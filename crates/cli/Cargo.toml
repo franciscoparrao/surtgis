@@ -1,0 +1,26 @@
+[package]
+name = "surtgis"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "High-performance geospatial analysis CLI"
+
+[[bin]]
+name = "surtgis"
+path = "src/main.rs"
+
+[features]
+default = []
+gdal = ["surtgis-core/gdal"]
+
+[dependencies]
+surtgis-core = { path = "../core" }
+surtgis-algorithms = { path = "../algorithms" }
+surtgis-parallel = { path = "../parallel" }
+clap.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+indicatif.workspace = true
+serde_json.workspace = true

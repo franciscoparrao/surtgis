@@ -1,0 +1,17 @@
+[package]
+name = "surtgis-parallel"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Parallel processing strategies for SurtGis"
+
+[dependencies]
+surtgis-core = { path = "../core" }
+rayon.workspace = true
+crossbeam.workspace = true
+ndarray.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true

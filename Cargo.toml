@@ -1,0 +1,63 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/algorithms",
+    "crates/parallel",
+    "crates/cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Francisco Parrao"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/franciscoparrao/surtgis"
+description = "High-performance geospatial analysis library in Rust"
+keywords = ["gis", "geospatial", "raster", "terrain", "hydrology"]
+categories = ["science::geo", "command-line-utilities"]
+
+[workspace.dependencies]
+# Core dependencies
+thiserror = "2"
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Geospatial
+geo = "0.29"
+geo-types = "0.7"
+proj = "0.28"
+gdal = { version = "0.17", features = ["bindgen"] }
+geozero = "0.14"
+rstar = "0.12"
+tiff = "0.10"
+
+# Numerics
+ndarray = { version = "0.16", features = ["rayon"] }
+num-traits = "0.2"
+ordered-float = "4"
+
+# Parallelism
+rayon = "1.10"
+crossbeam = "0.8"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+indicatif = "0.17"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Testing & Benchmarks
+criterion = { version = "0.5", features = ["html_reports"] }
+approx = "0.5"
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+opt-level = 3
+
+[profile.bench]
+lto = "thin"
+codegen-units = 1
