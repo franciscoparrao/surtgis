@@ -8,13 +8,13 @@
 //! - **hydrology**: Fill sinks, flow direction, flow accumulation, watershed delineation
 //! - **imagery**: Spectral indices, band math, reclassification
 //! - **interpolation**: IDW, nearest neighbor, TIN
-//! - **vector**: Buffer, overlay, simplify (TODO)
+//! - **vector**: Buffer, simplify, spatial operations, clipping, measurements
 
 pub mod terrain;
 pub mod hydrology;
 pub mod imagery;
 pub mod interpolation;
-// pub mod vector; // TODO
+pub mod vector;
 
 /// Prelude for convenient imports
 pub mod prelude {
@@ -33,6 +33,13 @@ pub mod prelude {
     pub use crate::interpolation::{
         idw, nearest_neighbor, tin_interpolation,
         IdwParams, NearestNeighborParams, TinParams, SamplePoint,
+    };
+    pub use crate::vector::{
+        buffer_points, buffer_geometry, BufferParams,
+        simplify_dp, simplify_vw, SimplifyParams,
+        bounding_box, centroid, convex_hull, dissolve, BoundingBox,
+        clip_by_rect, ClipRect,
+        area, length, perimeter,
     };
     pub use surtgis_core::prelude::*;
 }
