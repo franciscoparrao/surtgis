@@ -4,7 +4,7 @@
 //!
 //! ## Available Algorithm Categories
 //!
-//! - **terrain**: Slope, aspect, hillshade
+//! - **terrain**: Slope, aspect, hillshade, curvature, TPI, TRI, landform classification
 //! - **hydrology**: Fill sinks, flow direction, flow accumulation, watershed delineation
 //! - **imagery**: Spectral indices, band math, reclassification
 //! - **interpolation**: IDW, nearest neighbor, TIN
@@ -21,7 +21,9 @@ pub mod vector;
 /// Prelude for convenient imports
 pub mod prelude {
     pub use crate::terrain::{
-        aspect, hillshade, slope, Aspect, Hillshade, Slope, SlopeUnits,
+        aspect, curvature, hillshade, landform_classification, slope, tpi, tri,
+        Aspect, Curvature, CurvatureType, Hillshade, Landform, Slope, SlopeUnits,
+        Tpi, TpiParams, Tri, TriParams, LandformParams,
     };
     pub use crate::hydrology::{
         fill_sinks, flow_direction, flow_accumulation, watershed,
