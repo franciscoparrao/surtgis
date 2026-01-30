@@ -184,6 +184,19 @@ where
         .write_tag(Tag::Unknown(33922), tiepoint.as_slice())
         .map_err(|e| Error::Other(format!("Cannot write tiepoint tag: {}", e)))?;
 
+    // GeoKeyDirectoryTag (34735) — minimal entry so tools like WhiteboxTools
+    // recognize this as a valid GeoTIFF. GTModelTypeGeoKey=1 (Projected),
+    // GTRasterTypeGeoKey=1 (RasterPixelIsArea).
+    let geokeys: Vec<u16> = vec![
+        1, 1, 0, 2, // Version 1.1.0, 2 keys
+        1024, 0, 1, 1, // GTModelTypeGeoKey = ModelTypeProjected
+        1025, 0, 1, 1, // GTRasterTypeGeoKey = RasterPixelIsArea
+    ];
+    image
+        .encoder()
+        .write_tag(Tag::Unknown(34735), geokeys.as_slice())
+        .map_err(|e| Error::Other(format!("Cannot write geokey tag: {}", e)))?;
+
     image
         .write_data(&data)
         .map_err(|e| Error::Other(format!("Cannot write image data: {}", e)))?;

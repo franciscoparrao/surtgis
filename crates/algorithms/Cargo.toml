@@ -26,3 +26,15 @@ criterion.workspace = true
 [[bench]]
 name = "terrain"
 harness = false
+
+[[bench]]
+name = "hydrology"
+harness = false
+
+[[bench]]
+name = "morphology"
+harness = false
+
+[[bench]]
+name = "imagery"
+harness = false
