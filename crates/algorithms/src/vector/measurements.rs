@@ -59,7 +59,7 @@ pub fn perimeter(geom: &Geometry<f64>) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use geo::{Line, MultiLineString, Coord};
+    use geo::{Line, LineString, MultiLineString, Polygon, Coord};
 
     fn square() -> Polygon<f64> {
         Polygon::new(

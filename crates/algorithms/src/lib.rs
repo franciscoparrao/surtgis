@@ -9,11 +9,13 @@
 //! - **imagery**: Spectral indices, band math, reclassification
 //! - **interpolation**: IDW, nearest neighbor, TIN
 //! - **vector**: Buffer, simplify, spatial operations, clipping, measurements
+//! - **morphology**: Erosion, dilation, opening, closing, gradient, top-hat, black-hat
 
 pub mod terrain;
 pub mod hydrology;
 pub mod imagery;
 pub mod interpolation;
+pub mod morphology;
 pub mod vector;
 
 /// Prelude for convenient imports
@@ -40,6 +42,12 @@ pub mod prelude {
         bounding_box, centroid, convex_hull, dissolve, BoundingBox,
         clip_by_rect, ClipRect,
         area, length, perimeter,
+    };
+    pub use crate::morphology::{
+        erode, dilate, opening, closing, gradient, top_hat, black_hat,
+        Erode, Dilate, Opening, Closing, Gradient, TopHat, BlackHat,
+        ErodeParams, DilateParams, OpeningParams, ClosingParams, GradientParams,
+        TopHatParams, BlackHatParams, StructuringElement,
     };
     pub use surtgis_core::prelude::*;
 }
