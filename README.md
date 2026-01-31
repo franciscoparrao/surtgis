@@ -40,7 +40,7 @@ cargo bench -p surtgis-algorithms
 ```
 surtgis/
 ├── surtgis-core         # Raster<T>, GeoTransform, CRS, I/O
-├── surtgis-algorithms   # Terrain, hydrology, imagery, interpolation, vector, morphology
+├── surtgis-algorithms   # Terrain, hydrology, imagery, interpolation, vector, morphology, statistics
 ├── surtgis-parallel     # Tiled processing, parallel strategies
 └── surtgis (cli)        # Command-line interface
 ```
@@ -55,9 +55,22 @@ surtgis/
 | Aspect | `terrain::aspect` | Direction of steepest descent. Degrees, radians, or 8-direction compass. |
 | Hillshade | `terrain::hillshade` | Shaded relief with configurable sun position. |
 | Curvature | `terrain::curvature` | General, profile, and plan curvature (Zevenbergen & Thorne 1987). |
+| Multiscale Curvatures | `terrain::multiscale_curvatures` | Mean, Gaussian, profile, plan, maximal, minimal curvature via 5×5 polynomial fitting (Florinsky 2016). |
 | TPI | `terrain::tpi` | Topographic Position Index with configurable neighborhood radius. |
 | TRI | `terrain::tri` | Terrain Ruggedness Index (Riley 1999). |
 | Landform | `terrain::landform_classification` | 11-class landform classification using multi-scale TPI + slope (Weiss 2001). |
+| Geomorphons | `terrain::geomorphons` | Pattern-based landform classification into 10 classes (Jasiewicz & Stepinski 2013). |
+| TWI | `terrain::twi` | Topographic Wetness Index — ln(specific catchment area / tan(slope)). |
+| SPI | `terrain::spi` | Stream Power Index — erosive power of flowing water. |
+| STI | `terrain::sti` | Sediment Transport Index (Moore & Burch 1986, USLE-based). |
+| Viewshed | `terrain::viewshed` | Line-of-sight visibility analysis from single or multiple observers. |
+| Sky View Factor | `terrain::sky_view_factor` | Fraction of visible sky hemisphere (0–1) based on horizon angles. |
+| Openness | `terrain::positive_openness`, `negative_openness` | Terrain openness in degrees (Yokoyama et al. 2002). |
+| Convergence Index | `terrain::convergence_index` | Flow convergence (−100) to divergence (+100) based on neighbor aspects. |
+| Smoothing | `terrain::feature_preserving_smoothing` | Noise removal preserving breaks-in-slope (bilateral filtering with surface normals). |
+| Wind Exposure | `terrain::wind_exposure` | Topographic exposure/shelter index (Topex method) with optional wind direction. |
+| Solar Radiation | `terrain::solar_radiation` | Daily beam + diffuse radiation (Wh/m²) considering slope, aspect, and atmosphere. |
+| MRVBF / MRRTF | `terrain::mrvbf` | Multi-Resolution Valley Bottom / Ridge Top Flatness (Gallant & Dowling 2003). |
 
 ### Hydrology
 
@@ -113,6 +126,15 @@ surtgis/
 | Black-hat | `morphology::black_hat` | Closing minus original — dark feature extraction |
 
 Structuring elements: `Square`, `Cross`, `Disk`, `Custom` with arbitrary radius.
+
+### Statistics
+
+| Algorithm | Function | Description |
+|-----------|----------|-------------|
+| Focal Statistics | `statistics::focal_statistics` | Moving window statistics: mean, std dev, min, max, range, sum, count, median, percentile. Square or circular window. |
+| Zonal Statistics | `statistics::zonal_statistics` | Per-zone statistics from integer zone raster (mean, std dev, min, max, range, sum, count, median). |
+| Global Moran's I | `statistics::global_morans_i` | Spatial autocorrelation measure with z-score and p-value (queen's case weights). |
+| Local Getis-Ord Gi* | `statistics::local_getis_ord` | Hotspot/coldspot detection with configurable radius. Returns z-score and p-value rasters. |
 
 ## Usage
 
@@ -186,12 +208,13 @@ cargo test
 ## Roadmap
 
 - [x] Core raster types and I/O
-- [x] Terrain: slope, aspect, hillshade, curvature, TPI, TRI, landform classification
+- [x] Terrain analysis (20 algorithms): slope, aspect, hillshade, curvature, multiscale curvatures, TPI, TRI, landform, geomorphons, TWI, SPI, STI, viewshed, SVF, openness, convergence, smoothing, wind exposure, solar radiation, MRVBF/MRRTF
 - [x] Hydrology: fill sinks, flow direction, flow accumulation, watersheds
 - [x] Imagery: spectral indices (NDVI, NDWI, MNDWI, NBR, SAVI, EVI, BSI), band math, reclassify
 - [x] Interpolation: IDW, nearest neighbor, TIN
 - [x] Vector: buffer, simplify, clip, spatial operations, measurements
 - [x] Mathematical morphology: erode, dilate, opening, closing, gradient, top-hat, black-hat
+- [x] Statistics: focal statistics, zonal statistics, spatial autocorrelation (Moran's I, Getis-Ord Gi*)
 - [x] Parallel processing with Rayon
 - [x] CLI with 26+ commands
 - [x] Benchmarks vs GDAL, SAGA, WhiteboxTools, R/terra
