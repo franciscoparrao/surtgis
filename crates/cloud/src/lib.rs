@@ -21,6 +21,7 @@ pub mod error;
 pub mod geotiff_keys;
 pub mod http;
 pub mod ifd;
+pub mod reproject;
 pub mod stac_client;
 pub mod stac_models;
 pub mod stac_reader;

@@ -1439,8 +1439,29 @@ fn main() -> Result<()> {
                 let opts = CogReaderOptions::default();
                 let mut reader = CogReaderBlocking::open(&href, opts)
                     .context("Failed to open remote COG")?;
+
+                // Auto-reproject bbox if COG is in a projected CRS (e.g. UTM)
+                let read_bb = {
+                    use surtgis_cloud::reproject;
+                    // Prefer proj:epsg from STAC item (no extra HTTP request)
+                    let epsg = item.epsg().or_else(|| {
+                        reader.metadata().crs.as_ref().and_then(|c| c.epsg())
+                    });
+                    if let Some(epsg) = epsg {
+                        if !reproject::is_wgs84(epsg) {
+                            let reprojected = reproject::reproject_bbox_to_cog(&bb, epsg);
+                            println!("Reprojected bbox to EPSG:{}", epsg);
+                            reprojected
+                        } else {
+                            bb
+                        }
+                    } else {
+                        bb
+                    }
+                };
+
                 let raster: surtgis_core::Raster<f64> = reader
-                    .read_bbox(&bb, None)
+                    .read_bbox(&read_bb, None)
                     .context("Failed to read bounding box from COG")?;
                 pb.finish_and_clear();
                 let elapsed = start.elapsed();

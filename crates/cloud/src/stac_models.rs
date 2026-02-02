@@ -164,6 +164,18 @@ impl StacItem {
         self.assets.get(key)
     }
 
+    /// Get the EPSG code from the `proj:epsg` property, if available.
+    ///
+    /// Most STAC items from Sentinel-2 / Landsat include this via the
+    /// [projection extension](https://github.com/stac-extensions/projection).
+    pub fn epsg(&self) -> Option<u32> {
+        self.properties
+            .extra
+            .get("proj:epsg")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+    }
+
     /// Find the first asset that looks like a COG (role contains "data" and
     /// media type is GeoTIFF or the href ends in `.tif`/`.tiff`).
     pub fn first_cog_asset(&self) -> Option<(&String, &StacAsset)> {
@@ -376,6 +388,13 @@ mod tests {
         assert_eq!(red.href, "https://example.com/B04.tif");
         assert!(red.type_.as_ref().unwrap().contains("geotiff"));
         assert_eq!(red.roles.as_ref().unwrap(), &["data"]);
+    }
+
+    #[test]
+    fn epsg_from_proj_extension() {
+        let col: StacItemCollection = serde_json::from_str(FIXTURE).unwrap();
+        let item = &col.features[0];
+        assert_eq!(item.epsg(), Some(32630));
     }
 
     #[test]
