@@ -6,7 +6,7 @@
 //!
 //! Uses a simple incremental Bowyer-Watson algorithm for triangulation.
 
-use rayon::prelude::*;
+use crate::maybe_rayon::*;
 use surtgis_core::raster::{GeoTransform, Raster};
 use surtgis_core::{Error, Result};
 

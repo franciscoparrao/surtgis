@@ -647,6 +647,7 @@ fn main() -> Result<()> {
                     CurvatureParams {
                         curvature_type: ct,
                         z_factor,
+                        ..Default::default()
                     },
                 )
                 .context("Failed to calculate curvature")?;

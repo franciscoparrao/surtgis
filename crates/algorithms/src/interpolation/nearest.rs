@@ -3,7 +3,7 @@
 //! Assigns each grid cell the value of the closest sample point.
 //! Fast and simple, produces a Voronoi-like tessellation.
 
-use rayon::prelude::*;
+use crate::maybe_rayon::*;
 use surtgis_core::raster::{GeoTransform, Raster};
 use surtgis_core::{Error, Result};
 

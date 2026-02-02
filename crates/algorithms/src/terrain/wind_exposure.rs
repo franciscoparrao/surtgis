@@ -5,7 +5,7 @@
 //! Based on the Forestry Commission (UK) topographic exposure method.
 
 use ndarray::Array2;
-use rayon::prelude::*;
+use crate::maybe_rayon::*;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 

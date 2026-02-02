@@ -26,7 +26,7 @@
 //!            Jenness, J. (2006) "Topographic Position Index extension for ArcView"
 
 use ndarray::Array2;
-use rayon::prelude::*;
+use crate::maybe_rayon::*;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Algorithm, Error, Result};
 

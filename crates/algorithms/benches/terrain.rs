@@ -64,7 +64,7 @@ fn bench_curvature(c: &mut Criterion) {
                     black_box(&dem),
                     CurvatureParams {
                         curvature_type: CurvatureType::General,
-                        z_factor: 1.0,
+                        ..Default::default()
                     },
                 )
                 .unwrap()

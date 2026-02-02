@@ -5,6 +5,8 @@ members = [
     "crates/algorithms",
     "crates/parallel",
     "crates/cli",
+    "crates/wasm",
+    "crates/python",
 ]
 
 [workspace.package]
@@ -34,7 +36,7 @@ rstar = "0.12"
 tiff = "0.10"
 
 # Numerics
-ndarray = { version = "0.16", features = ["rayon"] }
+ndarray = "0.16"
 num-traits = "0.2"
 ordered-float = "4"
 
@@ -47,6 +49,14 @@ clap = { version = "4", features = ["derive"] }
 indicatif = "0.17"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# WASM
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+
+# Python
+pyo3 = { version = "0.23", features = ["extension-module"] }
+numpy = { version = "0.23", features = ["half"] }
 
 # Testing & Benchmarks
 criterion = { version = "0.5", features = ["html_reports"] }

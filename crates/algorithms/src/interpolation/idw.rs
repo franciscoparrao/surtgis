@@ -8,11 +8,57 @@
 //! Shepard, D. (1968). A two-dimensional interpolation function for
 //! irregularly-spaced data. ACM National Conference.
 
-use rayon::prelude::*;
+use crate::maybe_rayon::*;
 use surtgis_core::raster::{GeoTransform, Raster};
 use surtgis_core::{Error, Result};
 
 use super::SamplePoint;
+
+/// Adaptive power parameters for density-dependent IDW.
+///
+/// Adjusts the power exponent per cell based on local point density.
+/// In sparse areas, power increases (sharper falloff); in dense areas,
+/// power decreases (smoother interpolation).
+///
+/// Reference: Chen (2015). Adaptive IDW with variable power parameter.
+#[derive(Debug, Clone)]
+pub struct AdaptivePower {
+    /// Number of nearest points for density estimation (default: 5)
+    pub k: usize,
+    /// Reference distance: when d_mean == d_ref, power is unchanged.
+    /// `None` → automatically computed as mean spacing of all points.
+    pub d_ref: Option<f64>,
+    /// Sensitivity exponent (default: 0.5). Higher = more adaptation.
+    pub alpha: f64,
+    /// Maximum allowed power (default: 6.0)
+    pub max_power: f64,
+    /// Minimum allowed power (default: 0.5)
+    pub min_power: f64,
+}
+
+impl Default for AdaptivePower {
+    fn default() -> Self {
+        Self {
+            k: 5,
+            d_ref: None,
+            alpha: 0.5,
+            max_power: 6.0,
+            min_power: 0.5,
+        }
+    }
+}
+
+/// Anisotropic search configuration for directional IDW.
+///
+/// Uses an elliptical search window instead of circular, giving more
+/// weight to points along a preferred direction (e.g., along a valley).
+#[derive(Debug, Clone)]
+pub struct Anisotropy {
+    /// Major axis direction in radians (0=East, π/2=North)
+    pub angle: f64,
+    /// Ratio of minor/major axis (0..1]. 1.0 = isotropic (no effect).
+    pub ratio: f64,
+}
 
 /// Parameters for IDW interpolation
 #[derive(Debug, Clone)]
@@ -35,6 +81,12 @@ pub struct IdwParams {
     pub cols: usize,
     /// Output raster geotransform
     pub transform: GeoTransform,
+    /// Adaptive power: vary exponent based on local point density.
+    /// When `Some`, power is adjusted per cell. When `None`, fixed power is used.
+    pub adaptive: Option<AdaptivePower>,
+    /// Anisotropic search: use elliptical distance instead of Euclidean.
+    /// When `Some`, distances are stretched along the minor axis direction.
+    pub anisotropy: Option<Anisotropy>,
 }
 
 impl Default for IdwParams {
@@ -47,8 +99,20 @@ impl Default for IdwParams {
             rows: 100,
             cols: 100,
             transform: GeoTransform::default(),
+            adaptive: None,
+            anisotropy: None,
         }
     }
+}
+
+/// Compute anisotropic distance squared between two points.
+/// Stretches coordinates perpendicular to the major axis direction.
+fn aniso_dist_sq(dx: f64, dy: f64, cos_a: f64, sin_a: f64, ratio_inv: f64) -> f64 {
+    // Rotate into aligned frame
+    let u = dx * cos_a + dy * sin_a;   // along major axis
+    let v = -dx * sin_a + dy * cos_a;  // along minor axis
+    // Stretch minor axis → makes distant points along minor seem farther
+    u * u + (v * ratio_inv) * (v * ratio_inv)
 }
 
 /// Perform IDW interpolation from scattered points to a raster grid.
@@ -79,9 +143,37 @@ pub fn idw(points: &[SamplePoint], params: IdwParams) -> Result<Raster<f64>> {
     let snap = params.snap_distance;
     let max_radius_sq = params.max_radius.map(|r| r * r);
 
-    // Pre-sort by distance if max_points is set
     let use_max_points = params.max_points.is_some();
     let max_points = params.max_points.unwrap_or(points.len());
+
+    // Precompute anisotropy parameters
+    let (use_aniso, cos_a, sin_a, ratio_inv) = match &params.anisotropy {
+        Some(a) if a.ratio < 1.0 && a.ratio > 0.0 => {
+            (true, a.angle.cos(), a.angle.sin(), 1.0 / a.ratio)
+        }
+        _ => (false, 1.0, 0.0, 1.0),
+    };
+
+    // Precompute adaptive power reference distance
+    let d_ref = match &params.adaptive {
+        Some(ap) => {
+            ap.d_ref.unwrap_or_else(|| {
+                // Auto: mean nearest-neighbor distance among sample points
+                let n = points.len();
+                if n < 2 { return 1.0; }
+                let sum: f64 = points.iter().map(|p| {
+                    points.iter()
+                        .filter(|q| (q.x - p.x).abs() > 1e-15 || (q.y - p.y).abs() > 1e-15)
+                        .map(|q| p.dist_sq(q.x, q.y))
+                        .fold(f64::MAX, f64::min)
+                        .sqrt()
+                }).sum();
+                (sum / n as f64).max(1e-10)
+            })
+        }
+        None => 1.0,
+    };
+    let adaptive = params.adaptive.clone();
 
     let data: Vec<f64> = (0..rows)
         .into_par_iter()
@@ -96,7 +188,14 @@ pub fn idw(points: &[SamplePoint], params: IdwParams) -> Result<Raster<f64>> {
                 let mut snapped = None;
 
                 for pt in points {
-                    let dsq = pt.dist_sq(cx, cy);
+                    let dx = cx - pt.x;
+                    let dy = cy - pt.y;
+
+                    let dsq = if use_aniso {
+                        aniso_dist_sq(dx, dy, cos_a, sin_a, ratio_inv)
+                    } else {
+                        dx * dx + dy * dy
+                    };
 
                     // Check snap distance
                     if dsq < snap * snap {
@@ -123,11 +222,27 @@ pub fn idw(points: &[SamplePoint], params: IdwParams) -> Result<Raster<f64>> {
                     continue; // NaN
                 }
 
-                // Sort by distance if limiting points
-                if use_max_points && candidates.len() > max_points {
+                // Sort by distance if limiting points or adaptive
+                let need_sort = (use_max_points && candidates.len() > max_points)
+                    || adaptive.is_some();
+                if need_sort {
                     candidates.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+                }
+                if use_max_points && candidates.len() > max_points {
                     candidates.truncate(max_points);
                 }
+
+                // Determine effective power (adaptive or fixed)
+                let eff_power = if let Some(ref ap) = adaptive {
+                    let k = ap.k.min(candidates.len());
+                    let d_mean: f64 = candidates[..k].iter()
+                        .map(|(dsq, _)| dsq.sqrt())
+                        .sum::<f64>() / k as f64;
+                    let p_local = power * (d_mean / d_ref).powf(ap.alpha);
+                    p_local.clamp(ap.min_power, ap.max_power)
+                } else {
+                    power
+                };
 
                 // Weighted average
                 let mut sum_w = 0.0;
@@ -135,7 +250,7 @@ pub fn idw(points: &[SamplePoint], params: IdwParams) -> Result<Raster<f64>> {
 
                 for &(dsq, val) in &candidates {
                     let d = dsq.sqrt();
-                    let w = 1.0 / d.powf(power);
+                    let w = 1.0 / d.powf(eff_power);
                     sum_w += w;
                     sum_wz += w * val;
                 }
@@ -293,6 +408,90 @@ mod tests {
     fn test_idw_empty_points() {
         let result = idw(&[], default_params());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_idw_adaptive_power() {
+        // Adaptive power should produce different results than fixed
+        let points = sample_points();
+
+        let fixed = idw(&points, IdwParams {
+            power: 2.0,
+            ..default_params()
+        }).unwrap();
+
+        let adaptive = idw(&points, IdwParams {
+            power: 2.0,
+            adaptive: Some(AdaptivePower::default()),
+            ..default_params()
+        }).unwrap();
+
+        // Values should differ (adaptive adjusts power per cell)
+        let f_center = fixed.get(5, 5).unwrap();
+        let a_center = adaptive.get(5, 5).unwrap();
+
+        // Both should be valid
+        assert!(!f_center.is_nan() && !a_center.is_nan());
+        // They may differ (adaptive adjusts power based on distance)
+        // Near corners they should still be close to sample values
+        let a_corner = adaptive.get(0, 0).unwrap();
+        assert!(
+            (a_corner - 10.0).abs() < 5.0,
+            "Adaptive IDW near sample should be close: got {}",
+            a_corner
+        );
+    }
+
+    #[test]
+    fn test_idw_anisotropic() {
+        // Create points along x-axis: anisotropy along x should weight them more
+        let points = vec![
+            SamplePoint::new(2.0, 5.0, 100.0),
+            SamplePoint::new(8.0, 5.0, 100.0),
+            SamplePoint::new(5.0, 2.0, 0.0),
+            SamplePoint::new(5.0, 8.0, 0.0),
+        ];
+
+        // Isotropic: center should be ~50 (equidistant from all 4)
+        let iso = idw(&points, IdwParams {
+            ..default_params()
+        }).unwrap();
+
+        // Anisotropic along x-axis: east-west points (100.0) should dominate
+        let aniso = idw(&points, IdwParams {
+            anisotropy: Some(Anisotropy { angle: 0.0, ratio: 0.3 }),
+            ..default_params()
+        }).unwrap();
+
+        let iso_center = iso.get(5, 5).unwrap();
+        let aniso_center = aniso.get(5, 5).unwrap();
+
+        // Anisotropic should pull toward the x-axis points (100.0)
+        assert!(
+            aniso_center > iso_center,
+            "Anisotropic along x should weight E-W points more: iso={:.1}, aniso={:.1}",
+            iso_center, aniso_center
+        );
+    }
+
+    #[test]
+    fn test_idw_anisotropy_ratio_one_is_isotropic() {
+        let points = sample_points();
+
+        let iso = idw(&points, default_params()).unwrap();
+        let aniso_1 = idw(&points, IdwParams {
+            anisotropy: Some(Anisotropy { angle: 0.5, ratio: 1.0 }),
+            ..default_params()
+        }).unwrap();
+
+        // ratio=1.0 should be identical to isotropic
+        let v1 = iso.get(3, 7).unwrap();
+        let v2 = aniso_1.get(3, 7).unwrap();
+        assert!(
+            (v1 - v2).abs() < 1e-10,
+            "Ratio 1.0 should be isotropic: {} vs {}",
+            v1, v2
+        );
     }
 
     #[test]

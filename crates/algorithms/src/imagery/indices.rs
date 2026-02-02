@@ -4,7 +4,7 @@
 //! All indices operate on single-band rasters (one band per raster).
 
 use ndarray::Array2;
-use rayon::prelude::*;
+use crate::maybe_rayon::*;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -25,6 +25,14 @@ pub enum SpectralIndex {
     NBR,
     /// Bare Soil Index
     BSI,
+    /// Normalized Difference Red Edge Index
+    NDRE,
+    /// Green Normalized Difference Vegetation Index
+    GNDVI,
+    /// Normalized Green-Red Difference Index
+    NGRDI,
+    /// Red Edge Chlorophyll Index
+    RECI,
 }
 
 // ---------------------------------------------------------------------------
@@ -359,6 +367,106 @@ pub fn bsi(
 }
 
 // ---------------------------------------------------------------------------
+// NDRE
+// ---------------------------------------------------------------------------
+
+/// Normalized Difference Red Edge Index (Gitelson & Merzlyak, 1994)
+///
+/// `NDRE = (NIR - RedEdge) / (NIR + RedEdge)`
+///
+/// Sensitive to chlorophyll content in leaves. More effective than NDVI
+/// for monitoring vegetation health in mid-to-late growth stages.
+///
+/// # Arguments
+/// * `nir` - Near-infrared band (e.g., Sentinel-2 B8)
+/// * `red_edge` - Red edge band (e.g., Sentinel-2 B5 or B6)
+pub fn ndre(nir: &Raster<f64>, red_edge: &Raster<f64>) -> Result<Raster<f64>> {
+    normalized_difference(nir, red_edge)
+}
+
+// ---------------------------------------------------------------------------
+// GNDVI
+// ---------------------------------------------------------------------------
+
+/// Green Normalized Difference Vegetation Index (Gitelson et al., 1996)
+///
+/// `GNDVI = (NIR - Green) / (NIR + Green)`
+///
+/// More sensitive to chlorophyll concentration than NDVI. Useful for
+/// assessing vegetation vigor and nitrogen content.
+///
+/// # Arguments
+/// * `nir` - Near-infrared band
+/// * `green` - Green band
+pub fn gndvi(nir: &Raster<f64>, green: &Raster<f64>) -> Result<Raster<f64>> {
+    normalized_difference(nir, green)
+}
+
+// ---------------------------------------------------------------------------
+// NGRDI
+// ---------------------------------------------------------------------------
+
+/// Normalized Green-Red Difference Index (Tucker, 1979)
+///
+/// `NGRDI = (Green - Red) / (Green + Red)`
+///
+/// Simple visible-band vegetation index. Can be computed from standard
+/// RGB imagery without NIR bands.
+///
+/// # Arguments
+/// * `green` - Green band
+/// * `red` - Red band
+pub fn ngrdi(green: &Raster<f64>, red: &Raster<f64>) -> Result<Raster<f64>> {
+    normalized_difference(green, red)
+}
+
+// ---------------------------------------------------------------------------
+// RECI
+// ---------------------------------------------------------------------------
+
+/// Red Edge Chlorophyll Index (Gitelson et al., 2003)
+///
+/// `RECI = (NIR / RedEdge) - 1`
+///
+/// Estimates canopy chlorophyll content. Values typically range from 0 to 10+.
+/// Unlike normalized indices, this is a ratio index (not bounded to [-1,1]).
+///
+/// # Arguments
+/// * `nir` - Near-infrared band
+/// * `red_edge` - Red edge band
+pub fn reci(nir: &Raster<f64>, red_edge: &Raster<f64>) -> Result<Raster<f64>> {
+    check_dimensions(nir, red_edge)?;
+
+    let (rows, cols) = nir.shape();
+    let nodata_nir = nir.nodata();
+    let nodata_re = red_edge.nodata();
+
+    let data: Vec<f64> = (0..rows)
+        .into_par_iter()
+        .flat_map(|row| {
+            let mut row_data = vec![f64::NAN; cols];
+            for col in 0..cols {
+                let n = unsafe { nir.get_unchecked(row, col) };
+                let re = unsafe { red_edge.get_unchecked(row, col) };
+
+                if is_nodata_f64(n, nodata_nir) || is_nodata_f64(re, nodata_re) {
+                    continue;
+                }
+
+                if re.abs() < 1e-10 {
+                    continue; // Avoid division by zero
+                }
+
+                row_data[col] = (n / re) - 1.0;
+            }
+            row_data
+        })
+        .collect();
+
+    build_output(nir, rows, cols, data)
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -583,5 +691,83 @@ mod tests {
 
         let result = normalized_difference(&a, &b);
         assert!(result.is_err(), "Should fail on dimension mismatch");
+    }
+
+    #[test]
+    fn test_ndre() {
+        let nir = make_band(5, 5, 0.6);
+        let red_edge = make_band(5, 5, 0.3);
+
+        let result = ndre(&nir, &red_edge).unwrap();
+        let val = result.get(2, 2).unwrap();
+
+        let expected = (0.6 - 0.3) / (0.6 + 0.3);
+        assert!(
+            (val - expected).abs() < 1e-10,
+            "Expected {}, got {}",
+            expected,
+            val
+        );
+    }
+
+    #[test]
+    fn test_gndvi() {
+        let nir = make_band(5, 5, 0.5);
+        let green = make_band(5, 5, 0.2);
+
+        let result = gndvi(&nir, &green).unwrap();
+        let val = result.get(2, 2).unwrap();
+
+        let expected = (0.5 - 0.2) / (0.5 + 0.2);
+        assert!(
+            (val - expected).abs() < 1e-10,
+            "Expected {}, got {}",
+            expected,
+            val
+        );
+    }
+
+    #[test]
+    fn test_ngrdi() {
+        let green = make_band(5, 5, 0.25);
+        let red = make_band(5, 5, 0.15);
+
+        let result = ngrdi(&green, &red).unwrap();
+        let val = result.get(2, 2).unwrap();
+
+        let expected = (0.25 - 0.15) / (0.25 + 0.15);
+        assert!(
+            (val - expected).abs() < 1e-10,
+            "Expected {}, got {}",
+            expected,
+            val
+        );
+    }
+
+    #[test]
+    fn test_reci() {
+        let nir = make_band(5, 5, 0.6);
+        let red_edge = make_band(5, 5, 0.2);
+
+        let result = reci(&nir, &red_edge).unwrap();
+        let val = result.get(2, 2).unwrap();
+
+        // RECI = (0.6 / 0.2) - 1 = 3.0 - 1.0 = 2.0
+        assert!(
+            (val - 2.0).abs() < 1e-10,
+            "Expected 2.0, got {}",
+            val
+        );
+    }
+
+    #[test]
+    fn test_reci_zero_rededge() {
+        let nir = make_band(5, 5, 0.5);
+        let red_edge = make_band(5, 5, 0.0);
+
+        let result = reci(&nir, &red_edge).unwrap();
+        let val = result.get(2, 2).unwrap();
+
+        assert!(val.is_nan(), "Zero red edge should produce NaN, got {}", val);
     }
 }

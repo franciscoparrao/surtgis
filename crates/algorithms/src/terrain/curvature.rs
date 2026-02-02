@@ -1,7 +1,7 @@
 //! Surface curvature from DEMs
 //!
 //! Calculates profile, plan and general (mean) curvature using second-order
-//! partial derivatives estimated from a 3x3 neighborhood (Zevenbergen & Thorne 1987).
+//! partial derivatives estimated from a 3×3 neighborhood.
 //!
 //! ```text
 //! a b c      z1 z2 z3
@@ -9,23 +9,22 @@
 //! g h i      z7 z8 z9
 //! ```
 //!
-//! The surface at the center cell is approximated by a bivariate quadratic:
-//!   Z = Ax²y² + Bx²y + Cxy² + Dx² + Ey² + Fxy + Gx + Hy + I
+//! Supports two derivative estimation methods:
 //!
-//! Partial derivatives used:
-//!   p  = dz/dx  = (z6 - z4) / (2*cs)
-//!   q  = dz/dy  = (z2 - z8) / (2*cs)
-//!   r  = d²z/dx² = (z4 - 2*z5 + z6) / cs²
-//!   s  = d²z/dxdy = (z3 - z1 - z9 + z7) / (4*cs²)
-//!   t  = d²z/dy² = (z2 - 2*z5 + z8) / cs²
+//! - **Evans-Young** (default): Weighted least-squares on all 9 cells.
+//!   More robust — recommended by Florinsky (2025).
+//! - **Zevenbergen-Thorne**: Central differences on cardinal/diagonal neighbors.
+//!   Legacy method, available for backward compatibility.
 //!
-//! Curvatures:
-//!   General  = -(r + t) / 2
-//!   Profile  = -(r*p² + 2*s*p*q + t*q²) / (p² + q²)      (along steepest descent)
-//!   Plan     = -(r*q² - 2*s*p*q + t*p²) / (p² + q²)      (perpendicular to descent)
+//! And two curvature formula variants:
+//!
+//! - **Full** (default): Includes √(1+p²+q²) denominators.
+//!   Correct on steep terrain.
+//! - **Simplified**: Omits denominators. Only valid for gentle slopes (<10°).
+//!   Error >15% at 30°, >30% at 45°.
 
 use ndarray::Array2;
-use rayon::prelude::*;
+use crate::maybe_rayon::*;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Algorithm, Error, Result};
 
@@ -41,11 +40,39 @@ pub enum CurvatureType {
     Plan,
 }
 
+/// Method for estimating partial derivatives from the 3×3 neighborhood
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DerivativeMethod {
+    /// Evans-Young (1979/1978): weighted least-squares using all 9 cells.
+    /// Recommended by Florinsky (2025) as the standard 3×3 approach.
+    #[default]
+    EvansYoung,
+    /// Zevenbergen & Thorne (1987): central differences.
+    /// Legacy method; less robust but widely used historically.
+    ZevenbergenThorne,
+}
+
+/// Whether to use full or simplified curvature formulas
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CurvatureFormula {
+    /// Full formulas with √(1+p²+q²) denominators (Florinsky 2025).
+    /// Correct for all slopes. Recommended.
+    #[default]
+    Full,
+    /// Simplified formulas omitting denominators (Z&T 1987).
+    /// Only valid for gentle terrain (<10°). Error >15% at 30°.
+    Simplified,
+}
+
 /// Parameters for curvature calculation
 #[derive(Debug, Clone)]
 pub struct CurvatureParams {
     /// Type of curvature to compute
     pub curvature_type: CurvatureType,
+    /// Method for partial derivative estimation
+    pub method: DerivativeMethod,
+    /// Full vs simplified curvature formulas
+    pub formula: CurvatureFormula,
     /// Z-factor for unit conversion (default 1.0)
     pub z_factor: f64,
 }
@@ -54,6 +81,8 @@ impl Default for CurvatureParams {
     fn default() -> Self {
         Self {
             curvature_type: CurvatureType::General,
+            method: DerivativeMethod::EvansYoung,
+            formula: CurvatureFormula::Full,
             z_factor: 1.0,
         }
     }
@@ -84,12 +113,15 @@ impl Algorithm for Curvature {
 
 /// Calculate surface curvature from a DEM
 ///
-/// Uses Zevenbergen & Thorne (1987) method.  Positive values indicate concave
-/// surfaces, negative values indicate convex surfaces.
+/// Supports Evans-Young (default) and Zevenbergen-Thorne derivative methods,
+/// and full (default) or simplified curvature formulas.
+///
+/// Positive values indicate concave surfaces (profile: decelerating flow;
+/// plan: converging flow). Negative values indicate convex surfaces.
 ///
 /// # Arguments
 /// * `dem` - Input DEM raster
-/// * `params` - Curvature parameters (type, z_factor)
+/// * `params` - Curvature parameters (type, method, formula, z_factor)
 ///
 /// # Returns
 /// Raster with curvature values (1/m by default)
@@ -98,7 +130,14 @@ pub fn curvature(dem: &Raster<f64>, params: CurvatureParams) -> Result<Raster<f6
     let cs = dem.cell_size() * params.z_factor;
     let nodata = dem.nodata();
     let cs2 = cs * cs;
+    let method = params.method;
+    let formula = params.formula;
+
+    // Precompute method-specific constants
     let two_cs = 2.0 * cs;
+    let cs6 = 6.0 * cs;
+    let cs2_3 = 3.0 * cs2;
+    let cs2_4 = 4.0 * cs2;
 
     let output_data: Vec<f64> = (0..rows)
         .into_par_iter()
@@ -128,30 +167,75 @@ pub fn curvature(dem: &Raster<f64>, params: CurvatureParams) -> Result<Raster<f6
                     continue;
                 }
 
-                let p = (z6 - z4) / two_cs;
-                let q = (z2 - z8) / two_cs;
-                let r = (z4 - 2.0 * z5 + z6) / cs2;
-                let s = (z3 - z1 - z9 + z7) / (4.0 * cs2);
-                let t = (z2 - 2.0 * z5 + z8) / cs2;
+                // Compute partial derivatives based on method
+                let (p, q, r, s, t) = match method {
+                    DerivativeMethod::EvansYoung => {
+                        let p = (z3 + z6 + z9 - z1 - z4 - z7) / cs6;
+                        let q = (z1 + z2 + z3 - z7 - z8 - z9) / cs6;
+                        let r = (z1 + z3 + z4 + z6 + z7 + z9
+                            - 2.0 * (z2 + z5 + z8))
+                            / cs2_3;
+                        let s = (z3 + z7 - z1 - z9) / cs2_4;
+                        let t = (z1 + z2 + z3 + z7 + z8 + z9
+                            - 2.0 * (z4 + z5 + z6))
+                            / cs2_3;
+                        (p, q, r, s, t)
+                    }
+                    DerivativeMethod::ZevenbergenThorne => {
+                        let p = (z6 - z4) / two_cs;
+                        let q = (z2 - z8) / two_cs;
+                        let r = (z4 - 2.0 * z5 + z6) / cs2;
+                        let s = (z3 - z1 - z9 + z7) / (4.0 * cs2);
+                        let t = (z2 - 2.0 * z5 + z8) / cs2;
+                        (p, q, r, s, t)
+                    }
+                };
 
-                row_data[col] = match params.curvature_type {
-                    CurvatureType::General => {
-                        -(r + t) / 2.0
+                let p2 = p * p;
+                let q2 = q * q;
+                let p2q2 = p2 + q2;
+
+                row_data[col] = match (params.curvature_type, formula) {
+                    // --- Full formulas (with denominators) ---
+                    (CurvatureType::General, CurvatureFormula::Full) => {
+                        let w = 1.0 + p2q2;
+                        -((1.0 + q2) * r - 2.0 * p * q * s + (1.0 + p2) * t)
+                            / (2.0 * w * w.sqrt())
                     }
-                    CurvatureType::Profile => {
-                        let p2q2 = p * p + q * q;
-                        if p2q2 < 1e-20 {
-                            0.0 // flat area
-                        } else {
-                            -(r * p * p + 2.0 * s * p * q + t * q * q) / p2q2
-                        }
-                    }
-                    CurvatureType::Plan => {
-                        let p2q2 = p * p + q * q;
+                    (CurvatureType::Profile, CurvatureFormula::Full) => {
                         if p2q2 < 1e-20 {
                             0.0
                         } else {
-                            -(r * q * q - 2.0 * s * p * q + t * p * p) / p2q2
+                            let w = 1.0 + p2q2;
+                            -(p2 * r + 2.0 * p * q * s + q2 * t)
+                                / (p2q2 * w * w.sqrt())
+                        }
+                    }
+                    (CurvatureType::Plan, CurvatureFormula::Full) => {
+                        if p2q2 < 1e-20 {
+                            0.0
+                        } else {
+                            let w_sqrt = (1.0 + p2q2).sqrt();
+                            -(q2 * r - 2.0 * p * q * s + p2 * t)
+                                / (p2q2 * w_sqrt)
+                        }
+                    }
+                    // --- Simplified formulas (legacy Z&T, no denominators) ---
+                    (CurvatureType::General, CurvatureFormula::Simplified) => {
+                        -(r + t) / 2.0
+                    }
+                    (CurvatureType::Profile, CurvatureFormula::Simplified) => {
+                        if p2q2 < 1e-20 {
+                            0.0
+                        } else {
+                            -(p2 * r + 2.0 * p * q * s + q2 * t) / p2q2
+                        }
+                    }
+                    (CurvatureType::Plan, CurvatureFormula::Simplified) => {
+                        if p2q2 < 1e-20 {
+                            0.0
+                        } else {
+                            -(q2 * r - 2.0 * p * q * s + p2 * t) / p2q2
                         }
                     }
                 };
@@ -214,7 +298,7 @@ mod tests {
         let dem = bowl();
         let result = curvature(&dem, CurvatureParams {
             curvature_type: CurvatureType::General,
-            z_factor: 1.0,
+            ..Default::default()
         }).unwrap();
 
         // z = x² + y² → d²z/dx²=2, d²z/dy²=2 → general = -(2+2)/2 = -2
@@ -230,7 +314,7 @@ mod tests {
         let dem = tilted_plane();
         let result = curvature(&dem, CurvatureParams {
             curvature_type: CurvatureType::Profile,
-            z_factor: 1.0,
+            ..Default::default()
         }).unwrap();
 
         let val = result.get(5, 5).unwrap();
@@ -242,7 +326,7 @@ mod tests {
         let dem = tilted_plane();
         let result = curvature(&dem, CurvatureParams {
             curvature_type: CurvatureType::Plan,
-            z_factor: 1.0,
+            ..Default::default()
         }).unwrap();
 
         let val = result.get(5, 5).unwrap();

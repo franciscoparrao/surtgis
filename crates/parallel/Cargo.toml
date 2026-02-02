@@ -6,10 +6,14 @@ authors.workspace = true
 license.workspace = true
 description = "Parallel processing strategies for SurtGis"
 
+[features]
+default = ["parallel"]
+parallel = ["dep:rayon", "dep:crossbeam", "surtgis-core/parallel"]
+
 [dependencies]
-surtgis-core = { path = "../core" }
-rayon.workspace = true
-crossbeam.workspace = true
+surtgis-core = { path = "../core", default-features = false }
+rayon = { workspace = true, optional = true }
+crossbeam = { workspace = true, optional = true }
 ndarray.workspace = true
 thiserror.workspace = true
 

@@ -5,7 +5,7 @@
 //! convergent flow (valleys), positive values indicate divergent flow (ridges).
 
 use ndarray::Array2;
-use rayon::prelude::*;
+use crate::maybe_rayon::*;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 

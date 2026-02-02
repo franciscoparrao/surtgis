@@ -1,0 +1,21 @@
+[package]
+name = "surtgis-python"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Python bindings for SurtGis geospatial algorithms via PyO3"
+
+[lib]
+name = "surtgis"
+crate-type = ["cdylib"]
+
+[features]
+default = ["parallel"]
+parallel = ["surtgis-algorithms/parallel"]
+
+[dependencies]
+surtgis-core = { path = "../core", default-features = false }
+surtgis-algorithms = { path = "../algorithms", default-features = false }
+pyo3.workspace = true
+numpy.workspace = true
