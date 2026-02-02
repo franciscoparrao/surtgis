@@ -24,6 +24,11 @@ use surtgis_algorithms::terrain::{
 };
 use surtgis_core::io::{read_geotiff, write_geotiff, GeoTiffOptions};
 
+#[cfg(feature = "cloud")]
+use surtgis_cloud::blocking::{CogReaderBlocking, StacClientBlocking, read_cog};
+#[cfg(feature = "cloud")]
+use surtgis_cloud::{BBox, CogReaderOptions, StacCatalog, StacClientOptions, StacSearchParams};
+
 // ─── CLI structure ──────────────────────────────────────────────────────
 
 #[derive(Parser)]
@@ -64,6 +69,18 @@ enum Commands {
     Morphology {
         #[command(subcommand)]
         algorithm: MorphologyCommands,
+    },
+    /// Read and process Cloud Optimized GeoTIFFs (COGs) via HTTP
+    #[cfg(feature = "cloud")]
+    Cog {
+        #[command(subcommand)]
+        action: CogCommands,
+    },
+    /// Search and fetch data from STAC catalogs (Planetary Computer, Earth Search)
+    #[cfg(feature = "cloud")]
+    Stac {
+        #[command(subcommand)]
+        action: StacCommands,
     },
 }
 
@@ -398,6 +415,150 @@ enum MorphologyCommands {
     },
 }
 
+// ─── COG subcommands ──────────────────────────────────────────────────
+
+#[cfg(feature = "cloud")]
+#[derive(Subcommand)]
+enum CogCommands {
+    /// Show metadata of a remote COG
+    Info {
+        /// URL of the COG file
+        url: String,
+    },
+    /// Read a bounding box from a remote COG and save to local file
+    Fetch {
+        /// URL of the COG file
+        url: String,
+        /// Output GeoTIFF file
+        output: PathBuf,
+        /// Bounding box: min_x,min_y,max_x,max_y
+        #[arg(long)]
+        bbox: String,
+        /// Overview level (0 = full resolution)
+        #[arg(long)]
+        overview: Option<usize>,
+    },
+    /// Calculate slope from a remote COG DEM
+    Slope {
+        /// URL of the COG DEM
+        url: String,
+        /// Output file
+        output: PathBuf,
+        /// Bounding box: min_x,min_y,max_x,max_y
+        #[arg(long)]
+        bbox: String,
+        /// Output units: degrees, percent, radians
+        #[arg(short, long, default_value = "degrees")]
+        units: String,
+        /// Z-factor for unit conversion
+        #[arg(short, long, default_value = "1.0")]
+        z_factor: f64,
+    },
+    /// Calculate aspect from a remote COG DEM
+    Aspect {
+        /// URL of the COG DEM
+        url: String,
+        /// Output file
+        output: PathBuf,
+        /// Bounding box: min_x,min_y,max_x,max_y
+        #[arg(long)]
+        bbox: String,
+        /// Output format: degrees, radians, compass
+        #[arg(short, long, default_value = "degrees")]
+        format: String,
+    },
+    /// Calculate hillshade from a remote COG DEM
+    Hillshade {
+        /// URL of the COG DEM
+        url: String,
+        /// Output file
+        output: PathBuf,
+        /// Bounding box: min_x,min_y,max_x,max_y
+        #[arg(long)]
+        bbox: String,
+        /// Sun azimuth in degrees (0=North, clockwise)
+        #[arg(short, long, default_value = "315")]
+        azimuth: f64,
+        /// Sun altitude in degrees above horizon
+        #[arg(short = 'l', long, default_value = "45")]
+        altitude: f64,
+        /// Z-factor for vertical exaggeration
+        #[arg(short, long, default_value = "1.0")]
+        z_factor: f64,
+    },
+    /// Calculate TPI from a remote COG DEM
+    Tpi {
+        /// URL of the COG DEM
+        url: String,
+        /// Output file
+        output: PathBuf,
+        /// Bounding box: min_x,min_y,max_x,max_y
+        #[arg(long)]
+        bbox: String,
+        /// Neighborhood radius in cells
+        #[arg(short, long, default_value = "1")]
+        radius: usize,
+    },
+    /// Fill sinks from a remote COG DEM
+    FillSinks {
+        /// URL of the COG DEM
+        url: String,
+        /// Output file
+        output: PathBuf,
+        /// Bounding box: min_x,min_y,max_x,max_y
+        #[arg(long)]
+        bbox: String,
+        /// Minimum slope to enforce
+        #[arg(long, default_value = "0.01")]
+        min_slope: f64,
+    },
+}
+
+// ─── STAC subcommands ────────────────────────────────────────────────
+
+#[cfg(feature = "cloud")]
+#[derive(Subcommand)]
+enum StacCommands {
+    /// Search a STAC catalog and list matching items
+    Search {
+        /// Catalog: "pc" (Planetary Computer), "es" (Earth Search), or full URL
+        #[arg(long, default_value = "es")]
+        catalog: String,
+        /// Bounding box: west,south,east,north
+        #[arg(long)]
+        bbox: Option<String>,
+        /// Datetime or range (e.g. "2024-06-01/2024-06-30")
+        #[arg(long)]
+        datetime: Option<String>,
+        /// Collections (comma-separated, e.g. "sentinel-2-l2a")
+        #[arg(long)]
+        collections: Option<String>,
+        /// Maximum items to return
+        #[arg(long, default_value = "10")]
+        limit: u32,
+    },
+    /// Search a STAC catalog, fetch the first COG asset, and save to a GeoTIFF
+    Fetch {
+        /// Catalog: "pc" (Planetary Computer), "es" (Earth Search), or full URL
+        #[arg(long, default_value = "es")]
+        catalog: String,
+        /// Bounding box: west,south,east,north
+        #[arg(long)]
+        bbox: String,
+        /// Collection (e.g. "sentinel-2-l2a")
+        #[arg(long)]
+        collection: String,
+        /// Asset key to fetch (e.g. "red", "nir", "B04"). Auto-detects COG if omitted.
+        #[arg(long)]
+        asset: Option<String>,
+        /// Datetime or range
+        #[arg(long)]
+        datetime: Option<String>,
+        /// Output GeoTIFF file
+        output: PathBuf,
+    },
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────────
 
 fn setup_logging(verbose: bool) {
@@ -507,6 +668,33 @@ fn parse_pour_points(s: &str) -> Result<Vec<(usize, usize)>> {
             Ok((row, col))
         })
         .collect()
+}
+
+// ─── COG helpers ────────────────────────────────────────────────────────
+
+#[cfg(feature = "cloud")]
+fn parse_bbox(s: &str) -> Result<BBox> {
+    let parts: Vec<&str> = s.split(',').collect();
+    if parts.len() != 4 {
+        anyhow::bail!("Bbox must be min_x,min_y,max_x,max_y (got {} parts)", parts.len());
+    }
+    let min_x: f64 = parts[0].trim().parse().context("Invalid min_x")?;
+    let min_y: f64 = parts[1].trim().parse().context("Invalid min_y")?;
+    let max_x: f64 = parts[2].trim().parse().context("Invalid max_x")?;
+    let max_y: f64 = parts[3].trim().parse().context("Invalid max_y")?;
+    Ok(BBox::new(min_x, min_y, max_x, max_y))
+}
+
+#[cfg(feature = "cloud")]
+fn read_cog_dem(url: &str, bbox: &BBox) -> Result<surtgis_core::Raster<f64>> {
+    let pb = spinner("Fetching COG tiles...");
+    let opts = CogReaderOptions::default();
+    let raster: surtgis_core::Raster<f64> =
+        read_cog(url, bbox, opts).context("Failed to read remote COG")?;
+    pb.finish_and_clear();
+    let (rows, cols) = raster.shape();
+    info!("Remote raster: {} x {} ({} cells)", cols, rows, raster.len());
+    Ok(raster)
 }
 
 // ─── Main ───────────────────────────────────────────────────────────────
@@ -989,6 +1177,278 @@ fn main() -> Result<()> {
                 let elapsed = start.elapsed();
                 write_result(&result, &output)?;
                 done("Black-hat", &output, elapsed);
+            }
+        },
+
+        // ── COG (remote processing) ───────────────────────────────────
+        #[cfg(feature = "cloud")]
+        Commands::Cog { action } => match action {
+            CogCommands::Info { url } => {
+                let pb = spinner("Opening remote COG...");
+                let opts = CogReaderOptions::default();
+                let reader = CogReaderBlocking::open(&url, opts)
+                    .context("Failed to open remote COG")?;
+                pb.finish_and_clear();
+
+                let meta = reader.metadata();
+                let ovr = reader.overviews();
+
+                println!("URL: {}", meta.url);
+                println!("Dimensions: {} x {} ({} cells)", meta.width, meta.height,
+                    meta.width as u64 * meta.height as u64);
+                println!("Tile size: {} x {}", meta.tile_width, meta.tile_height);
+                println!("Bits/sample: {}, Sample format: {}", meta.bits_per_sample, meta.sample_format);
+                println!("Compression: {}", match meta.compression {
+                    1 => "None",
+                    5 => "LZW",
+                    8 | 32946 => "DEFLATE",
+                    _ => "Other",
+                });
+                let gt = &meta.geo_transform;
+                println!("Origin: ({:.6}, {:.6})", gt.origin_x, gt.origin_y);
+                println!("Pixel size: ({:.6}, {:.6})", gt.pixel_width, gt.pixel_height);
+                if let Some(crs) = &meta.crs {
+                    println!("CRS: {}", crs);
+                }
+                if let Some(nd) = meta.nodata {
+                    println!("NoData: {}", nd);
+                }
+                if !ovr.is_empty() {
+                    println!("Overviews ({}):", ovr.len());
+                    for o in &ovr {
+                        println!("  [{}] {} x {}", o.index, o.width, o.height);
+                    }
+                }
+            }
+
+            CogCommands::Fetch { url, output, bbox, overview } => {
+                let bbox = parse_bbox(&bbox)?;
+                let pb = spinner("Fetching COG tiles...");
+                let opts = CogReaderOptions::default();
+                let mut reader = CogReaderBlocking::open(&url, opts)
+                    .context("Failed to open remote COG")?;
+                let start = Instant::now();
+                let raster: surtgis_core::Raster<f64> = reader
+                    .read_bbox(&bbox, overview)
+                    .context("Failed to read bounding box")?;
+                pb.finish_and_clear();
+                let elapsed = start.elapsed();
+                let (rows, cols) = raster.shape();
+                println!("Fetched: {} x {} ({} cells)", cols, rows, raster.len());
+                write_result(&raster, &output)?;
+                done("COG fetch", &output, elapsed);
+            }
+
+            CogCommands::Slope { url, output, bbox, units, z_factor } => {
+                let bbox = parse_bbox(&bbox)?;
+                let dem = read_cog_dem(&url, &bbox)?;
+                let units = match units.to_lowercase().as_str() {
+                    "degrees" | "deg" | "d" => SlopeUnits::Degrees,
+                    "percent" | "pct" | "%" => SlopeUnits::Percent,
+                    "radians" | "rad" | "r" => SlopeUnits::Radians,
+                    _ => {
+                        eprintln!("Unknown units: {}. Using degrees.", units);
+                        SlopeUnits::Degrees
+                    }
+                };
+                let start = Instant::now();
+                let result = slope(&dem, SlopeParams { units, z_factor })
+                    .context("Failed to calculate slope")?;
+                let elapsed = start.elapsed();
+                write_result(&result, &output)?;
+                done("COG slope", &output, elapsed);
+            }
+
+            CogCommands::Aspect { url, output, bbox, format } => {
+                let bbox = parse_bbox(&bbox)?;
+                let dem = read_cog_dem(&url, &bbox)?;
+                let fmt = match format.to_lowercase().as_str() {
+                    "degrees" | "deg" | "d" => AspectOutput::Degrees,
+                    "radians" | "rad" | "r" => AspectOutput::Radians,
+                    "compass" | "c" => AspectOutput::Compass,
+                    _ => {
+                        eprintln!("Unknown format: {}. Using degrees.", format);
+                        AspectOutput::Degrees
+                    }
+                };
+                let start = Instant::now();
+                let result = aspect(&dem, fmt).context("Failed to calculate aspect")?;
+                let elapsed = start.elapsed();
+                write_result(&result, &output)?;
+                done("COG aspect", &output, elapsed);
+            }
+
+            CogCommands::Hillshade { url, output, bbox, azimuth, altitude, z_factor } => {
+                let bbox = parse_bbox(&bbox)?;
+                let dem = read_cog_dem(&url, &bbox)?;
+                let start = Instant::now();
+                let result = hillshade(
+                    &dem,
+                    HillshadeParams { azimuth, altitude, z_factor, normalized: false },
+                ).context("Failed to calculate hillshade")?;
+                let elapsed = start.elapsed();
+                write_result(&result, &output)?;
+                done("COG hillshade", &output, elapsed);
+            }
+
+            CogCommands::Tpi { url, output, bbox, radius } => {
+                let bbox = parse_bbox(&bbox)?;
+                let dem = read_cog_dem(&url, &bbox)?;
+                let start = Instant::now();
+                let result = tpi(&dem, TpiParams { radius })
+                    .context("Failed to calculate TPI")?;
+                let elapsed = start.elapsed();
+                write_result(&result, &output)?;
+                done("COG TPI", &output, elapsed);
+            }
+
+            CogCommands::FillSinks { url, output, bbox, min_slope } => {
+                let bbox = parse_bbox(&bbox)?;
+                let dem = read_cog_dem(&url, &bbox)?;
+                let start = Instant::now();
+                let result = fill_sinks(&dem, FillSinksParams { min_slope })
+                    .context("Failed to fill sinks")?;
+                let elapsed = start.elapsed();
+                write_result(&result, &output)?;
+                done("COG fill-sinks", &output, elapsed);
+            }
+        },
+
+        // ── STAC catalog search & fetch ─────────────────────────────────
+        #[cfg(feature = "cloud")]
+        Commands::Stac { action } => match action {
+            StacCommands::Search {
+                catalog,
+                bbox,
+                datetime,
+                collections,
+                limit,
+            } => {
+                let cat = StacCatalog::from_str_or_url(&catalog);
+                let pb = spinner("Searching STAC catalog...");
+                let client = StacClientBlocking::new(cat, StacClientOptions::default())
+                    .context("Failed to create STAC client")?;
+
+                let mut params = StacSearchParams::new().limit(limit);
+                if let Some(ref b) = bbox {
+                    let bb = parse_bbox(b)?;
+                    params = params.bbox(bb.min_x, bb.min_y, bb.max_x, bb.max_y);
+                }
+                if let Some(ref dt) = datetime {
+                    params = params.datetime(dt);
+                }
+                if let Some(ref cols) = collections {
+                    let c: Vec<&str> = cols.split(',').map(|s| s.trim()).collect();
+                    params = params.collections(&c);
+                }
+
+                let results = client.search(&params).context("STAC search failed")?;
+                pb.finish_and_clear();
+
+                println!(
+                    "Found {} items (matched: {})",
+                    results.len(),
+                    results.number_matched.map_or("?".to_string(), |n| n.to_string())
+                );
+                println!();
+
+                for item in &results.features {
+                    let dt = item
+                        .properties
+                        .datetime
+                        .as_deref()
+                        .unwrap_or("-");
+                    let cc = item
+                        .properties
+                        .eo_cloud_cover
+                        .map(|c| format!("{:.1}%", c))
+                        .unwrap_or_else(|| "-".to_string());
+                    let col = item.collection.as_deref().unwrap_or("-");
+                    let asset_keys: Vec<&str> = item.assets.keys().map(|k| k.as_str()).collect();
+
+                    println!("  {} [{}]", item.id, col);
+                    println!("    datetime: {}  cloud: {}", dt, cc);
+                    println!("    assets: {}", asset_keys.join(", "));
+                }
+
+                if results.has_next() {
+                    println!("\n  (more results available — increase --limit to fetch more)");
+                }
+            }
+
+            StacCommands::Fetch {
+                catalog,
+                bbox,
+                collection,
+                asset,
+                datetime,
+                output,
+            } => {
+                let cat = StacCatalog::from_str_or_url(&catalog);
+                let bb = parse_bbox(&bbox)?;
+
+                let mut params = StacSearchParams::new()
+                    .bbox(bb.min_x, bb.min_y, bb.max_x, bb.max_y)
+                    .collections(&[collection.as_str()])
+                    .limit(1);
+                if let Some(ref dt) = datetime {
+                    params = params.datetime(dt);
+                }
+
+                let pb = spinner("Searching STAC catalog...");
+                let client = StacClientBlocking::new(cat, StacClientOptions::default())
+                    .context("Failed to create STAC client")?;
+                let results = client.search(&params).context("STAC search failed")?;
+
+                let item = results.features.first().ok_or_else(|| {
+                    anyhow::anyhow!("No items found matching the search criteria")
+                })?;
+                pb.finish_and_clear();
+
+                println!("Item: {} [{}]", item.id, item.collection.as_deref().unwrap_or("-"));
+
+                // Determine asset key
+                let asset_key = if let Some(ref k) = asset {
+                    k.clone()
+                } else {
+                    let (k, _) = item.first_cog_asset().ok_or_else(|| {
+                        anyhow::anyhow!("No COG asset found. Specify --asset explicitly. Available: {}",
+                            item.assets.keys().cloned().collect::<Vec<_>>().join(", "))
+                    })?;
+                    println!("Auto-detected asset: {}", k);
+                    k.clone()
+                };
+
+                let stac_asset = item.asset(&asset_key).ok_or_else(|| {
+                    anyhow::anyhow!("Asset '{}' not found. Available: {}",
+                        asset_key,
+                        item.assets.keys().cloned().collect::<Vec<_>>().join(", "))
+                })?;
+
+                // Sign the href if needed
+                let href = client
+                    .sign_asset_href(
+                        &stac_asset.href,
+                        item.collection.as_deref().unwrap_or(""),
+                    )
+                    .context("Failed to sign asset URL")?;
+
+                // Read via CogReader
+                let pb = spinner("Fetching COG tiles...");
+                let start = Instant::now();
+                let opts = CogReaderOptions::default();
+                let mut reader = CogReaderBlocking::open(&href, opts)
+                    .context("Failed to open remote COG")?;
+                let raster: surtgis_core::Raster<f64> = reader
+                    .read_bbox(&bb, None)
+                    .context("Failed to read bounding box from COG")?;
+                pb.finish_and_clear();
+                let elapsed = start.elapsed();
+
+                let (rows, cols) = raster.shape();
+                println!("Fetched: {} x {} ({} cells)", cols, rows, raster.len());
+                write_result(&raster, &output)?;
+                done("STAC fetch", &output, elapsed);
             }
         },
     }
