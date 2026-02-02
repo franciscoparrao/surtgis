@@ -122,7 +122,7 @@ pub fn breach_depressions(dem: &Raster<f64>, params: BreachParams) -> Result<Ras
     for row in 1..rows - 1 {
         for col in 1..cols - 1 {
             let z = output[(row, col)];
-            if z.is_nan() || nodata.map_or(false, |nd| (z - nd).abs() < f64::EPSILON) {
+            if z.is_nan() || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON) {
                 continue;
             }
 
@@ -219,7 +219,7 @@ pub fn breach_depressions(dem: &Raster<f64>, params: BreachParams) -> Result<Ras
                 }
 
                 let nz = output[(nr, nc)];
-                if nz.is_nan() || nodata.map_or(false, |nd| (nz - nd).abs() < f64::EPSILON) {
+                if nz.is_nan() || nodata.is_some_and(|nd| (nz - nd).abs() < f64::EPSILON) {
                     continue;
                 }
 
@@ -288,7 +288,7 @@ pub fn breach_depressions(dem: &Raster<f64>, params: BreachParams) -> Result<Ras
             for col in 0..cols {
                 let val = output[(row, col)];
                 let is_nd = val.is_nan()
-                    || nodata.map_or(false, |nd| (val - nd).abs() < f64::EPSILON);
+                    || nodata.is_some_and(|nd| (val - nd).abs() < f64::EPSILON);
 
                 if is_nd {
                     pf_visited[(row, col)] = true;

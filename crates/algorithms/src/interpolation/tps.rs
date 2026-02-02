@@ -145,7 +145,7 @@ pub fn tps_interpolation(
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let (x, y) = transform.pixel_to_geo(col, row);
 
                 let mut val = a1 + a2 * x + a3 * y;
@@ -157,7 +157,7 @@ pub fn tps_interpolation(
                     val += weights[i] * tps_kernel(r);
                 }
 
-                row_data[col] = val;
+                *row_data_col = val;
             }
 
             row_data

@@ -169,11 +169,10 @@ impl KdTree {
         }
 
         // Check if we need to search the other side
-        if diff * diff < *best_dist_sq {
-            if let Some(child) = second {
+        if diff * diff < *best_dist_sq
+            && let Some(child) = second {
                 self.nearest_recursive(child, qx, qy, best_dist_sq, best_idx);
             }
-        }
     }
 
     fn knn_recursive(
@@ -233,11 +232,10 @@ impl KdTree {
             f64::MAX
         };
 
-        if diff * diff < threshold {
-            if let Some(child) = second {
+        if diff * diff < threshold
+            && let Some(child) = second {
                 self.knn_recursive(child, qx, qy, k, heap);
             }
-        }
     }
 
     fn radius_recursive(
@@ -266,17 +264,15 @@ impl KdTree {
         let diff = if node.split_dim == 0 { dx } else { dy };
 
         // Always check both sides if the splitting plane is within radius
-        if let Some(left) = node.left {
-            if diff > 0.0 || diff * diff <= radius_sq {
+        if let Some(left) = node.left
+            && (diff > 0.0 || diff * diff <= radius_sq) {
                 self.radius_recursive(left, qx, qy, radius_sq, results);
             }
-        }
 
-        if let Some(right) = node.right {
-            if diff < 0.0 || diff * diff <= radius_sq {
+        if let Some(right) = node.right
+            && (diff < 0.0 || diff * diff <= radius_sq) {
                 self.radius_recursive(right, qx, qy, radius_sq, results);
             }
-        }
     }
 }
 

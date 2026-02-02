@@ -1,7 +1,13 @@
-//! Multiscale Curvatures (Florinsky 2016)
+//! Multiscale Curvatures (Florinsky 2025, Ch. 4)
 //!
 //! Uses 3rd-order bivariate polynomial fitting on a 5×5 neighborhood
 //! to compute curvatures more robust against noise than standard 3×3 methods.
+//!
+//! The cubic fit ensures unbiased first-derivative estimates (p, q)
+//! even when the terrain has cubic variation — unlike a quadratic fit
+//! which leaks cubic trend into the gradient estimates.
+//!
+//! Closed-form LS solution: Florinsky 2025, Eqs. 4.14–4.22.
 
 use ndarray::Array2;
 use crate::maybe_rayon::*;
@@ -40,13 +46,13 @@ impl Default for MultiscaleCurvatureParams {
     }
 }
 
-/// Compute multiscale curvature using Florinsky's (2016) method
+/// Compute multiscale curvature using Florinsky's (2025) method
 ///
-/// Fits a 3rd-order bivariate polynomial to the 5×5 neighborhood
-/// around each cell, then computes curvatures from the fitted surface.
+/// Fits a 3rd-order (cubic) bivariate polynomial to the 5×5 neighborhood
+/// around each cell, then computes curvatures from the partial derivatives.
 ///
-/// The polynomial is: z = ax² + bxy + cy² + dx + ey + f
-/// (using least-squares fit to 25 points)
+/// The cubic model on a symmetric 5×5 grid yields closed-form solutions
+/// for all five partial derivatives (p, q, r, s, t) at the center.
 ///
 /// # Arguments
 /// * `dem` - Input DEM
@@ -65,7 +71,7 @@ pub fn multiscale_curvatures(
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 // Need 5×5 neighborhood (margin of 2)
                 if row < 2 || row >= rows - 2 || col < 2 || col >= cols - 2 {
                     continue;
@@ -88,55 +94,52 @@ pub fn multiscale_curvatures(
                 }
                 if has_nan { continue; }
 
-                // Fit quadratic surface z = ax² + bxy + cy² + dx + ey + f
-                // using Evans-Young method on 5×5 window
-                let (a, b, c, d, e) = fit_quadratic_5x5(dem, row, col, cs);
+                // Fit cubic surface and get partial derivatives
+                let (p, q, r, s, t) = fit_cubic_5x5(dem, row, col, cs);
 
-                row_data[col] = match params.curvature_type {
+                let g2 = p * p + q * q; // gradient magnitude squared
+
+                *row_data_col = match params.curvature_type {
                     MultiscaleCurvatureType::Mean => {
-                        // H = -((1+e²)a + (1+d²)c - deb) / ((1+d²+e²)^1.5)
-                        let g2 = d * d + e * e;
-                        if g2 < f64::EPSILON && a.abs() < f64::EPSILON && c.abs() < f64::EPSILON {
+                        // H = -((1+q²)r + (1+p²)t - 2pqs) / (2(1+p²+q²)^1.5)
+                        if g2 < f64::EPSILON && r.abs() < f64::EPSILON && t.abs() < f64::EPSILON {
                             0.0
                         } else {
-                            -((1.0 + e * e) * a + (1.0 + d * d) * c - d * e * b)
-                                / (1.0 + g2).powf(1.5)
+                            -((1.0 + q * q) * r + (1.0 + p * p) * t - 2.0 * p * q * s)
+                                / (2.0 * (1.0 + g2).powf(1.5))
                         }
                     }
                     MultiscaleCurvatureType::Gaussian => {
-                        // K = (ac - b²/4) / (1 + d² + e²)²
-                        let g2 = d * d + e * e;
-                        (a * c - b * b / 4.0) / (1.0 + g2).powi(2)
+                        // K = (rt - s²) / (1 + p² + q²)²
+                        (r * t - s * s) / (1.0 + g2).powi(2)
                     }
                     MultiscaleCurvatureType::Profile => {
-                        // Profile curvature
-                        let g2 = d * d + e * e;
+                        // kp = -(p²r + 2pqs + q²t) / ((p²+q²)(1+p²+q²)^1.5)
                         if g2 < f64::EPSILON { 0.0 }
                         else {
-                            -(a * d * d + b * d * e + c * e * e)
+                            -(p * p * r + 2.0 * p * q * s + q * q * t)
                                 / (g2 * (1.0 + g2).powf(1.5))
                         }
                     }
                     MultiscaleCurvatureType::Plan => {
-                        // Plan (tangential) curvature
-                        let g2 = d * d + e * e;
+                        // kh = -(q²r - 2pqs + p²t) / ((p²+q²)√(1+p²+q²))
                         if g2 < f64::EPSILON { 0.0 }
                         else {
-                            -(a * e * e - b * d * e + c * d * d)
+                            -(q * q * r - 2.0 * p * q * s + p * p * t)
                                 / (g2 * (1.0 + g2).sqrt())
                         }
                     }
                     MultiscaleCurvatureType::Maximal => {
-                        let h = -((1.0 + e * e) * a + (1.0 + d * d) * c - d * e * b)
-                            / (1.0 + d * d + e * e).powf(1.5);
-                        let k = (a * c - b * b / 4.0) / (1.0 + d * d + e * e).powi(2);
+                        let h = -((1.0 + q * q) * r + (1.0 + p * p) * t - 2.0 * p * q * s)
+                            / (2.0 * (1.0 + g2).powf(1.5));
+                        let k = (r * t - s * s) / (1.0 + g2).powi(2);
                         let disc = (h * h - k).max(0.0).sqrt();
                         h + disc
                     }
                     MultiscaleCurvatureType::Minimal => {
-                        let h = -((1.0 + e * e) * a + (1.0 + d * d) * c - d * e * b)
-                            / (1.0 + d * d + e * e).powf(1.5);
-                        let k = (a * c - b * b / 4.0) / (1.0 + d * d + e * e).powi(2);
+                        let h = -((1.0 + q * q) * r + (1.0 + p * p) * t - 2.0 * p * q * s)
+                            / (2.0 * (1.0 + g2).powf(1.5));
+                        let k = (r * t - s * s) / (1.0 + g2).powi(2);
                         let disc = (h * h - k).max(0.0).sqrt();
                         h - disc
                     }
@@ -155,72 +158,95 @@ pub fn multiscale_curvatures(
     Ok(output)
 }
 
-/// Fit a quadratic surface to 5×5 neighborhood using least-squares
-/// Returns (a, b, c, d, e) for z = ax² + bxy + cy² + dx + ey + f
-fn fit_quadratic_5x5(dem: &Raster<f64>, row: usize, col: usize, cs: f64) -> (f64, f64, f64, f64, f64) {
-    // Use analytical solution for the specific 5×5 grid pattern
-    // The grid has integer coordinates [-2,-1,0,1,2] scaled by cell_size
+/// Fit a 3rd-order (cubic) bivariate polynomial to the 5×5 neighborhood
+/// using the closed-form least-squares solution (Florinsky 2025, Eqs. 4.14–4.22).
+///
+/// Returns (p, q, r, s, t) — the actual partial derivatives at the center:
+///   p = ∂z/∂x, q = ∂z/∂y, r = ∂²z/∂x², s = ∂²z/∂x∂y, t = ∂²z/∂y²
+///
+/// The cubic model on the symmetric 5×5 grid decouples into four independent
+/// blocks due to parity symmetry, yielding analytical formulas:
+///
+///   Block A (even-even): r, t from {1, x², y²}
+///   Block B (odd-x):     p from {x, x³, xy²}
+///   Block C (odd-y):     q from {y, y³, x²y}
+///   Block D (odd-odd):   s from {xy}
+fn fit_cubic_5x5(dem: &Raster<f64>, row: usize, col: usize, cs: f64) -> (f64, f64, f64, f64, f64) {
+    let h = cs;
+    let h2 = h * h;
+
+    // Accumulate weighted sums in grid coordinates (integer offsets)
+    let mut sz = 0.0;     // Σ z
+    let mut sx_z = 0.0;   // Σ x·z
+    let mut sy_z = 0.0;   // Σ y·z
+    let mut sx2_z = 0.0;  // Σ x²·z
+    let mut sy2_z = 0.0;  // Σ y²·z
+    let mut sxy_z = 0.0;  // Σ xy·z
+    let mut sx3_z = 0.0;  // Σ x³·z
+    let mut sy3_z = 0.0;  // Σ y³·z
+    let mut sxy2_z = 0.0; // Σ xy²·z
+    let mut sx2y_z = 0.0; // Σ x²y·z
+
+    for di in -2_isize..=2 {
+        let y = di as f64;
+        for dj in -2_isize..=2 {
+            let x = dj as f64;
+            let v = unsafe { dem.get_unchecked(
+                (row as isize + di) as usize,
+                (col as isize + dj) as usize,
+            )};
+            sz += v;
+            sx_z += x * v;
+            sy_z += y * v;
+            sx2_z += x * x * v;
+            sy2_z += y * y * v;
+            sxy_z += x * y * v;
+            sx3_z += x * x * x * v;
+            sy3_z += y * y * y * v;
+            sxy2_z += x * y * y * v;
+            sx2y_z += x * x * y * v;
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Block B: solve for a₁₀ (→ p) from the 3×3 system:
+    //   M_B · [a₁₀, a₃₀, a₁₂]ᵀ = [sx_z, sx3_z, sxy2_z]ᵀ
     //
-    // For the standard 5×5 grid, the least-squares solution simplifies to:
-    // a = (Σz*x² - n*z̄*Σx²) / (Σx⁴ - n*(Σx²)²) but we use the closed-form
-    // from the specific grid structure.
+    //   M_B = [[50, 170, 100],
+    //          [170, 650, 340],
+    //          [100, 340, 340]]
+    //
+    //   det(M_B) = 504000
+    //   First row of M_B⁻¹ = [105400, -23800, -7200] / 504000
+    //                       = [527, -119, -36] / 2520
+    // -------------------------------------------------------------------
+    let p = (527.0 * sx_z - 119.0 * sx3_z - 36.0 * sxy2_z) / (2520.0 * h);
 
-    let mut z = [[0.0_f64; 5]; 5]; // z[dr+2][dc+2]
-    for dr in -2_isize..=2 {
-        for dc in -2_isize..=2 {
-            z[(dr + 2) as usize][(dc + 2) as usize] =
-                unsafe { dem.get_unchecked((row as isize + dr) as usize, (col as isize + dc) as usize) };
-        }
-    }
+    // -------------------------------------------------------------------
+    // Block C: identical structure by x↔y symmetry
+    // -------------------------------------------------------------------
+    let q = (527.0 * sy_z - 119.0 * sy3_z - 36.0 * sx2y_z) / (2520.0 * h);
 
-    let cs2 = cs * cs;
+    // -------------------------------------------------------------------
+    // Block A: solve for a₂₀, a₀₂ from the 3×3 system:
+    //   [[25, 50, 50], [50, 170, 100], [50, 100, 170]]
+    //
+    //   Row reduction gives: a₂₀ = (sx2_z - 2·sz) / 70
+    //                        a₀₂ = (sy2_z - 2·sz) / 70
+    //
+    //   r = ∂²z/∂x² = 2·a₂₀,  t = ∂²z/∂y² = 2·a₀₂
+    // -------------------------------------------------------------------
+    let r = (sx2_z - 2.0 * sz) / (35.0 * h2);
+    let t = (sy2_z - 2.0 * sz) / (35.0 * h2);
 
-    // For a 5×5 uniform grid centered at origin, the LS formulas are:
-    // Sum notation: z[i][j] where i=row offset+2, j=col offset+2
+    // -------------------------------------------------------------------
+    // Block D: single equation for a₁₁ = s
+    //   a₁₁ = sxy_z / Σ(x²y²) = sxy_z / 100
+    //   s = ∂²z/∂x∂y = a₁₁
+    // -------------------------------------------------------------------
+    let s = sxy_z / (100.0 * h2);
 
-    // d = ∂z/∂x ≈ least-squares slope in x
-    // Using weighted sum of all columns
-    let mut sum_xz = 0.0;
-    let mut sum_yz = 0.0;
-    let mut sum_x2z = 0.0;
-    let mut sum_y2z = 0.0;
-    let mut sum_xyz = 0.0;
-    let mut sum_z = 0.0;
-
-    // Σx² for x in {-2,-1,0,1,2} = 10, Σx⁴ = 34
-
-    for i in 0..5 {
-        let y = (i as f64 - 2.0) * cs;
-        for j in 0..5 {
-            let x = (j as f64 - 2.0) * cs;
-            let v = z[i][j];
-            sum_xz += x * v;
-            sum_yz += y * v;
-            sum_x2z += x * x * v;
-            sum_y2z += y * y * v;
-            sum_xyz += x * y * v;
-            sum_z += v;
-        }
-    }
-
-    let n = 25.0;
-    let sx2 = 50.0 * cs2;        // sum of x² over 25 points
-    let sx4 = 170.0 * cs2 * cs2; // sum of x⁴ over 25 points
-    let sx2y2 = 100.0 * cs2 * cs2; // sum of x²y² over 25 points
-
-    // First-order terms (slope)
-    let d = sum_xz / sx2;  // ∂z/∂x
-    let e = sum_yz / sx2;  // ∂z/∂y
-
-    // Second-order terms (curvature)
-    let mean_z = sum_z / n;
-    let a = (sum_x2z - mean_z * sx2) / (sx4 - sx2 * sx2 / n); // ∂²z/∂x²  / 2
-    let c = (sum_y2z - mean_z * sx2) / (sx4 - sx2 * sx2 / n); // ∂²z/∂y²  / 2
-    let b = sum_xyz / sx2y2; // ∂²z/∂x∂y (cross term on uniform grid)
-
-    // Scale to proper units: the fit gives z = a*x² + b*xy + c*y² + ...
-    // Second derivatives: ∂²z/∂x² = 2a, etc.
-    (a, b, c, d, e)
+    (p, q, r, s, t)
 }
 
 #[cfg(test)]
@@ -295,5 +321,54 @@ mod tests {
 
         // Bowl has both profile and plan curvature
         assert!(!pf.is_nan() && !pl.is_nan());
+    }
+
+    #[test]
+    fn test_cubic_fit_linear_surface() {
+        // Linear surface z = 3x + 2y: p=3, q=2, r=s=t=0
+        let mut dem = Raster::new(20, 20);
+        dem.set_transform(GeoTransform::new(0.0, 20.0, 1.0, -1.0));
+        for row in 0..20 {
+            for col in 0..20 {
+                dem.set(row, col, 3.0 * col as f64 + 2.0 * row as f64).unwrap();
+            }
+        }
+
+        let (p, q, r, s, t) = fit_cubic_5x5(&dem, 10, 10, 1.0);
+        assert!((p - 3.0).abs() < 1e-10, "p should be 3.0, got {}", p);
+        assert!((q - 2.0).abs() < 1e-10, "q should be 2.0, got {}", q);
+        assert!(r.abs() < 1e-10, "r should be 0, got {}", r);
+        assert!(s.abs() < 1e-10, "s should be 0, got {}", s);
+        assert!(t.abs() < 1e-10, "t should be 0, got {}", t);
+    }
+
+    #[test]
+    fn test_cubic_fit_quadratic_surface() {
+        // Quadratic z = x² + y²: p=0 at center, q=0 at center, r=2, t=2, s=0
+        let dem = bowl_dem(20);
+        let (p, q, r, s, t) = fit_cubic_5x5(&dem, 10, 10, 1.0);
+        assert!(p.abs() < 1e-6, "p should be ~0 at bowl center, got {}", p);
+        assert!(q.abs() < 1e-6, "q should be ~0 at bowl center, got {}", q);
+        assert!((r - 2.0).abs() < 1e-6, "r should be 2.0, got {}", r);
+        assert!((t - 2.0).abs() < 1e-6, "t should be 2.0, got {}", t);
+        assert!(s.abs() < 1e-6, "s should be 0, got {}", s);
+    }
+
+    #[test]
+    fn test_cubic_fit_unbiased_on_cubic_surface() {
+        // Cubic surface z = x³: at center p=0, q=0 (∂(x³)/∂x = 3x² = 0 at x=0)
+        let mut dem = Raster::new(20, 20);
+        dem.set_transform(GeoTransform::new(0.0, 20.0, 1.0, -1.0));
+        for row in 0..20 {
+            for col in 0..20 {
+                let x = col as f64 - 10.0;
+                dem.set(row, col, x * x * x).unwrap();
+            }
+        }
+
+        let (p, _q, _r, _s, _t) = fit_cubic_5x5(&dem, 10, 10, 1.0);
+        // Cubic fit should give p = 0 at center of z = x³
+        // (quadratic fit would give biased nonzero value)
+        assert!(p.abs() < 1e-6, "Cubic fit should give p=0 for z=x³ at center, got {}", p);
     }
 }

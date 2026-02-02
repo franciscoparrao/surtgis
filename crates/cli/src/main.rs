@@ -462,7 +462,7 @@ fn write_result_i32(raster: &surtgis_core::Raster<i32>, path: &PathBuf) -> Resul
     Ok(())
 }
 
-fn done(name: &str, path: &PathBuf, elapsed: std::time::Duration) {
+fn done(name: &str, path: &std::path::Path, elapsed: std::time::Duration) {
     println!("{} saved to: {}", name, path.display());
     println!("  Processing time: {:.2?}", elapsed);
 }

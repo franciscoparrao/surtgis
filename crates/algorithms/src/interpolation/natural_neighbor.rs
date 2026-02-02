@@ -93,7 +93,7 @@ pub fn natural_neighbor(points: &[SamplePoint], params: NaturalNeighborParams) -
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let (cx, cy) = params.transform.pixel_to_geo(col, row);
 
                 // Find k nearest points
@@ -106,7 +106,7 @@ pub fn natural_neighbor(points: &[SamplePoint], params: NaturalNeighborParams) -
 
                 // Check for exact hit (point coincides with cell center)
                 if dists[0].1 < 1e-20 {
-                    row_data[col] = points[dists[0].0].value;
+                    *row_data_col = points[dists[0].0].value;
                     continue;
                 }
 
@@ -117,7 +117,7 @@ pub fn natural_neighbor(points: &[SamplePoint], params: NaturalNeighborParams) -
 
                 if step < 1e-15 {
                     // All points at same location, use nearest
-                    row_data[col] = points[dists[0].0].value;
+                    *row_data_col = points[dists[0].0].value;
                     continue;
                 }
 
@@ -161,7 +161,7 @@ pub fn natural_neighbor(points: &[SamplePoint], params: NaturalNeighborParams) -
 
                 if total_stolen == 0 {
                     // Fallback: use nearest neighbor
-                    row_data[col] = points[neighbor_indices[0]].value;
+                    *row_data_col = points[neighbor_indices[0]].value;
                     continue;
                 }
 
@@ -177,7 +177,7 @@ pub fn natural_neighbor(points: &[SamplePoint], params: NaturalNeighborParams) -
                 }
 
                 if sum_w > 0.0 {
-                    row_data[col] = sum_wv / sum_w;
+                    *row_data_col = sum_wv / sum_w;
                 }
             }
 

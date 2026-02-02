@@ -12,18 +12,12 @@ use super::element::StructuringElement;
 
 /// Parameters for morphological erosion
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct ErodeParams {
     /// Structuring element shape
     pub element: StructuringElement,
 }
 
-impl Default for ErodeParams {
-    fn default() -> Self {
-        Self {
-            element: StructuringElement::default(),
-        }
-    }
-}
 
 /// Erosion algorithm
 #[derive(Debug, Clone, Default)]
@@ -70,7 +64,7 @@ pub fn erode(raster: &Raster<f64>, element: &StructuringElement) -> Result<Raste
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let center = unsafe { raster.get_unchecked(row, col) };
                 if is_nodata_val(center, nodata) {
                     continue;
@@ -104,7 +98,7 @@ pub fn erode(raster: &Raster<f64>, element: &StructuringElement) -> Result<Raste
                 }
 
                 if !has_nodata {
-                    row_data[col] = min_val;
+                    *row_data_col = min_val;
                 }
             }
 

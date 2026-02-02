@@ -144,9 +144,9 @@ pub fn curvature(dem: &Raster<f64>, params: CurvatureParams) -> Result<Raster<f6
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let z5 = unsafe { dem.get_unchecked(row, col) };
-                if z5.is_nan() || nodata.map_or(false, |nd| (z5 - nd).abs() < f64::EPSILON) {
+                if z5.is_nan() || nodata.is_some_and(|nd| (z5 - nd).abs() < f64::EPSILON) {
                     continue;
                 }
 
@@ -195,7 +195,7 @@ pub fn curvature(dem: &Raster<f64>, params: CurvatureParams) -> Result<Raster<f6
                 let q2 = q * q;
                 let p2q2 = p2 + q2;
 
-                row_data[col] = match (params.curvature_type, formula) {
+                *row_data_col = match (params.curvature_type, formula) {
                     // --- Full formulas (with denominators) ---
                     (CurvatureType::General, CurvatureFormula::Full) => {
                         let w = 1.0 + p2q2;

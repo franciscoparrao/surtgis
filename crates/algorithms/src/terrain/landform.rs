@@ -131,7 +131,7 @@ pub fn landform_classification(dem: &Raster<f64>, params: LandformParams) -> Res
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let sv = unsafe { tpi_small.get_unchecked(row, col) };
                 let lv = unsafe { tpi_large.get_unchecked(row, col) };
                 let sl = unsafe { slope_deg.get_unchecked(row, col) };
@@ -159,7 +159,7 @@ pub fn landform_classification(dem: &Raster<f64>, params: LandformParams) -> Res
                 let l_low = lz < -threshold;
                 let gentle = sl < slope_thresh;
 
-                row_data[col] = if s_high && l_high {
+                *row_data_col = if s_high && l_high {
                     class::RIDGE
                 } else if s_high && !l_high && !l_low {
                     class::UPPER_SLOPE

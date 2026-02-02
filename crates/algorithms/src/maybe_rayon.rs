@@ -3,7 +3,6 @@
 /// When the `parallel` feature is enabled, this re-exports rayon's parallel iterators.
 /// When disabled (e.g., for WASM builds), it provides sequential fallbacks that
 /// implement the same API surface used by our algorithms.
-
 #[cfg(feature = "parallel")]
 pub use rayon::prelude::*;
 

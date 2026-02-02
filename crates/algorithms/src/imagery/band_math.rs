@@ -40,19 +40,18 @@ where
         .into_par_iter()
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let val = unsafe { raster.get_unchecked(row, col) };
 
                 if val.is_nan() {
                     continue;
                 }
-                if let Some(nd) = nodata {
-                    if (val - nd).abs() < f64::EPSILON {
+                if let Some(nd) = nodata
+                    && (val - nd).abs() < f64::EPSILON {
                         continue;
                     }
-                }
 
-                row_data[col] = f(val);
+                *row_data_col = f(val);
             }
             row_data
         })
@@ -97,25 +96,23 @@ pub fn band_math_binary(
         .into_par_iter()
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let va = unsafe { a.get_unchecked(row, col) };
                 let vb = unsafe { b.get_unchecked(row, col) };
 
                 if va.is_nan() || vb.is_nan() {
                     continue;
                 }
-                if let Some(nd) = nodata_a {
-                    if (va - nd).abs() < f64::EPSILON {
+                if let Some(nd) = nodata_a
+                    && (va - nd).abs() < f64::EPSILON {
                         continue;
                     }
-                }
-                if let Some(nd) = nodata_b {
-                    if (vb - nd).abs() < f64::EPSILON {
+                if let Some(nd) = nodata_b
+                    && (vb - nd).abs() < f64::EPSILON {
                         continue;
                     }
-                }
 
-                row_data[col] = match op {
+                *row_data_col = match op {
                     BandMathOp::Add => va + vb,
                     BandMathOp::Subtract => va - vb,
                     BandMathOp::Multiply => va * vb,

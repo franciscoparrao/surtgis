@@ -61,7 +61,7 @@ pub fn flow_accumulation_tfga(dem: &Raster<f64>, params: TfgaParams) -> Result<R
         for col in 0..cols {
             let z = unsafe { dem.get_unchecked(row, col) };
             let is_nd = z.is_nan()
-                || nodata.map_or(false, |nd| (z - nd).abs() < f64::EPSILON);
+                || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
             if !is_nd {
                 cells.push((row, col, z));
             }
@@ -75,7 +75,7 @@ pub fn flow_accumulation_tfga(dem: &Raster<f64>, params: TfgaParams) -> Result<R
         for col in 0..cols {
             let z = unsafe { dem.get_unchecked(row, col) };
             let is_nd = z.is_nan()
-                || nodata.map_or(false, |nd| (z - nd).abs() < f64::EPSILON);
+                || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
             if is_nd {
                 acc[(row, col)] = 0.0;
             }
@@ -106,9 +106,8 @@ pub fn flow_accumulation_tfga(dem: &Raster<f64>, params: TfgaParams) -> Result<R
             }
             let z = unsafe { dem.get_unchecked(nr as usize, nc as usize) };
             if !z.is_nan() {
-                if let Some(nd) = nodata {
-                    if (z - nd).abs() < f64::EPSILON { continue; }
-                }
+                if let Some(nd) = nodata
+                    && (z - nd).abs() < f64::EPSILON { continue; }
                 nz[i] = z;
             }
         }
@@ -164,12 +163,10 @@ pub fn flow_accumulation_tfga(dem: &Raster<f64>, params: TfgaParams) -> Result<R
                 } else {
                     (a_j, a_i + two_pi) // wrap
                 }
+            } else if a_i - a_j <= std::f64::consts::PI {
+                (a_j, a_i)
             } else {
-                if a_i - a_j <= std::f64::consts::PI {
-                    (a_j, a_i)
-                } else {
-                    (a_i, a_j + two_pi) // wrap
-                }
+                (a_i, a_j + two_pi) // wrap
             };
 
             // Normalize gradient angle into the range
@@ -231,7 +228,7 @@ pub fn flow_accumulation_tfga(dem: &Raster<f64>, params: TfgaParams) -> Result<R
         for col in 0..cols {
             let z = unsafe { dem.get_unchecked(row, col) };
             let is_nd = z.is_nan()
-                || nodata.map_or(false, |nd| (z - nd).abs() < f64::EPSILON);
+                || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
             if !is_nd {
                 acc[(row, col)] = (acc[(row, col)] - 1.0).max(0.0);
             }

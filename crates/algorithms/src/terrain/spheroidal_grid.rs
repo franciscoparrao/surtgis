@@ -228,8 +228,8 @@ pub fn vincenty_distance(
     }
 
     // Failed to converge (antipodal points) — use spherical approximation
-    a * ((sin_u1 * sin_u2 + cos_u1 * cos_u2 * l.cos())
-        .max(-1.0).min(1.0)).acos()
+    a * (sin_u1 * sin_u2 + cos_u1 * cos_u2 * l.cos())
+        .clamp(-1.0, 1.0).acos()
 }
 
 /// Compute slope on a geographic (spheroidal) grid using variable cell sizes.
@@ -267,6 +267,7 @@ pub fn slope_geographic(
             let dx = dims.dx;
             let dy = dims.dy;
 
+            #[allow(clippy::needless_range_loop)]
             for col in 1..cols - 1 {
                 let a = unsafe { dem.get_unchecked(row - 1, col - 1) };
                 let b = unsafe { dem.get_unchecked(row - 1, col) };

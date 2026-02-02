@@ -58,7 +58,7 @@ pub fn nearest_neighbor(points: &[SamplePoint], params: NearestNeighborParams) -
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let (cx, cy) = params.transform.pixel_to_geo(col, row);
 
                 let mut min_dist_sq = f64::MAX;
@@ -73,13 +73,12 @@ pub fn nearest_neighbor(points: &[SamplePoint], params: NearestNeighborParams) -
                 }
 
                 // Check max radius
-                if let Some(max_sq) = max_radius_sq {
-                    if min_dist_sq > max_sq {
+                if let Some(max_sq) = max_radius_sq
+                    && min_dist_sq > max_sq {
                         continue;
                     }
-                }
 
-                row_data[col] = nearest_val;
+                *row_data_col = nearest_val;
             }
 
             row_data

@@ -14,18 +14,12 @@ use super::erode::erode;
 
 /// Parameters for morphological gradient
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct GradientParams {
     /// Structuring element shape
     pub element: StructuringElement,
 }
 
-impl Default for GradientParams {
-    fn default() -> Self {
-        Self {
-            element: StructuringElement::default(),
-        }
-    }
-}
 
 /// Morphological gradient algorithm
 #[derive(Debug, Clone, Default)]
@@ -69,13 +63,13 @@ pub fn gradient(raster: &Raster<f64>, element: &StructuringElement) -> Result<Ra
         .into_par_iter()
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let d = unsafe { dilated.get_unchecked(row, col) };
                 let e = unsafe { eroded.get_unchecked(row, col) };
                 if d.is_nan() || e.is_nan() {
                     continue;
                 }
-                row_data[col] = d - e;
+                *row_data_col = d - e;
             }
             row_data
         })

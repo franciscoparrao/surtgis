@@ -13,25 +13,25 @@
 
 | Tier | Total | Done | Remaining | % |
 |------|-------|------|-----------|---|
-| P0 — Critical Corrections | 4 | 2 | 2 | 50% |
+| P0 — Critical Corrections | 4 | 4 | 0 | 100% |
 | P0 — Critical Missing | 6 | 6 | 0 | 100% |
 | P1 — High Priority | 21 | 21 | 0 | 100% |
 | P2 — Medium Priority | 14 | 14 | 0 | 100% |
 | P3 — Research/Future | 10 | 10 | 0 | 100% |
 | Infrastructure | 6 | 6 | 0 | 100% |
-| **Total** | **61** | **59** | **2** | **97%** |
+| **Total** | **61** | **61** | **0** | **100%** |
 
 ### By Theme
 
 | Theme | Items | Done | Key Blockers |
 |-------|-------|------|--------------|
-| Terrain / Curvatures | 12 | 16 | P0-C1 blocks advanced curvatures |
+| Terrain / Curvatures | 12 | 16 | Complete |
 | Hydrology | 10 | 10 | Complete |
 | Imagery / Spectral | 3 | 2 | — |
 | Interpolation | 7 | 8 | — |
 | Solar Radiation | 4 | 8 | — |
 | Viewshed | 3 | 3 | — |
-| Smoothing / Filtering | 5 | 4 | P0-C3 (FPDEMS) remaining |
+| Smoothing / Filtering | 5 | 5 | Complete |
 | Infrastructure | 6 | 6 | Complete |
 
 ---
@@ -81,14 +81,14 @@ These 9 items have **low effort + high impact**. They are a subset of items from
 
 These fix known errors in the current codebase. **Do these first.**
 
-- [ ] **P0-C1** `terrain::multiscale_curvatures` — Fix polynomial model: current code uses **quadratic** (2nd order) least-squares on the 5×5 window, but Florinsky's method requires a **cubic** (3rd order) polynomial to compute 3rd-order derivatives (g, h, k, m). Replace with closed-form formulas Eqs. 4.14–4.22 from Florinsky (2025, Ch. 4). Effort: Med | Ref: Florinsky 2009, 2025 §4.2 | FIX
+- [x] **P0-C1** `terrain::multiscale_curvatures` — Fix polynomial model: current code uses **quadratic** (2nd order) least-squares on the 5×5 window, but Florinsky's method requires a **cubic** (3rd order) polynomial to compute 3rd-order derivatives (g, h, k, m). Replace with closed-form formulas Eqs. 4.14–4.22 from Florinsky (2025, Ch. 4). Effort: Med | Ref: Florinsky 2009, 2025 §4.2 | FIX
   - Current: Generic LS fit with quadratic terms
   - Required: 9 closed-form derivative estimates (r, t, s, p, q + g, h, k, m) from 25-cell window
   - Impact: Enables horizontal deflection (Dkh), correct curvature RMSE (~6× better than Evans-Young for 2nd-order derivatives per Table 5.1)
 
 - [x] **P0-C2** `terrain::curvature` — ~~Add missing denominator in Z&T curvatures.~~ ✅ Done. Added `CurvatureFormula` enum (`Full`/`Simplified`). Full formulas with √(1+p²+q²) denominators are now default. Effort: Low | Ref: Florinsky 2025 §2.4, §7.2.4 | FIX
 
-- [ ] **P0-C3** `terrain::smoothing` — Fix FPDEMS: current implementation is a single-stage bilateral filter. The real FPDEMS (Lindsay et al. 2019 / Florinsky Eqs. 6.11–6.12) is **two-stage**: (1) smooth normals with cos²(angle) weighting + hard threshold Θ_t, (2) adjust elevations from tangent planes of neighbors with smoothed normals. Effort: Med | Ref: Lindsay 2019, Florinsky 2025 §6.3 | FIX
+- [x] **P0-C3** `terrain::smoothing` — Fix FPDEMS: current implementation is a single-stage bilateral filter. The real FPDEMS (Lindsay et al. 2019 / Florinsky Eqs. 6.11–6.12) is **two-stage**: (1) smooth normals with cos²(angle) weighting + hard threshold Θ_t, (2) adjust elevations from tangent planes of neighbors with smoothed normals. Effort: Med | Ref: Lindsay 2019, Florinsky 2025 §6.3 | FIX
 
 - [x] **P0-C4** `terrain::curvature` — ~~Set Evans-Young as default 3×3 method.~~ ✅ Done. Added `DerivativeMethod` enum (`EvansYoung`/`ZevenbergenThorne`). Evans-Young is now default. Effort: Low | Ref: Florinsky 2025 §4.1, Table 5.1 | FIX
 

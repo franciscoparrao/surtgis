@@ -15,9 +15,11 @@ use super::horizon_angles::HorizonAngles;
 
 /// Diffuse radiation model
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Default)]
 pub enum DiffuseModel {
     /// Isotropic sky model: uniform diffuse from all sky directions.
     /// Simple but underestimates near-sun and near-horizon brightness.
+    #[default]
     Isotropic,
     /// Klucher (1979) anisotropic model: corrects for circumsolar
     /// brightening and horizon brightening. 5–15% improvement in
@@ -32,11 +34,6 @@ pub enum DiffuseModel {
     Perez,
 }
 
-impl Default for DiffuseModel {
-    fn default() -> Self {
-        DiffuseModel::Isotropic
-    }
-}
 
 /// Parameters for solar radiation model
 #[derive(Debug, Clone)]
@@ -146,6 +143,7 @@ fn perez_bin(epsilon: f64) -> usize {
 /// Compute Perez anisotropic diffuse radiation on a tilted surface.
 ///
 /// Returns diffuse irradiance on tilted surface.
+#[allow(clippy::too_many_arguments)]
 fn perez_diffuse(
     dhi: f64, _ghi: f64, dni: f64,
     theta_z: f64, cos_inc: f64,
@@ -269,7 +267,7 @@ pub fn solar_radiation(
         .flat_map(|row| {
             let mut row_data = vec![(f64::NAN, f64::NAN, f64::NAN); cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let slp = unsafe { slope_rad.get_unchecked(row, col) };
                 let asp = unsafe { aspect_rad.get_unchecked(row, col) };
 
@@ -362,7 +360,7 @@ pub fn solar_radiation(
                 // Reflected radiation: albedo × GHI_flat × ground_view_factor
                 let reflected_daily = params.albedo * ghi_flat_daily * (1.0 - slp.cos()) / 2.0;
 
-                row_data[col] = (beam_daily, diffuse_daily, reflected_daily);
+                *row_data_col = (beam_daily, diffuse_daily, reflected_daily);
             }
 
             row_data
@@ -500,7 +498,7 @@ pub fn solar_radiation_shadowed(
         .flat_map(|row| {
             let mut row_data = vec![(f64::NAN, f64::NAN, f64::NAN); cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let slp = unsafe { slope_rad.get_unchecked(row, col) };
                 let asp = unsafe { aspect_rad.get_unchecked(row, col) };
 
@@ -597,7 +595,7 @@ pub fn solar_radiation_shadowed(
                 // Reflected radiation
                 let reflected_daily = params.albedo * ghi_flat_daily * (1.0 - slp.cos()) / 2.0;
 
-                row_data[col] = (beam_daily, diffuse_daily, reflected_daily);
+                *row_data_col = (beam_daily, diffuse_daily, reflected_daily);
             }
 
             row_data
@@ -899,7 +897,7 @@ pub fn surface_normal(slope: f64, aspect: f64) -> Vec3 {
 /// # Returns
 /// cos(θ_i) = dot(sun, normal), clamped to [0, 1]
 pub fn cos_incidence_vectorial(sun: Vec3, normal: Vec3) -> f64 {
-    sun.dot(normal).max(0.0).min(1.0)
+    sun.dot(normal).clamp(0.0, 1.0)
 }
 
 #[cfg(test)]

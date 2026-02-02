@@ -93,7 +93,7 @@ pub fn flow_accumulation_mfd(dem: &Raster<f64>, params: MfdParams) -> Result<Ras
         for col in 0..cols {
             let z = unsafe { dem.get_unchecked(row, col) };
             let is_nd = z.is_nan()
-                || nodata.map_or(false, |nd| (z - nd).abs() < f64::EPSILON);
+                || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
             if !is_nd {
                 cells.push((row, col, z));
             }
@@ -111,7 +111,7 @@ pub fn flow_accumulation_mfd(dem: &Raster<f64>, params: MfdParams) -> Result<Ras
         for col in 0..cols {
             let z = unsafe { dem.get_unchecked(row, col) };
             let is_nd = z.is_nan()
-                || nodata.map_or(false, |nd| (z - nd).abs() < f64::EPSILON);
+                || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
             if is_nd {
                 accumulation[(row, col)] = 0.0;
             }
@@ -138,11 +138,10 @@ pub fn flow_accumulation_mfd(dem: &Raster<f64>, params: MfdParams) -> Result<Ras
             if nz.is_nan() {
                 continue;
             }
-            if let Some(nd) = nodata {
-                if (nz - nd).abs() < f64::EPSILON {
+            if let Some(nd) = nodata
+                && (nz - nd).abs() < f64::EPSILON {
                     continue;
                 }
-            }
 
             // Only consider downslope neighbors
             let drop = z - nz;
@@ -184,7 +183,7 @@ pub fn flow_accumulation_mfd(dem: &Raster<f64>, params: MfdParams) -> Result<Ras
         for col in 0..cols {
             let z = unsafe { dem.get_unchecked(row, col) };
             let is_nd = z.is_nan()
-                || nodata.map_or(false, |nd| (z - nd).abs() < f64::EPSILON);
+                || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
             if !is_nd {
                 accumulation[(row, col)] -= 1.0;
                 // Clamp to 0 (floating point rounding)

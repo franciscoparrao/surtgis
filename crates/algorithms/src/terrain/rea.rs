@@ -18,8 +18,10 @@ use surtgis_core::{Error, Result};
 
 /// Morphometric variable to evaluate across scales
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Default)]
 pub enum ReaVariable {
     /// Slope magnitude (default)
+    #[default]
     Slope,
     /// Plan curvature (kh)
     PlanCurvature,
@@ -27,11 +29,6 @@ pub enum ReaVariable {
     ProfileCurvature,
 }
 
-impl Default for ReaVariable {
-    fn default() -> Self {
-        ReaVariable::Slope
-    }
-}
 
 /// Parameters for REA analysis
 #[derive(Debug, Clone)]

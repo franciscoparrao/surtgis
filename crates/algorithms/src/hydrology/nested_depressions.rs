@@ -251,16 +251,14 @@ pub fn nested_depressions(
                         children: vec![dep_n.unwrap(), dep_c.unwrap()],
                     };
                     // Set parent for children
-                    if let Some(id) = dep_n {
-                        if let Some(d) = depressions.iter_mut().find(|d| d.id == id) {
+                    if let Some(id) = dep_n
+                        && let Some(d) = depressions.iter_mut().find(|d| d.id == id) {
                             d.parent = Some(parent_id);
                         }
-                    }
-                    if let Some(id) = dep_c {
-                        if let Some(d) = depressions.iter_mut().find(|d| d.id == id) {
+                    if let Some(id) = dep_c
+                        && let Some(d) = depressions.iter_mut().find(|d| d.id == id) {
                             d.parent = Some(parent_id);
                         }
-                    }
                     depressions.push(parent);
                     component_depression[new_root] = Some(parent_id);
                     depression_id_counter += 1;

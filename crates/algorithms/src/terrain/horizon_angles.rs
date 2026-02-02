@@ -236,13 +236,13 @@ pub fn horizon_angle_map(
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let z0 = unsafe { dem.get_unchecked(row, col) };
                 if z0.is_nan() {
                     continue;
                 }
 
-                row_data[col] = trace_horizon(
+                *row_data_col = trace_horizon(
                     dem, row, col, z0, dr, dc,
                     radius, cell_size, rows, cols,
                 );
@@ -344,8 +344,8 @@ fn build_lod_pyramid(dem: &Raster<f64>) -> Vec<LodLevel> {
     let mut scale = 1;
 
     while prev_rows > 2 && prev_cols > 2 {
-        let new_rows = (prev_rows + 1) / 2;
-        let new_cols = (prev_cols + 1) / 2;
+        let new_rows = prev_rows.div_ceil(2);
+        let new_cols = prev_cols.div_ceil(2);
         scale *= 2;
 
         let prev = &levels.last().unwrap().data;
@@ -369,11 +369,10 @@ fn build_lod_pyramid(dem: &Raster<f64>) -> Vec<LodLevel> {
                 // Max of valid values (NaN-aware)
                 let mut mx = f64::NAN;
                 for &v in &[v00, v01, v10, v11] {
-                    if !v.is_nan() {
-                        if mx.is_nan() || v > mx {
+                    if !v.is_nan()
+                        && (mx.is_nan() || v > mx) {
                             mx = v;
                         }
-                    }
                 }
                 new_data[r * new_cols + c] = mx;
             }
@@ -409,6 +408,7 @@ fn select_lod_level(distance_cells: f64, near_distance: usize, max_level: usize)
 }
 
 /// Trace horizon using LOD pyramid — fast version.
+#[allow(clippy::too_many_arguments)]
 #[inline]
 fn trace_horizon_lod(
     pyramid: &[LodLevel],
@@ -580,13 +580,13 @@ pub fn horizon_angle_map_fast(
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let z0 = unsafe { dem.get_unchecked(row, col) };
                 if z0.is_nan() {
                     continue;
                 }
 
-                row_data[col] = trace_horizon_lod(
+                *row_data_col = trace_horizon_lod(
                     &pyramid, row, col, z0, dr, dc,
                     radius, cell_size, rows, cols, near_distance,
                 );
@@ -608,6 +608,7 @@ pub fn horizon_angle_map_fast(
 /// maximum elevation angle to the horizon.
 ///
 /// Returns horizon angle in radians (≥ 0).
+#[allow(clippy::too_many_arguments)]
 #[inline]
 fn trace_horizon(
     dem: &Raster<f64>,

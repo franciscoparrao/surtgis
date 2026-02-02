@@ -60,7 +60,7 @@ pub fn normalized_difference(band_a: &Raster<f64>, band_b: &Raster<f64>) -> Resu
         .into_par_iter()
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let a = unsafe { band_a.get_unchecked(row, col) };
                 let b = unsafe { band_b.get_unchecked(row, col) };
 
@@ -73,7 +73,7 @@ pub fn normalized_difference(band_a: &Raster<f64>, band_b: &Raster<f64>) -> Resu
                     continue; // Avoid division by zero
                 }
 
-                row_data[col] = (a - b) / sum;
+                *row_data_col = (a - b) / sum;
             }
             row_data
         })
@@ -194,7 +194,7 @@ pub fn savi(nir: &Raster<f64>, red: &Raster<f64>, params: SaviParams) -> Result<
         .into_par_iter()
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let n = unsafe { nir.get_unchecked(row, col) };
                 let r = unsafe { red.get_unchecked(row, col) };
 
@@ -207,7 +207,7 @@ pub fn savi(nir: &Raster<f64>, red: &Raster<f64>, params: SaviParams) -> Result<
                     continue;
                 }
 
-                row_data[col] = ((n - r) / denom) * (1.0 + l);
+                *row_data_col = ((n - r) / denom) * (1.0 + l);
             }
             row_data
         })
@@ -274,7 +274,7 @@ pub fn evi(
         .into_par_iter()
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let n = unsafe { nir.get_unchecked(row, col) };
                 let r = unsafe { red.get_unchecked(row, col) };
                 let b = unsafe { blue.get_unchecked(row, col) };
@@ -291,7 +291,7 @@ pub fn evi(
                     continue;
                 }
 
-                row_data[col] = params.g * (n - r) / denom;
+                *row_data_col = params.g * (n - r) / denom;
             }
             row_data
         })
@@ -335,7 +335,7 @@ pub fn bsi(
         .into_par_iter()
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let sw = unsafe { swir.get_unchecked(row, col) };
                 let r = unsafe { red.get_unchecked(row, col) };
                 let n = unsafe { nir.get_unchecked(row, col) };
@@ -357,7 +357,7 @@ pub fn bsi(
                     continue;
                 }
 
-                row_data[col] = (a_val - b_val) / denom;
+                *row_data_col = (a_val - b_val) / denom;
             }
             row_data
         })
@@ -445,7 +445,7 @@ pub fn reci(nir: &Raster<f64>, red_edge: &Raster<f64>) -> Result<Raster<f64>> {
         .into_par_iter()
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let n = unsafe { nir.get_unchecked(row, col) };
                 let re = unsafe { red_edge.get_unchecked(row, col) };
 
@@ -457,7 +457,7 @@ pub fn reci(nir: &Raster<f64>, red_edge: &Raster<f64>) -> Result<Raster<f64>> {
                     continue; // Avoid division by zero
                 }
 
-                row_data[col] = (n / re) - 1.0;
+                *row_data_col = (n / re) - 1.0;
             }
             row_data
         })

@@ -37,12 +37,12 @@ pub fn log_transform(raster: &Raster<f64>) -> Result<Raster<f64>> {
         .into_par_iter()
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let v = unsafe { raster.get_unchecked(row, col) };
-                if v.is_nan() || nodata.map_or(false, |nd| (v - nd).abs() < f64::EPSILON) {
+                if v.is_nan() || nodata.is_some_and(|nd| (v - nd).abs() < f64::EPSILON) {
                     continue;
                 }
-                row_data[col] = v.signum() * (1.0 + v.abs()).ln();
+                *row_data_col = v.signum() * (1.0 + v.abs()).ln();
             }
             row_data
         })

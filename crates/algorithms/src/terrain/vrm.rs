@@ -123,6 +123,7 @@ pub fn vrm(dem: &Raster<f64>, params: VrmParams) -> Result<Raster<f64>> {
                 return row_data;
             }
 
+            #[allow(clippy::needless_range_loop)]
             for col in (r + 1)..(cols - r - 1) {
                 let mut sum_x = 0.0;
                 let mut sum_y = 0.0;

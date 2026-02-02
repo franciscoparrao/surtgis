@@ -30,11 +30,18 @@ impl Default for SmoothingParams {
     }
 }
 
-/// Apply feature-preserving smoothing to a DEM
+/// Apply feature-preserving DEM smoothing (FPDEMS, 2-stage).
 ///
-/// Uses bilateral filtering adapted for terrain: smooths only within
-/// regions of similar surface orientation, preserving edges where
-/// surface normals change abruptly (breaks-in-slope).
+/// Implements the two-stage approach from Florinsky (2025) Eqs. 6.11–6.12:
+///
+/// **Stage 1 — Normal filtering**: For each cell, compute a bilateral-filtered
+/// surface normal by weighting neighbor normals by spatial distance and
+/// normal similarity. This smooths surface orientation while preserving
+/// sharp features (ridges, valleys, scarps).
+///
+/// **Stage 2 — Vertex update**: Adjust elevations so that the surface gradient
+/// matches the filtered normals. Each cell is displaced by the average
+/// projection of neighbor displacements onto the filtered normal.
 ///
 /// # Arguments
 /// * `dem` - Input DEM
@@ -54,6 +61,7 @@ pub fn feature_preserving_smoothing(
     }
 
     let (rows, cols) = dem.shape();
+    let cs = dem.cell_size();
     let threshold_rad = params.threshold.to_radians();
     let r = params.radius as isize;
 
@@ -62,14 +70,17 @@ pub fn feature_preserving_smoothing(
     for _ in 0..params.iterations {
         let prev = current.clone();
 
-        let new_data: Vec<f64> = (0..rows)
+        // =============================================================
+        // Stage 1: Bilateral filtering of surface normals (Eq. 6.11)
+        // =============================================================
+        let filtered_normals: Vec<(f64, f64, f64)> = (0..rows)
             .into_par_iter()
             .flat_map(|row| {
-                let mut row_data = vec![f64::NAN; cols];
+                let mut row_normals = vec![(0.0, 0.0, 1.0); cols];
 
                 for col in 0..cols {
                     if row < 1 || row >= rows - 1 || col < 1 || col >= cols - 1 {
-                        row_data[col] = prev[(row, col)];
+                        row_normals[col] = compute_normal(&prev, row, col, rows, cols, cs);
                         continue;
                     }
 
@@ -78,10 +89,11 @@ pub fn feature_preserving_smoothing(
                         continue;
                     }
 
-                    // Compute surface normal at center
-                    let n0 = compute_normal(&prev, row, col, rows, cols);
+                    let n0 = compute_normal(&prev, row, col, rows, cols, cs);
 
-                    let mut weighted_sum = 0.0;
+                    let mut sum_nx = 0.0;
+                    let mut sum_ny = 0.0;
+                    let mut sum_nz = 0.0;
                     let mut weight_total = 0.0;
 
                     for dr in -r..=r {
@@ -100,8 +112,7 @@ pub fn feature_preserving_smoothing(
                                 continue;
                             }
 
-                            // Compute surface normal at neighbor
-                            let nn = compute_normal(&prev, nr, nc, rows, cols);
+                            let nn = compute_normal(&prev, nr, nc, rows, cols, cs);
 
                             // Normal similarity: angle between normals
                             let cos_angle = (n0.0 * nn.0 + n0.1 * nn.1 + n0.2 * nn.2)
@@ -109,10 +120,10 @@ pub fn feature_preserving_smoothing(
                             let angle = cos_angle.acos();
 
                             if angle > threshold_rad {
-                                continue; // Skip: different surface orientation
+                                continue; // Hard threshold: skip dissimilar normals
                             }
 
-                            // Spatial weight (Gaussian)
+                            // Spatial Gaussian weight
                             let dist_sq = (dr * dr + dc * dc) as f64;
                             let sigma = params.radius as f64;
                             let spatial_w = (-dist_sq / (2.0 * sigma * sigma)).exp();
@@ -121,13 +132,79 @@ pub fn feature_preserving_smoothing(
                             let normal_w = (-(angle * angle) / (2.0 * threshold_rad * threshold_rad)).exp();
 
                             let w = spatial_w * normal_w;
-                            weighted_sum += z * w;
+                            sum_nx += nn.0 * w;
+                            sum_ny += nn.1 * w;
+                            sum_nz += nn.2 * w;
                             weight_total += w;
                         }
                     }
 
                     if weight_total > 0.0 {
-                        row_data[col] = weighted_sum / weight_total;
+                        let len = (sum_nx * sum_nx + sum_ny * sum_ny + sum_nz * sum_nz).sqrt();
+                        if len > f64::EPSILON {
+                            row_normals[col] = (sum_nx / len, sum_ny / len, sum_nz / len);
+                        } else {
+                            row_normals[col] = n0;
+                        }
+                    } else {
+                        row_normals[col] = n0;
+                    }
+                }
+
+                row_normals
+            })
+            .collect();
+
+        // =============================================================
+        // Stage 2: Vertex update from filtered normals (Eq. 6.12)
+        //
+        //   z_i^new = z_i + (1/|N|) Σ_{j∈N} n̂_i · (p_j - p_i)
+        //
+        // Uses 3×3 immediate neighborhood for stability.
+        // =============================================================
+        let new_data: Vec<f64> = (0..rows)
+            .into_par_iter()
+            .flat_map(|row| {
+                let mut row_data = vec![f64::NAN; cols];
+
+                for col in 0..cols {
+                    if row < 1 || row >= rows - 1 || col < 1 || col >= cols - 1 {
+                        row_data[col] = prev[(row, col)];
+                        continue;
+                    }
+
+                    let z0 = prev[(row, col)];
+                    if z0.is_nan() {
+                        continue;
+                    }
+
+                    let n = filtered_normals[row * cols + col];
+
+                    let mut dot_sum = 0.0;
+                    let mut count = 0.0;
+
+                    for dr in -1_isize..=1 {
+                        for dc in -1_isize..=1 {
+                            if dr == 0 && dc == 0 { continue; }
+
+                            let nr = (row as isize + dr) as usize;
+                            let nc = (col as isize + dc) as usize;
+                            let zn = prev[(nr, nc)];
+                            if zn.is_nan() { continue; }
+
+                            // Displacement vector from cell i to neighbor j
+                            let dx = dc as f64 * cs;
+                            let dy = dr as f64 * cs;
+                            let dz = zn - z0;
+
+                            // Project onto filtered normal
+                            dot_sum += n.0 * dx + n.1 * dy + n.2 * dz;
+                            count += 1.0;
+                        }
+                    }
+
+                    if count > 0.0 {
+                        row_data[col] = z0 + dot_sum / count;
                     } else {
                         row_data[col] = z0;
                     }
@@ -148,14 +225,15 @@ pub fn feature_preserving_smoothing(
     Ok(output)
 }
 
-/// Compute approximate surface normal at a cell (nx, ny, nz)
-fn compute_normal(data: &Array2<f64>, row: usize, col: usize, rows: usize, cols: usize) -> (f64, f64, f64) {
+/// Compute approximate surface normal at a cell (nx, ny, nz).
+/// Uses central differences with proper cell_size scaling.
+fn compute_normal(data: &Array2<f64>, row: usize, col: usize, rows: usize, cols: usize, cs: f64) -> (f64, f64, f64) {
     if row == 0 || row >= rows - 1 || col == 0 || col >= cols - 1 {
         return (0.0, 0.0, 1.0);
     }
 
-    let dz_dx = (data[(row, col + 1)] - data[(row, col - 1)]) / 2.0;
-    let dz_dy = (data[(row + 1, col)] - data[(row - 1, col)]) / 2.0;
+    let dz_dx = (data[(row, col + 1)] - data[(row, col - 1)]) / (2.0 * cs);
+    let dz_dy = (data[(row + 1, col)] - data[(row - 1, col)]) / (2.0 * cs);
 
     let len = (dz_dx * dz_dx + dz_dy * dz_dy + 1.0).sqrt();
     (-dz_dx / len, -dz_dy / len, 1.0 / len)
@@ -210,7 +288,7 @@ pub fn gaussian_smoothing(
     let two_sigma_sq = 2.0 * sigma * sigma;
 
     // Precompute kernel
-    let kernel_size = (2 * params.radius + 1) as usize;
+    let kernel_size = 2 * params.radius + 1;
     let mut kernel = vec![0.0_f64; kernel_size * kernel_size];
     let mut kernel_sum = 0.0;
 
@@ -241,9 +319,8 @@ pub fn gaussian_smoothing(
                 if z0.is_nan() {
                     continue;
                 }
-                if let Some(nd) = nodata {
-                    if (z0 - nd).abs() < f64::EPSILON { continue; }
-                }
+                if let Some(nd) = nodata
+                    && (z0 - nd).abs() < f64::EPSILON { continue; }
 
                 let mut sum = 0.0;
                 let mut wsum = 0.0;
@@ -258,9 +335,8 @@ pub fn gaussian_smoothing(
 
                         let z = data[(nr as usize, nc as usize)];
                         if z.is_nan() { continue; }
-                        if let Some(nd) = nodata {
-                            if (z - nd).abs() < f64::EPSILON { continue; }
-                        }
+                        if let Some(nd) = nodata
+                            && (z - nd).abs() < f64::EPSILON { continue; }
 
                         let ki = ((dr + r) as usize) * kernel_size + (dc + r) as usize;
                         let w = kernel[ki];
@@ -363,9 +439,8 @@ pub fn iterative_mean_smoothing(
                     if z0.is_nan() {
                         continue;
                     }
-                    if let Some(nd) = nodata {
-                        if (z0 - nd).abs() < f64::EPSILON { continue; }
-                    }
+                    if let Some(nd) = nodata
+                        && (z0 - nd).abs() < f64::EPSILON { continue; }
 
                     // Border cells: preserve
                     if row == 0 || row == rows - 1 || col == 0 || col == cols - 1 {
@@ -382,9 +457,8 @@ pub fn iterative_mean_smoothing(
                         let z = prev[(nr, nc)];
 
                         if z.is_nan() { continue; }
-                        if let Some(nd) = nodata {
-                            if (z - nd).abs() < f64::EPSILON { continue; }
-                        }
+                        if let Some(nd) = nodata
+                            && (z - nd).abs() < f64::EPSILON { continue; }
 
                         let w = weights[i];
                         sum += z * w;
@@ -547,20 +621,20 @@ pub fn fft_low_pass(dem: &Raster<f64>, params: FftLowPassParams) -> Result<Raste
 
     // Fill padded array (mirror padding at edges)
     let mut grid = vec![vec![Complex::zero(); ncols]; nrows];
-    for r in 0..nrows {
-        for c in 0..ncols {
+    for (r, grid_row) in grid.iter_mut().enumerate() {
+        for (c, cell) in grid_row.iter_mut().enumerate() {
             let sr = if r < rows { r } else { 2 * rows - r - 2 };
             let sc = if c < cols { c } else { 2 * cols - c - 2 };
             let sr = sr.min(rows - 1);
             let sc = sc.min(cols - 1);
             let z = data[[sr, sc]];
-            grid[r][c] = Complex::new(if z.is_nan() { 0.0 } else { z }, 0.0);
+            *cell = Complex::new(if z.is_nan() { 0.0 } else { z }, 0.0);
         }
     }
 
     // Row-wise FFT
-    for r in 0..nrows {
-        fft_1d(&mut grid[r], false);
+    for grid_row in &mut grid {
+        fft_1d(grid_row, false);
     }
 
     // Column-wise FFT (transpose, FFT, transpose back)
@@ -580,8 +654,8 @@ pub fn fft_low_pass(dem: &Raster<f64>, params: FftLowPassParams) -> Result<Raste
     let freq_cutoff_r = nrows as f64 / params.cutoff_wavelength;
     let freq_cutoff_c = ncols as f64 / params.cutoff_wavelength;
 
-    for r in 0..nrows {
-        for c in 0..ncols {
+    for (r, grid_row) in grid.iter_mut().enumerate() {
+        for (c, cell) in grid_row.iter_mut().enumerate() {
             // Frequency indices (handle wrapping)
             let fr = if r <= nrows / 2 { r as f64 } else { (nrows - r) as f64 };
             let fc = if c <= ncols / 2 { c as f64 } else { (ncols - c) as f64 };
@@ -590,7 +664,7 @@ pub fn fft_low_pass(dem: &Raster<f64>, params: FftLowPassParams) -> Result<Raste
             let f_norm = ((fr / freq_cutoff_r).powi(2) + (fc / freq_cutoff_c).powi(2)).sqrt();
 
             if f_norm > 1.0 {
-                grid[r][c] = Complex::zero();
+                *cell = Complex::zero();
             }
         }
     }
@@ -607,8 +681,8 @@ pub fn fft_low_pass(dem: &Raster<f64>, params: FftLowPassParams) -> Result<Raste
     }
 
     // Inverse row-wise FFT
-    for r in 0..nrows {
-        fft_1d(&mut grid[r], true);
+    for grid_row in &mut grid {
+        fft_1d(grid_row, true);
     }
 
     // Extract original-size result

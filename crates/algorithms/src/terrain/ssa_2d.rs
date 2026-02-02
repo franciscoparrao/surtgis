@@ -181,10 +181,9 @@ fn power_iteration_deflation(
 
     for comp in 0..n_components {
         // Initialize random-ish vector
-        let mut v = vec![0.0_f64; dim];
-        for i in 0..dim {
-            v[i] = 1.0 + (i as f64 * 0.1).sin();
-        }
+        let mut v: Vec<f64> = (0..dim)
+            .map(|i| 1.0 + (i as f64 * 0.1).sin())
+            .collect();
         normalize(&mut v);
 
         // Power iteration
@@ -241,7 +240,7 @@ fn power_iteration_deflation(
     result
 }
 
-fn normalize(v: &mut Vec<f64>) {
+fn normalize(v: &mut [f64]) {
     let norm: f64 = v.iter().map(|x| x * x).sum::<f64>().sqrt();
     if norm > 1e-15 {
         for x in v.iter_mut() {

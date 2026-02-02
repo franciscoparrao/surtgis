@@ -77,10 +77,10 @@ pub fn dev(dem: &Raster<f64>, params: DevParams) -> Result<Raster<f64>> {
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let center = unsafe { dem.get_unchecked(row, col) };
                 if center.is_nan()
-                    || nodata.map_or(false, |nd| (center - nd).abs() < f64::EPSILON)
+                    || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON)
                 {
                     continue;
                 }
@@ -104,7 +104,7 @@ pub fn dev(dem: &Raster<f64>, params: DevParams) -> Result<Raster<f64>> {
                         let nc = (ci + dc) as usize;
                         let nv = unsafe { dem.get_unchecked(nr, nc) };
                         if !nv.is_nan()
-                            && nodata.map_or(true, |nd| (nv - nd).abs() >= f64::EPSILON)
+                            && nodata.is_none_or(|nd| (nv - nd).abs() >= f64::EPSILON)
                         {
                             sum += nv;
                             sum_sq += nv * nv;
@@ -122,9 +122,9 @@ pub fn dev(dem: &Raster<f64>, params: DevParams) -> Result<Raster<f64>> {
 
                 // Protect against near-zero variance (perfectly flat neighborhoods)
                 if variance < 1e-20 {
-                    row_data[col] = 0.0;
+                    *row_data_col = 0.0;
                 } else {
-                    row_data[col] = (center - mean) / variance.sqrt();
+                    *row_data_col = (center - mean) / variance.sqrt();
                 }
             }
 

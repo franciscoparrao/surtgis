@@ -133,7 +133,7 @@ pub fn priority_flood(dem: &Raster<f64>, params: PriorityFloodParams) -> Result<
 
             // Check if nodata
             let is_nd = val.is_nan()
-                || nodata.map_or(false, |nd| (val - nd).abs() < f64::EPSILON);
+                || nodata.is_some_and(|nd| (val - nd).abs() < f64::EPSILON);
 
             if is_nd {
                 visited[(row, col)] = true;
@@ -173,7 +173,7 @@ pub fn priority_flood(dem: &Raster<f64>, params: PriorityFloodParams) -> Result<
 
             // Check nodata
             let is_nd = neighbor_elev.is_nan()
-                || nodata.map_or(false, |nd| (neighbor_elev - nd).abs() < f64::EPSILON);
+                || nodata.is_some_and(|nd| (neighbor_elev - nd).abs() < f64::EPSILON);
 
             if is_nd {
                 output[(nr, nc)] = neighbor_elev;

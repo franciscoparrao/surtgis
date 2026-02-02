@@ -73,7 +73,7 @@ fn compute_openness(
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let z0 = unsafe { dem.get_unchecked(row, col) };
                 if z0.is_nan() {
                     continue;
@@ -92,7 +92,7 @@ fn compute_openness(
                     angle_sum += angle;
                 }
 
-                row_data[col] = angle_sum / n_dirs as f64;
+                *row_data_col = angle_sum / n_dirs as f64;
             }
 
             row_data
@@ -108,6 +108,7 @@ fn compute_openness(
 }
 
 /// Positive openness angle for one direction: 90° - max_up_angle
+#[allow(clippy::too_many_arguments)]
 fn compute_positive_angle(
     dem: &Raster<f64>,
     row: usize, col: usize, z0: f64,
@@ -143,6 +144,7 @@ fn compute_positive_angle(
 }
 
 /// Negative openness angle for one direction: 90° - max_down_angle
+#[allow(clippy::too_many_arguments)]
 fn compute_negative_angle(
     dem: &Raster<f64>,
     row: usize, col: usize, z0: f64,

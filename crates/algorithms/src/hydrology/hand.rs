@@ -122,7 +122,7 @@ pub fn hand(
             }
 
             let z = unsafe { dem.get_unchecked(start_row, start_col) };
-            if z.is_nan() || nodata.map_or(false, |nd| (z - nd).abs() < f64::EPSILON) {
+            if z.is_nan() || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON) {
                 continue; // Nodata
             }
 

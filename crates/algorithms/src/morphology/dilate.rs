@@ -12,18 +12,12 @@ use super::element::StructuringElement;
 
 /// Parameters for morphological dilation
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct DilateParams {
     /// Structuring element shape
     pub element: StructuringElement,
 }
 
-impl Default for DilateParams {
-    fn default() -> Self {
-        Self {
-            element: StructuringElement::default(),
-        }
-    }
-}
 
 /// Dilation algorithm
 #[derive(Debug, Clone, Default)]
@@ -70,7 +64,7 @@ pub fn dilate(raster: &Raster<f64>, element: &StructuringElement) -> Result<Rast
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let center = unsafe { raster.get_unchecked(row, col) };
                 if is_nodata_val(center, nodata) {
                     continue;
@@ -104,7 +98,7 @@ pub fn dilate(raster: &Raster<f64>, element: &StructuringElement) -> Result<Rast
                 }
 
                 if !has_nodata {
-                    row_data[col] = max_val;
+                    *row_data_col = max_val;
                 }
             }
 

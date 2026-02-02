@@ -274,7 +274,7 @@ pub fn index_builder(
     let (rows, cols) = first.shape();
 
     // Verify all bands have same dimensions
-    for (_name, raster) in bands {
+    for raster in bands.values() {
         let (r, c) = raster.shape();
         if r != rows || c != cols {
             return Err(Error::SizeMismatch {
@@ -296,7 +296,7 @@ pub fn index_builder(
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let mut band_values = HashMap::new();
                 let mut any_nan = false;
 
@@ -314,7 +314,7 @@ pub fn index_builder(
                 }
 
                 let result = eval(&expr, &band_values);
-                row_data[col] = result;
+                *row_data_col = result;
             }
 
             row_data

@@ -72,17 +72,17 @@ pub fn aspect(dem: &Raster<f64>, output_format: AspectOutput) -> Result<Raster<f
         .flat_map(|row| {
             let mut row_data = vec![-1.0; cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 // Get center value
                 let e = unsafe { dem.get_unchecked(row, col) };
                 if e.is_nan() || (nodata.is_some() && (e - nodata.unwrap()).abs() < f64::EPSILON) {
-                    row_data[col] = -1.0;
+                    *row_data_col = -1.0;
                     continue;
                 }
 
                 // Skip edges
                 if row == 0 || row == rows - 1 || col == 0 || col == cols - 1 {
-                    row_data[col] = -1.0;
+                    *row_data_col = -1.0;
                     continue;
                 }
 
@@ -98,7 +98,7 @@ pub fn aspect(dem: &Raster<f64>, output_format: AspectOutput) -> Result<Raster<f
 
                 // Check for nodata in neighborhood
                 if [a, b, c, d, f, g, h, i].iter().any(|v| v.is_nan()) {
-                    row_data[col] = -1.0;
+                    *row_data_col = -1.0;
                     continue;
                 }
 
@@ -108,7 +108,7 @@ pub fn aspect(dem: &Raster<f64>, output_format: AspectOutput) -> Result<Raster<f
 
                 // Check for flat area
                 if dz_dx.abs() < FLAT_THRESHOLD && dz_dy.abs() < FLAT_THRESHOLD {
-                    row_data[col] = -1.0;
+                    *row_data_col = -1.0;
                     continue;
                 }
 
@@ -130,13 +130,13 @@ pub fn aspect(dem: &Raster<f64>, output_format: AspectOutput) -> Result<Raster<f
                     aspect_north
                 };
 
-                row_data[col] = match output_format {
+                *row_data_col = match output_format {
                     AspectOutput::Degrees => aspect_north.to_degrees(),
                     AspectOutput::Radians => aspect_north,
                     AspectOutput::Compass => {
                         // Convert to 8-direction compass (1-8)
                         let deg = aspect_north.to_degrees();
-                        if deg < 22.5 || deg >= 337.5 {
+                        if !(22.5..337.5).contains(&deg) {
                             1.0 // N
                         } else if deg < 67.5 {
                             2.0 // NE

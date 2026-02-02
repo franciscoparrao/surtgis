@@ -72,9 +72,9 @@ pub fn multidirectional_hillshade(
         .flat_map(|row| {
             let mut row_data = vec![0.0; cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let e = unsafe { dem.get_unchecked(row, col) };
-                if e.is_nan() || nodata.map_or(false, |nd| (e - nd).abs() < f64::EPSILON) {
+                if e.is_nan() || nodata.is_some_and(|nd| (e - nd).abs() < f64::EPSILON) {
                     continue;
                 }
 
@@ -134,7 +134,7 @@ pub fn multidirectional_hillshade(
                     0.0
                 };
 
-                row_data[col] = if params.normalized {
+                *row_data_col = if params.normalized {
                     shade_val
                 } else {
                     (shade_val * 255.0).round()

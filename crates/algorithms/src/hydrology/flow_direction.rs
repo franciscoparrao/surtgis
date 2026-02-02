@@ -87,18 +87,17 @@ pub fn flow_direction(dem: &Raster<f64>) -> Result<Raster<u8>> {
         .flat_map(|row| {
             let mut row_data = vec![0u8; cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let center = unsafe { dem.get_unchecked(row, col) };
 
                 // Skip nodata
                 if center.is_nan() {
                     continue;
                 }
-                if let Some(nd) = nodata {
-                    if (center - nd).abs() < f64::EPSILON {
+                if let Some(nd) = nodata
+                    && (center - nd).abs() < f64::EPSILON {
                         continue;
                     }
-                }
 
                 let mut max_drop = 0.0_f64;
                 let mut best_dir: u8 = 0;
@@ -116,11 +115,10 @@ pub fn flow_direction(dem: &Raster<f64>) -> Result<Raster<u8>> {
                     if neighbor.is_nan() {
                         continue;
                     }
-                    if let Some(nd) = nodata {
-                        if (neighbor - nd).abs() < f64::EPSILON {
+                    if let Some(nd) = nodata
+                        && (neighbor - nd).abs() < f64::EPSILON {
                             continue;
                         }
-                    }
 
                     // Drop = (center - neighbor) / distance
                     let distance = D8_DIST[idx] * cell_size;
@@ -132,7 +130,7 @@ pub fn flow_direction(dem: &Raster<f64>) -> Result<Raster<u8>> {
                     }
                 }
 
-                row_data[col] = best_dir;
+                *row_data_col = best_dir;
             }
 
             row_data

@@ -95,7 +95,7 @@ pub fn slope(dem: &Raster<f64>, params: SlopeParams) -> Result<Raster<f64>> {
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 // Get center value
                 let e = unsafe { dem.get_unchecked(row, col) };
                 if e.is_nan() || (nodata.is_some() && (e - nodata.unwrap()).abs() < f64::EPSILON) {
@@ -104,7 +104,7 @@ pub fn slope(dem: &Raster<f64>, params: SlopeParams) -> Result<Raster<f64>> {
 
                 // Skip edges (need full 3x3 neighborhood)
                 if row == 0 || row == rows - 1 || col == 0 || col == cols - 1 {
-                    row_data[col] = f64::NAN;
+                    *row_data_col = f64::NAN;
                     continue;
                 }
 
@@ -120,7 +120,7 @@ pub fn slope(dem: &Raster<f64>, params: SlopeParams) -> Result<Raster<f64>> {
 
                 // Check for nodata in neighborhood
                 if [a, b, c, d, f, g, h, i].iter().any(|v| v.is_nan()) {
-                    row_data[col] = f64::NAN;
+                    *row_data_col = f64::NAN;
                     continue;
                 }
 
@@ -130,7 +130,7 @@ pub fn slope(dem: &Raster<f64>, params: SlopeParams) -> Result<Raster<f64>> {
 
                 let slope_rad = (dz_dx * dz_dx + dz_dy * dz_dy).sqrt().atan();
 
-                row_data[col] = match params.units {
+                *row_data_col = match params.units {
                     SlopeUnits::Degrees => slope_rad.to_degrees(),
                     SlopeUnits::Percent => slope_rad.tan() * 100.0,
                     SlopeUnits::Radians => slope_rad,

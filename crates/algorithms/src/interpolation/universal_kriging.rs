@@ -139,7 +139,7 @@ pub fn universal_kriging(
         .flat_map(|row| {
             let mut row_data = vec![(f64::NAN, f64::NAN); cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let (x0, y0) = transform.pixel_to_geo(col, row);
 
                 // Find nearest points
@@ -175,7 +175,7 @@ pub fn universal_kriging(
                 // Check snap distance
                 if neighbors[0].1 < 1e-12 {
                     let idx = neighbors[0].0;
-                    row_data[col] = (points[idx].value, 0.0);
+                    *row_data_col = (points[idx].value, 0.0);
                     continue;
                 }
 
@@ -240,7 +240,7 @@ pub fn universal_kriging(
                             0.0
                         };
 
-                        row_data[col] = (estimate, variance);
+                        *row_data_col = (estimate, variance);
                     }
                     Err(_) => {
                         // Fallback: IDW
@@ -252,7 +252,7 @@ pub fn universal_kriging(
                             sum_wz += w * points[*idx].value;
                         }
                         if sum_w > 0.0 {
-                            row_data[col] = (sum_wz / sum_w, f64::NAN);
+                            *row_data_col = (sum_wz / sum_w, f64::NAN);
                         }
                     }
                 }

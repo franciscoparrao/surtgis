@@ -85,17 +85,17 @@ pub fn hillshade(dem: &Raster<f64>, params: HillshadeParams) -> Result<Raster<f6
         .flat_map(|row| {
             let mut row_data = vec![0.0; cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 // Get center value
                 let e = unsafe { dem.get_unchecked(row, col) };
                 if e.is_nan() || (nodata.is_some() && (e - nodata.unwrap()).abs() < f64::EPSILON) {
-                    row_data[col] = 0.0;
+                    *row_data_col = 0.0;
                     continue;
                 }
 
                 // Skip edges
                 if row == 0 || row == rows - 1 || col == 0 || col == cols - 1 {
-                    row_data[col] = 0.0;
+                    *row_data_col = 0.0;
                     continue;
                 }
 
@@ -111,7 +111,7 @@ pub fn hillshade(dem: &Raster<f64>, params: HillshadeParams) -> Result<Raster<f6
 
                 // Check for nodata
                 if [a, b, c, d, f, g, h, i].iter().any(|v| v.is_nan()) {
-                    row_data[col] = 0.0;
+                    *row_data_col = 0.0;
                     continue;
                 }
 
@@ -139,9 +139,9 @@ pub fn hillshade(dem: &Raster<f64>, params: HillshadeParams) -> Result<Raster<f6
                     + sin_zenith * slope_rad.sin() * (azimuth_rad - aspect_rad).cos();
 
                 // Clamp to [0, 1]
-                let shade_clamped = shade.max(0.0).min(1.0);
+                let shade_clamped = shade.clamp(0.0, 1.0);
 
-                row_data[col] = if params.normalized {
+                *row_data_col = if params.normalized {
                     shade_clamped
                 } else {
                     (shade_clamped * 255.0).round()

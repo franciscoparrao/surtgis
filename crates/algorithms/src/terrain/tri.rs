@@ -79,9 +79,9 @@ pub fn tri(dem: &Raster<f64>, params: TriParams) -> Result<Raster<f64>> {
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let center = unsafe { dem.get_unchecked(row, col) };
-                if center.is_nan() || nodata.map_or(false, |nd| (center - nd).abs() < f64::EPSILON)
+                if center.is_nan() || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON)
                 {
                     continue;
                 }
@@ -103,7 +103,7 @@ pub fn tri(dem: &Raster<f64>, params: TriParams) -> Result<Raster<f64>> {
                         let nr = (ri + dr) as usize;
                         let nc = (ci + dc) as usize;
                         let nv = unsafe { dem.get_unchecked(nr, nc) };
-                        if !nv.is_nan() && nodata.map_or(true, |nd| (nv - nd).abs() >= f64::EPSILON)
+                        if !nv.is_nan() && nodata.is_none_or(|nd| (nv - nd).abs() >= f64::EPSILON)
                         {
                             let diff = nv - center;
                             sum_sq += diff * diff;
@@ -113,7 +113,7 @@ pub fn tri(dem: &Raster<f64>, params: TriParams) -> Result<Raster<f64>> {
                 }
 
                 if count > 0 {
-                    row_data[col] = (sum_sq / count as f64).sqrt();
+                    *row_data_col = (sum_sq / count as f64).sqrt();
                 }
             }
 

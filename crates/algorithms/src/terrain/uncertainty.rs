@@ -76,6 +76,7 @@ pub fn uncertainty(dem: &Raster<f64>, params: UncertaintyParams) -> Result<Uncer
 
     // Compute uncertainty for all morphometric variables simultaneously
     // to avoid recomputing the 3×3 window and derivatives multiple times
+    #[allow(clippy::type_complexity)]
     let row_results: Vec<Vec<(f64, f64, f64, f64, f64)>> = (1..rows - 1)
         .into_par_iter()
         .map(|row| {
@@ -256,6 +257,7 @@ enum CurvatureType {
 /// For Evans-Young derivatives, the partial derivatives of r, s, t with
 /// respect to each z_i are known constants. We use the chain rule to
 /// compute ∂K/∂zᵢ = (∂K/∂p)(∂p/∂zᵢ) + (∂K/∂q)(∂q/∂zᵢ) + ... for r,s,t.
+#[allow(clippy::too_many_arguments)]
 fn curvature_uncertainty_generic(
     p: f64, q: f64, r: f64, s: f64, t: f64,
     cs: f64, mz2: f64,

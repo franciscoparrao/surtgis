@@ -12,18 +12,12 @@ use super::erode::erode;
 
 /// Parameters for morphological closing
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct ClosingParams {
     /// Structuring element shape
     pub element: StructuringElement,
 }
 
-impl Default for ClosingParams {
-    fn default() -> Self {
-        Self {
-            element: StructuringElement::default(),
-        }
-    }
-}
 
 /// Closing algorithm
 #[derive(Debug, Clone, Default)]

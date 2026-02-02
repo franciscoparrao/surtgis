@@ -76,17 +76,16 @@ pub fn reclassify(raster: &Raster<f64>, params: ReclassifyParams) -> Result<Rast
         .into_par_iter()
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let val = unsafe { raster.get_unchecked(row, col) };
 
                 if val.is_nan() {
                     continue;
                 }
-                if let Some(nd) = nodata {
-                    if (val - nd).abs() < f64::EPSILON {
+                if let Some(nd) = nodata
+                    && (val - nd).abs() < f64::EPSILON {
                         continue;
                     }
-                }
 
                 // Find matching class
                 let mut classified = default;
@@ -105,7 +104,7 @@ pub fn reclassify(raster: &Raster<f64>, params: ReclassifyParams) -> Result<Rast
                     }
                 }
 
-                row_data[col] = classified;
+                *row_data_col = classified;
             }
             row_data
         })

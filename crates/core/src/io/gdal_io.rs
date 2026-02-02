@@ -1,9 +1,10 @@
 //! GeoTIFF reading and writing using GDAL
 
 use crate::crs::CRS;
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::raster::{GeoTransform, Raster, RasterElement};
-use gdal::raster::{GdalDataType, GdalType, RasterBand};
+use gdal::cpl::CslStringList;
+use gdal::raster::GdalType;
 use gdal::spatial_ref::SpatialRef;
 use gdal::{Dataset, DriverManager};
 use std::path::Path;
@@ -77,7 +78,7 @@ where
     }
 
     // Set nodata
-    if let Ok(nodata) = rasterband.no_data_value() {
+    if let Some(nodata) = rasterband.no_data_value() {
         if let Some(nd) = num_traits::cast(nodata) {
             raster.set_nodata(Some(nd));
         }
@@ -121,17 +122,17 @@ where
         create_options.push("BIGTIFF=YES".to_string());
     }
 
-    let create_options_refs: Vec<&str> = create_options.iter().map(|s| s.as_str()).collect();
-
-    // Determine GDAL data type
-    let gdal_type = T::gdal_ordinal();
+    let mut csl = CslStringList::new();
+    for opt in &create_options {
+        csl.add_string(opt)?;
+    }
 
     let mut dataset = driver.create_with_band_type_with_options::<T, _>(
         path.as_ref(),
-        cols as isize,
-        rows as isize,
+        cols,
+        rows,
         1,
-        &create_options_refs,
+        &csl,
     )?;
 
     // Set geotransform
@@ -160,7 +161,8 @@ where
 
     // Write the raster data
     let data: Vec<T> = raster.data().iter().copied().collect();
-    band.write((0, 0), (cols, rows), &data)?;
+    let mut buffer = gdal::raster::Buffer::new((cols, rows), data);
+    band.write((0, 0), (cols, rows), &mut buffer)?;
 
     Ok(())
 }

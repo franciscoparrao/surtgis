@@ -266,7 +266,7 @@ pub fn tin_interpolation(points: &[SamplePoint], params: TinParams) -> Result<Ra
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let (px, py) = params.transform.pixel_to_geo(col, row);
 
                 // Find enclosing triangle (brute force; OK for moderate triangle counts)
@@ -280,7 +280,7 @@ pub fn tin_interpolation(points: &[SamplePoint], params: TinParams) -> Result<Ra
                     // Check if point is inside triangle (with small tolerance)
                     const EPS: f64 = -1e-10;
                     if u >= EPS && v >= EPS && w >= EPS {
-                        row_data[col] = u * p0.value + v * p1.value + w * p2.value;
+                        *row_data_col = u * p0.value + v * p1.value + w * p2.value;
                         break;
                     }
                 }

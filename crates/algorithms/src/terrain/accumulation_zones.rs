@@ -62,14 +62,14 @@ pub fn accumulation_zones(dem: &Raster<f64>) -> Result<Raster<f64>> {
         .into_par_iter()
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let h = unsafe { kh.get_unchecked(row, col) };
                 let v = unsafe { kv.get_unchecked(row, col) };
                 if h.is_nan() || v.is_nan() {
                     continue;
                 }
 
-                row_data[col] = if h < 0.0 && v < 0.0 {
+                *row_data_col = if h < 0.0 && v < 0.0 {
                     ZONE_ACCUMULATION
                 } else if h < 0.0 && v >= 0.0 {
                     ZONE_TRANSITIONAL_ACC

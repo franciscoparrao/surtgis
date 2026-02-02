@@ -94,12 +94,11 @@ pub fn global_morans_i(raster: &Raster<f64>) -> Result<MoransIResult> {
                 }
                 let nr = row as isize + dr;
                 let nc = col as isize + dc;
-                if nr >= 0 && nc >= 0 && (nr as usize) < rows && (nc as usize) < cols {
-                    if let Some(j_idx) = grid[(nr as usize, nc as usize)] {
+                if nr >= 0 && nc >= 0 && (nr as usize) < rows && (nc as usize) < cols
+                    && let Some(j_idx) = grid[(nr as usize, nc as usize)] {
                         numerator += dev_i * deviations[j_idx];
                         w_sum += 1.0;
                     }
-                }
             }
         }
     }
@@ -116,11 +115,10 @@ pub fn global_morans_i(raster: &Raster<f64>) -> Result<MoransIResult> {
                 if dr == 0 && dc == 0 { continue; }
                 let nr = row as isize + dr;
                 let nc = col as isize + dc;
-                if nr >= 0 && nc >= 0 && (nr as usize) < rows && (nc as usize) < cols {
-                    if grid[(nr as usize, nc as usize)].is_some() {
+                if nr >= 0 && nc >= 0 && (nr as usize) < rows && (nc as usize) < cols
+                    && grid[(nr as usize, nc as usize)].is_some() {
                         neighbors += 1.0;
                     }
-                }
             }
         }
         let total = neighbors * 2.0; // in-degree + out-degree
@@ -211,7 +209,7 @@ pub fn local_getis_ord(raster: &Raster<f64>, radius: usize) -> Result<GetisOrdRe
         .flat_map(|row| {
             let mut row_z = vec![f64::NAN; cols];
 
-            for col in 0..cols {
+            for (col, row_z_col) in row_z.iter_mut().enumerate() {
                 let center = unsafe { raster.get_unchecked(row, col) };
                 if center.is_nan() {
                     continue;
@@ -240,9 +238,9 @@ pub fn local_getis_ord(raster: &Raster<f64>, radius: usize) -> Result<GetisOrdRe
                 let denom = s * ((n * w_count - w_count * w_count) / (n - 1.0)).sqrt();
 
                 if denom.abs() > f64::EPSILON {
-                    row_z[col] = numerator / denom;
+                    *row_z_col = numerator / denom;
                 } else {
-                    row_z[col] = 0.0;
+                    *row_z_col = 0.0;
                 }
             }
 

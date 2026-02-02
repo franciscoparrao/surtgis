@@ -122,7 +122,7 @@ pub fn curvature_compute(tiff_bytes: &[u8], ctype: &str) -> Result<Vec<u8>, JsVa
 #[wasm_bindgen]
 pub fn tpi_compute(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> {
     dem_op!(tiff_bytes, |dem: &_| compute_tpi(
-        dem, TpiParams { radius, ..Default::default() }
+        dem, TpiParams { radius }
     ))
 }
 
@@ -157,7 +157,7 @@ pub fn twi_compute(tiff_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
 #[wasm_bindgen]
 pub fn geomorphons_compute(tiff_bytes: &[u8], flatness: f64, radius: usize) -> Result<Vec<u8>, JsValue> {
     dem_op!(tiff_bytes, |dem: &_| compute_geomorphons(
-        dem, GeomorphonParams { flatness_threshold: flatness, radius, ..Default::default() }
+        dem, GeomorphonParams { flatness_threshold: flatness, radius }
     ))
 }
 
@@ -177,7 +177,7 @@ pub fn eastness_compute(tiff_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
 #[wasm_bindgen]
 pub fn dev_compute(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> {
     dem_op!(tiff_bytes, |dem: &_| compute_dev(
-        dem, DevParams { radius, ..Default::default() }
+        dem, DevParams { radius }
     ))
 }
 
@@ -197,7 +197,7 @@ pub fn curvedness(tiff_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
 #[wasm_bindgen]
 pub fn sky_view_factor(tiff_bytes: &[u8], n_dirs: usize, max_radius: usize) -> Result<Vec<u8>, JsValue> {
     dem_op!(tiff_bytes, |dem: &_| compute_svf(
-        dem, SvfParams { directions: n_dirs, radius: max_radius, ..Default::default() }
+        dem, SvfParams { directions: n_dirs, radius: max_radius }
     ))
 }
 

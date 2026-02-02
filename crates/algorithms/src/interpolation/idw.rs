@@ -180,7 +180,7 @@ pub fn idw(points: &[SamplePoint], params: IdwParams) -> Result<Raster<f64>> {
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let (cx, cy) = params.transform.pixel_to_geo(col, row);
 
                 // Collect distances and values
@@ -204,17 +204,16 @@ pub fn idw(points: &[SamplePoint], params: IdwParams) -> Result<Raster<f64>> {
                     }
 
                     // Check max radius
-                    if let Some(max_sq) = max_radius_sq {
-                        if dsq > max_sq {
+                    if let Some(max_sq) = max_radius_sq
+                        && dsq > max_sq {
                             continue;
                         }
-                    }
 
                     candidates.push((dsq, pt.value));
                 }
 
                 if let Some(val) = snapped {
-                    row_data[col] = val;
+                    *row_data_col = val;
                     continue;
                 }
 
@@ -256,7 +255,7 @@ pub fn idw(points: &[SamplePoint], params: IdwParams) -> Result<Raster<f64>> {
                 }
 
                 if sum_w > 0.0 {
-                    row_data[col] = sum_wz / sum_w;
+                    *row_data_col = sum_wz / sum_w;
                 }
             }
 

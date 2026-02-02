@@ -68,11 +68,10 @@ pub fn focal_statistics(raster: &Raster<f64>, params: FocalParams) -> Result<Ras
         return Err(Error::Algorithm("Focal radius must be > 0".into()));
     }
 
-    if let FocalStatistic::Percentile(p) = params.statistic {
-        if !(0.0..=100.0).contains(&p) {
+    if let FocalStatistic::Percentile(p) = params.statistic
+        && !(0.0..=100.0).contains(&p) {
             return Err(Error::Algorithm("Percentile must be between 0 and 100".into()));
         }
-    }
 
     let (rows, cols) = raster.shape();
     let r = params.radius as isize;
@@ -104,7 +103,7 @@ pub fn focal_statistics(raster: &Raster<f64>, params: FocalParams) -> Result<Ras
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 // Collect valid neighbor values
                 let mut values: Vec<f64> = Vec::with_capacity(offsets.len());
 
@@ -124,7 +123,7 @@ pub fn focal_statistics(raster: &Raster<f64>, params: FocalParams) -> Result<Ras
                     continue;
                 }
 
-                row_data[col] = compute_statistic(&mut values, &params.statistic);
+                *row_data_col = compute_statistic(&mut values, &params.statistic);
             }
 
             row_data
@@ -139,7 +138,7 @@ pub fn focal_statistics(raster: &Raster<f64>, params: FocalParams) -> Result<Ras
     Ok(output)
 }
 
-fn compute_statistic(values: &mut Vec<f64>, stat: &FocalStatistic) -> f64 {
+fn compute_statistic(values: &mut [f64], stat: &FocalStatistic) -> f64 {
     let n = values.len() as f64;
 
     match stat {

@@ -89,9 +89,9 @@ pub fn advanced_curvatures(
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let z5 = unsafe { dem.get_unchecked(row, col) };
-                if z5.is_nan() || nodata.map_or(false, |nd| (z5 - nd).abs() < f64::EPSILON) {
+                if z5.is_nan() || nodata.is_some_and(|nd| (z5 - nd).abs() < f64::EPSILON) {
                     continue;
                 }
                 if row == 0 || row == rows - 1 || col == 0 || col == cols - 1 {
@@ -123,7 +123,7 @@ pub fn advanced_curvatures(
                 let p2q2 = p2 + q2;
                 let w = 1.0 + p2q2; // 1 + p² + q²
 
-                row_data[col] = compute_curvature(curv_type, p, q, r, s, t, p2, q2, p2q2, w);
+                *row_data_col = compute_curvature(curv_type, p, q, r, s, t, p2, q2, p2q2, w);
             }
 
             row_data
@@ -155,9 +155,9 @@ pub fn all_curvatures(dem: &Raster<f64>) -> Result<AllCurvatures> {
         .flat_map(|row| {
             let mut row_data = vec![[f64::NAN; 14]; cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let z5 = unsafe { dem.get_unchecked(row, col) };
-                if z5.is_nan() || nodata.map_or(false, |nd| (z5 - nd).abs() < f64::EPSILON) {
+                if z5.is_nan() || nodata.is_some_and(|nd| (z5 - nd).abs() < f64::EPSILON) {
                     continue;
                 }
                 if row == 0 || row == rows - 1 || col == 0 || col == cols - 1 {
@@ -221,7 +221,7 @@ pub fn all_curvatures(dem: &Raster<f64>) -> Result<AllCurvatures> {
 
                 let laplacian = r + t;
 
-                row_data[col] = [
+                *row_data_col = [
                     mean_h, gauss_k, m_val, e_val,
                     kmin, kmax, kh, kv,
                     khe, kve, ka, kr,
@@ -301,6 +301,7 @@ pub struct AllCurvatures {
 }
 
 // Private helper: compute one curvature value from pre-computed derivatives
+#[allow(clippy::too_many_arguments)]
 #[inline]
 fn compute_curvature(
     curv_type: AdvancedCurvatureType,

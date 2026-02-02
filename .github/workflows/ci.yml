@@ -54,8 +54,41 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - name: Build WASM crate
-        run: cargo build --package surtgis-wasm --target wasm32-unknown-unknown --release
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - name: Build WASM with wasm-pack
+        run: wasm-pack build crates/wasm --target bundler --release --out-dir ../../pkg
+      - name: Verify exported functions
+        run: |
+          COUNT=$(grep -c "export function" pkg/surtgis_wasm.d.ts)
+          echo "Exported functions: $COUNT"
+          if [ "$COUNT" -lt 29 ]; then
+            echo "ERROR: Expected at least 29 exported functions, got $COUNT"
+            exit 1
+          fi
+
+  web-build:
+    name: Web Demo Build
+    runs-on: ubuntu-latest
+    needs: wasm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - name: Build WASM
+        run: wasm-pack build crates/wasm --target bundler --release --out-dir ../../pkg
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: web/package-lock.json
+      - name: Install & build web demo
+        working-directory: web
+        run: npm ci && npm run build
 
   python:
     name: Python Build
@@ -82,6 +115,26 @@ jobs:
           components: rustfmt
       - name: Check formatting
         run: cargo fmt --all -- --check
+
+  integration:
+    name: Integration Tests (real DEM)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check for fixture
+        id: fixture
+        run: |
+          if [ -f tests/fixtures/andes_chile_30m.tif ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Fixture not found — skipping integration tests"
+          fi
+      - name: Run integration tests
+        if: steps.fixture.outputs.exists == 'true'
+        run: cargo test --test integration_real_dem --package surtgis-algorithms
 
   bench:
     name: Benchmarks (dry run)

@@ -49,9 +49,9 @@ pub fn shape_index(dem: &Raster<f64>) -> Result<Raster<f64>> {
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let z5 = unsafe { dem.get_unchecked(row, col) };
-                if z5.is_nan() || nodata.map_or(false, |nd| (z5 - nd).abs() < f64::EPSILON) {
+                if z5.is_nan() || nodata.is_some_and(|nd| (z5 - nd).abs() < f64::EPSILON) {
                     continue;
                 }
 
@@ -92,9 +92,9 @@ pub fn shape_index(dem: &Raster<f64>) -> Result<Raster<f64>> {
                         continue;
                     }
                     // Perfect sphere: SI = sign(kmax)
-                    row_data[col] = if kmax > 0.0 { 1.0 } else { -1.0 };
+                    *row_data_col = if kmax > 0.0 { 1.0 } else { -1.0 };
                 } else {
-                    row_data[col] = (2.0 / PI) * ((kmax + kmin) / diff).atan();
+                    *row_data_col = (2.0 / PI) * ((kmax + kmin) / diff).atan();
                 }
             }
 
@@ -129,9 +129,9 @@ pub fn curvedness(dem: &Raster<f64>) -> Result<Raster<f64>> {
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let z5 = unsafe { dem.get_unchecked(row, col) };
-                if z5.is_nan() || nodata.map_or(false, |nd| (z5 - nd).abs() < f64::EPSILON) {
+                if z5.is_nan() || nodata.is_some_and(|nd| (z5 - nd).abs() < f64::EPSILON) {
                     continue;
                 }
 
@@ -163,7 +163,7 @@ pub fn curvedness(dem: &Raster<f64>) -> Result<Raster<f64>> {
                 let kmax = mean + disc_sqrt;
                 let kmin = mean - disc_sqrt;
 
-                row_data[col] = ((kmax * kmax + kmin * kmin) / 2.0).sqrt();
+                *row_data_col = ((kmax * kmax + kmin * kmin) / 2.0).sqrt();
             }
 
             row_data

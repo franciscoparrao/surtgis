@@ -36,13 +36,13 @@ pub fn northness(dem: &Raster<f64>) -> Result<Raster<f64>> {
         .into_par_iter()
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let a = unsafe { aspect_raster.get_unchecked(row, col) };
                 // aspect returns -1.0 for flat/nodata cells
                 if a < 0.0 || a.is_nan() {
                     continue;
                 }
-                row_data[col] = a.cos();
+                *row_data_col = a.cos();
             }
             row_data
         })
@@ -74,12 +74,12 @@ pub fn eastness(dem: &Raster<f64>) -> Result<Raster<f64>> {
         .into_par_iter()
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let a = unsafe { aspect_raster.get_unchecked(row, col) };
                 if a < 0.0 || a.is_nan() {
                     continue;
                 }
-                row_data[col] = a.sin();
+                *row_data_col = a.sin();
             }
             row_data
         })
@@ -107,12 +107,12 @@ pub fn northness_eastness(dem: &Raster<f64>) -> Result<(Raster<f64>, Raster<f64>
         .into_par_iter()
         .flat_map(|row| {
             let mut row_data = vec![(f64::NAN, f64::NAN); cols];
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let a = unsafe { aspect_raster.get_unchecked(row, col) };
                 if a < 0.0 || a.is_nan() {
                     continue;
                 }
-                row_data[col] = (a.cos(), a.sin());
+                *row_data_col = (a.cos(), a.sin());
             }
             row_data
         })

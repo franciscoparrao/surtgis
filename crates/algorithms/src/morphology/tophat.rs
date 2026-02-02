@@ -16,18 +16,12 @@ use super::opening::opening;
 
 /// Parameters for top-hat transform
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct TopHatParams {
     /// Structuring element shape
     pub element: StructuringElement,
 }
 
-impl Default for TopHatParams {
-    fn default() -> Self {
-        Self {
-            element: StructuringElement::default(),
-        }
-    }
-}
 
 /// Top-hat (white top-hat) algorithm
 #[derive(Debug, Clone, Default)]
@@ -54,18 +48,12 @@ impl Algorithm for TopHat {
 
 /// Parameters for black-hat transform
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct BlackHatParams {
     /// Structuring element shape
     pub element: StructuringElement,
 }
 
-impl Default for BlackHatParams {
-    fn default() -> Self {
-        Self {
-            element: StructuringElement::default(),
-        }
-    }
-}
 
 /// Black-hat algorithm
 #[derive(Debug, Clone, Default)]
@@ -108,13 +96,13 @@ pub fn top_hat(raster: &Raster<f64>, element: &StructuringElement) -> Result<Ras
         .into_par_iter()
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let orig = unsafe { raster.get_unchecked(row, col) };
                 let op = unsafe { opened.get_unchecked(row, col) };
                 if orig.is_nan() || op.is_nan() {
                     continue;
                 }
-                row_data[col] = orig - op;
+                *row_data_col = orig - op;
             }
             row_data
         })
@@ -145,13 +133,13 @@ pub fn black_hat(raster: &Raster<f64>, element: &StructuringElement) -> Result<R
         .into_par_iter()
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let orig = unsafe { raster.get_unchecked(row, col) };
                 let cl = unsafe { closed.get_unchecked(row, col) };
                 if orig.is_nan() || cl.is_nan() {
                     continue;
                 }
-                row_data[col] = cl - orig;
+                *row_data_col = cl - orig;
             }
             row_data
         })

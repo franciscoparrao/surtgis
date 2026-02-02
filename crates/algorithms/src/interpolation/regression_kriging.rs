@@ -137,12 +137,12 @@ pub fn regression_kriging(
         .into_par_iter()
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let (x, y) = transform.pixel_to_geo(col, row);
                 let trend = coefficients[0] + coefficients[1] * x + coefficients[2] * y;
                 let residual = kriged_residuals.estimate.get(row, col).unwrap_or(f64::NAN);
                 if !residual.is_nan() {
-                    row_data[col] = trend + residual;
+                    *row_data_col = trend + residual;
                 }
             }
             row_data
@@ -205,12 +205,12 @@ pub fn regression_kriging_with_variogram(
         .into_par_iter()
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let (x, y) = transform.pixel_to_geo(col, row);
                 let trend = coefficients[0] + coefficients[1] * x + coefficients[2] * y;
                 let residual = kriged_residuals.estimate.get(row, col).unwrap_or(f64::NAN);
                 if !residual.is_nan() {
-                    row_data[col] = trend + residual;
+                    *row_data_col = trend + residual;
                 }
             }
             row_data
@@ -260,12 +260,10 @@ fn ols_fit(points: &[SamplePoint]) -> Result<Vec<f64>> {
     // [n    sx   sy ] [β₀]   [sz ]
     // [sx   sxx  sxy] [β₁] = [sxz]
     // [sy   sxy  syy] [β₂]   [syz]
-    let mut mat = vec![
-        n, sx, sy,
+    let mut mat = [n, sx, sy,
         sx, sxx, sxy,
-        sy, sxy, syy,
-    ];
-    let mut rhs = vec![sz, sxz, syz];
+        sy, sxy, syy];
+    let mut rhs = [sz, sxz, syz];
 
     // Solve 3×3 system
     for col in 0..3 {

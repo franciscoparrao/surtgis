@@ -46,7 +46,7 @@ pub fn convergence_index(dem: &Raster<f64>, params: ConvergenceParams) -> Result
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let z0 = unsafe { dem.get_unchecked(row, col) };
                 if z0.is_nan() {
                     continue;
@@ -97,7 +97,7 @@ pub fn convergence_index(dem: &Raster<f64>, params: ConvergenceParams) -> Result
                 if count > 0 {
                     let avg_deviation = sum_deviation / count as f64;
                     // Scale to [-100, 100]: 0° → -100 (convergent), 90° → 0, 180° → +100 (divergent)
-                    row_data[col] = (avg_deviation / 90.0 - 1.0) * 100.0;
+                    *row_data_col = (avg_deviation / 90.0 - 1.0) * 100.0;
                 }
             }
 

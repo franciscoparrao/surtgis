@@ -82,7 +82,7 @@ pub fn geomorphons(dem: &Raster<f64>, params: GeomorphonParams) -> Result<Raster
         .flat_map(|row| {
             let mut row_data = vec![0u8; cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let z0 = unsafe { dem.get_unchecked(row, col) };
                 if z0.is_nan() {
                     continue;
@@ -134,7 +134,7 @@ pub fn geomorphons(dem: &Raster<f64>, params: GeomorphonParams) -> Result<Raster
                     }
                 }
 
-                row_data[col] = classify_pattern(&pattern);
+                *row_data_col = classify_pattern(&pattern);
             }
 
             row_data
@@ -206,8 +206,8 @@ fn count_segments(pattern: &[i8; 8], target: i8) -> usize {
 
     // Check circular continuity: start from a non-target position
     let mut start = 0;
-    for i in 0..8 {
-        if pattern[i] != target {
+    for (i, &p) in pattern.iter().enumerate() {
+        if p != target {
             start = i;
             break;
         }

@@ -95,7 +95,7 @@ pub fn flow_direction_dinf(dem: &Raster<f64>) -> Result<Raster<f64>> {
     for row in 0..rows {
         for col in 0..cols {
             let z0 = unsafe { dem.get_unchecked(row, col) };
-            if z0.is_nan() || nodata.map_or(false, |nd| (z0 - nd).abs() < f64::EPSILON) {
+            if z0.is_nan() || nodata.is_some_and(|nd| (z0 - nd).abs() < f64::EPSILON) {
                 continue;
             }
 
@@ -113,7 +113,7 @@ pub fn flow_direction_dinf(dem: &Raster<f64>) -> Result<Raster<f64>> {
                 }
 
                 let nval = unsafe { dem.get_unchecked(nr as usize, nc as usize) };
-                if nval.is_nan() || nodata.map_or(false, |nd| (nval - nd).abs() < f64::EPSILON) {
+                if nval.is_nan() || nodata.is_some_and(|nd| (nval - nd).abs() < f64::EPSILON) {
                     all_valid = false;
                     continue;
                 }
@@ -227,7 +227,7 @@ pub fn flow_dinf(dem: &Raster<f64>) -> Result<DinfResult> {
         for col in 0..cols {
             let z = unsafe { dem.get_unchecked(row, col) };
             let is_nd = z.is_nan()
-                || nodata.map_or(false, |nd| (z - nd).abs() < f64::EPSILON);
+                || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
             if !is_nd {
                 cells.push((row, col, z));
             }
@@ -240,7 +240,7 @@ pub fn flow_dinf(dem: &Raster<f64>) -> Result<DinfResult> {
     for row in 0..rows {
         for col in 0..cols {
             let z = unsafe { dem.get_unchecked(row, col) };
-            if z.is_nan() || nodata.map_or(false, |nd| (z - nd).abs() < f64::EPSILON) {
+            if z.is_nan() || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON) {
                 accumulation[(row, col)] = 0.0;
             }
         }
@@ -296,7 +296,7 @@ pub fn flow_dinf(dem: &Raster<f64>) -> Result<DinfResult> {
         for col in 0..cols {
             let z = unsafe { dem.get_unchecked(row, col) };
             let is_nd = z.is_nan()
-                || nodata.map_or(false, |nd| (z - nd).abs() < f64::EPSILON);
+                || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
             if !is_nd {
                 accumulation[(row, col)] -= 1.0;
                 if accumulation[(row, col)] < 0.0 {

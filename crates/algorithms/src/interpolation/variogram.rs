@@ -307,11 +307,10 @@ pub fn fit_best_variogram(
 
     let mut best: Option<FittedVariogram> = None;
     for &model in &models {
-        if let Ok(fitted) = fit_variogram(empirical, model) {
-            if best.as_ref().map_or(true, |b| fitted.rss < b.rss) {
+        if let Ok(fitted) = fit_variogram(empirical, model)
+            && best.as_ref().is_none_or(|b| fitted.rss < b.rss) {
                 best = Some(fitted);
             }
-        }
     }
 
     best.ok_or_else(|| Error::Algorithm("Could not fit any variogram model".into()))

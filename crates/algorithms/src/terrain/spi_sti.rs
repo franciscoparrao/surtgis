@@ -53,7 +53,7 @@ pub fn spi(flow_acc: &Raster<f64>, slope_rad: &Raster<f64>) -> Result<Raster<f64
         .into_par_iter()
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let acc = unsafe { flow_acc.get_unchecked(row, col) };
                 let slp = unsafe { slope_rad.get_unchecked(row, col) };
 
@@ -62,7 +62,7 @@ pub fn spi(flow_acc: &Raster<f64>, slope_rad: &Raster<f64>) -> Result<Raster<f64
                 }
 
                 let a_s = (acc + 1.0) * cell_size;
-                row_data[col] = a_s * slp.tan();
+                *row_data_col = a_s * slp.tan();
             }
             row_data
         })
@@ -111,7 +111,7 @@ pub fn sti(
         .into_par_iter()
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let acc = unsafe { flow_acc.get_unchecked(row, col) };
                 let slp = unsafe { slope_rad.get_unchecked(row, col) };
 
@@ -123,7 +123,7 @@ pub fn sti(
                 let length_factor = (a_s / 22.13).powf(m);
                 let slope_factor = (slp.sin() / 0.0896).powf(n);
 
-                row_data[col] = (m + 1.0) * length_factor * slope_factor;
+                *row_data_col = (m + 1.0) * length_factor * slope_factor;
             }
             row_data
         })

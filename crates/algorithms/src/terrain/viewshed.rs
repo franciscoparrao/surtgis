@@ -131,6 +131,7 @@ pub fn viewshed(dem: &Raster<f64>, params: ViewshedParams) -> Result<Raster<u8>>
 }
 
 /// Trace a ray from observer to target, returning visible cells
+#[allow(clippy::too_many_arguments)]
 fn trace_ray(
     dem: &Raster<f64>,
     obs_r: isize, obs_c: isize, obs_z: f64,
@@ -322,10 +323,10 @@ fn xdraw_interpolate_ref(
     if abs_dr >= abs_dc {
         // Primary axis is row direction
         // Cell A: one step back along primary (same secondary)
-        let ar = (r as isize - sign_r) as isize;
+        let ar = r as isize - sign_r;
         let ac = c as isize;
         // Cell B: one step back along primary AND one step back along secondary
-        let br = (r as isize - sign_r) as isize;
+        let br = r as isize - sign_r;
         let bc = if sign_c != 0 { c as isize - sign_c } else { ac };
 
         let f = if abs_dr > 0 { abs_dc as f64 / abs_dr as f64 } else { 0.0 };
@@ -343,10 +344,10 @@ fn xdraw_interpolate_ref(
         // Primary axis is column direction
         // Cell A: one step back along primary (same secondary)
         let ar = r as isize;
-        let ac = (c as isize - sign_c) as isize;
+        let ac = c as isize - sign_c;
         // Cell B: one step back along primary AND one step back along secondary
         let br = if sign_r != 0 { r as isize - sign_r } else { ar };
-        let bc = (c as isize - sign_c) as isize;
+        let bc = c as isize - sign_c;
 
         let f = if abs_dc > 0 { abs_dr as f64 / abs_dc as f64 } else { 0.0 };
 

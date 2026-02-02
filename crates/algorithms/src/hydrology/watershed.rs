@@ -30,19 +30,13 @@ fn opposite_dir(dir: u8) -> u8 {
 
 /// Parameters for watershed delineation
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct WatershedParams {
     /// Pour points as (row, col) coordinates.
     /// If empty, all independent basins are delineated.
     pub pour_points: Vec<(usize, usize)>,
 }
 
-impl Default for WatershedParams {
-    fn default() -> Self {
-        Self {
-            pour_points: Vec::new(),
-        }
-    }
-}
 
 /// Watershed delineation algorithm
 #[derive(Debug, Clone, Default)]

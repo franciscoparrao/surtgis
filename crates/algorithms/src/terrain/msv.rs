@@ -144,7 +144,7 @@ fn compute_scale_curvature(
         .flat_map(|row| {
             let mut row_data = vec![(f64::NAN, f64::NAN); cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let z0 = unsafe { dem.get_unchecked(row, col) };
                 if z0.is_nan() {
                     continue;
@@ -229,7 +229,7 @@ fn compute_scale_curvature(
                     // Ridgeness: convexity → negative λ₁ (both negative = dome)
                     let ridge = (-lambda1).max(0.0);
 
-                    row_data[col] = (valley, ridge);
+                    *row_data_col = (valley, ridge);
                 }
             }
 
@@ -252,6 +252,7 @@ fn compute_scale_curvature(
 
 /// Solve 6×6 symmetric positive-definite system from upper triangle.
 /// Returns None if system is singular.
+#[allow(clippy::needless_range_loop)]
 fn solve_6x6_upper(ata: &[f64; 21], atz: &[f64; 6]) -> Option<[f64; 6]> {
     // Expand upper triangle to full 6×6 matrix
     let mut m = [[0.0_f64; 7]; 6]; // augmented matrix [A | b]

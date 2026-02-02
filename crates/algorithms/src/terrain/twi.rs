@@ -41,7 +41,7 @@ pub fn twi(flow_acc: &Raster<f64>, slope_rad: &Raster<f64>) -> Result<Raster<f64
         .into_par_iter()
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let acc = unsafe { flow_acc.get_unchecked(row, col) };
                 let slp = unsafe { slope_rad.get_unchecked(row, col) };
 
@@ -53,7 +53,7 @@ pub fn twi(flow_acc: &Raster<f64>, slope_rad: &Raster<f64>) -> Result<Raster<f64
                 let sca = (acc + 1.0) * cell_size;
                 let beta = slp.max(min_slope);
 
-                row_data[col] = (sca / beta.tan()).ln();
+                *row_data_col = (sca / beta.tan()).ln();
             }
             row_data
         })

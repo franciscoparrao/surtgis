@@ -113,7 +113,7 @@ fn zhang_suen_thin(image: &Array2<u8>) -> Array2<u8> {
                 let a = transitions_01(&p);
 
                 // Conditions for sub-iteration 1
-                if b >= 2 && b <= 6
+                if (2..=6).contains(&b)
                     && a == 1
                     && (p[0] * p[2] * p[4]) == 0  // P2 * P4 * P6 = 0
                     && (p[2] * p[4] * p[6]) == 0  // P4 * P6 * P8 = 0
@@ -140,7 +140,7 @@ fn zhang_suen_thin(image: &Array2<u8>) -> Array2<u8> {
                 let a = transitions_01(&p);
 
                 // Conditions for sub-iteration 2
-                if b >= 2 && b <= 6
+                if (2..=6).contains(&b)
                     && a == 1
                     && (p[0] * p[2] * p[6]) == 0  // P2 * P4 * P8 = 0
                     && (p[0] * p[4] * p[6]) == 0  // P2 * P6 * P8 = 0
