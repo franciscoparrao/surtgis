@@ -8,13 +8,24 @@ use std::time::Instant;
 
 use crossbeam_channel::Sender;
 
-use surtgis_algorithms::hydrology::{fill_sinks, flow_direction, flow_accumulation, FillSinksParams};
-use surtgis_algorithms::imagery::{ndvi, ndwi};
+use surtgis_algorithms::hydrology::{
+    fill_sinks, flow_accumulation, flow_direction, hand, priority_flood_flat, FillSinksParams,
+    HandParams,
+};
+use surtgis_algorithms::imagery::{
+    band_math_binary, bsi, evi, mndwi, nbr, ndvi, ndwi, savi, BandMathOp, EviParams, SaviParams,
+};
+use surtgis_algorithms::morphology::{
+    black_hat, closing, dilate, erode, gradient, opening, top_hat, StructuringElement,
+};
 use surtgis_algorithms::statistics::{focal_statistics, FocalParams, FocalStatistic};
 use surtgis_algorithms::terrain::{
-    aspect, curvature, dev, geomorphons, hillshade, multidirectional_hillshade, slope, tpi, tri,
-    AspectOutput, CurvatureParams, CurvatureType, DevParams, GeomorphonParams, HillshadeParams,
-    MultiHillshadeParams, SlopeParams, SlopeUnits, TpiParams, TriParams,
+    aspect, convergence_index, curvature, curvedness, dev, eastness, geomorphons, hillshade,
+    landform_classification, multidirectional_hillshade, negative_openness, northness,
+    positive_openness, shape_index, sky_view_factor, slope, tpi, tri, vrm, AspectOutput,
+    ConvergenceParams, CurvatureParams, CurvatureType, DevParams, GeomorphonParams,
+    HillshadeParams, LandformParams, MultiHillshadeParams, OpennessParams, SlopeParams,
+    SlopeUnits, SvfParams, TpiParams, TriParams, VrmParams,
 };
 use surtgis_core::raster::Raster;
 
@@ -22,9 +33,6 @@ use crate::registry::ParamValue;
 use crate::state::{AppMessage, LogEntry};
 
 /// Dispatch an algorithm by ID, running it in a background thread.
-///
-/// `input` is the primary input raster. `params` are the user-configured parameter values.
-/// `extra_inputs` holds additional input rasters keyed by parameter name (for multi-input algos).
 pub fn dispatch_algorithm(
     algo_id: &str,
     input: Raster<f64>,
@@ -44,265 +52,312 @@ pub fn dispatch_algorithm(
         let start = Instant::now();
 
         match algo_id.as_str() {
+            // ═══════════════════════════════════════════════════
+            // TERRAIN
+            // ═══════════════════════════════════════════════════
             "slope" => {
-                let units = match params.get("units").map(|v| v.as_choice_index()).unwrap_or(0) {
-                    0 => SlopeUnits::Degrees,
+                let units = match get_choice(&params, "units") {
                     1 => SlopeUnits::Percent,
                     2 => SlopeUnits::Radians,
                     _ => SlopeUnits::Degrees,
                 };
-                let z_factor = params.get("z_factor").map(|v| v.as_f64()).unwrap_or(1.0);
-                match slope(&input, SlopeParams { units, z_factor }) {
-                    Ok(result) => send_f64(&tx, "Slope", result, start),
-                    Err(e) => send_error(&tx, "Slope", e),
-                }
+                let z_factor = get_f64(&params, "z_factor", 1.0);
+                dispatch_f64(&tx, "Slope", start, slope(&input, SlopeParams { units, z_factor }));
             }
 
             "aspect" => {
-                let fmt = match params.get("format").map(|v| v.as_choice_index()).unwrap_or(0) {
-                    0 => AspectOutput::Degrees,
+                let fmt = match get_choice(&params, "format") {
                     1 => AspectOutput::Radians,
                     _ => AspectOutput::Degrees,
                 };
-                match aspect(&input, fmt) {
-                    Ok(result) => send_f64(&tx, "Aspect", result, start),
-                    Err(e) => send_error(&tx, "Aspect", e),
-                }
+                dispatch_f64(&tx, "Aspect", start, aspect(&input, fmt));
             }
 
             "hillshade" => {
-                let azimuth = params.get("azimuth").map(|v| v.as_f64()).unwrap_or(315.0);
-                let altitude = params.get("altitude").map(|v| v.as_f64()).unwrap_or(45.0);
-                let z_factor = params.get("z_factor").map(|v| v.as_f64()).unwrap_or(1.0);
-                match hillshade(
-                    &input,
-                    HillshadeParams {
-                        azimuth,
-                        altitude,
-                        z_factor,
-                        normalized: false,
-                    },
-                ) {
-                    Ok(result) => send_f64(&tx, "Hillshade", result, start),
-                    Err(e) => send_error(&tx, "Hillshade", e),
-                }
+                dispatch_f64(&tx, "Hillshade", start, hillshade(&input, HillshadeParams {
+                    azimuth: get_f64(&params, "azimuth", 315.0),
+                    altitude: get_f64(&params, "altitude", 45.0),
+                    z_factor: get_f64(&params, "z_factor", 1.0),
+                    normalized: false,
+                }));
+            }
+
+            "multidirectional_hillshade" => {
+                dispatch_f64(&tx, "Multidirectional Hillshade", start,
+                    multidirectional_hillshade(&input, MultiHillshadeParams::default()));
             }
 
             "curvature" => {
-                let ct = match params.get("type").map(|v| v.as_choice_index()).unwrap_or(0) {
-                    0 => CurvatureType::General,
+                let ct = match get_choice(&params, "type") {
                     1 => CurvatureType::Profile,
                     2 => CurvatureType::Plan,
                     _ => CurvatureType::General,
                 };
-                let z_factor = params.get("z_factor").map(|v| v.as_f64()).unwrap_or(1.0);
-                match curvature(
-                    &input,
-                    CurvatureParams {
-                        curvature_type: ct,
-                        z_factor,
-                        ..Default::default()
-                    },
-                ) {
-                    Ok(result) => send_f64(&tx, "Curvature", result, start),
-                    Err(e) => send_error(&tx, "Curvature", e),
-                }
+                dispatch_f64(&tx, "Curvature", start, curvature(&input, CurvatureParams {
+                    curvature_type: ct,
+                    z_factor: get_f64(&params, "z_factor", 1.0),
+                    ..Default::default()
+                }));
             }
 
             "tpi" => {
-                let radius = params.get("radius").map(|v| v.as_usize()).unwrap_or(3);
-                match tpi(&input, TpiParams { radius }) {
-                    Ok(result) => send_f64(&tx, "TPI", result, start),
-                    Err(e) => send_error(&tx, "TPI", e),
-                }
+                dispatch_f64(&tx, "TPI", start, tpi(&input, TpiParams {
+                    radius: get_usize(&params, "radius", 3),
+                }));
             }
 
             "tri" => {
-                let radius = params.get("radius").map(|v| v.as_usize()).unwrap_or(1);
-                match tri(&input, TriParams { radius }) {
-                    Ok(result) => send_f64(&tx, "TRI", result, start),
-                    Err(e) => send_error(&tx, "TRI", e),
-                }
+                dispatch_f64(&tx, "TRI", start, tri(&input, TriParams {
+                    radius: get_usize(&params, "radius", 1),
+                }));
             }
 
             "twi" => {
-                // TWI requires flow accumulation + slope. Compute both from DEM.
                 let _ = tx.send(AppMessage::Log(LogEntry::info(
-                    "Computing flow direction + accumulation + slope for TWI...",
+                    "Computing fill + flow + slope for TWI...",
                 )));
-                let filled = match fill_sinks(&input, FillSinksParams { min_slope: 0.01 }) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        send_error(&tx, "TWI (fill sinks)", e);
-                        return;
-                    }
-                };
-                let fdir = match flow_direction(&filled) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        send_error(&tx, "TWI (flow direction)", e);
-                        return;
-                    }
-                };
-                let facc = match flow_accumulation(&fdir) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        send_error(&tx, "TWI (flow accumulation)", e);
-                        return;
-                    }
-                };
-                let slope_rad = match slope(
-                    &filled,
-                    SlopeParams {
-                        units: SlopeUnits::Radians,
-                        z_factor: 1.0,
-                    },
-                ) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        send_error(&tx, "TWI (slope)", e);
-                        return;
-                    }
-                };
-                match surtgis_algorithms::terrain::twi(&facc, &slope_rad) {
-                    Ok(result) => send_f64(&tx, "TWI", result, start),
-                    Err(e) => send_error(&tx, "TWI", e),
-                }
+                let res = (|| -> anyhow::Result<Raster<f64>> {
+                    let filled = fill_sinks(&input, FillSinksParams { min_slope: 0.01 })?;
+                    let fdir = flow_direction(&filled)?;
+                    let facc = flow_accumulation(&fdir)?;
+                    let slope_rad = slope(&filled, SlopeParams {
+                        units: SlopeUnits::Radians, z_factor: 1.0,
+                    })?;
+                    Ok(surtgis_algorithms::terrain::twi(&facc, &slope_rad)?)
+                })();
+                dispatch_f64(&tx, "TWI", start, res);
             }
 
             "geomorphons" => {
-                let flatness = params.get("flatness").map(|v| v.as_f64()).unwrap_or(1.0);
-                let radius = params.get("radius").map(|v| v.as_usize()).unwrap_or(10);
-                match geomorphons(
-                    &input,
-                    GeomorphonParams {
-                        radius,
-                        flatness_threshold: flatness,
-                    },
-                ) {
-                    Ok(result) => {
-                        let elapsed = start.elapsed();
-                        let _ = tx.send(AppMessage::AlgoCompleteU8 {
-                            name: "Geomorphons".to_string(),
-                            result,
-                            elapsed,
-                        });
-                        let _ = tx.send(AppMessage::Log(LogEntry::success(format!(
-                            "Geomorphons completed in {:.2}s",
-                            elapsed.as_secs_f64()
-                        ))));
-                    }
-                    Err(e) => send_error(&tx, "Geomorphons", e),
-                }
-            }
-
-            "multidirectional_hillshade" => {
-                match multidirectional_hillshade(&input, MultiHillshadeParams::default()) {
-                    Ok(result) => send_f64(&tx, "Multidirectional Hillshade", result, start),
-                    Err(e) => send_error(&tx, "Multidirectional Hillshade", e),
-                }
+                let result = geomorphons(&input, GeomorphonParams {
+                    radius: get_usize(&params, "radius", 10),
+                    flatness_threshold: get_f64(&params, "flatness", 1.0),
+                });
+                dispatch_u8(&tx, "Geomorphons", start, result);
             }
 
             "dev" => {
-                let radius = params.get("radius").map(|v| v.as_usize()).unwrap_or(10);
-                match dev(&input, DevParams { radius }) {
-                    Ok(result) => send_f64(&tx, "DEV", result, start),
-                    Err(e) => send_error(&tx, "DEV", e),
-                }
+                dispatch_f64(&tx, "DEV", start, dev(&input, DevParams {
+                    radius: get_usize(&params, "radius", 10),
+                }));
             }
 
+            "landform" => {
+                dispatch_f64(&tx, "Landform", start, landform_classification(&input, LandformParams {
+                    small_radius: get_usize(&params, "small_radius", 3),
+                    large_radius: get_usize(&params, "large_radius", 10),
+                    tpi_threshold: get_f64(&params, "threshold", 1.0),
+                    slope_threshold: get_f64(&params, "slope_threshold", 6.0),
+                }));
+            }
+
+            "sky_view_factor" => {
+                dispatch_f64(&tx, "Sky View Factor", start, sky_view_factor(&input, SvfParams {
+                    radius: get_usize(&params, "radius", 10),
+                    directions: get_usize(&params, "directions", 16),
+                }));
+            }
+
+            "positive_openness" => {
+                dispatch_f64(&tx, "Positive Openness", start, positive_openness(&input, OpennessParams {
+                    radius: get_usize(&params, "radius", 10),
+                    directions: get_usize(&params, "directions", 8),
+                }));
+            }
+
+            "negative_openness" => {
+                dispatch_f64(&tx, "Negative Openness", start, negative_openness(&input, OpennessParams {
+                    radius: get_usize(&params, "radius", 10),
+                    directions: get_usize(&params, "directions", 8),
+                }));
+            }
+
+            "convergence_index" => {
+                dispatch_f64(&tx, "Convergence Index", start, convergence_index(&input, ConvergenceParams {
+                    radius: get_usize(&params, "radius", 1),
+                }));
+            }
+
+            "vrm" => {
+                dispatch_f64(&tx, "VRM", start, vrm(&input, VrmParams {
+                    radius: get_usize(&params, "radius", 1),
+                }));
+            }
+
+            "shape_index" => {
+                dispatch_f64(&tx, "Shape Index", start, shape_index(&input));
+            }
+
+            "curvedness" => {
+                dispatch_f64(&tx, "Curvedness", start, curvedness(&input));
+            }
+
+            "northness" => {
+                dispatch_f64(&tx, "Northness", start, northness(&input));
+            }
+
+            "eastness" => {
+                dispatch_f64(&tx, "Eastness", start, eastness(&input));
+            }
+
+            // ═══════════════════════════════════════════════════
+            // HYDROLOGY
+            // ═══════════════════════════════════════════════════
             "fill_sinks" => {
-                match fill_sinks(&input, FillSinksParams { min_slope: 0.01 }) {
-                    Ok(result) => send_f64(&tx, "Fill Sinks", result, start),
-                    Err(e) => send_error(&tx, "Fill Sinks", e),
-                }
+                dispatch_f64(&tx, "Fill Sinks", start,
+                    fill_sinks(&input, FillSinksParams { min_slope: 0.01 }));
             }
 
-            "flow_direction" => match flow_direction(&input) {
-                Ok(result) => {
-                    let elapsed = start.elapsed();
-                    let _ = tx.send(AppMessage::AlgoCompleteU8 {
-                        name: "Flow Direction".to_string(),
-                        result,
-                        elapsed,
-                    });
-                    let _ = tx.send(AppMessage::Log(LogEntry::success(format!(
-                        "Flow Direction completed in {:.2}s",
-                        elapsed.as_secs_f64()
-                    ))));
-                }
-                Err(e) => send_error(&tx, "Flow Direction", e),
-            },
+            "priority_flood" => {
+                dispatch_f64(&tx, "Priority Flood", start, priority_flood_flat(&input));
+            }
+
+            "flow_direction" => {
+                dispatch_u8(&tx, "Flow Direction", start, flow_direction(&input));
+            }
 
             "flow_accumulation" => {
-                // Flow accumulation expects a D8 flow direction as u8 input.
-                // For simplicity in MVP, compute from DEM directly.
                 let _ = tx.send(AppMessage::Log(LogEntry::info(
                     "Computing fill + flow direction first...",
                 )));
-                let filled = match fill_sinks(&input, FillSinksParams { min_slope: 0.01 }) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        send_error(&tx, "Flow Accumulation (fill)", e);
-                        return;
-                    }
-                };
-                let fdir = match flow_direction(&filled) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        send_error(&tx, "Flow Accumulation (fdir)", e);
-                        return;
-                    }
-                };
-                match flow_accumulation(&fdir) {
-                    Ok(result) => send_f64(&tx, "Flow Accumulation", result, start),
-                    Err(e) => send_error(&tx, "Flow Accumulation", e),
-                }
+                let res = (|| -> anyhow::Result<Raster<f64>> {
+                    let filled = fill_sinks(&input, FillSinksParams { min_slope: 0.01 })?;
+                    let fdir = flow_direction(&filled)?;
+                    Ok(flow_accumulation(&fdir)?)
+                })();
+                dispatch_f64(&tx, "Flow Accumulation", start, res);
             }
 
+            "hand" => {
+                let threshold = get_f64(&params, "stream_threshold", 1000.0);
+                let _ = tx.send(AppMessage::Log(LogEntry::info(
+                    "Computing fill + flow + accumulation for HAND...",
+                )));
+                let res = (|| -> anyhow::Result<Raster<f64>> {
+                    let filled = fill_sinks(&input, FillSinksParams { min_slope: 0.01 })?;
+                    let fdir = flow_direction(&filled)?;
+                    let facc = flow_accumulation(&fdir)?;
+                    Ok(hand(&filled, &fdir, &facc, HandParams { stream_threshold: threshold })?)
+                })();
+                dispatch_f64(&tx, "HAND", start, res);
+            }
+
+            // ═══════════════════════════════════════════════════
+            // IMAGERY
+            // ═══════════════════════════════════════════════════
             "ndvi" => {
-                if let Some(nir) = extra_inputs.get("nir") {
-                    match ndvi(nir, &input) {
-                        Ok(result) => send_f64(&tx, "NDVI", result, start),
-                        Err(e) => send_error(&tx, "NDVI", e),
-                    }
-                } else {
-                    send_error(
-                        &tx,
-                        "NDVI",
-                        anyhow::anyhow!("NIR band not provided"),
-                    );
-                }
+                require_extra(&tx, "NDVI", &extra_inputs, &["nir"], |inputs| {
+                    ndvi(inputs["nir"], &input)
+                }, start);
             }
 
             "ndwi" => {
-                if let Some(green) = extra_inputs.get("green") {
-                    match ndwi(green, &input) {
-                        Ok(result) => send_f64(&tx, "NDWI", result, start),
-                        Err(e) => send_error(&tx, "NDWI", e),
-                    }
-                } else {
-                    send_error(
-                        &tx,
-                        "NDWI",
-                        anyhow::anyhow!("Green band not provided"),
-                    );
-                }
+                require_extra(&tx, "NDWI", &extra_inputs, &["green"], |inputs| {
+                    ndwi(inputs["green"], &input)
+                }, start);
             }
 
+            "mndwi" => {
+                require_extra(&tx, "MNDWI", &extra_inputs, &["green", "swir"], |inputs| {
+                    mndwi(inputs["green"], inputs["swir"])
+                }, start);
+            }
+
+            "nbr" => {
+                require_extra(&tx, "NBR", &extra_inputs, &["nir", "swir"], |inputs| {
+                    nbr(inputs["nir"], inputs["swir"])
+                }, start);
+            }
+
+            "savi" => {
+                let l_factor = get_f64(&params, "l_factor", 0.5);
+                require_extra(&tx, "SAVI", &extra_inputs, &["nir", "red"], |inputs| {
+                    savi(inputs["nir"], inputs["red"], SaviParams { l_factor })
+                }, start);
+            }
+
+            "evi" => {
+                require_extra(&tx, "EVI", &extra_inputs, &["nir", "red", "blue"], |inputs| {
+                    evi(inputs["nir"], inputs["red"], inputs["blue"], EviParams::default())
+                }, start);
+            }
+
+            "bsi" => {
+                require_extra(&tx, "BSI", &extra_inputs, &["swir", "red", "nir", "blue"], |inputs| {
+                    bsi(inputs["swir"], inputs["red"], inputs["nir"], inputs["blue"])
+                }, start);
+            }
+
+            "band_math" => {
+                let op = match get_choice(&params, "op") {
+                    0 => BandMathOp::Add,
+                    1 => BandMathOp::Subtract,
+                    2 => BandMathOp::Multiply,
+                    3 => BandMathOp::Divide,
+                    4 => BandMathOp::Min,
+                    5 => BandMathOp::Max,
+                    _ => BandMathOp::Add,
+                };
+                require_extra(&tx, "Band Math", &extra_inputs, &["a", "b"], |inputs| {
+                    band_math_binary(inputs["a"], inputs["b"], op)
+                }, start);
+            }
+
+            // ═══════════════════════════════════════════════════
+            // MORPHOLOGY
+            // ═══════════════════════════════════════════════════
+            "erode" => {
+                let se = make_se(&params);
+                dispatch_f64(&tx, "Erosion", start, erode(&input, &se));
+            }
+
+            "dilate" => {
+                let se = make_se(&params);
+                dispatch_f64(&tx, "Dilation", start, dilate(&input, &se));
+            }
+
+            "morph_opening" => {
+                let se = make_se(&params);
+                dispatch_f64(&tx, "Opening", start, opening(&input, &se));
+            }
+
+            "morph_closing" => {
+                let se = make_se(&params);
+                dispatch_f64(&tx, "Closing", start, closing(&input, &se));
+            }
+
+            "morph_gradient" => {
+                let se = make_se(&params);
+                dispatch_f64(&tx, "Gradient", start, gradient(&input, &se));
+            }
+
+            "top_hat" => {
+                let se = make_se(&params);
+                dispatch_f64(&tx, "Top Hat", start, top_hat(&input, &se));
+            }
+
+            "black_hat" => {
+                let se = make_se(&params);
+                dispatch_f64(&tx, "Black Hat", start, black_hat(&input, &se));
+            }
+
+            // ═══════════════════════════════════════════════════
+            // STATISTICS
+            // ═══════════════════════════════════════════════════
             "focal_mean" => {
-                let radius = params.get("radius").map(|v| v.as_usize()).unwrap_or(3);
-                match focal_statistics(
-                    &input,
-                    FocalParams {
-                        radius,
-                        statistic: FocalStatistic::Mean,
-                        circular: false,
-                    },
-                ) {
-                    Ok(result) => send_f64(&tx, "Focal Mean", result, start),
-                    Err(e) => send_error(&tx, "Focal Mean", e),
-                }
+                dispatch_focal(&tx, start, &input, &params, FocalStatistic::Mean, "Focal Mean");
+            }
+
+            "focal_std" => {
+                dispatch_focal(&tx, start, &input, &params, FocalStatistic::StdDev, "Focal Std Dev");
+            }
+
+            "focal_range" => {
+                dispatch_focal(&tx, start, &input, &params, FocalStatistic::Range, "Focal Range");
+            }
+
+            "focal_median" => {
+                dispatch_focal(&tx, start, &input, &params, FocalStatistic::Median, "Focal Median");
             }
 
             _ => {
@@ -315,18 +370,110 @@ pub fn dispatch_algorithm(
     });
 }
 
-fn send_f64(tx: &Sender<AppMessage>, name: &str, result: Raster<f64>, start: Instant) {
-    let elapsed = start.elapsed();
-    let _ = tx.send(AppMessage::AlgoComplete {
-        name: name.to_string(),
-        result,
-        elapsed,
-    });
-    let _ = tx.send(AppMessage::Log(LogEntry::success(format!(
-        "{} completed in {:.2}s",
-        name,
-        elapsed.as_secs_f64()
-    ))));
+// ─── Helpers ───────────────────────────────────────────────────────────
+
+fn get_f64(params: &HashMap<String, ParamValue>, key: &str, default: f64) -> f64 {
+    params.get(key).map(|v| v.as_f64()).unwrap_or(default)
+}
+
+fn get_usize(params: &HashMap<String, ParamValue>, key: &str, default: usize) -> usize {
+    params.get(key).map(|v| v.as_usize()).unwrap_or(default)
+}
+
+fn get_choice(params: &HashMap<String, ParamValue>, key: &str) -> usize {
+    params.get(key).map(|v| v.as_choice_index()).unwrap_or(0)
+}
+
+fn make_se(params: &HashMap<String, ParamValue>) -> StructuringElement {
+    let radius = get_usize(params, "radius", 1);
+    match get_choice(params, "shape") {
+        1 => StructuringElement::Cross(radius),
+        2 => StructuringElement::Disk(radius),
+        _ => StructuringElement::Square(radius),
+    }
+}
+
+fn dispatch_f64<E: std::fmt::Display>(
+    tx: &Sender<AppMessage>,
+    name: &str,
+    start: Instant,
+    result: Result<Raster<f64>, E>,
+) {
+    match result {
+        Ok(raster) => {
+            let elapsed = start.elapsed();
+            let _ = tx.send(AppMessage::AlgoComplete {
+                name: name.to_string(),
+                result: raster,
+                elapsed,
+            });
+            let _ = tx.send(AppMessage::Log(LogEntry::success(format!(
+                "{} completed in {:.2}s", name, elapsed.as_secs_f64()
+            ))));
+        }
+        Err(e) => send_error(tx, name, e),
+    }
+}
+
+fn dispatch_u8<E: std::fmt::Display>(
+    tx: &Sender<AppMessage>,
+    name: &str,
+    start: Instant,
+    result: Result<Raster<u8>, E>,
+) {
+    match result {
+        Ok(raster) => {
+            let elapsed = start.elapsed();
+            let _ = tx.send(AppMessage::AlgoCompleteU8 {
+                name: name.to_string(),
+                result: raster,
+                elapsed,
+            });
+            let _ = tx.send(AppMessage::Log(LogEntry::success(format!(
+                "{} completed in {:.2}s", name, elapsed.as_secs_f64()
+            ))));
+        }
+        Err(e) => send_error(tx, name, e),
+    }
+}
+
+fn dispatch_focal(
+    tx: &Sender<AppMessage>,
+    start: Instant,
+    input: &Raster<f64>,
+    params: &HashMap<String, ParamValue>,
+    statistic: FocalStatistic,
+    name: &str,
+) {
+    dispatch_f64(tx, name, start, focal_statistics(input, FocalParams {
+        radius: get_usize(params, "radius", 3),
+        statistic,
+        circular: false,
+    }));
+}
+
+/// Helper for multi-input algorithms: checks all required extra inputs exist.
+fn require_extra<F>(
+    tx: &Sender<AppMessage>,
+    name: &str,
+    extra_inputs: &HashMap<String, Raster<f64>>,
+    required: &[&str],
+    f: F,
+    start: Instant,
+) where
+    F: FnOnce(HashMap<&str, &Raster<f64>>) -> surtgis_core::Result<Raster<f64>>,
+{
+    let mut inputs = HashMap::new();
+    for &key in required {
+        match extra_inputs.get(key) {
+            Some(r) => { inputs.insert(key, r); }
+            None => {
+                send_error(tx, name, format!("Missing input: {}", key));
+                return;
+            }
+        }
+    }
+    dispatch_f64(tx, name, start, f(inputs));
 }
 
 fn send_error(tx: &Sender<AppMessage>, name: &str, err: impl std::fmt::Display) {

@@ -1,4 +1,4 @@
-//! Map canvas panel: displays the active raster with colormap, zoom, and pan.
+//! Map canvas panel: displays the active raster with colormap, zoom, pan, and scale bar.
 
 use egui::{Color32, Pos2, Rect, Sense, TextureHandle, Vec2};
 
@@ -103,11 +103,21 @@ pub fn show_map_canvas(
         Color32::WHITE,
     );
 
-    // Handle zoom (mouse wheel)
+    // Handle zoom (mouse wheel) — zoom towards cursor
     let scroll = ui.input(|i| i.raw_scroll_delta.y);
     if scroll != 0.0 && response.hovered() {
         let factor = if scroll > 0.0 { 1.1 } else { 1.0 / 1.1 };
-        state.zoom = (state.zoom * factor).clamp(0.1, 50.0);
+        let new_zoom = (state.zoom * factor).clamp(0.1, 50.0);
+        // Zoom towards cursor position
+        if let Some(cursor) = response.hover_pos() {
+            let ratio = new_zoom / state.zoom;
+            state.offset = cursor.to_vec2() - ratio * (cursor.to_vec2() - state.offset - center.to_vec2())
+                - center.to_vec2();
+            // Simplified: just adjust offset proportionally
+            state.offset.x *= ratio;
+            state.offset.y *= ratio;
+        }
+        state.zoom = new_zoom;
     }
 
     // Handle pan (drag)
@@ -141,6 +151,9 @@ pub fn show_map_canvas(
         }
     }
 
+    // ── Scale bar ─────────────────────────────────────────────────────
+    draw_scale_bar(&painter, &response.rect, &dataset.raster, scale);
+
     // Status bar at bottom
     let status_rect = Rect::from_min_size(
         Pos2::new(response.rect.left(), response.rect.bottom() - 20.0),
@@ -152,18 +165,21 @@ pub fn show_map_canvas(
         (state.cursor_geo, &state.cursor_value)
     {
         format!(
-            "X: {:.6}  Y: {:.6}  |  Value: {}  |  Zoom: {:.0}%",
+            "X: {:.6}  Y: {:.6}  |  Value: {}  |  Zoom: {:.0}%  |  {}x{}",
             gx,
             gy,
             val,
-            state.zoom * 100.0
+            state.zoom * 100.0,
+            cols,
+            rows,
         )
     } else {
         format!(
-            "{}x{} pixels  |  Zoom: {:.0}%",
+            "{}x{} pixels  |  Zoom: {:.0}%  |  Colormap: {}",
             cols,
             rows,
-            state.zoom * 100.0
+            state.zoom * 100.0,
+            dataset.colormap.name(),
         )
     };
 
@@ -173,6 +189,106 @@ pub fn show_map_canvas(
         status_text,
         egui::FontId::monospace(11.0),
         Color32::LIGHT_GRAY,
+    );
+}
+
+/// Draw a scale bar in the bottom-left corner of the map canvas.
+fn draw_scale_bar(
+    painter: &egui::Painter,
+    canvas_rect: &Rect,
+    raster: &DatasetRaster,
+    pixel_scale: f32,
+) {
+    // Get the cell size (geographic units per pixel)
+    let cell_size = match raster {
+        DatasetRaster::F64(r) => r.cell_size(),
+        DatasetRaster::U8(r) => r.cell_size(),
+        DatasetRaster::I32(r) => r.cell_size(),
+    };
+    if cell_size <= 0.0 || pixel_scale <= 0.0 {
+        return;
+    }
+
+    // Geo units per screen pixel
+    let geo_per_px = cell_size / pixel_scale as f64;
+
+    // Target bar width ~100-200 screen pixels
+    let target_screen_px = 150.0_f64;
+    let raw_geo = geo_per_px * target_screen_px;
+
+    // Round to a nice number
+    let magnitude = 10.0_f64.powf(raw_geo.log10().floor());
+    let nice = if raw_geo / magnitude < 2.0 {
+        magnitude
+    } else if raw_geo / magnitude < 5.0 {
+        2.0 * magnitude
+    } else {
+        5.0 * magnitude
+    };
+
+    let bar_screen_px = (nice / geo_per_px) as f32;
+    if bar_screen_px < 20.0 || bar_screen_px > 400.0 {
+        return;
+    }
+
+    // Format the label
+    let label = if nice >= 1000.0 {
+        format!("{:.0} km", nice / 1000.0)
+    } else if nice >= 1.0 {
+        format!("{:.0} m", nice)
+    } else if nice >= 0.01 {
+        format!("{:.2} m", nice)
+    } else {
+        // Probably degrees
+        if nice >= 1.0 / 3600.0 {
+            format!("{:.1}\"", nice * 3600.0)
+        } else {
+            format!("{:.6}\u{00b0}", nice)
+        }
+    };
+
+    let bar_y = canvas_rect.bottom() - 40.0;
+    let bar_x = canvas_rect.left() + 16.0;
+    let bar_height = 6.0_f32;
+
+    // Background
+    let bg_rect = Rect::from_min_size(
+        Pos2::new(bar_x - 4.0, bar_y - 16.0),
+        Vec2::new(bar_screen_px + 8.0, bar_height + 24.0),
+    );
+    painter.rect_filled(bg_rect, 3.0, Color32::from_black_alpha(140));
+
+    // Bar
+    let bar_rect = Rect::from_min_size(
+        Pos2::new(bar_x, bar_y),
+        Vec2::new(bar_screen_px, bar_height),
+    );
+    painter.rect_filled(bar_rect, 1.0, Color32::WHITE);
+
+    // End ticks
+    let tick_h = 10.0_f32;
+    painter.line_segment(
+        [
+            Pos2::new(bar_x, bar_y - tick_h / 2.0),
+            Pos2::new(bar_x, bar_y + bar_height + tick_h / 2.0),
+        ],
+        egui::Stroke::new(1.5, Color32::WHITE),
+    );
+    painter.line_segment(
+        [
+            Pos2::new(bar_x + bar_screen_px, bar_y - tick_h / 2.0),
+            Pos2::new(bar_x + bar_screen_px, bar_y + bar_height + tick_h / 2.0),
+        ],
+        egui::Stroke::new(1.5, Color32::WHITE),
+    );
+
+    // Label
+    painter.text(
+        Pos2::new(bar_x + bar_screen_px / 2.0, bar_y - 10.0),
+        egui::Align2::CENTER_BOTTOM,
+        label,
+        egui::FontId::proportional(11.0),
+        Color32::WHITE,
     );
 }
 

@@ -18,6 +18,8 @@ pub struct Dataset {
     pub raster: DatasetRaster,
     pub colormap: ColorScheme,
     pub visible: bool,
+    /// Layer opacity [0.0, 1.0].
+    pub opacity: f32,
     /// Cached RGBA pixels (invalidated when colormap changes).
     pub rgba_cache: Option<Vec<u8>>,
     /// Which algorithm produced this (None if loaded from file).

@@ -15,7 +15,10 @@ use crate::io;
 use crate::menu::{show_menu_bar, MenuAction};
 use crate::panels::algo_tree::show_algo_tree;
 use crate::panels::console::show_console;
+use crate::panels::data_manager::show_data_manager;
+use crate::panels::layers::{show_layers, LayerAction};
 use crate::panels::map_canvas::{invalidate_texture, show_map_canvas, MapCanvasState};
+use crate::panels::properties::{show_properties, PropertiesAction};
 use crate::panels::tool_dialog::{show_tool_dialog, ToolDialogAction, ToolDialogState};
 use crate::registry::{build_registry, AlgorithmEntry, ParamValue};
 use crate::state::workspace::{Dataset, DatasetRaster, Workspace};
@@ -110,6 +113,7 @@ impl SurtGisApp {
                         raster: DatasetRaster::F64(raster),
                         colormap: ColorScheme::Terrain,
                         visible: true,
+                        opacity: 1.0,
                         rgba_cache: None,
                         provenance: None,
                     };
@@ -133,6 +137,7 @@ impl SurtGisApp {
                         raster: DatasetRaster::F64(result),
                         colormap,
                         visible: true,
+                        opacity: 1.0,
                         rgba_cache: None,
                         provenance: Some(
                             self.tool_dialog
@@ -159,6 +164,7 @@ impl SurtGisApp {
                         raster: DatasetRaster::U8(result),
                         colormap,
                         visible: true,
+                        opacity: 1.0,
                         rgba_cache: None,
                         provenance: Some(
                             self.tool_dialog
@@ -184,6 +190,7 @@ impl SurtGisApp {
                         raster: DatasetRaster::I32(result),
                         colormap: ColorScheme::Terrain,
                         visible: true,
+                        opacity: 1.0,
                         rgba_cache: None,
                         provenance: Some(
                             self.tool_dialog
@@ -293,6 +300,7 @@ impl eframe::App for SurtGisApp {
         }
 
         // Menu bar
+        let registry_ref = self.registry.clone();
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
             let colormap = self
                 .workspace
@@ -300,7 +308,7 @@ impl eframe::App for SurtGisApp {
                 .map(|d| d.colormap)
                 .unwrap_or(ColorScheme::Terrain);
 
-            match show_menu_bar(ui, colormap) {
+            match show_menu_bar(ui, colormap, &registry_ref) {
                 MenuAction::Open => {
                     io::open_geotiff(self.tx.clone());
                 }
@@ -332,6 +340,11 @@ impl eframe::App for SurtGisApp {
                 }
                 MenuAction::About => {
                     self.show_about = true;
+                }
+                MenuAction::RunAlgorithm(algo_id) => {
+                    if let Some(algo) = self.registry.iter().find(|a| a.id == algo_id.as_str()) {
+                        self.tool_dialog.open(algo);
+                    }
                 }
                 MenuAction::None => {}
             }
@@ -409,6 +422,9 @@ impl eframe::App for SurtGisApp {
             dataset_names: &dataset_names,
             algo_clicked: None,
             run_requested: false,
+            data_manager_select: None,
+            layer_action: LayerAction::None,
+            properties_action: PropertiesAction::None,
             ctx,
         };
 
@@ -419,6 +435,10 @@ impl eframe::App for SurtGisApp {
         // Extract results before dropping the borrow
         let algo_clicked = tab_viewer.algo_clicked.take();
         let run_requested = tab_viewer.run_requested;
+        let dm_select = tab_viewer.data_manager_select;
+        let layer_action = std::mem::replace(&mut tab_viewer.layer_action, LayerAction::None);
+        let props_action =
+            std::mem::replace(&mut tab_viewer.properties_action, PropertiesAction::None);
         drop(tab_viewer);
 
         // Handle tool dialog actions
@@ -431,6 +451,55 @@ impl eframe::App for SurtGisApp {
         if run_requested {
             self.run_algorithm();
             self.tool_dialog.close();
+        }
+
+        // Handle data manager selection
+        if let Some(id) = dm_select {
+            self.workspace.active_dataset = Some(id);
+            self.map_texture = None;
+        }
+
+        // Handle layer actions
+        match layer_action {
+            LayerAction::ToggleVisibility(id) => {
+                if let Some(ds) = self.workspace.get_mut(id) {
+                    ds.visible = !ds.visible;
+                    ds.rgba_cache = None;
+                }
+                self.map_texture = None;
+            }
+            LayerAction::ChangeOpacity(id, opacity) => {
+                if let Some(ds) = self.workspace.get_mut(id) {
+                    ds.opacity = opacity;
+                }
+            }
+            LayerAction::Select(id) => {
+                self.workspace.active_dataset = Some(id);
+                self.map_texture = None;
+            }
+            LayerAction::Remove(id) => {
+                let name = self
+                    .workspace
+                    .get(id)
+                    .map(|d| d.name.clone())
+                    .unwrap_or_default();
+                self.workspace.remove(id);
+                self.map_texture = None;
+                self.logs
+                    .push(LogEntry::info(format!("Removed layer: {}", name)));
+            }
+            LayerAction::None => {}
+        }
+
+        // Handle properties actions
+        match props_action {
+            PropertiesAction::ChangeColormap(scheme) => {
+                if let Some(active) = self.workspace.active_mut() {
+                    active.colormap = scheme;
+                    invalidate_texture(active, &mut self.map_texture);
+                }
+            }
+            PropertiesAction::None => {}
         }
     }
 }
@@ -447,6 +516,12 @@ struct SurtGisTabViewer<'a> {
     dataset_names: &'a [(DatasetId, String)],
     algo_clicked: Option<String>,
     run_requested: bool,
+    /// Action from data manager (select a dataset).
+    data_manager_select: Option<DatasetId>,
+    /// Action from layers panel.
+    layer_action: LayerAction,
+    /// Action from properties panel.
+    properties_action: PropertiesAction,
     ctx: &'a egui::Context,
 }
 
@@ -496,11 +571,26 @@ impl<'a> TabViewer for SurtGisTabViewer<'a> {
             PanelId::Console => {
                 show_console(ui, self.logs);
             }
+
+            PanelId::DataManager => {
+                if let Some(id) = show_data_manager(ui, self.workspace) {
+                    self.data_manager_select = Some(id);
+                }
+            }
+
+            PanelId::Layers => {
+                self.layer_action = show_layers(ui, self.workspace);
+            }
+
+            PanelId::Properties => {
+                let active_ds = self.workspace.active();
+                self.properties_action = show_properties(ui, active_ds);
+            }
         }
     }
 
     fn closeable(&mut self, _tab: &mut Self::Tab) -> bool {
-        false // Panels cannot be closed in MVP
+        false // Panels cannot be closed
     }
 }
 

@@ -1,4 +1,7 @@
 pub mod algo_tree;
 pub mod console;
+pub mod data_manager;
+pub mod layers;
 pub mod map_canvas;
+pub mod properties;
 pub mod tool_dialog;
