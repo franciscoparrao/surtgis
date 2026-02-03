@@ -13,6 +13,7 @@ pub enum AlgoCategory {
     Imagery,
     Morphology,
     Statistics,
+    Interpolation,
 }
 
 impl AlgoCategory {
@@ -23,6 +24,7 @@ impl AlgoCategory {
             Self::Imagery => "Imagery",
             Self::Morphology => "Morphology",
             Self::Statistics => "Statistics",
+            Self::Interpolation => "Interpolation",
         }
     }
 
@@ -32,6 +34,7 @@ impl AlgoCategory {
         Self::Imagery,
         Self::Morphology,
         Self::Statistics,
+        Self::Interpolation,
     ];
 }
 
@@ -518,6 +521,352 @@ pub fn build_registry() -> Vec<AlgorithmEntry> {
             id: "focal_median", name: "Focal Median", category: AlgoCategory::Statistics,
             description: "Moving median filter",
             input_count: 1, params: vec![param_radius(3, 50)],
+        },
+        AlgorithmEntry {
+            id: "focal_min", name: "Focal Min", category: AlgoCategory::Statistics,
+            description: "Moving minimum filter",
+            input_count: 1, params: vec![param_radius(3, 50)],
+        },
+        AlgorithmEntry {
+            id: "focal_max", name: "Focal Max", category: AlgoCategory::Statistics,
+            description: "Moving maximum filter",
+            input_count: 1, params: vec![param_radius(3, 50)],
+        },
+        AlgorithmEntry {
+            id: "focal_sum", name: "Focal Sum", category: AlgoCategory::Statistics,
+            description: "Moving sum filter",
+            input_count: 1, params: vec![param_radius(3, 50)],
+        },
+        AlgorithmEntry {
+            id: "zonal_statistics", name: "Zonal Statistics", category: AlgoCategory::Statistics,
+            description: "Statistics for each zone of a categorical raster",
+            input_count: 2,
+            params: vec![
+                ParamDef { name: "zones", label: "Zones Raster", kind: ParamKind::InputRaster },
+            ],
+        },
+        AlgorithmEntry {
+            id: "morans_i", name: "Moran's I (Global)", category: AlgoCategory::Statistics,
+            description: "Global spatial autocorrelation index",
+            input_count: 1, params: vec![],
+        },
+        AlgorithmEntry {
+            id: "getis_ord", name: "Getis-Ord Gi* (Hot Spots)", category: AlgoCategory::Statistics,
+            description: "Local hot/cold spot analysis (z-scores)",
+            input_count: 1, params: vec![param_radius(3, 50)],
+        },
+
+        // ═══════════════════════════════════════════════════════
+        // HYDROLOGY — new (+9)
+        // ═══════════════════════════════════════════════════════
+        AlgorithmEntry {
+            id: "breach_depressions", name: "Breach Depressions", category: AlgoCategory::Hydrology,
+            description: "Breach depressions in DEM (alternative to fill sinks)",
+            input_count: 1,
+            params: vec![
+                ParamDef { name: "max_depth", label: "Max Depth (m)", kind: ParamKind::Float {
+                    default: f64::INFINITY, min: 0.0, max: 10000.0, speed: 1.0,
+                }},
+                ParamDef { name: "max_length", label: "Max Length (cells)", kind: ParamKind::Int {
+                    default: 0, min: 0, max: 10000,
+                }},
+            ],
+        },
+        AlgorithmEntry {
+            id: "flow_direction_dinf", name: "Flow Direction (D-inf)", category: AlgoCategory::Hydrology,
+            description: "D-infinity flow direction (continuous angle in radians)",
+            input_count: 1, params: vec![],
+        },
+        AlgorithmEntry {
+            id: "flow_accumulation_mfd", name: "Flow Accumulation (MFD)", category: AlgoCategory::Hydrology,
+            description: "Multiple Flow Direction accumulation (auto fill from DEM)",
+            input_count: 1,
+            params: vec![
+                ParamDef { name: "exponent", label: "Exponent", kind: ParamKind::Float {
+                    default: 1.1, min: 0.1, max: 10.0, speed: 0.1,
+                }},
+            ],
+        },
+        AlgorithmEntry {
+            id: "flow_accumulation_mfd_adaptive", name: "Flow Accumulation (Adaptive MFD)",
+            category: AlgoCategory::Hydrology,
+            description: "Adaptive Multiple Flow Direction accumulation (auto fill from DEM)",
+            input_count: 1,
+            params: vec![
+                ParamDef { name: "scale_factor", label: "Scale Factor", kind: ParamKind::Float {
+                    default: 1.0, min: 0.1, max: 10.0, speed: 0.1,
+                }},
+            ],
+        },
+        AlgorithmEntry {
+            id: "flow_accumulation_tfga", name: "Flow Accumulation (TFGA)",
+            category: AlgoCategory::Hydrology,
+            description: "TFGA flow accumulation (auto fill from DEM)",
+            input_count: 1, params: vec![],
+        },
+        AlgorithmEntry {
+            id: "watershed", name: "Watershed Basins", category: AlgoCategory::Hydrology,
+            description: "Delineate watershed basins (auto fill + flow direction from DEM)",
+            input_count: 1, params: vec![],
+        },
+        AlgorithmEntry {
+            id: "stream_network", name: "Stream Network", category: AlgoCategory::Hydrology,
+            description: "Extract stream network (auto fill + flow + acc from DEM)",
+            input_count: 1,
+            params: vec![ParamDef { name: "stream_threshold", label: "Stream Threshold (cells)",
+                kind: ParamKind::Float { default: 1000.0, min: 10.0, max: 100000.0, speed: 100.0 },
+            }],
+        },
+        AlgorithmEntry {
+            id: "nested_depressions", name: "Nested Depressions", category: AlgoCategory::Hydrology,
+            description: "Analyze nested depression hierarchy in DEM",
+            input_count: 1,
+            params: vec![
+                ParamDef { name: "min_depth", label: "Min Depth (m)", kind: ParamKind::Float {
+                    default: 0.1, min: 0.0, max: 100.0, speed: 0.1,
+                }},
+                ParamDef { name: "min_area", label: "Min Area (cells)", kind: ParamKind::Int {
+                    default: 10, min: 1, max: 100000,
+                }},
+            ],
+        },
+        AlgorithmEntry {
+            id: "flow_dinf", name: "D-inf Flow (Direction + Accumulation)",
+            category: AlgoCategory::Hydrology,
+            description: "D-infinity flow direction and accumulation in one pass",
+            input_count: 1, params: vec![],
+        },
+
+        // ═══════════════════════════════════════════════════════
+        // IMAGERY — new (+7)
+        // ═══════════════════════════════════════════════════════
+        AlgorithmEntry {
+            id: "ndre", name: "NDRE", category: AlgoCategory::Imagery,
+            description: "Normalized Difference Red Edge (vegetation health/stress)",
+            input_count: 2,
+            params: vec![
+                ParamDef { name: "nir", label: "NIR Band", kind: ParamKind::InputRaster },
+                ParamDef { name: "red_edge", label: "Red Edge Band", kind: ParamKind::InputRaster },
+            ],
+        },
+        AlgorithmEntry {
+            id: "gndvi", name: "GNDVI", category: AlgoCategory::Imagery,
+            description: "Green NDVI (chlorophyll-sensitive vegetation index)",
+            input_count: 2,
+            params: vec![
+                ParamDef { name: "nir", label: "NIR Band", kind: ParamKind::InputRaster },
+                ParamDef { name: "green", label: "Green Band", kind: ParamKind::InputRaster },
+            ],
+        },
+        AlgorithmEntry {
+            id: "ngrdi", name: "NGRDI", category: AlgoCategory::Imagery,
+            description: "Normalized Green Red Difference Index (visible-only vegetation proxy)",
+            input_count: 2,
+            params: vec![
+                ParamDef { name: "green", label: "Green Band", kind: ParamKind::InputRaster },
+                ParamDef { name: "red", label: "Red Band", kind: ParamKind::InputRaster },
+            ],
+        },
+        AlgorithmEntry {
+            id: "reci", name: "RECI", category: AlgoCategory::Imagery,
+            description: "Red Edge Chlorophyll Index",
+            input_count: 2,
+            params: vec![
+                ParamDef { name: "nir", label: "NIR Band", kind: ParamKind::InputRaster },
+                ParamDef { name: "red_edge", label: "Red Edge Band", kind: ParamKind::InputRaster },
+            ],
+        },
+        AlgorithmEntry {
+            id: "normalized_difference", name: "Normalized Difference (custom)", category: AlgoCategory::Imagery,
+            description: "Generic (A - B) / (A + B) for any two bands",
+            input_count: 2,
+            params: vec![
+                ParamDef { name: "a", label: "Band A", kind: ParamKind::InputRaster },
+                ParamDef { name: "b", label: "Band B", kind: ParamKind::InputRaster },
+            ],
+        },
+        AlgorithmEntry {
+            id: "reclassify", name: "Reclassify", category: AlgoCategory::Imagery,
+            description: "Reclassify raster values into discrete classes (e.g. 0-0.2->1, 0.2-0.5->2)",
+            input_count: 1,
+            params: vec![
+                ParamDef { name: "n_classes", label: "Number of Classes", kind: ParamKind::Int {
+                    default: 5, min: 2, max: 50,
+                }},
+            ],
+        },
+        AlgorithmEntry {
+            id: "band_math_expr", name: "Band Math (Expression)", category: AlgoCategory::Imagery,
+            description: "Apply formula to each pixel: pow, sqrt, log, abs, clamp (single raster)",
+            input_count: 1,
+            params: vec![
+                ParamDef { name: "operation", label: "Operation", kind: ParamKind::Choice {
+                    options: &["sqrt", "log", "log10", "abs", "negate", "square", "normalize 0-1"],
+                    default: 0,
+                }},
+            ],
+        },
+
+        // ═══════════════════════════════════════════════════════
+        // TERRAIN — new (+8)
+        // ═══════════════════════════════════════════════════════
+        AlgorithmEntry {
+            id: "spi", name: "SPI (Stream Power Index)", category: AlgoCategory::Terrain,
+            description: "Erosive power of flowing water (auto fill+flow+acc+slope from DEM)",
+            input_count: 1, params: vec![],
+        },
+        AlgorithmEntry {
+            id: "sti", name: "STI (Sediment Transport Index)", category: AlgoCategory::Terrain,
+            description: "Sediment transport capacity (USLE-based, auto fill+flow+acc+slope from DEM)",
+            input_count: 1,
+            params: vec![
+                ParamDef { name: "m", label: "m (slope-length exponent)", kind: ParamKind::Float {
+                    default: 0.4, min: 0.0, max: 5.0, speed: 0.05,
+                }},
+                ParamDef { name: "n", label: "n (slope steepness exponent)", kind: ParamKind::Float {
+                    default: 1.3, min: 0.0, max: 5.0, speed: 0.05,
+                }},
+            ],
+        },
+        AlgorithmEntry {
+            id: "viewshed", name: "Viewshed", category: AlgoCategory::Terrain,
+            description: "Line-of-sight visibility from an observer point",
+            input_count: 1,
+            params: vec![
+                ParamDef { name: "observer_row", label: "Observer Row", kind: ParamKind::Int {
+                    default: 0, min: 0, max: 100000,
+                }},
+                ParamDef { name: "observer_col", label: "Observer Col", kind: ParamKind::Int {
+                    default: 0, min: 0, max: 100000,
+                }},
+                ParamDef { name: "observer_height", label: "Observer Height (m)", kind: ParamKind::Float {
+                    default: 1.7, min: 0.0, max: 1000.0, speed: 0.5,
+                }},
+                ParamDef { name: "target_height", label: "Target Height (m)", kind: ParamKind::Float {
+                    default: 0.0, min: 0.0, max: 1000.0, speed: 0.5,
+                }},
+                ParamDef { name: "max_radius", label: "Max Radius (cells, 0=unlimited)", kind: ParamKind::Int {
+                    default: 0, min: 0, max: 100000,
+                }},
+            ],
+        },
+        AlgorithmEntry {
+            id: "mrvbf", name: "MRVBF / MRRTF", category: AlgoCategory::Terrain,
+            description: "Multi-resolution Valley Bottom / Ridge Top Flatness",
+            input_count: 1,
+            params: vec![
+                ParamDef { name: "t_slope", label: "Initial Slope Threshold", kind: ParamKind::Float {
+                    default: 16.0, min: 1.0, max: 90.0, speed: 1.0,
+                }},
+                ParamDef { name: "steps", label: "Resolution Steps", kind: ParamKind::Int {
+                    default: 3, min: 1, max: 10,
+                }},
+            ],
+        },
+        AlgorithmEntry {
+            id: "wind_exposure", name: "Wind Exposure", category: AlgoCategory::Terrain,
+            description: "Topographic wind shelter/exposure index",
+            input_count: 1,
+            params: vec![
+                param_radius(30, 500),
+                ParamDef { name: "directions", label: "Directions", kind: ParamKind::Int {
+                    default: 8, min: 4, max: 64,
+                }},
+            ],
+        },
+        AlgorithmEntry {
+            id: "solar_radiation", name: "Solar Radiation", category: AlgoCategory::Terrain,
+            description: "Daily beam + diffuse solar radiation (auto slope+aspect from DEM)",
+            input_count: 1,
+            params: vec![
+                ParamDef { name: "day", label: "Day of Year (1-365)", kind: ParamKind::Int {
+                    default: 172, min: 1, max: 365,
+                }},
+                ParamDef { name: "latitude", label: "Latitude (\u{00b0})", kind: ParamKind::Float {
+                    default: 40.0, min: -90.0, max: 90.0, speed: 0.5,
+                }},
+                ParamDef { name: "transmittance", label: "Atmospheric Transmittance", kind: ParamKind::Float {
+                    default: 0.7, min: 0.1, max: 1.0, speed: 0.05,
+                }},
+            ],
+        },
+        AlgorithmEntry {
+            id: "lineament_detection", name: "Lineament Detection", category: AlgoCategory::Terrain,
+            description: "Detect linear features from curvature (auto plan+profile curvature from DEM)",
+            input_count: 1,
+            params: vec![
+                ParamDef { name: "min_length", label: "Min Length (cells)", kind: ParamKind::Int {
+                    default: 5, min: 2, max: 100,
+                }},
+            ],
+        },
+        AlgorithmEntry {
+            id: "advanced_curvatures", name: "Advanced Curvatures (Florinsky)", category: AlgoCategory::Terrain,
+            description: "Florinsky curvature: mean, Gaussian, horizontal, vertical, accumulation, etc.",
+            input_count: 1,
+            params: vec![
+                ParamDef { name: "curv_type", label: "Curvature Type", kind: ParamKind::Choice {
+                    options: &[
+                        "Mean (H)", "Gaussian (K)", "Unsphericity (M)", "Difference (E)",
+                        "Minimal (Kmin)", "Maximal (Kmax)", "Horizontal (Kh)", "Vertical (Kv)",
+                        "Horiz. Excess (Khe)", "Vert. Excess (Kve)", "Accumulation (Ka)",
+                        "Ring (Kr)", "Rotor", "Laplacian",
+                    ],
+                    default: 0,
+                }},
+            ],
+        },
+
+        // ═══════════════════════════════════════════════════════
+        // INTERPOLATION (6) — new category
+        // ═══════════════════════════════════════════════════════
+        AlgorithmEntry {
+            id: "interp_idw", name: "IDW Interpolation", category: AlgoCategory::Interpolation,
+            description: "Inverse Distance Weighting — fill NoData gaps in the active raster",
+            input_count: 1,
+            params: vec![
+                ParamDef { name: "power", label: "Power", kind: ParamKind::Float {
+                    default: 2.0, min: 0.1, max: 10.0, speed: 0.1,
+                }},
+                ParamDef { name: "max_points", label: "Max Points", kind: ParamKind::Int {
+                    default: 12, min: 1, max: 100,
+                }},
+            ],
+        },
+        AlgorithmEntry {
+            id: "interp_nearest", name: "Nearest Neighbor Interpolation", category: AlgoCategory::Interpolation,
+            description: "Fill NoData with nearest valid pixel value",
+            input_count: 1, params: vec![],
+        },
+        AlgorithmEntry {
+            id: "interp_natural", name: "Natural Neighbor Interpolation", category: AlgoCategory::Interpolation,
+            description: "Sibson natural neighbor — fill NoData gaps",
+            input_count: 1, params: vec![],
+        },
+        AlgorithmEntry {
+            id: "interp_tin", name: "TIN Interpolation", category: AlgoCategory::Interpolation,
+            description: "Triangulated Irregular Network — fill NoData gaps",
+            input_count: 1, params: vec![],
+        },
+        AlgorithmEntry {
+            id: "interp_tps", name: "Thin Plate Spline", category: AlgoCategory::Interpolation,
+            description: "Thin Plate Spline — smooth interpolation of NoData gaps",
+            input_count: 1,
+            params: vec![
+                ParamDef { name: "smoothing", label: "Smoothing", kind: ParamKind::Float {
+                    default: 0.0, min: 0.0, max: 100.0, speed: 0.1,
+                }},
+            ],
+        },
+        AlgorithmEntry {
+            id: "interp_kriging", name: "Ordinary Kriging", category: AlgoCategory::Interpolation,
+            description: "Geostatistical interpolation — fill NoData gaps with variance estimation",
+            input_count: 1,
+            params: vec![
+                ParamDef { name: "max_points", label: "Max Points", kind: ParamKind::Int {
+                    default: 16, min: 4, max: 64,
+                }},
+            ],
         },
     ]
 }

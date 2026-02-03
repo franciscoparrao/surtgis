@@ -967,20 +967,30 @@ impl<'a> TabViewer for SurtGisTabViewer<'a> {
 /// Suggest a colormap based on the algorithm name.
 fn suggest_colormap(algo_name: &str) -> ColorScheme {
     let lower = algo_name.to_lowercase();
-    if lower.contains("ndvi") {
+    if lower.contains("ndvi") || lower.contains("gndvi") || lower.contains("ndre")
+        || lower.contains("savi") || lower.contains("evi") || lower.contains("reci")
+        || lower.contains("ngrdi")
+    {
         ColorScheme::Ndvi
-    } else if lower.contains("ndwi") || lower.contains("water") || lower.contains("twi") {
+    } else if lower.contains("ndwi") || lower.contains("water") || lower.contains("twi")
+        || lower.contains("mrvbf") || lower.contains("depression")
+    {
         ColorScheme::Water
     } else if lower.contains("geomorphon") {
         ColorScheme::Geomorphons
-    } else if lower.contains("curvature") || lower.contains("tpi") || lower.contains("dev") {
+    } else if lower.contains("curvature") || lower.contains("tpi") || lower.contains("dev")
+        || lower.contains("moran") || lower.contains("getis") || lower.contains("convergence")
+        || lower.contains("wind")
+    {
         ColorScheme::BlueWhiteRed
-    } else if lower.contains("accumulation") {
+    } else if lower.contains("accumulation") || lower.contains("spi") || lower.contains("sti") {
         ColorScheme::Accumulation
-    } else if lower.contains("hillshade") {
+    } else if lower.contains("hillshade") || lower.contains("viewshed") {
         ColorScheme::Grayscale
     } else if lower.contains("aspect") {
         ColorScheme::Divergent
+    } else if lower.contains("solar") || lower.contains("radiation") {
+        ColorScheme::Terrain
     } else {
         ColorScheme::Terrain
     }
