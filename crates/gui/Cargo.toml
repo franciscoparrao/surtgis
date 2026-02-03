@@ -1,0 +1,33 @@
+[package]
+name = "surtgis-gui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Desktop GUI for SurtGis geospatial analysis (egui + eframe)"
+
+[[bin]]
+name = "surtgis-gui"
+path = "src/main.rs"
+
+[features]
+default = []
+cloud = ["dep:surtgis-cloud"]
+
+[dependencies]
+surtgis-core = { path = "../core", default-features = false }
+surtgis-algorithms = { path = "../algorithms" }
+surtgis-parallel = { path = "../parallel" }
+surtgis-colormap = { path = "../colormap" }
+surtgis-cloud = { path = "../cloud", optional = true }
+
+eframe.workspace = true
+egui.workspace = true
+egui_dock.workspace = true
+rfd.workspace = true
+crossbeam-channel.workspace = true
+image.workspace = true
+
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

@@ -8,6 +8,8 @@ members = [
     "crates/wasm",
     "crates/python",
     "crates/cloud",
+    "crates/colormap",
+    "crates/gui",
 ]
 
 [workspace.package]
@@ -68,6 +70,14 @@ js-sys = "0.3"
 # Python
 pyo3 = { version = "0.23", features = ["extension-module"] }
 numpy = { version = "0.23", features = ["half"] }
+
+# GUI
+eframe = { version = "0.31", default-features = false, features = ["default_fonts", "wgpu", "wayland", "x11"] }
+egui = "0.31"
+egui_dock = "0.16"
+rfd = "0.15"
+crossbeam-channel = "0.5"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 # Testing & Benchmarks
 criterion = { version = "0.5", features = ["html_reports"] }
