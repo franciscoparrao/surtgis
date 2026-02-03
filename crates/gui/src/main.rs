@@ -9,6 +9,7 @@ mod io;
 mod menu;
 mod panels;
 mod registry;
+mod render;
 mod state;
 
 use app::SurtGisApp;

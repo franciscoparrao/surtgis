@@ -72,9 +72,10 @@ pyo3 = { version = "0.23", features = ["extension-module"] }
 numpy = { version = "0.23", features = ["half"] }
 
 # GUI
-eframe = { version = "0.31", default-features = false, features = ["default_fonts", "wgpu", "wayland", "x11"] }
-egui = "0.31"
-egui_dock = "0.16"
+eframe = { version = "0.33", features = ["wgpu"] }
+egui = "0.33"
+egui_dock = "0.18"
+walkers = "0.52"
 rfd = "0.15"
 crossbeam-channel = "0.5"
 image = { version = "0.25", default-features = false, features = ["png"] }

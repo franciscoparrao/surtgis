@@ -11,7 +11,7 @@ name = "surtgis-gui"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["cloud"]
 cloud = ["dep:surtgis-cloud"]
 
 [dependencies]
@@ -19,11 +19,12 @@ surtgis-core = { path = "../core", default-features = false }
 surtgis-algorithms = { path = "../algorithms" }
 surtgis-parallel = { path = "../parallel" }
 surtgis-colormap = { path = "../colormap" }
-surtgis-cloud = { path = "../cloud", optional = true }
+surtgis-cloud = { path = "../cloud", optional = true, features = ["native"] }
 
 eframe.workspace = true
 egui.workspace = true
 egui_dock.workspace = true
+walkers.workspace = true
 rfd.workspace = true
 crossbeam-channel.workspace = true
 image.workspace = true

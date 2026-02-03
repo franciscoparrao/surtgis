@@ -4,4 +4,6 @@ pub mod data_manager;
 pub mod layers;
 pub mod map_canvas;
 pub mod properties;
+pub mod stac_browser;
 pub mod tool_dialog;
+pub mod view_3d;

@@ -44,6 +44,22 @@ pub enum AppMessage {
         dataset_id: DatasetId,
         path: PathBuf,
     },
+
+    /// STAC search completed.
+    StacSearchComplete {
+        items: Vec<crate::panels::stac_browser::StacSearchResult>,
+        total: Option<u64>,
+    },
+    /// A STAC asset was downloaded and loaded as a raster.
+    StacAssetLoaded {
+        item_id: String,
+        asset_key: String,
+        raster: Raster<f64>,
+    },
+    /// A STAC operation failed.
+    StacError {
+        message: String,
+    },
 }
 
 /// Log level for console messages.

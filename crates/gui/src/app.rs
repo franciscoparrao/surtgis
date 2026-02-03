@@ -19,8 +19,15 @@ use crate::panels::data_manager::show_data_manager;
 use crate::panels::layers::{show_layers, LayerAction};
 use crate::panels::map_canvas::{invalidate_texture, show_map_canvas, MapCanvasState};
 use crate::panels::properties::{show_properties, PropertiesAction};
+use crate::panels::stac_browser::{
+    StacBrowserAction, StacBrowserState, StacSearchState, show_stac_browser,
+};
 use crate::panels::tool_dialog::{show_tool_dialog, ToolDialogAction, ToolDialogState};
+use crate::panels::view_3d::{View3dState, show_view_3d};
 use crate::registry::{build_registry, AlgorithmEntry, ParamValue};
+use crate::render::map_tiles::{BasemapState, show_basemap};
+use crate::render::tiled_renderer::TiledRenderer;
+use crate::render::MapMode;
 use crate::state::workspace::{Dataset, DatasetRaster, Workspace};
 use crate::state::{AppMessage, DatasetId, LogEntry};
 
@@ -59,6 +66,21 @@ pub struct SurtGisApp {
 
     /// Show about dialog.
     show_about: bool,
+
+    /// Map display mode (Simple / Basemap).
+    map_mode: MapMode,
+
+    /// Basemap state (lazy-initialised on first use).
+    basemap: Option<BasemapState>,
+
+    /// Tiled renderer for large rasters.
+    tiled_renderer: TiledRenderer,
+
+    /// STAC browser panel state.
+    stac_browser: StacBrowserState,
+
+    /// 3D wireframe view state.
+    view_3d: View3dState,
 }
 
 impl SurtGisApp {
@@ -83,6 +105,11 @@ impl SurtGisApp {
             map_texture: None,
             running: false,
             show_about: false,
+            map_mode: MapMode::Simple,
+            basemap: None,
+            tiled_renderer: TiledRenderer::default(),
+            stac_browser: StacBrowserState::default(),
+            view_3d: View3dState::default(),
         };
 
         app.logs
@@ -119,7 +146,6 @@ impl SurtGisApp {
                     };
 
                     self.workspace.add_dataset(dataset);
-                    // Invalidate texture so the new dataset gets rendered
                     self.map_texture = None;
                 }
 
@@ -217,6 +243,46 @@ impl SurtGisApp {
                     self.logs
                         .push(LogEntry::success(format!("Saved to {}", path.display())));
                 }
+
+                AppMessage::StacSearchComplete { items, total } => {
+                    self.stac_browser.results = items;
+                    self.stac_browser.total_matched = total;
+                    self.stac_browser.search_state = StacSearchState::Results;
+                    self.stac_browser.selected_item = None;
+                    self.logs.push(LogEntry::info(format!(
+                        "STAC search: {} results",
+                        self.stac_browser.results.len()
+                    )));
+                }
+
+                AppMessage::StacAssetLoaded {
+                    item_id,
+                    asset_key,
+                    raster,
+                } => {
+                    let name = format!("{} ({})", item_id, asset_key);
+                    let dataset = Dataset {
+                        id: DatasetId(0),
+                        name: name.clone(),
+                        source_path: None,
+                        raster: DatasetRaster::F64(raster),
+                        colormap: ColorScheme::Terrain,
+                        visible: true,
+                        opacity: 1.0,
+                        rgba_cache: None,
+                        provenance: Some("STAC download".to_string()),
+                    };
+                    self.workspace.add_dataset(dataset);
+                    self.map_texture = None;
+                    self.logs
+                        .push(LogEntry::success(format!("Downloaded: {}", name)));
+                }
+
+                AppMessage::StacError { message } => {
+                    self.stac_browser.search_state =
+                        StacSearchState::Error(message.clone());
+                    self.logs.push(LogEntry::error(format!("STAC: {}", message)));
+                }
             }
         }
     }
@@ -238,7 +304,6 @@ impl SurtGisApp {
         let input = match &active.raster {
             DatasetRaster::F64(r) => r.clone(),
             DatasetRaster::U8(r) => {
-                // Convert u8 to f64 for processing
                 let mut result = Raster::<f64>::new(r.rows(), r.cols());
                 result.set_transform(r.transform().clone());
                 result.set_crs(r.crs().cloned());
@@ -287,6 +352,245 @@ impl SurtGisApp {
             self.tx.clone(),
         );
     }
+
+    /// Handle STAC browser actions.
+    fn handle_stac_action(&mut self, action: StacBrowserAction) {
+        match action {
+            StacBrowserAction::Search => {
+                self.launch_stac_search();
+            }
+            StacBrowserAction::Download { item_idx, asset_key } => {
+                self.launch_stac_download(item_idx, asset_key);
+            }
+            StacBrowserAction::UseMapExtent => {
+                if let Some(active) = self.workspace.active() {
+                    let (min_x, min_y, max_x, max_y) = active.raster.bounds();
+                    self.stac_browser.bbox_west = format!("{:.6}", min_x);
+                    self.stac_browser.bbox_south = format!("{:.6}", min_y);
+                    self.stac_browser.bbox_east = format!("{:.6}", max_x);
+                    self.stac_browser.bbox_north = format!("{:.6}", max_y);
+                } else {
+                    self.logs.push(LogEntry::warning(
+                        "No dataset loaded to get map extent from",
+                    ));
+                }
+            }
+            StacBrowserAction::None => {}
+        }
+    }
+
+    /// Launch a STAC search in a background thread.
+    #[cfg(feature = "cloud")]
+    fn launch_stac_search(&mut self) {
+        use crate::panels::stac_browser::{StacCatalogChoice, StacSearchResult};
+
+        let west: f64 = self.stac_browser.bbox_west.parse().unwrap_or(0.0);
+        let south: f64 = self.stac_browser.bbox_south.parse().unwrap_or(0.0);
+        let east: f64 = self.stac_browser.bbox_east.parse().unwrap_or(0.0);
+        let north: f64 = self.stac_browser.bbox_north.parse().unwrap_or(0.0);
+
+        let datetime = if !self.stac_browser.date_start.is_empty()
+            && !self.stac_browser.date_end.is_empty()
+        {
+            Some(format!(
+                "{}/{}",
+                self.stac_browser.date_start, self.stac_browser.date_end
+            ))
+        } else {
+            None
+        };
+
+        let collection = if self.stac_browser.collection_filter.is_empty() {
+            None
+        } else {
+            Some(self.stac_browser.collection_filter.clone())
+        };
+
+        let max_cloud = self.stac_browser.max_cloud;
+
+        let catalog_str = match &self.stac_browser.catalog {
+            StacCatalogChoice::PlanetaryComputer => "pc".to_string(),
+            StacCatalogChoice::EarthSearch => "es".to_string(),
+            StacCatalogChoice::Custom(url) => url.clone(),
+        };
+
+        self.stac_browser.search_state = StacSearchState::Searching;
+        let tx = self.tx.clone();
+
+        std::thread::spawn(move || {
+            let catalog = surtgis_cloud::StacCatalog::from_str_or_url(&catalog_str);
+            let options = surtgis_cloud::StacClientOptions::default();
+            let client = match surtgis_cloud::blocking::StacClientBlocking::new(catalog, options) {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx.send(AppMessage::StacError {
+                        message: format!("Failed to create STAC client: {}", e),
+                    });
+                    return;
+                }
+            };
+
+            let mut params = surtgis_cloud::StacSearchParams::new()
+                .bbox(west, south, east, north);
+
+            if let Some(dt) = &datetime {
+                params = params.datetime(dt);
+            }
+            if let Some(col) = &collection {
+                params = params.collections(&[col.as_str()]);
+            }
+
+            match client.search_all(&params) {
+                Ok(items) => {
+                    let results: Vec<StacSearchResult> = items
+                        .iter()
+                        .filter(|item| {
+                            item.properties
+                                .eo_cloud_cover
+                                .map(|c| c <= max_cloud)
+                                .unwrap_or(true)
+                        })
+                        .map(|item| {
+                            let cog = item.first_cog_asset();
+                            StacSearchResult {
+                                id: item.id.clone(),
+                                datetime: item
+                                    .properties
+                                    .datetime
+                                    .clone()
+                                    .unwrap_or_else(|| "—".into()),
+                                cloud_cover: item.properties.eo_cloud_cover,
+                                platform: item.properties.platform.clone(),
+                                gsd: item.properties.gsd,
+                                collection: item
+                                    .collection
+                                    .clone()
+                                    .unwrap_or_else(|| "—".into()),
+                                asset_keys: item.assets.keys().cloned().collect(),
+                                cog_href: cog.map(|(_, a)| a.href.clone()),
+                                cog_key: cog.map(|(k, _)| k.clone()),
+                            }
+                        })
+                        .collect();
+
+                    let total = None; // search_all doesn't return total count
+                    let _ = tx.send(AppMessage::StacSearchComplete {
+                        items: results,
+                        total,
+                    });
+                }
+                Err(e) => {
+                    let _ = tx.send(AppMessage::StacError {
+                        message: format!("{}", e),
+                    });
+                }
+            }
+        });
+    }
+
+    #[cfg(not(feature = "cloud"))]
+    fn launch_stac_search(&mut self) {
+        self.logs.push(LogEntry::error(
+            "STAC search requires the 'cloud' feature",
+        ));
+    }
+
+    /// Download a STAC asset in a background thread.
+    #[cfg(feature = "cloud")]
+    fn launch_stac_download(&mut self, item_idx: usize, asset_key: String) {
+        use crate::panels::stac_browser::StacCatalogChoice;
+
+        let Some(result) = self.stac_browser.results.get(item_idx) else {
+            return;
+        };
+
+        // Find the href for the requested asset key
+        let href = if asset_key == result.cog_key.as_deref().unwrap_or("") {
+            result.cog_href.clone()
+        } else {
+            None
+        };
+
+        let Some(href) = href else {
+            self.logs.push(LogEntry::error(format!(
+                "No download URL for asset '{}'",
+                asset_key
+            )));
+            return;
+        };
+
+        let item_id = result.id.clone();
+        let collection = result.collection.clone();
+        let catalog_str = match &self.stac_browser.catalog {
+            StacCatalogChoice::PlanetaryComputer => "pc".to_string(),
+            StacCatalogChoice::EarthSearch => "es".to_string(),
+            StacCatalogChoice::Custom(url) => url.clone(),
+        };
+
+        let tx = self.tx.clone();
+        self.logs.push(LogEntry::info(format!(
+            "Downloading {} / {} ...",
+            item_id, asset_key
+        )));
+
+        std::thread::spawn(move || {
+            // Sign the URL if needed (Planetary Computer)
+            let catalog = surtgis_cloud::StacCatalog::from_str_or_url(&catalog_str);
+            let signed_href = if catalog.needs_signing() {
+                let options = surtgis_cloud::StacClientOptions::default();
+                match surtgis_cloud::blocking::StacClientBlocking::new(catalog, options) {
+                    Ok(client) => match client.sign_asset_href(&href, &collection) {
+                        Ok(h) => h,
+                        Err(e) => {
+                            let _ = tx.send(AppMessage::StacError {
+                                message: format!("Signing failed: {}", e),
+                            });
+                            return;
+                        }
+                    },
+                    Err(e) => {
+                        let _ = tx.send(AppMessage::StacError {
+                            message: format!("Client error: {}", e),
+                        });
+                        return;
+                    }
+                }
+            } else {
+                href
+            };
+
+            // Read COG
+            let options = surtgis_cloud::CogReaderOptions::default();
+            match surtgis_cloud::blocking::CogReaderBlocking::open(&signed_href, options) {
+                Ok(mut reader) => match reader.read_full::<f64>(None) {
+                    Ok(raster) => {
+                        let _ = tx.send(AppMessage::StacAssetLoaded {
+                            item_id,
+                            asset_key,
+                            raster,
+                        });
+                    }
+                    Err(e) => {
+                        let _ = tx.send(AppMessage::StacError {
+                            message: format!("COG read failed: {}", e),
+                        });
+                    }
+                },
+                Err(e) => {
+                    let _ = tx.send(AppMessage::StacError {
+                        message: format!("COG open failed: {}", e),
+                    });
+                }
+            }
+        });
+    }
+
+    #[cfg(not(feature = "cloud"))]
+    fn launch_stac_download(&mut self, _item_idx: usize, _asset_key: String) {
+        self.logs.push(LogEntry::error(
+            "STAC download requires the 'cloud' feature",
+        ));
+    }
 }
 
 impl eframe::App for SurtGisApp {
@@ -294,13 +598,14 @@ impl eframe::App for SurtGisApp {
         // Process pending messages
         self.process_messages();
 
-        // Request repaint while algorithm is running (to show log updates)
-        if self.running {
+        // Request repaint while algorithm is running or STAC search in progress
+        if self.running || self.stac_browser.search_state == StacSearchState::Searching {
             ctx.request_repaint();
         }
 
         // Menu bar
         let registry_ref = self.registry.clone();
+        let current_map_mode = self.map_mode;
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
             let colormap = self
                 .workspace
@@ -308,7 +613,7 @@ impl eframe::App for SurtGisApp {
                 .map(|d| d.colormap)
                 .unwrap_or(ColorScheme::Terrain);
 
-            match show_menu_bar(ui, colormap, &registry_ref) {
+            match show_menu_bar(ui, colormap, current_map_mode, &registry_ref) {
                 MenuAction::Open => {
                     io::open_geotiff(self.tx.clone());
                 }
@@ -337,6 +642,21 @@ impl eframe::App for SurtGisApp {
                 MenuAction::ZoomToFit => {
                     self.map_state.zoom = 1.0;
                     self.map_state.offset = egui::Vec2::ZERO;
+                }
+                MenuAction::ChangeMapMode(mode) => {
+                    self.map_mode = mode;
+                    if mode == MapMode::Basemap && self.basemap.is_none() {
+                        // Lazy-init basemap centred on the active dataset (or default)
+                        let (lon, lat) = self
+                            .workspace
+                            .active()
+                            .map(|ds| {
+                                let (min_x, min_y, max_x, max_y) = ds.raster.bounds();
+                                ((min_x + max_x) / 2.0, (min_y + max_y) / 2.0)
+                            })
+                            .unwrap_or((-3.7, 40.4)); // default: Madrid
+                        self.basemap = Some(BasemapState::new(ctx, lon, lat));
+                    }
                 }
                 MenuAction::About => {
                     self.show_about = true;
@@ -425,6 +745,12 @@ impl eframe::App for SurtGisApp {
             data_manager_select: None,
             layer_action: LayerAction::None,
             properties_action: PropertiesAction::None,
+            stac_browser: &mut self.stac_browser,
+            stac_action: StacBrowserAction::None,
+            view_3d: &mut self.view_3d,
+            map_mode: self.map_mode,
+            basemap: &mut self.basemap,
+            tiled_renderer: &mut self.tiled_renderer,
             ctx,
         };
 
@@ -439,6 +765,8 @@ impl eframe::App for SurtGisApp {
         let layer_action = std::mem::replace(&mut tab_viewer.layer_action, LayerAction::None);
         let props_action =
             std::mem::replace(&mut tab_viewer.properties_action, PropertiesAction::None);
+        let stac_action =
+            std::mem::replace(&mut tab_viewer.stac_action, StacBrowserAction::None);
         drop(tab_viewer);
 
         // Handle tool dialog actions
@@ -501,6 +829,9 @@ impl eframe::App for SurtGisApp {
             }
             PropertiesAction::None => {}
         }
+
+        // Handle STAC browser actions
+        self.handle_stac_action(stac_action);
     }
 }
 
@@ -522,6 +853,17 @@ struct SurtGisTabViewer<'a> {
     layer_action: LayerAction,
     /// Action from properties panel.
     properties_action: PropertiesAction,
+    /// STAC browser state and action.
+    stac_browser: &'a mut StacBrowserState,
+    stac_action: StacBrowserAction,
+    /// 3D view state.
+    view_3d: &'a mut View3dState,
+    /// Current map mode.
+    map_mode: MapMode,
+    /// Basemap state (for Basemap mode).
+    basemap: &'a mut Option<BasemapState>,
+    /// Tiled renderer (for large rasters).
+    tiled_renderer: &'a mut TiledRenderer,
     ctx: &'a egui::Context,
 }
 
@@ -535,15 +877,39 @@ impl<'a> TabViewer for SurtGisTabViewer<'a> {
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
         match tab {
             PanelId::MapCanvas => {
-                let active = self
-                    .workspace
-                    .active_dataset
-                    .and_then(|id| self.workspace.get_mut(id));
-                show_map_canvas(ui, active, self.map_texture, self.map_state, self.ctx);
+                match self.map_mode {
+                    MapMode::Simple => {
+                        let active = self
+                            .workspace
+                            .active_dataset
+                            .and_then(|id| self.workspace.get_mut(id));
+                        show_map_canvas(ui, active, self.map_texture, self.map_state, self.ctx);
+                    }
+                    MapMode::Basemap => {
+                        if let Some(basemap) = self.basemap {
+                            let active = self.workspace.active();
+                            let (tex, bounds, opacity) = match active {
+                                Some(ds) => (
+                                    self.map_texture.as_ref(),
+                                    Some(ds.raster.bounds()),
+                                    ds.opacity,
+                                ),
+                                None => (None, None, 1.0),
+                            };
+                            show_basemap(ui, basemap, tex, bounds, opacity);
+                        } else {
+                            ui.label("Basemap not initialised.");
+                        }
+                    }
+                }
+            }
+
+            PanelId::View3D => {
+                let active_ds = self.workspace.active();
+                show_view_3d(ui, active_ds, self.view_3d);
             }
 
             PanelId::AlgoTree => {
-                // Show tool dialog if open, otherwise show the tree
                 if self.tool_dialog.algo_id.is_some() {
                     match show_tool_dialog(
                         ui,
@@ -566,6 +932,10 @@ impl<'a> TabViewer for SurtGisTabViewer<'a> {
                         self.algo_clicked = Some(algo_id);
                     }
                 }
+            }
+
+            PanelId::StacBrowser => {
+                self.stac_action = show_stac_browser(ui, self.stac_browser);
             }
 
             PanelId::Console => {
