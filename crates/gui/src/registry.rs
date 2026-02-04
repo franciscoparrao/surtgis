@@ -15,6 +15,8 @@ pub enum AlgoCategory {
     Statistics,
     Interpolation,
     Landscape,
+    Classification,
+    Texture,
 }
 
 impl AlgoCategory {
@@ -27,6 +29,8 @@ impl AlgoCategory {
             Self::Statistics => "Statistics",
             Self::Interpolation => "Interpolation",
             Self::Landscape => "Landscape",
+            Self::Classification => "Classification",
+            Self::Texture => "Texture",
         }
     }
 
@@ -38,6 +42,8 @@ impl AlgoCategory {
         Self::Statistics,
         Self::Interpolation,
         Self::Landscape,
+        Self::Classification,
+        Self::Texture,
     ];
 }
 
@@ -977,6 +983,163 @@ pub fn build_registry() -> Vec<AlgorithmEntry> {
             id: "patch_density", name: "Patch Density", category: AlgoCategory::Landscape,
             description: "Number of distinct patches per unit area in moving window",
             input_count: 1, params: vec![param_radius(3, 50)],
+        },
+
+        // ═══════════════════════════════════════════════════════
+        // CLASSIFICATION — Fase C (+5, new category)
+        // ═══════════════════════════════════════════════════════
+        AlgorithmEntry {
+            id: "kmeans", name: "K-Means Clustering", category: AlgoCategory::Classification,
+            description: "Unsupervised K-means pixel clustering",
+            input_count: 1,
+            params: vec![
+                ParamDef { name: "k", label: "Number of Clusters", kind: ParamKind::Int {
+                    default: 5, min: 2, max: 50,
+                }},
+                ParamDef { name: "max_iterations", label: "Max Iterations", kind: ParamKind::Int {
+                    default: 100, min: 1, max: 1000,
+                }},
+            ],
+        },
+        AlgorithmEntry {
+            id: "isodata", name: "ISODATA Clustering", category: AlgoCategory::Classification,
+            description: "Iterative self-organizing clustering with split/merge",
+            input_count: 1,
+            params: vec![
+                ParamDef { name: "initial_k", label: "Initial Clusters", kind: ParamKind::Int {
+                    default: 5, min: 2, max: 50,
+                }},
+                ParamDef { name: "min_k", label: "Min Clusters", kind: ParamKind::Int {
+                    default: 2, min: 1, max: 20,
+                }},
+                ParamDef { name: "max_k", label: "Max Clusters", kind: ParamKind::Int {
+                    default: 10, min: 2, max: 100,
+                }},
+                ParamDef { name: "max_std_dev", label: "Max Std Dev (split)", kind: ParamKind::Float {
+                    default: 10.0, min: 0.1, max: 1000.0, speed: 1.0,
+                }},
+                ParamDef { name: "min_merge_dist", label: "Min Merge Distance", kind: ParamKind::Float {
+                    default: 5.0, min: 0.01, max: 1000.0, speed: 1.0,
+                }},
+            ],
+        },
+        AlgorithmEntry {
+            id: "minimum_distance", name: "Minimum Distance Classification",
+            category: AlgoCategory::Classification,
+            description: "Supervised classification: assign each pixel to nearest training class centroid",
+            input_count: 2,
+            params: vec![
+                ParamDef { name: "training", label: "Training Raster (classified)", kind: ParamKind::InputRaster },
+            ],
+        },
+        AlgorithmEntry {
+            id: "maximum_likelihood", name: "Maximum Likelihood Classification",
+            category: AlgoCategory::Classification,
+            description: "Supervised classification: Gaussian MLE from training data",
+            input_count: 2,
+            params: vec![
+                ParamDef { name: "training", label: "Training Raster (classified)", kind: ParamKind::InputRaster },
+            ],
+        },
+        AlgorithmEntry {
+            id: "pca", name: "PCA (first component)", category: AlgoCategory::Classification,
+            description: "Principal Component Analysis — returns first principal component",
+            input_count: 1,
+            params: vec![],
+        },
+
+        // ═══════════════════════════════════════════════════════
+        // TEXTURE — Fase C (+3, new category)
+        // ═══════════════════════════════════════════════════════
+        AlgorithmEntry {
+            id: "haralick_glcm", name: "GLCM Texture (Haralick)", category: AlgoCategory::Texture,
+            description: "Gray-Level Co-occurrence Matrix texture features",
+            input_count: 1,
+            params: vec![
+                param_radius(3, 20),
+                ParamDef { name: "n_levels", label: "Gray Levels", kind: ParamKind::Int {
+                    default: 32, min: 4, max: 256,
+                }},
+                ParamDef { name: "texture", label: "Texture Measure", kind: ParamKind::Choice {
+                    options: &["Contrast", "Energy", "Homogeneity", "Correlation", "Entropy", "Dissimilarity"],
+                    default: 0,
+                }},
+            ],
+        },
+        AlgorithmEntry {
+            id: "sobel_edge", name: "Sobel Edge Detection", category: AlgoCategory::Texture,
+            description: "Gradient magnitude using 3x3 Sobel operators",
+            input_count: 1, params: vec![],
+        },
+        AlgorithmEntry {
+            id: "laplacian", name: "Laplacian Filter", category: AlgoCategory::Texture,
+            description: "Second-derivative edge detection (3x3 Laplacian kernel)",
+            input_count: 1, params: vec![],
+        },
+
+        // ═══════════════════════════════════════════════════════
+        // IMAGERY — Fase C (+2: change detection)
+        // ═══════════════════════════════════════════════════════
+        AlgorithmEntry {
+            id: "raster_difference", name: "Raster Difference", category: AlgoCategory::Imagery,
+            description: "Change detection: difference and classification (decrease/no change/increase)",
+            input_count: 2,
+            params: vec![
+                ParamDef { name: "after", label: "After Raster", kind: ParamKind::InputRaster },
+                ParamDef { name: "threshold", label: "Change Threshold", kind: ParamKind::Float {
+                    default: 0.1, min: 0.0, max: 1000.0, speed: 0.01,
+                }},
+            ],
+        },
+        AlgorithmEntry {
+            id: "change_vector_analysis", name: "Change Vector Analysis (CVA)",
+            category: AlgoCategory::Imagery,
+            description: "Multi-band change detection: magnitude + direction from two band pairs",
+            input_count: 4,
+            params: vec![
+                ParamDef { name: "b1_after", label: "Band 1 After", kind: ParamKind::InputRaster },
+                ParamDef { name: "b2_before", label: "Band 2 Before", kind: ParamKind::InputRaster },
+                ParamDef { name: "b2_after", label: "Band 2 After", kind: ParamKind::InputRaster },
+            ],
+        },
+
+        // ═══════════════════════════════════════════════════════
+        // HYDROLOGY — Fase C (+4: advanced)
+        // ═══════════════════════════════════════════════════════
+        AlgorithmEntry {
+            id: "strahler_order", name: "Strahler Stream Order", category: AlgoCategory::Hydrology,
+            description: "Stream ordering (auto fill + flow + stream from DEM)",
+            input_count: 1,
+            params: vec![
+                ParamDef { name: "stream_threshold", label: "Stream Threshold (cells)",
+                    kind: ParamKind::Float { default: 1000.0, min: 10.0, max: 100000.0, speed: 100.0 },
+                },
+            ],
+        },
+        AlgorithmEntry {
+            id: "flow_path_length", name: "Flow Path Length", category: AlgoCategory::Hydrology,
+            description: "Downstream distance along D8 flow path (auto fill + flow from DEM)",
+            input_count: 1, params: vec![],
+        },
+        AlgorithmEntry {
+            id: "isobasins", name: "Isobasins", category: AlgoCategory::Hydrology,
+            description: "Equal-area watershed subdivision (auto fill + flow + acc from DEM)",
+            input_count: 1,
+            params: vec![
+                ParamDef { name: "target_area", label: "Target Area (cells)", kind: ParamKind::Int {
+                    default: 1000, min: 10, max: 1000000,
+                }},
+            ],
+        },
+        AlgorithmEntry {
+            id: "flood_fill_simulation", name: "Flood Simulation", category: AlgoCategory::Hydrology,
+            description: "Simulate flooding at a given water level (BFS from boundaries)",
+            input_count: 1,
+            params: vec![
+                ParamDef { name: "water_level", label: "Water Level (m)", kind: ParamKind::Float {
+                    default: 10.0, min: -10000.0, max: 100000.0, speed: 1.0,
+                }},
+            ],
         },
     ]
 }

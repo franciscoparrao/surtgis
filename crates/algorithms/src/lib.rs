@@ -23,6 +23,8 @@ pub mod hydrology;
 pub mod imagery;
 pub mod interpolation;
 pub mod landscape;
+pub mod classification;
+pub mod texture;
 pub mod morphology;
 pub mod statistics;
 pub mod vector;

@@ -1003,6 +1003,23 @@ fn suggest_colormap(algo_name: &str) -> ColorScheme {
         ColorScheme::Ndvi
     } else if lower.contains("contour") {
         ColorScheme::Grayscale
+    } else if lower.contains("kmeans") || lower.contains("isodata")
+        || lower.contains("minimum distance") || lower.contains("maximum likelihood")
+        || lower.contains("strahler") || lower.contains("isobasin")
+    {
+        ColorScheme::Geomorphons
+    } else if lower.contains("glcm") || lower.contains("texture") || lower.contains("entropy") {
+        ColorScheme::Terrain
+    } else if lower.contains("sobel") || lower.contains("laplacian") || lower.contains("edge") {
+        ColorScheme::Grayscale
+    } else if lower.contains("flood") {
+        ColorScheme::Water
+    } else if lower.contains("flow path") || lower.contains("path length") {
+        ColorScheme::Accumulation
+    } else if lower.contains("pca") || lower.contains("pc1") {
+        ColorScheme::BlueWhiteRed
+    } else if lower.contains("raster diff") || lower.contains("change") || lower.contains("cva") {
+        ColorScheme::BlueWhiteRed
     } else {
         ColorScheme::Terrain
     }

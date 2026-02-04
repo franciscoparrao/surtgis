@@ -23,6 +23,7 @@ mod priority_flood;
 mod stream_network;
 mod watershed;
 mod watershed_parallel;
+mod advanced;
 
 pub use breach::{breach_depressions, BreachParams};
 pub use fill_sinks::{fill_sinks, FillSinks, FillSinksParams};
@@ -38,3 +39,7 @@ pub use flow_direction_mfd_adaptive::{flow_accumulation_mfd_adaptive, AdaptiveMf
 pub use flow_direction_tfga::{flow_accumulation_tfga, TfgaParams};
 pub use nested_depressions::{nested_depressions, NestedDepressionParams, NestedDepressionResult, Depression};
 pub use watershed_parallel::{watershed_parallel, ParallelWatershedParams};
+pub use advanced::{
+    strahler_order, flow_path_length, isobasins, flood_fill_simulation,
+    IsobasinParams, FloodSimParams,
+};

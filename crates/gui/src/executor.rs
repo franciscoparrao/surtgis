@@ -12,13 +12,23 @@ use surtgis_algorithms::hydrology::{
     breach_depressions, fill_sinks, flow_accumulation, flow_accumulation_mfd,
     flow_accumulation_mfd_adaptive, flow_accumulation_tfga, flow_dinf, flow_direction,
     flow_direction_dinf, hand, nested_depressions, priority_flood_flat, stream_network, watershed,
+    strahler_order, flow_path_length, isobasins, flood_fill_simulation,
     AdaptiveMfdParams, BreachParams, FillSinksParams, HandParams, MfdParams,
     NestedDepressionParams, StreamNetworkParams, TfgaParams, WatershedParams,
+    IsobasinParams, FloodSimParams,
 };
 use surtgis_algorithms::imagery::{
     band_math_binary, bsi, evi, evi2, gndvi, mndwi, msavi, nbr, ndbi, ndmi, ndre, ndsi,
     ndvi, ndwi, ngrdi, normalized_difference, reci, reclassify, savi, BandMathOp, EviParams,
     ReclassEntry, ReclassifyParams, SaviParams,
+    raster_difference, change_vector_analysis, RasterDiffParams,
+};
+use surtgis_algorithms::classification::{
+    kmeans_raster, isodata, minimum_distance, maximum_likelihood,
+    signatures_from_training, KmeansParams, IsodataParams,
+};
+use surtgis_algorithms::texture::{
+    haralick_glcm, sobel_edge, laplacian, GlcmParams, GlcmTexture,
 };
 use surtgis_algorithms::landscape::{
     shannon_diversity, simpson_diversity, patch_density, DiversityParams,
@@ -913,6 +923,165 @@ pub fn dispatch_algorithm(
                     radius,
                     circular: false,
                 }));
+            }
+
+            // ═══════════════════════════════════════════════════
+            // CLASSIFICATION — Fase C
+            // ═══════════════════════════════════════════════════
+            "kmeans" => {
+                let k = get_usize(&params, "k", 5);
+                let max_iterations = get_usize(&params, "max_iterations", 100);
+                dispatch_f64(&tx, "K-Means", start, kmeans_raster(&input, KmeansParams {
+                    k,
+                    max_iterations,
+                    ..KmeansParams::default()
+                }));
+            }
+
+            "isodata" => {
+                let initial_k = get_usize(&params, "initial_k", 5);
+                let min_k = get_usize(&params, "min_k", 2);
+                let max_k = get_usize(&params, "max_k", 10);
+                let max_std_dev = get_f64(&params, "max_std_dev", 10.0);
+                let min_merge_distance = get_f64(&params, "min_merge_dist", 5.0);
+                dispatch_f64(&tx, "ISODATA", start, isodata(&input, IsodataParams {
+                    initial_k,
+                    min_k,
+                    max_k,
+                    max_std_dev,
+                    min_merge_distance,
+                    ..IsodataParams::default()
+                }));
+            }
+
+            "minimum_distance" => {
+                require_extra(&tx, "Minimum Distance", &extra_inputs, &["training"], |inputs| {
+                    let training = inputs["training"];
+                    let sigs = signatures_from_training(training, &input)?;
+                    minimum_distance(&input, &sigs)
+                }, start);
+            }
+
+            "maximum_likelihood" => {
+                require_extra(&tx, "Maximum Likelihood", &extra_inputs, &["training"], |inputs| {
+                    let training = inputs["training"];
+                    let sigs = signatures_from_training(training, &input)?;
+                    maximum_likelihood(&input, &sigs)
+                }, start);
+            }
+
+            "pca" => {
+                use surtgis_algorithms::classification::{pca, PcaParams};
+                let res = (|| -> anyhow::Result<Raster<f64>> {
+                    let result = pca(&[&input], PcaParams { n_components: Some(1) })?;
+                    Ok(result.components.into_iter().next().unwrap())
+                })();
+                dispatch_f64(&tx, "PCA (PC1)", start, res);
+            }
+
+            // ═══════════════════════════════════════════════════
+            // TEXTURE — Fase C
+            // ═══════════════════════════════════════════════════
+            "haralick_glcm" => {
+                let radius = get_usize(&params, "radius", 3);
+                let n_levels = get_usize(&params, "n_levels", 32);
+                let texture = match get_choice(&params, "texture") {
+                    0 => GlcmTexture::Contrast,
+                    1 => GlcmTexture::Energy,
+                    2 => GlcmTexture::Homogeneity,
+                    3 => GlcmTexture::Correlation,
+                    4 => GlcmTexture::Entropy,
+                    5 => GlcmTexture::Dissimilarity,
+                    _ => GlcmTexture::Contrast,
+                };
+                dispatch_f64(&tx, "GLCM Texture", start, haralick_glcm(&input, GlcmParams {
+                    radius,
+                    n_levels,
+                    distance: 1,
+                    texture,
+                }));
+            }
+
+            "sobel_edge" => {
+                dispatch_f64(&tx, "Sobel Edge", start, sobel_edge(&input));
+            }
+
+            "laplacian" => {
+                dispatch_f64(&tx, "Laplacian", start, laplacian(&input));
+            }
+
+            // ═══════════════════════════════════════════════════
+            // IMAGERY — Fase C (change detection)
+            // ═══════════════════════════════════════════════════
+            "raster_difference" => {
+                let threshold = get_f64(&params, "threshold", 0.1);
+                require_extra(&tx, "Raster Difference", &extra_inputs, &["after"], |inputs| {
+                    let (diff, _categorical) = raster_difference(&input, inputs["after"],
+                        RasterDiffParams {
+                            decrease_threshold: -threshold,
+                            increase_threshold: threshold,
+                        })?;
+                    Ok(diff)
+                }, start);
+            }
+
+            "change_vector_analysis" => {
+                require_extra(&tx, "CVA", &extra_inputs, &["b1_after", "b2_before", "b2_after"], |inputs| {
+                    let (magnitude, _direction) = change_vector_analysis(
+                        &input, inputs["b1_after"], inputs["b2_before"], inputs["b2_after"],
+                    )?;
+                    Ok(magnitude)
+                }, start);
+            }
+
+            // ═══════════════════════════════════════════════════
+            // HYDROLOGY — Fase C (advanced)
+            // ═══════════════════════════════════════════════════
+            "strahler_order" => {
+                let threshold = get_f64(&params, "stream_threshold", 1000.0);
+                let _ = tx.send(AppMessage::Log(LogEntry::info(
+                    "Computing fill + flow + acc + stream for Strahler...",
+                )));
+                let res = (|| -> anyhow::Result<Raster<f64>> {
+                    let filled = fill_sinks(&input, FillSinksParams { min_slope: 0.01 })?;
+                    let fdir = flow_direction(&filled)?;
+                    let facc = flow_accumulation(&fdir)?;
+                    let stream = stream_network(&facc, StreamNetworkParams { threshold })?;
+                    Ok(strahler_order(&fdir, &stream)?)
+                })();
+                dispatch_f64(&tx, "Strahler Order", start, res);
+            }
+
+            "flow_path_length" => {
+                let _ = tx.send(AppMessage::Log(LogEntry::info(
+                    "Computing fill + flow direction for flow path length...",
+                )));
+                let res = (|| -> anyhow::Result<Raster<f64>> {
+                    let filled = fill_sinks(&input, FillSinksParams { min_slope: 0.01 })?;
+                    let fdir = flow_direction(&filled)?;
+                    Ok(flow_path_length(&fdir)?)
+                })();
+                dispatch_f64(&tx, "Flow Path Length", start, res);
+            }
+
+            "isobasins" => {
+                let target_area = get_usize(&params, "target_area", 1000);
+                let _ = tx.send(AppMessage::Log(LogEntry::info(
+                    "Computing fill + flow + acc for isobasins...",
+                )));
+                let res = (|| -> anyhow::Result<Raster<f64>> {
+                    let filled = fill_sinks(&input, FillSinksParams { min_slope: 0.01 })?;
+                    let fdir = flow_direction(&filled)?;
+                    let facc = flow_accumulation(&fdir)?;
+                    Ok(isobasins(&fdir, &facc, IsobasinParams { target_area })?)
+                })();
+                dispatch_f64(&tx, "Isobasins", start, res);
+            }
+
+            "flood_fill_simulation" => {
+                let water_level = get_f64(&params, "water_level", 10.0);
+                dispatch_f64(&tx, "Flood Simulation", start,
+                    flood_fill_simulation(&input, FloodSimParams { water_level }));
             }
 
             // ═══════════════════════════════════════════════════
