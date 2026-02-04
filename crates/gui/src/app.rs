@@ -969,21 +969,23 @@ fn suggest_colormap(algo_name: &str) -> ColorScheme {
     let lower = algo_name.to_lowercase();
     if lower.contains("ndvi") || lower.contains("gndvi") || lower.contains("ndre")
         || lower.contains("savi") || lower.contains("evi") || lower.contains("reci")
-        || lower.contains("ngrdi")
+        || lower.contains("ngrdi") || lower.contains("msavi")
     {
         ColorScheme::Ndvi
     } else if lower.contains("ndwi") || lower.contains("water") || lower.contains("twi")
-        || lower.contains("mrvbf") || lower.contains("depression")
+        || lower.contains("mrvbf") || lower.contains("depression") || lower.contains("ndmi")
     {
         ColorScheme::Water
-    } else if lower.contains("geomorphon") {
+    } else if lower.contains("geomorphon") || lower.contains("landform") {
         ColorScheme::Geomorphons
     } else if lower.contains("curvature") || lower.contains("tpi") || lower.contains("dev")
         || lower.contains("moran") || lower.contains("getis") || lower.contains("convergence")
         || lower.contains("wind")
     {
         ColorScheme::BlueWhiteRed
-    } else if lower.contains("accumulation") || lower.contains("spi") || lower.contains("sti") {
+    } else if lower.contains("accumulation") || lower.contains("spi") || lower.contains("sti")
+        || lower.contains("cost_distance")
+    {
         ColorScheme::Accumulation
     } else if lower.contains("hillshade") || lower.contains("viewshed") {
         ColorScheme::Grayscale
@@ -991,6 +993,16 @@ fn suggest_colormap(algo_name: &str) -> ColorScheme {
         ColorScheme::Divergent
     } else if lower.contains("solar") || lower.contains("radiation") {
         ColorScheme::Terrain
+    } else if lower.contains("ndsi") || lower.contains("snow") {
+        ColorScheme::Water
+    } else if lower.contains("ndbi") || lower.contains("built") {
+        ColorScheme::Accumulation
+    } else if lower.contains("shannon") || lower.contains("simpson") || lower.contains("diversity")
+        || lower.contains("patch")
+    {
+        ColorScheme::Ndvi
+    } else if lower.contains("contour") {
+        ColorScheme::Grayscale
     } else {
         ColorScheme::Terrain
     }

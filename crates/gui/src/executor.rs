@@ -16,9 +16,12 @@ use surtgis_algorithms::hydrology::{
     NestedDepressionParams, StreamNetworkParams, TfgaParams, WatershedParams,
 };
 use surtgis_algorithms::imagery::{
-    band_math_binary, bsi, evi, gndvi, mndwi, nbr, ndre, ndvi, ndwi, ngrdi,
-    normalized_difference, reci, reclassify, savi, BandMathOp, EviParams, ReclassEntry,
-    ReclassifyParams, SaviParams,
+    band_math_binary, bsi, evi, evi2, gndvi, mndwi, msavi, nbr, ndbi, ndmi, ndre, ndsi,
+    ndvi, ndwi, ngrdi, normalized_difference, reci, reclassify, savi, BandMathOp, EviParams,
+    ReclassEntry, ReclassifyParams, SaviParams,
+};
+use surtgis_algorithms::landscape::{
+    shannon_diversity, simpson_diversity, patch_density, DiversityParams,
 };
 use surtgis_algorithms::interpolation::{
     idw, natural_neighbor, nearest_neighbor, ordinary_kriging, tin_interpolation,
@@ -32,15 +35,15 @@ use surtgis_algorithms::statistics::{
     focal_statistics, global_morans_i, local_getis_ord, FocalParams, FocalStatistic,
 };
 use surtgis_algorithms::terrain::{
-    advanced_curvatures, aspect, convergence_index, curvature, curvedness, dev, eastness,
-    geomorphons, hillshade, landform_classification, lineament_detection,
-    multidirectional_hillshade, mrvbf, negative_openness, northness, positive_openness,
-    shape_index, sky_view_factor, slope, solar_radiation, spi, sti, tpi, tri, viewshed,
-    vrm, wind_exposure, AdvancedCurvatureType, AspectOutput, ConvergenceParams, CurvatureParams,
-    CurvatureType, DevParams, GeomorphonParams, HillshadeParams, LandformParams,
-    LineamentParams, MultiHillshadeParams, MrvbfParams, OpennessParams, SlopeParams, SlopeUnits,
-    SolarParams, StiParams, SvfParams, TpiParams, TriParams, ViewshedParams, VrmParams,
-    WindExposureParams,
+    advanced_curvatures, aspect, contour_lines, convergence_index, cost_distance, curvature,
+    curvedness, dev, eastness, geomorphons, hillshade, landform_classification,
+    lineament_detection, multidirectional_hillshade, mrvbf, negative_openness, northness,
+    positive_openness, shape_index, sky_view_factor, slope, solar_radiation, spi, sti, tpi,
+    tri, viewshed, vrm, wind_exposure, AdvancedCurvatureType, AspectOutput, ContourParams,
+    ConvergenceParams, CostDistanceParams, CurvatureParams, CurvatureType, DevParams,
+    GeomorphonParams, HillshadeParams, LandformParams, LineamentParams, MultiHillshadeParams,
+    MrvbfParams, OpennessParams, SlopeParams, SlopeUnits, SolarParams, StiParams, SvfParams,
+    TpiParams, TriParams, ViewshedParams, VrmParams, WindExposureParams,
 };
 use surtgis_core::raster::{GeoTransform, Raster};
 
@@ -387,6 +390,10 @@ pub fn dispatch_algorithm(
                 dispatch_focal(&tx, start, &input, &params, FocalStatistic::Sum, "Focal Sum");
             }
 
+            "focal_majority" => {
+                dispatch_focal(&tx, start, &input, &params, FocalStatistic::Majority, "Focal Majority");
+            }
+
             "zonal_statistics" => {
                 require_extra(&tx, "Zonal Statistics", &extra_inputs, &["zones"], |inputs| {
                     let zones_f64 = inputs["zones"];
@@ -679,6 +686,39 @@ pub fn dispatch_algorithm(
             }
 
             // ═══════════════════════════════════════════════════
+            // IMAGERY — Fase B
+            // ═══════════════════════════════════════════════════
+            "ndsi" => {
+                require_extra(&tx, "NDSI", &extra_inputs, &["green", "swir"], |inputs| {
+                    ndsi(inputs["green"], inputs["swir"])
+                }, start);
+            }
+
+            "ndbi" => {
+                require_extra(&tx, "NDBI", &extra_inputs, &["swir", "nir"], |inputs| {
+                    ndbi(inputs["swir"], inputs["nir"])
+                }, start);
+            }
+
+            "ndmi" => {
+                require_extra(&tx, "NDMI", &extra_inputs, &["nir", "swir"], |inputs| {
+                    ndmi(inputs["nir"], inputs["swir"])
+                }, start);
+            }
+
+            "msavi" => {
+                require_extra(&tx, "MSAVI", &extra_inputs, &["nir", "red"], |inputs| {
+                    msavi(inputs["nir"], inputs["red"])
+                }, start);
+            }
+
+            "evi2" => {
+                require_extra(&tx, "EVI2", &extra_inputs, &["nir", "red"], |inputs| {
+                    evi2(inputs["nir"], inputs["red"])
+                }, start);
+            }
+
+            // ═══════════════════════════════════════════════════
             // TERRAIN — new
             // ═══════════════════════════════════════════════════
             "spi" => {
@@ -826,6 +866,53 @@ pub fn dispatch_algorithm(
                     _ => AdvancedCurvatureType::MeanH,
                 };
                 dispatch_f64(&tx, "Advanced Curvature", start, advanced_curvatures(&input, curv_type));
+            }
+
+            // ═══════════════════════════════════════════════════
+            // TERRAIN — Fase B
+            // ═══════════════════════════════════════════════════
+            "contour_lines" => {
+                let interval = get_f64(&params, "interval", 10.0);
+                let base = get_f64(&params, "base", 0.0);
+                dispatch_f64(&tx, "Contour Lines", start, contour_lines(&input, ContourParams {
+                    interval,
+                    base,
+                }));
+            }
+
+            "cost_distance" => {
+                let source_row = get_usize(&params, "source_row", 0);
+                let source_col = get_usize(&params, "source_col", 0);
+                dispatch_f64(&tx, "Cost Distance", start, cost_distance(&input, CostDistanceParams {
+                    sources: vec![(source_row, source_col)],
+                }));
+            }
+
+            // ═══════════════════════════════════════════════════
+            // LANDSCAPE ECOLOGY — Fase B (new category)
+            // ═══════════════════════════════════════════════════
+            "shannon_diversity" => {
+                let radius = get_usize(&params, "radius", 3);
+                dispatch_f64(&tx, "Shannon Diversity", start, shannon_diversity(&input, DiversityParams {
+                    radius,
+                    circular: false,
+                }));
+            }
+
+            "simpson_diversity" => {
+                let radius = get_usize(&params, "radius", 3);
+                dispatch_f64(&tx, "Simpson Diversity", start, simpson_diversity(&input, DiversityParams {
+                    radius,
+                    circular: false,
+                }));
+            }
+
+            "patch_density" => {
+                let radius = get_usize(&params, "radius", 3);
+                dispatch_f64(&tx, "Patch Density", start, patch_density(&input, DiversityParams {
+                    radius,
+                    circular: false,
+                }));
             }
 
             // ═══════════════════════════════════════════════════

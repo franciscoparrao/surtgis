@@ -467,6 +467,155 @@ pub fn reci(nir: &Raster<f64>, red_edge: &Raster<f64>) -> Result<Raster<f64>> {
 }
 
 // ---------------------------------------------------------------------------
+// NDSI
+// ---------------------------------------------------------------------------
+
+/// Normalized Difference Snow Index (Hall et al., 1995)
+///
+/// `NDSI = (Green - SWIR) / (Green + SWIR)`
+///
+/// Discriminates snow/ice from clouds and other features.
+/// Values > 0.4 typically indicate snow cover.
+///
+/// # Arguments
+/// * `green` - Green band (e.g., Sentinel-2 B3)
+/// * `swir` - Shortwave infrared band (e.g., Sentinel-2 B11)
+pub fn ndsi(green: &Raster<f64>, swir: &Raster<f64>) -> Result<Raster<f64>> {
+    normalized_difference(green, swir)
+}
+
+// ---------------------------------------------------------------------------
+// NDBI
+// ---------------------------------------------------------------------------
+
+/// Normalized Difference Built-up Index (Zha et al., 2003)
+///
+/// `NDBI = (SWIR - NIR) / (SWIR + NIR)`
+///
+/// Highlights urban/built-up areas. Positive values indicate built-up land.
+///
+/// # Arguments
+/// * `swir` - Shortwave infrared band
+/// * `nir` - Near-infrared band
+pub fn ndbi(swir: &Raster<f64>, nir: &Raster<f64>) -> Result<Raster<f64>> {
+    normalized_difference(swir, nir)
+}
+
+// ---------------------------------------------------------------------------
+// NDMI
+// ---------------------------------------------------------------------------
+
+/// Normalized Difference Moisture Index (Gao, 1996)
+///
+/// `NDMI = (NIR - SWIR) / (NIR + SWIR)`
+///
+/// Monitors vegetation moisture stress. High values indicate high canopy
+/// water content. Similar formula to NBR but interpreted differently.
+///
+/// # Arguments
+/// * `nir` - Near-infrared band
+/// * `swir` - Shortwave infrared band
+pub fn ndmi(nir: &Raster<f64>, swir: &Raster<f64>) -> Result<Raster<f64>> {
+    normalized_difference(nir, swir)
+}
+
+// ---------------------------------------------------------------------------
+// MSAVI
+// ---------------------------------------------------------------------------
+
+/// Modified Soil-Adjusted Vegetation Index (Qi et al., 1994)
+///
+/// `MSAVI = (2 * NIR + 1 - sqrt((2 * NIR + 1)^2 - 8 * (NIR - Red))) / 2`
+///
+/// Self-adjusting soil brightness correction factor, eliminating the need
+/// to manually specify the L parameter as in SAVI.
+///
+/// # Arguments
+/// * `nir` - Near-infrared band
+/// * `red` - Red band
+pub fn msavi(nir: &Raster<f64>, red: &Raster<f64>) -> Result<Raster<f64>> {
+    check_dimensions(nir, red)?;
+
+    let (rows, cols) = nir.shape();
+    let nodata_nir = nir.nodata();
+    let nodata_red = red.nodata();
+
+    let data: Vec<f64> = (0..rows)
+        .into_par_iter()
+        .flat_map(|row| {
+            let mut row_data = vec![f64::NAN; cols];
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
+                let n = unsafe { nir.get_unchecked(row, col) };
+                let r = unsafe { red.get_unchecked(row, col) };
+
+                if is_nodata_f64(n, nodata_nir) || is_nodata_f64(r, nodata_red) {
+                    continue;
+                }
+
+                let term = 2.0 * n + 1.0;
+                let discriminant = term * term - 8.0 * (n - r);
+
+                if discriminant < 0.0 {
+                    continue; // Should not happen with valid reflectance but guard anyway
+                }
+
+                *row_data_col = (term - discriminant.sqrt()) / 2.0;
+            }
+            row_data
+        })
+        .collect();
+
+    build_output(nir, rows, cols, data)
+}
+
+// ---------------------------------------------------------------------------
+// EVI2
+// ---------------------------------------------------------------------------
+
+/// Two-band Enhanced Vegetation Index (Jiang et al., 2008)
+///
+/// `EVI2 = 2.5 * (NIR - Red) / (NIR + 2.4 * Red + 1)`
+///
+/// Approximation of EVI that does not require the blue band.
+/// Useful when only NIR and Red bands are available.
+///
+/// # Arguments
+/// * `nir` - Near-infrared band
+/// * `red` - Red band
+pub fn evi2(nir: &Raster<f64>, red: &Raster<f64>) -> Result<Raster<f64>> {
+    check_dimensions(nir, red)?;
+
+    let (rows, cols) = nir.shape();
+    let nodata_nir = nir.nodata();
+    let nodata_red = red.nodata();
+
+    let data: Vec<f64> = (0..rows)
+        .into_par_iter()
+        .flat_map(|row| {
+            let mut row_data = vec![f64::NAN; cols];
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
+                let n = unsafe { nir.get_unchecked(row, col) };
+                let r = unsafe { red.get_unchecked(row, col) };
+
+                if is_nodata_f64(n, nodata_nir) || is_nodata_f64(r, nodata_red) {
+                    continue;
+                }
+
+                let denom = n + 2.4 * r + 1.0;
+                if denom.abs() < 1e-10 {
+                    continue;
+                }
+
+                *row_data_col = 2.5 * (n - r) / denom;
+            }
+            row_data
+        })
+        .collect();
+
+    build_output(nir, rows, cols, data)
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -769,5 +918,72 @@ mod tests {
         let val = result.get(2, 2).unwrap();
 
         assert!(val.is_nan(), "Zero red edge should produce NaN, got {}", val);
+    }
+
+    #[test]
+    fn test_ndsi() {
+        let green = make_band(5, 5, 0.7);
+        let swir = make_band(5, 5, 0.2);
+
+        let result = ndsi(&green, &swir).unwrap();
+        let val = result.get(2, 2).unwrap();
+
+        let expected = (0.7 - 0.2) / (0.7 + 0.2);
+        assert!((val - expected).abs() < 1e-10, "Expected {}, got {}", expected, val);
+    }
+
+    #[test]
+    fn test_ndbi() {
+        let swir = make_band(5, 5, 0.4);
+        let nir = make_band(5, 5, 0.3);
+
+        let result = ndbi(&swir, &nir).unwrap();
+        let val = result.get(2, 2).unwrap();
+
+        let expected = (0.4 - 0.3) / (0.4 + 0.3);
+        assert!((val - expected).abs() < 1e-10, "Expected {}, got {}", expected, val);
+    }
+
+    #[test]
+    fn test_ndmi() {
+        let nir = make_band(5, 5, 0.6);
+        let swir = make_band(5, 5, 0.3);
+
+        let result = ndmi(&nir, &swir).unwrap();
+        let val = result.get(2, 2).unwrap();
+
+        let expected = (0.6 - 0.3) / (0.6 + 0.3);
+        assert!((val - expected).abs() < 1e-10, "Expected {}, got {}", expected, val);
+    }
+
+    #[test]
+    fn test_msavi() {
+        let nir = make_band(5, 5, 0.5);
+        let red = make_band(5, 5, 0.1);
+
+        let result = msavi(&nir, &red).unwrap();
+        let val = result.get(2, 2).unwrap();
+
+        // MSAVI = (2*0.5 + 1 - sqrt((2*0.5+1)^2 - 8*(0.5-0.1))) / 2
+        //       = (2.0 - sqrt(4.0 - 3.2)) / 2 = (2.0 - sqrt(0.8)) / 2
+        let expected = (2.0 * 0.5 + 1.0 - ((2.0 * 0.5 + 1.0_f64).powi(2) - 8.0 * (0.5 - 0.1)).sqrt()) / 2.0;
+        assert!((val - expected).abs() < 1e-10, "Expected {}, got {}", expected, val);
+        // MSAVI should be in reasonable vegetation range
+        assert!(val > 0.0 && val < 1.0, "MSAVI should be in (0,1) for valid reflectance");
+    }
+
+    #[test]
+    fn test_evi2() {
+        let nir = make_band(5, 5, 0.5);
+        let red = make_band(5, 5, 0.1);
+
+        let result = evi2(&nir, &red).unwrap();
+        let val = result.get(2, 2).unwrap();
+
+        // EVI2 = 2.5 * (0.5 - 0.1) / (0.5 + 2.4*0.1 + 1)
+        //      = 2.5 * 0.4 / (0.5 + 0.24 + 1.0)
+        //      = 1.0 / 1.74
+        let expected = 2.5 * (0.5 - 0.1) / (0.5 + 2.4 * 0.1 + 1.0);
+        assert!((val - expected).abs() < 1e-10, "Expected {}, got {}", expected, val);
     }
 }

@@ -23,7 +23,9 @@
 mod accumulation_zones;
 mod aspect;
 mod chebyshev_spectral;
+mod contour;
 mod convergence;
+mod cost_distance;
 mod curvature;
 pub mod derivatives;
 mod curvature_advanced;
@@ -64,6 +66,8 @@ pub use accumulation_zones::{
     ZONE_TRANSITIONAL_ACC, ZONE_TRANSITIONAL_DISP,
 };
 pub use aspect::{aspect, Aspect, AspectOutput};
+pub use contour::{contour_lines, ContourParams};
+pub use cost_distance::{cost_distance, CostDistanceParams};
 pub use convergence::{convergence_index, ConvergenceParams};
 pub use curvature::{curvature, Curvature, CurvatureParams, CurvatureType, DerivativeMethod, CurvatureFormula};
 pub use curvature_advanced::{advanced_curvatures, all_curvatures, AdvancedCurvatureType, AllCurvatures};

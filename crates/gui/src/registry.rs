@@ -14,6 +14,7 @@ pub enum AlgoCategory {
     Morphology,
     Statistics,
     Interpolation,
+    Landscape,
 }
 
 impl AlgoCategory {
@@ -25,6 +26,7 @@ impl AlgoCategory {
             Self::Morphology => "Morphology",
             Self::Statistics => "Statistics",
             Self::Interpolation => "Interpolation",
+            Self::Landscape => "Landscape",
         }
     }
 
@@ -35,6 +37,7 @@ impl AlgoCategory {
         Self::Morphology,
         Self::Statistics,
         Self::Interpolation,
+        Self::Landscape,
     ];
 }
 
@@ -867,6 +870,113 @@ pub fn build_registry() -> Vec<AlgorithmEntry> {
                     default: 16, min: 4, max: 64,
                 }},
             ],
+        },
+
+        // ═══════════════════════════════════════════════════════
+        // IMAGERY — Fase B (+5)
+        // ═══════════════════════════════════════════════════════
+        AlgorithmEntry {
+            id: "ndsi", name: "NDSI", category: AlgoCategory::Imagery,
+            description: "Normalized Difference Snow Index (Green - SWIR) / (Green + SWIR)",
+            input_count: 2,
+            params: vec![
+                ParamDef { name: "green", label: "Green Band", kind: ParamKind::InputRaster },
+                ParamDef { name: "swir", label: "SWIR Band", kind: ParamKind::InputRaster },
+            ],
+        },
+        AlgorithmEntry {
+            id: "ndbi", name: "NDBI", category: AlgoCategory::Imagery,
+            description: "Normalized Difference Built-up Index (SWIR - NIR) / (SWIR + NIR)",
+            input_count: 2,
+            params: vec![
+                ParamDef { name: "swir", label: "SWIR Band", kind: ParamKind::InputRaster },
+                ParamDef { name: "nir", label: "NIR Band", kind: ParamKind::InputRaster },
+            ],
+        },
+        AlgorithmEntry {
+            id: "ndmi", name: "NDMI", category: AlgoCategory::Imagery,
+            description: "Normalized Difference Moisture Index (NIR - SWIR) / (NIR + SWIR)",
+            input_count: 2,
+            params: vec![
+                ParamDef { name: "nir", label: "NIR Band", kind: ParamKind::InputRaster },
+                ParamDef { name: "swir", label: "SWIR Band", kind: ParamKind::InputRaster },
+            ],
+        },
+        AlgorithmEntry {
+            id: "msavi", name: "MSAVI", category: AlgoCategory::Imagery,
+            description: "Modified SAVI — self-adjusting soil brightness correction",
+            input_count: 2,
+            params: vec![
+                ParamDef { name: "nir", label: "NIR Band", kind: ParamKind::InputRaster },
+                ParamDef { name: "red", label: "Red Band", kind: ParamKind::InputRaster },
+            ],
+        },
+        AlgorithmEntry {
+            id: "evi2", name: "EVI2", category: AlgoCategory::Imagery,
+            description: "Two-band Enhanced Vegetation Index (no blue band needed)",
+            input_count: 2,
+            params: vec![
+                ParamDef { name: "nir", label: "NIR Band", kind: ParamKind::InputRaster },
+                ParamDef { name: "red", label: "Red Band", kind: ParamKind::InputRaster },
+            ],
+        },
+
+        // ═══════════════════════════════════════════════════════
+        // STATISTICS — Fase B (+1)
+        // ═══════════════════════════════════════════════════════
+        AlgorithmEntry {
+            id: "focal_majority", name: "Focal Majority", category: AlgoCategory::Statistics,
+            description: "Moving majority (mode) filter — most frequent value in window",
+            input_count: 1, params: vec![param_radius(3, 50)],
+        },
+
+        // ═══════════════════════════════════════════════════════
+        // TERRAIN — Fase B (+2)
+        // ═══════════════════════════════════════════════════════
+        AlgorithmEntry {
+            id: "contour_lines", name: "Contour Lines", category: AlgoCategory::Terrain,
+            description: "Generate contour lines at regular intervals (raster overlay)",
+            input_count: 1,
+            params: vec![
+                ParamDef { name: "interval", label: "Contour Interval (m)", kind: ParamKind::Float {
+                    default: 10.0, min: 0.1, max: 10000.0, speed: 1.0,
+                }},
+                ParamDef { name: "base", label: "Base Value (m)", kind: ParamKind::Float {
+                    default: 0.0, min: -10000.0, max: 10000.0, speed: 1.0,
+                }},
+            ],
+        },
+        AlgorithmEntry {
+            id: "cost_distance", name: "Cost Distance", category: AlgoCategory::Terrain,
+            description: "Accumulated cost of travel from a source cell (Dijkstra 8-connected)",
+            input_count: 1,
+            params: vec![
+                ParamDef { name: "source_row", label: "Source Row", kind: ParamKind::Int {
+                    default: 0, min: 0, max: 100000,
+                }},
+                ParamDef { name: "source_col", label: "Source Col", kind: ParamKind::Int {
+                    default: 0, min: 0, max: 100000,
+                }},
+            ],
+        },
+
+        // ═══════════════════════════════════════════════════════
+        // LANDSCAPE ECOLOGY — Fase B (+3, new category)
+        // ═══════════════════════════════════════════════════════
+        AlgorithmEntry {
+            id: "shannon_diversity", name: "Shannon Diversity Index", category: AlgoCategory::Landscape,
+            description: "Landscape information entropy H' = -Σ(pi·ln(pi)) per moving window",
+            input_count: 1, params: vec![param_radius(3, 50)],
+        },
+        AlgorithmEntry {
+            id: "simpson_diversity", name: "Simpson Diversity Index", category: AlgoCategory::Landscape,
+            description: "Probability of interspecific encounter 1-Σ(pi²) per moving window",
+            input_count: 1, params: vec![param_radius(3, 50)],
+        },
+        AlgorithmEntry {
+            id: "patch_density", name: "Patch Density", category: AlgoCategory::Landscape,
+            description: "Number of distinct patches per unit area in moving window",
+            input_count: 1, params: vec![param_radius(3, 50)],
         },
     ]
 }
