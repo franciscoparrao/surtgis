@@ -1,0 +1,21 @@
+[package]
+name = "surtgis-wasm"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "WebAssembly bindings for SurtGis geospatial algorithms"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+
+[dependencies]
+surtgis-core = { path = "../core", default-features = false }
+surtgis-algorithms = { path = "../algorithms", default-features = false }
+wasm-bindgen.workspace = true
+js-sys.workspace = true
+serde.workspace = true
+serde_json.workspace = true

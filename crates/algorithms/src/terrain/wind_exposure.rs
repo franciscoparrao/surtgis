@@ -5,7 +5,7 @@
 //! Based on the Forestry Commission (UK) topographic exposure method.
 
 use ndarray::Array2;
-use rayon::prelude::*;
+use crate::maybe_rayon::*;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -87,7 +87,7 @@ pub fn wind_exposure(dem: &Raster<f64>, params: WindExposureParams) -> Result<Ra
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let z0 = unsafe { dem.get_unchecked(row, col) };
                 if z0.is_nan() {
                     continue;
@@ -127,7 +127,7 @@ pub fn wind_exposure(dem: &Raster<f64>, params: WindExposureParams) -> Result<Ra
                     }
                 }
 
-                row_data[col] = topex_sum;
+                *row_data_col = topex_sum;
             }
 
             row_data

@@ -78,6 +78,7 @@ impl Neighborhood {
 }
 
 /// D8 flow directions (standard encoding)
+#[allow(dead_code)]
 pub mod d8 {
     /// Direction offsets: (row_offset, col_offset)
     /// Indexed by direction code (1-8), 0 is unused

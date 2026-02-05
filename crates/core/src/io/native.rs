@@ -6,6 +6,7 @@
 use crate::error::{Error, Result};
 use crate::raster::{GeoTransform, Raster, RasterElement};
 use std::fs::File;
+use std::io::Cursor;
 use std::path::Path;
 use tiff::decoder::{Decoder, DecodingResult};
 use tiff::encoder::colortype::Gray32Float;
@@ -31,13 +32,34 @@ impl Default for GeoTiffOptions {
 ///
 /// Native reader with limited GeoTIFF metadata support.
 /// For full support, enable the `gdal` feature.
-pub fn read_geotiff<T, P>(path: P, _band: Option<usize>) -> Result<Raster<T>>
+pub fn read_geotiff<T, P>(path: P, band: Option<usize>) -> Result<Raster<T>>
 where
     T: RasterElement,
     P: AsRef<Path>,
 {
     let file = File::open(path.as_ref())?;
-    let mut decoder = Decoder::new(file)
+    decode_geotiff(file, band)
+}
+
+/// Read a GeoTIFF from an in-memory buffer into a Raster
+///
+/// Same as `read_geotiff` but operates on a byte slice instead of a file path.
+/// Useful for WASM environments where filesystem access is not available.
+pub fn read_geotiff_from_buffer<T>(data: &[u8], band: Option<usize>) -> Result<Raster<T>>
+where
+    T: RasterElement,
+{
+    let cursor = Cursor::new(data);
+    decode_geotiff(cursor, band)
+}
+
+/// Internal: decode a GeoTIFF from any `Read + Seek` source
+fn decode_geotiff<T, R>(reader: R, _band: Option<usize>) -> Result<Raster<T>>
+where
+    T: RasterElement,
+    R: std::io::Read + std::io::Seek,
+{
+    let mut decoder = Decoder::new(reader)
         .map_err(|e| Error::Other(format!("TIFF decode error: {}", e)))?;
 
     let (width, height) = decoder.dimensions()
@@ -151,7 +173,32 @@ where
     P: AsRef<Path>,
 {
     let file = File::create(path.as_ref())?;
-    let mut encoder = TiffEncoder::new(file)
+    encode_geotiff(raster, file)
+}
+
+/// Write a Raster to an in-memory GeoTIFF buffer
+///
+/// Same as `write_geotiff` but returns a `Vec<u8>` instead of writing to a file.
+/// Useful for WASM environments where filesystem access is not available.
+pub fn write_geotiff_to_buffer<T>(
+    raster: &Raster<T>,
+    _options: Option<GeoTiffOptions>,
+) -> Result<Vec<u8>>
+where
+    T: RasterElement,
+{
+    let mut buf = Vec::new();
+    encode_geotiff(raster, Cursor::new(&mut buf))?;
+    Ok(buf)
+}
+
+/// Internal: encode a Raster as GeoTIFF into any `Write + Seek` sink
+fn encode_geotiff<T, W>(raster: &Raster<T>, writer: W) -> Result<()>
+where
+    T: RasterElement,
+    W: std::io::Write + std::io::Seek,
+{
+    let mut encoder = TiffEncoder::new(writer)
         .map_err(|e| Error::Other(format!("TIFF encoder error: {}", e)))?;
 
     let (rows, cols) = raster.shape();

@@ -1,0 +1,42 @@
+[package]
+name = "surtgis-cloud"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Cloud Optimized GeoTIFF (COG) reader for SurtGis"
+
+[features]
+default = ["deflate", "lzw"]
+deflate = ["dep:flate2"]
+lzw = ["dep:weezl"]
+native = ["dep:tokio", "reqwest/rustls-tls"]
+wasm = ["dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:js-sys"]
+
+[dependencies]
+surtgis-core = { path = "../core", default-features = false }
+thiserror.workspace = true
+serde.workspace = true
+ndarray.workspace = true
+num-traits.workspace = true
+reqwest = { workspace = true, default-features = false }
+lru.workspace = true
+byteorder.workspace = true
+futures.workspace = true
+
+# Compression (optional)
+flate2 = { workspace = true, optional = true }
+weezl = { workspace = true, optional = true }
+
+# Native sync API (optional)
+tokio = { workspace = true, optional = true }
+
+# WASM (optional)
+wasm-bindgen = { workspace = true, optional = true }
+wasm-bindgen-futures = { workspace = true, optional = true }
+js-sys = { workspace = true, optional = true }
+serde_json.workspace = true
+
+[dev-dependencies]
+approx.workspace = true
+tokio = { workspace = true, features = ["rt", "macros"] }

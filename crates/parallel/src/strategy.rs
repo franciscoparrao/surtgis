@@ -3,20 +3,15 @@
 use rayon::prelude::*;
 
 /// Processing mode for algorithms
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProcessingMode {
     /// Single-threaded processing
     Sequential,
     /// Parallel processing using all available cores
+    #[default]
     Parallel,
     /// Parallel with specified number of threads
     ParallelWith(usize),
-}
-
-impl Default for ProcessingMode {
-    fn default() -> Self {
-        ProcessingMode::Parallel
-    }
 }
 
 /// Strategy for parallel execution

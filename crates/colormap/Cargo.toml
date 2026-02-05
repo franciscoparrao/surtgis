@@ -1,0 +1,11 @@
+[package]
+name = "surtgis-colormap"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Color mapping and raster visualization for SurtGis"
+
+[dependencies]
+surtgis-core = { path = "../core", default-features = false, features = [] }
+num-traits.workspace = true

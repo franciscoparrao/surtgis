@@ -11,13 +11,15 @@ name = "surtgis"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["cloud"]
 gdal = ["surtgis-core/gdal"]
+cloud = ["dep:surtgis-cloud"]
 
 [dependencies]
 surtgis-core = { path = "../core" }
 surtgis-algorithms = { path = "../algorithms" }
 surtgis-parallel = { path = "../parallel" }
+surtgis-cloud = { path = "../cloud", features = ["native"], optional = true }
 clap.workspace = true
 anyhow.workspace = true
 tracing.workspace = true

@@ -104,7 +104,7 @@ pub fn convex_hull(geom: &Geometry<f64>) -> Polygon<f64> {
             let points: Vec<Coord<f64>> = gc
                 .0
                 .iter()
-                .filter_map(|g| bounding_box(g))
+                .filter_map(bounding_box)
                 .flat_map(|bb| {
                     vec![
                         Coord { x: bb.min_x, y: bb.min_y },

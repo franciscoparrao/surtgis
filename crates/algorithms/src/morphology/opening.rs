@@ -12,18 +12,12 @@ use super::erode::erode;
 
 /// Parameters for morphological opening
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct OpeningParams {
     /// Structuring element shape
     pub element: StructuringElement,
 }
 
-impl Default for OpeningParams {
-    fn default() -> Self {
-        Self {
-            element: StructuringElement::default(),
-        }
-    }
-}
 
 /// Opening algorithm
 #[derive(Debug, Clone, Default)]

@@ -128,11 +128,10 @@ pub fn fill_sinks(dem: &Raster<f64>, params: FillSinksParams) -> Result<Raster<f
                 if dem_val.is_nan() {
                     continue;
                 }
-                if let Some(nd) = nodata {
-                    if (dem_val - nd).abs() < f64::EPSILON {
+                if let Some(nd) = nodata
+                    && (dem_val - nd).abs() < f64::EPSILON {
                         continue;
                     }
-                }
 
                 if w[(row, col)] > dem_val {
                     for (idx, &(dr, dc)) in D8_OFFSETS.iter().enumerate() {
@@ -168,11 +167,10 @@ pub fn fill_sinks(dem: &Raster<f64>, params: FillSinksParams) -> Result<Raster<f
                 if dem_val.is_nan() {
                     continue;
                 }
-                if let Some(nd) = nodata {
-                    if (dem_val - nd).abs() < f64::EPSILON {
+                if let Some(nd) = nodata
+                    && (dem_val - nd).abs() < f64::EPSILON {
                         continue;
                     }
-                }
 
                 if w[(row, col)] > dem_val {
                     for (idx, &(dr, dc)) in D8_OFFSETS.iter().enumerate() {

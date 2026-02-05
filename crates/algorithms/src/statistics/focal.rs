@@ -4,7 +4,7 @@
 //! Supports: Mean, StdDev, Min, Max, Range, Sum, Count, Median, Percentile.
 
 use ndarray::Array2;
-use rayon::prelude::*;
+use crate::maybe_rayon::*;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -29,6 +29,8 @@ pub enum FocalStatistic {
     Median,
     /// Percentile (0-100)
     Percentile(f64),
+    /// Majority (mode) — most frequent value
+    Majority,
 }
 
 /// Parameters for focal statistics
@@ -68,11 +70,10 @@ pub fn focal_statistics(raster: &Raster<f64>, params: FocalParams) -> Result<Ras
         return Err(Error::Algorithm("Focal radius must be > 0".into()));
     }
 
-    if let FocalStatistic::Percentile(p) = params.statistic {
-        if !(0.0..=100.0).contains(&p) {
+    if let FocalStatistic::Percentile(p) = params.statistic
+        && !(0.0..=100.0).contains(&p) {
             return Err(Error::Algorithm("Percentile must be between 0 and 100".into()));
         }
-    }
 
     let (rows, cols) = raster.shape();
     let r = params.radius as isize;
@@ -104,7 +105,7 @@ pub fn focal_statistics(raster: &Raster<f64>, params: FocalParams) -> Result<Ras
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
 
-            for col in 0..cols {
+            for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 // Collect valid neighbor values
                 let mut values: Vec<f64> = Vec::with_capacity(offsets.len());
 
@@ -124,7 +125,7 @@ pub fn focal_statistics(raster: &Raster<f64>, params: FocalParams) -> Result<Ras
                     continue;
                 }
 
-                row_data[col] = compute_statistic(&mut values, &params.statistic);
+                *row_data_col = compute_statistic(&mut values, &params.statistic);
             }
 
             row_data
@@ -139,7 +140,7 @@ pub fn focal_statistics(raster: &Raster<f64>, params: FocalParams) -> Result<Ras
     Ok(output)
 }
 
-fn compute_statistic(values: &mut Vec<f64>, stat: &FocalStatistic) -> f64 {
+fn compute_statistic(values: &mut [f64], stat: &FocalStatistic) -> f64 {
     let n = values.len() as f64;
 
     match stat {
@@ -181,6 +182,32 @@ fn compute_statistic(values: &mut Vec<f64>, stat: &FocalStatistic) -> f64 {
             values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             let idx = (p / 100.0 * (values.len() - 1) as f64).round() as usize;
             values[idx.min(values.len() - 1)]
+        }
+        FocalStatistic::Majority => {
+            // Round values to avoid floating-point noise in class rasters.
+            // Uses a simple counting approach: sort, then find longest run.
+            values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let mut best_val = values[0];
+            let mut best_count = 1usize;
+            let mut cur_val = values[0];
+            let mut cur_count = 1usize;
+            for v in &values[1..] {
+                // Treat values within 1e-9 as equal (class rasters are typically integers)
+                if (*v - cur_val).abs() < 1e-9 {
+                    cur_count += 1;
+                } else {
+                    if cur_count > best_count {
+                        best_count = cur_count;
+                        best_val = cur_val;
+                    }
+                    cur_val = *v;
+                    cur_count = 1;
+                }
+            }
+            if cur_count > best_count {
+                best_val = cur_val;
+            }
+            best_val
         }
     }
 }
@@ -325,5 +352,36 @@ mod tests {
             circular: false,
         });
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_focal_majority() {
+        // Create a raster with a dominant class in the center
+        let mut r = Raster::new(5, 5);
+        r.set_transform(GeoTransform::new(0.0, 5.0, 1.0, -1.0));
+        for row in 0..5 {
+            for col in 0..5 {
+                r.set(row, col, 1.0).unwrap(); // All class 1
+            }
+        }
+        // Set center and neighbors to class 2 (majority in 3x3 window around center)
+        r.set(1, 1, 2.0).unwrap();
+        r.set(1, 2, 2.0).unwrap();
+        r.set(1, 3, 2.0).unwrap();
+        r.set(2, 1, 2.0).unwrap();
+        r.set(2, 2, 2.0).unwrap();
+        r.set(2, 3, 2.0).unwrap();
+        r.set(3, 1, 2.0).unwrap();
+        r.set(3, 2, 2.0).unwrap();
+        r.set(3, 3, 2.0).unwrap();
+
+        let result = focal_statistics(&r, FocalParams {
+            radius: 1,
+            statistic: FocalStatistic::Majority,
+            circular: false,
+        }).unwrap();
+
+        let v = result.get(2, 2).unwrap();
+        assert!((v - 2.0).abs() < 1e-10, "Majority should be 2.0, got {}", v);
     }
 }

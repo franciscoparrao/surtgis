@@ -129,10 +129,7 @@ pub fn clip_by_rect(geom: &Geometry<f64>, rect: ClipRect) -> Option<Geometry<f64
             // Sutherland-Hodgman: clip against each edge
             let mut vertices: Vec<Coord<f64>> = poly
                 .exterior()
-                .0
-                .iter()
-                .copied()
-                .collect();
+                .0.to_vec();
 
             // Remove closing vertex for algorithm
             if vertices.len() > 1 && vertices.first() == vertices.last() {

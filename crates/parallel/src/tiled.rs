@@ -169,6 +169,7 @@ impl TiledProcessor {
         let tiles: Vec<_> = TileIterator::new(rows, cols, self.tile_size, self.overlap).collect();
 
         // Process tiles in parallel
+        #[allow(clippy::type_complexity)]
         let results: Vec<(Tile, Vec<(usize, usize, U)>)> = tiles
             .into_par_iter()
             .map(|tile| {
