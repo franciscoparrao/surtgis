@@ -37,16 +37,16 @@
 
 ## 0.4 Merge a main
 
-- [ ] Revisar diferencias `main` vs `feature/gui-desktop`
-- [ ] Resolver conflictos en `Cargo.toml` / `Cargo.lock` si existen
-- [ ] Merge (preservar historia de commits)
-- [ ] `cargo test --workspace` en main post-merge
+- [x] Revisar diferencias `main` vs `feature/gui-desktop` (13 commits, 203 archivos, fast-forward)
+- [x] Sin conflictos (main no tenía commits divergentes)
+- [x] Merge con `--no-ff` (preserva historia de commits)
+- [x] `cargo test --workspace` en main post-merge — 637 passed, 0 failed
 - [ ] Tag `v0.1.0-rc1` (release candidate)
 
 ## 0.5 Verificación post-merge
 
-- [ ] `cargo clippy --workspace -- -D warnings` en main
-- [ ] `cargo test --workspace` en main
+- [x] `cargo clippy --workspace -- -D warnings` en main — 0 warnings
+- [x] `cargo test --workspace` en main — 637 passed, 0 failed
 - [ ] `cargo doc --workspace --no-deps` genera sin warnings
 - [ ] README renderiza correctamente en GitHub
 - [ ] CHANGELOG refleja el estado actual
