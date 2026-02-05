@@ -26,7 +26,7 @@ pub fn show_layers(ui: &mut Ui, workspace: &Workspace) -> LayerAction {
     ui.heading("Layers");
     ui.separator();
 
-    if workspace.len() == 0 {
+    if workspace.is_empty() {
         ui.label("No layers.");
         return action;
     }

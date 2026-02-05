@@ -51,14 +51,14 @@ pub fn auto_params<T: RasterElement>(raster: &Raster<T>, scheme: ColorScheme) ->
         if val.is_nodata(nodata) {
             continue;
         }
-        if let Some(v) = val.to_f64() {
-            if v.is_finite() {
-                if v < min {
-                    min = v;
-                }
-                if v > max {
-                    max = v;
-                }
+        if let Some(v) = val.to_f64()
+            && v.is_finite()
+        {
+            if v < min {
+                min = v;
+            }
+            if v > max {
+                max = v;
             }
         }
     }

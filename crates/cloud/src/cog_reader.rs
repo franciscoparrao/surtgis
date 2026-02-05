@@ -274,7 +274,7 @@ impl CogReader {
         let bps = ifd.bits_per_sample;
         let sf = ifd.sample_format;
         let compression = ifd.compression;
-        let bytes_per_pixel = (bps as usize + 7) / 8;
+        let bytes_per_pixel = (bps as usize).div_ceil(8);
         let raw_tile_size = tw * th * bytes_per_pixel;
 
         let (px_min_col, px_min_row, px_max_col, px_max_row) = mapping.pixel_window;
@@ -287,13 +287,13 @@ impl CogReader {
                 ifd_idx,
                 tile_idx: tr.tile_idx,
             };
-            if self.cache.get(&key).is_none() {
-                if tr.tile_idx < ifd.tile_offsets.len() {
-                    let offset = ifd.tile_offsets[tr.tile_idx];
-                    let length = ifd.tile_byte_counts[tr.tile_idx];
-                    if length > 0 {
-                        to_fetch.push((i, offset, length));
-                    }
+            if self.cache.get(&key).is_none()
+                && tr.tile_idx < ifd.tile_offsets.len()
+            {
+                let offset = ifd.tile_offsets[tr.tile_idx];
+                let length = ifd.tile_byte_counts[tr.tile_idx];
+                if length > 0 {
+                    to_fetch.push((i, offset, length));
                 }
             }
         }
@@ -371,10 +371,10 @@ impl CogReader {
         raster.set_transform(out_gt);
         raster.set_crs(self.geo_meta.crs.clone());
 
-        if let Some(nd) = self.geo_meta.nodata {
-            if let Some(nd_t) = num_traits::cast(nd) {
-                raster.set_nodata(Some(nd_t));
-            }
+        if let Some(nd) = self.geo_meta.nodata
+            && let Some(nd_t) = num_traits::cast(nd)
+        {
+            raster.set_nodata(Some(nd_t));
         }
 
         Ok(raster)

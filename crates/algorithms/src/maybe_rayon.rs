@@ -26,6 +26,23 @@ mod sequential {
             self.into_iter()
         }
     }
+
+    /// Sequential stand-in for `rayon::prelude::IntoParallelRefMutIterator`.
+    ///
+    /// Calls `iter_mut()` instead of `par_iter_mut()`.
+    pub trait IntoParallelRefMutIterator<'data> {
+        type Iter: Iterator;
+        type Item: Send + 'data;
+        fn par_iter_mut(&'data mut self) -> Self::Iter;
+    }
+
+    impl<'data, T: Send + 'data> IntoParallelRefMutIterator<'data> for Vec<T> {
+        type Iter = std::slice::IterMut<'data, T>;
+        type Item = T;
+        fn par_iter_mut(&'data mut self) -> Self::Iter {
+            self.iter_mut()
+        }
+    }
 }
 
 #[cfg(not(feature = "parallel"))]

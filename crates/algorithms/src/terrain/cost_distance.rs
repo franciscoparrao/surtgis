@@ -11,17 +11,11 @@ use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
 /// Parameters for cost distance
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CostDistanceParams {
     /// Source cell locations as (row, col) pairs.
     /// If empty, cells with value 0 in the cost surface are used as sources.
     pub sources: Vec<(usize, usize)>,
-}
-
-impl Default for CostDistanceParams {
-    fn default() -> Self {
-        Self { sources: Vec::new() }
-    }
 }
 
 /// State in the priority queue (min-heap via Reverse ordering).

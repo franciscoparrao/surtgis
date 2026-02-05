@@ -9,16 +9,10 @@ use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
 /// Parameters for PCA
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct PcaParams {
     /// Number of principal components to return (default: all)
     pub n_components: Option<usize>,
-}
-
-impl Default for PcaParams {
-    fn default() -> Self {
-        Self { n_components: None }
-    }
 }
 
 /// Result of PCA
@@ -134,8 +128,7 @@ pub fn pca(bands: &[&Raster<f64>], params: PcaParams) -> Result<PcaResult> {
 
     // Project pixels onto principal components
     let mut components = Vec::with_capacity(n_components);
-    for comp_idx in 0..n_components {
-        let eigvec_idx = indices[comp_idx];
+    for &eigvec_idx in indices.iter().take(n_components) {
         let mut data = vec![f64::NAN; rows * cols];
 
         let mut pixel_idx = 0;
@@ -175,8 +168,8 @@ fn jacobi_eigen(matrix: &[Vec<f64>], n: usize) -> Result<(Vec<f64>, Vec<Vec<f64>
 
     // Initialize eigenvectors as identity
     let mut v = vec![vec![0.0; n]; n];
-    for i in 0..n {
-        v[i][i] = 1.0;
+    for (i, vi) in v.iter_mut().enumerate() {
+        vi[i] = 1.0;
     }
 
     for _ in 0..max_iter {
@@ -184,10 +177,10 @@ fn jacobi_eigen(matrix: &[Vec<f64>], n: usize) -> Result<(Vec<f64>, Vec<Vec<f64>
         let mut max_val = 0.0;
         let mut p = 0;
         let mut q = 1;
-        for i in 0..n {
-            for j in (i + 1)..n {
-                if a[i][j].abs() > max_val {
-                    max_val = a[i][j].abs();
+        for (i, ai) in a.iter().enumerate() {
+            for (j, val) in ai.iter().enumerate().skip(i + 1) {
+                if val.abs() > max_val {
+                    max_val = val.abs();
                     p = i;
                     q = j;
                 }
@@ -225,11 +218,11 @@ fn jacobi_eigen(matrix: &[Vec<f64>], n: usize) -> Result<(Vec<f64>, Vec<Vec<f64>
         a = new_a;
 
         // Update eigenvectors
-        for i in 0..n {
-            let vip = v[i][p];
-            let viq = v[i][q];
-            v[i][p] = cos_t * vip + sin_t * viq;
-            v[i][q] = -sin_t * vip + cos_t * viq;
+        for vi in &mut v {
+            let vip = vi[p];
+            let viq = vi[q];
+            vi[p] = cos_t * vip + sin_t * viq;
+            vi[q] = -sin_t * vip + cos_t * viq;
         }
     }
 

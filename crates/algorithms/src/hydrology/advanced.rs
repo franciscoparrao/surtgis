@@ -18,9 +18,6 @@ const D8_OFFSETS: [(isize, isize); 8] = [
     (0, -1), (1, -1), (1, 0), (1, 1),
 ];
 
-/// Reverse direction: direction that flows INTO this cell from that direction
-const D8_REVERSE: [u8; 8] = [5, 6, 7, 8, 1, 2, 3, 4];
-
 // ─────────────────────────────────────────────────────────
 // Strahler Order
 // ─────────────────────────────────────────────────────────
@@ -59,7 +56,7 @@ pub fn strahler_order(
             if sm == 0 { continue; }
 
             let dir = unsafe { flow_dir.get_unchecked(r, c) };
-            if dir >= 1 && dir <= 8 {
+            if (1..=8).contains(&dir) {
                 let (dr, dc) = D8_OFFSETS[(dir - 1) as usize];
                 let nr = r as isize + dr;
                 let nc = c as isize + dc;
@@ -93,7 +90,7 @@ pub fn strahler_order(
         let c = idx % cols;
         let dir = unsafe { flow_dir.get_unchecked(r, c) };
 
-        if dir < 1 || dir > 8 { continue; }
+        if !(1..=8).contains(&dir) { continue; }
 
         let (dr, dc) = D8_OFFSETS[(dir - 1) as usize];
         let nr = r as isize + dr;
@@ -156,7 +153,7 @@ pub fn flow_path_length(flow_dir: &Raster<u8>) -> Result<Raster<f64>> {
         .into_par_iter()
         .flat_map(|row| {
             let mut row_data = vec![0.0; cols];
-            for col in 0..cols {
+            for (col, out) in row_data.iter_mut().enumerate() {
                 let mut r = row;
                 let mut c = col;
                 let mut length = 0.0;
@@ -165,7 +162,7 @@ pub fn flow_path_length(flow_dir: &Raster<u8>) -> Result<Raster<f64>> {
 
                 loop {
                     let dir = unsafe { flow_dir.get_unchecked(r, c) };
-                    if dir < 1 || dir > 8 {
+                    if !(1..=8).contains(&dir) {
                         break; // Pit or edge
                     }
 
@@ -193,7 +190,7 @@ pub fn flow_path_length(flow_dir: &Raster<u8>) -> Result<Raster<f64>> {
                     }
                 }
 
-                row_data[col] = length;
+                *out = length;
             }
             row_data
         })
@@ -263,7 +260,7 @@ pub fn isobasins(
             if !acc.is_finite() || acc < threshold { continue; }
 
             let dir = unsafe { flow_dir.get_unchecked(r, c) };
-            if dir < 1 || dir > 8 { continue; }
+            if !(1..=8).contains(&dir) { continue; }
 
             // Check if this is a threshold crossing point
             // Simple: is accumulation a multiple of threshold?
@@ -323,7 +320,7 @@ pub fn isobasins(
                 if basin_id[nidx] > 0.0 { continue; }
 
                 let ndir = unsafe { flow_dir.get_unchecked(nr, nc) };
-                if ndir >= 1 && ndir <= 8 && (ndir - 1) as usize == di {
+                if (1..=8).contains(&ndir) && (ndir - 1) as usize == di {
                     // This neighbor flows into (r, c)
                     basin_id[nidx] = label;
                     queue.push_back((nr, nc));

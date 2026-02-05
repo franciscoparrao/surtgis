@@ -36,7 +36,7 @@ pub fn sobel_edge(raster: &Raster<f64>) -> Result<Raster<f64>> {
                 return row_data;
             }
 
-            for col in 1..(cols - 1) {
+            for (col, out) in row_data.iter_mut().enumerate().skip(1).take(cols - 2) {
                 // 3x3 window
                 let z = |r: usize, c: usize| -> f64 {
                     let v = unsafe { raster.get_unchecked(r, c) };
@@ -58,7 +58,7 @@ pub fn sobel_edge(raster: &Raster<f64>) -> Result<Raster<f64>> {
                 // Sobel Gy: vertical gradient
                 let gy = (z7 + 2.0 * z8 + z9) - (z1 + 2.0 * z2 + z3);
 
-                row_data[col] = (gx * gx + gy * gy).sqrt();
+                *out = (gx * gx + gy * gy).sqrt();
             }
 
             row_data
@@ -104,7 +104,7 @@ pub fn laplacian(raster: &Raster<f64>) -> Result<Raster<f64>> {
                 return row_data;
             }
 
-            for col in 1..(cols - 1) {
+            for (col, out) in row_data.iter_mut().enumerate().skip(1).take(cols - 2) {
                 let center = unsafe { raster.get_unchecked(row, col) };
                 if center.is_nan() {
                     continue;
@@ -119,7 +119,7 @@ pub fn laplacian(raster: &Raster<f64>) -> Result<Raster<f64>> {
                     continue;
                 }
 
-                row_data[col] = top + bottom + left + right - 4.0 * center;
+                *out = top + bottom + left + right - 4.0 * center;
             }
 
             row_data

@@ -305,7 +305,7 @@ impl SurtGisApp {
             DatasetRaster::F64(r) => r.clone(),
             DatasetRaster::U8(r) => {
                 let mut result = Raster::<f64>::new(r.rows(), r.cols());
-                result.set_transform(r.transform().clone());
+                result.set_transform(*r.transform());
                 result.set_crs(r.crs().cloned());
                 for row in 0..r.rows() {
                     for col in 0..r.cols() {
@@ -318,7 +318,7 @@ impl SurtGisApp {
             }
             DatasetRaster::I32(r) => {
                 let mut result = Raster::<f64>::new(r.rows(), r.cols());
-                result.set_transform(r.transform().clone());
+                result.set_transform(*r.transform());
                 result.set_crs(r.crs().cloned());
                 for row in 0..r.rows() {
                     for col in 0..r.cols() {
@@ -334,12 +334,11 @@ impl SurtGisApp {
         // Collect extra inputs for multi-input algorithms
         let mut extra_inputs: HashMap<String, Raster<f64>> = HashMap::new();
         for (param_name, param_value) in &self.tool_dialog.values {
-            if let ParamValue::InputRaster(Some(dataset_id)) = param_value {
-                if let Some(ds) = self.workspace.get(*dataset_id) {
-                    if let DatasetRaster::F64(r) = &ds.raster {
-                        extra_inputs.insert(param_name.clone(), r.clone());
-                    }
-                }
+            if let ParamValue::InputRaster(Some(dataset_id)) = param_value
+                && let Some(ds) = self.workspace.get(*dataset_id)
+                && let DatasetRaster::F64(r) = &ds.raster
+            {
+                extra_inputs.insert(param_name.clone(), r.clone());
             }
         }
 
@@ -671,7 +670,7 @@ impl eframe::App for SurtGisApp {
         });
 
         // Dataset selector bar
-        if self.workspace.len() > 0 {
+        if !self.workspace.is_empty() {
             egui::TopBottomPanel::top("dataset_bar").show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Dataset:");
@@ -770,10 +769,10 @@ impl eframe::App for SurtGisApp {
         drop(tab_viewer);
 
         // Handle tool dialog actions
-        if let Some(algo_id) = algo_clicked {
-            if let Some(algo) = registry.iter().find(|a| a.id == algo_id.as_str()) {
-                self.tool_dialog.open(algo);
-            }
+        if let Some(algo_id) = algo_clicked
+            && let Some(algo) = registry.iter().find(|a| a.id == algo_id.as_str())
+        {
+            self.tool_dialog.open(algo);
         }
 
         if run_requested {
@@ -863,6 +862,7 @@ struct SurtGisTabViewer<'a> {
     /// Basemap state (for Basemap mode).
     basemap: &'a mut Option<BasemapState>,
     /// Tiled renderer (for large rasters).
+    #[allow(dead_code)]
     tiled_renderer: &'a mut TiledRenderer,
     ctx: &'a egui::Context,
 }
@@ -925,12 +925,10 @@ impl<'a> TabViewer for SurtGisTabViewer<'a> {
                         }
                         ToolDialogAction::None => {}
                     }
-                } else {
-                    if let Some(algo_id) =
-                        show_algo_tree(ui, self.registry, self.selected_algo)
-                    {
-                        self.algo_clicked = Some(algo_id);
-                    }
+                } else if let Some(algo_id) =
+                    show_algo_tree(ui, self.registry, self.selected_algo)
+                {
+                    self.algo_clicked = Some(algo_id);
                 }
             }
 
@@ -1016,9 +1014,9 @@ fn suggest_colormap(algo_name: &str) -> ColorScheme {
         ColorScheme::Water
     } else if lower.contains("flow path") || lower.contains("path length") {
         ColorScheme::Accumulation
-    } else if lower.contains("pca") || lower.contains("pc1") {
-        ColorScheme::BlueWhiteRed
-    } else if lower.contains("raster diff") || lower.contains("change") || lower.contains("cva") {
+    } else if lower.contains("pca") || lower.contains("pc1")
+        || lower.contains("raster diff") || lower.contains("change") || lower.contains("cva")
+    {
         ColorScheme::BlueWhiteRed
     } else {
         ColorScheme::Terrain

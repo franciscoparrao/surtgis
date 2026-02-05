@@ -194,7 +194,7 @@ pub fn evaluate(scheme: ColorScheme, t: f64) -> Rgb {
         ColorScheme::Ndvi => multi_stop(NDVI_STOPS, t),
         ColorScheme::BlueWhiteRed => multi_stop(BLUE_WHITE_RED_STOPS, t),
         ColorScheme::Geomorphons => {
-            let idx = (t * 10.0).floor().min(9.0).max(0.0) as usize;
+            let idx = (t * 10.0).floor().clamp(0.0, 9.0) as usize;
             GEOMORPHON_PALETTE[idx]
         }
         ColorScheme::Water => multi_stop(WATER_STOPS, t),

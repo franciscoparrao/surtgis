@@ -90,14 +90,14 @@ pub fn tiles_for_bbox(
         return None;
     }
 
-    let tiles_across = (iw + tw - 1) / tw;
-    let tiles_down = (ih + th - 1) / th;
+    let tiles_across = iw.div_ceil(tw);
+    let tiles_down = ih.div_ceil(th);
 
     // Tile range
     let tile_col_min = min_col / tw;
-    let tile_col_max = (max_col + tw - 1) / tw; // exclusive
+    let tile_col_max = max_col.div_ceil(tw); // exclusive
     let tile_row_min = min_row / th;
-    let tile_row_max = (max_row + th - 1) / th;
+    let tile_row_max = max_row.div_ceil(th);
 
     let tile_col_max = tile_col_max.min(tiles_across);
     let tile_row_max = tile_row_max.min(tiles_down);

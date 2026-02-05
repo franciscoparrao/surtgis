@@ -50,33 +50,33 @@ fn extract_geotransform(
     let scale = find_resolved_f64(byte_order, entries, resolved, tags::MODEL_PIXEL_SCALE);
     let tiepoint = find_resolved_f64(byte_order, entries, resolved, tags::MODEL_TIEPOINT);
 
-    if let (Some(scale), Some(tiepoint)) = (&scale, &tiepoint) {
-        if scale.len() >= 2 && tiepoint.len() >= 6 {
-            let origin_x = tiepoint[3] - tiepoint[0] * scale[0];
-            let origin_y = tiepoint[4] + tiepoint[1] * scale[1];
-            let pixel_width = scale[0];
-            let pixel_height = -scale[1];
-            return GeoTransform::new(origin_x, origin_y, pixel_width, pixel_height);
-        }
+    if let (Some(scale), Some(tiepoint)) = (&scale, &tiepoint)
+        && scale.len() >= 2 && tiepoint.len() >= 6
+    {
+        let origin_x = tiepoint[3] - tiepoint[0] * scale[0];
+        let origin_y = tiepoint[4] + tiepoint[1] * scale[1];
+        let pixel_width = scale[0];
+        let pixel_height = -scale[1];
+        return GeoTransform::new(origin_x, origin_y, pixel_width, pixel_height);
     }
 
     // Try ModelTransformation (34264) — 4x4 matrix, row-major
     let transform = find_resolved_f64(byte_order, entries, resolved, tags::MODEL_TRANSFORMATION);
-    if let Some(t) = &transform {
-        if t.len() >= 16 {
-            // Row-major 4x4: [a b c d / e f g h / ...]
-            // GeoTransform from first two rows:
-            // x = t[3] + col * t[0] + row * t[1]
-            // y = t[7] + col * t[4] + row * t[5]
-            return GeoTransform {
-                origin_x: t[3],
-                origin_y: t[7],
-                pixel_width: t[0],
-                pixel_height: t[5],
-                row_rotation: t[1],
-                col_rotation: t[4],
-            };
-        }
+    if let Some(t) = &transform
+        && t.len() >= 16
+    {
+        // Row-major 4x4: [a b c d / e f g h / ...]
+        // GeoTransform from first two rows:
+        // x = t[3] + col * t[0] + row * t[1]
+        // y = t[7] + col * t[4] + row * t[5]
+        return GeoTransform {
+            origin_x: t[3],
+            origin_y: t[7],
+            pixel_width: t[0],
+            pixel_height: t[5],
+            row_rotation: t[1],
+            col_rotation: t[4],
+        };
     }
 
     GeoTransform::default()

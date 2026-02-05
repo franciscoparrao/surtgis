@@ -13,6 +13,7 @@ pub enum StacCatalogChoice {
 }
 
 impl StacCatalogChoice {
+    #[allow(dead_code)]
     pub fn label(&self) -> &str {
         match self {
             Self::PlanetaryComputer => "Planetary Computer",
@@ -317,21 +318,21 @@ fn show_stac_browser_inner(ui: &mut Ui, state: &mut StacBrowserState) -> StacBro
                 });
 
             // ── Asset detail for selected item ──────────────────────
-            if let Some(sel) = state.selected_item {
-                if let Some(item) = state.results.get(sel) {
-                    ui.separator();
-                    ui.label(format!("Assets for: {}", item.id));
-                    for key in &item.asset_keys {
-                        ui.horizontal(|ui| {
-                            ui.monospace(key);
-                            if ui.small_button("Download").clicked() {
-                                action = StacBrowserAction::Download {
-                                    item_idx: sel,
-                                    asset_key: key.clone(),
-                                };
-                            }
-                        });
-                    }
+            if let Some(sel) = state.selected_item
+                && let Some(item) = state.results.get(sel)
+            {
+                ui.separator();
+                ui.label(format!("Assets for: {}", item.id));
+                for key in &item.asset_keys {
+                    ui.horizontal(|ui| {
+                        ui.monospace(key);
+                        if ui.small_button("Download").clicked() {
+                            action = StacBrowserAction::Download {
+                                item_idx: sel,
+                                asset_key: key.clone(),
+                            };
+                        }
+                    });
                 }
             }
         }

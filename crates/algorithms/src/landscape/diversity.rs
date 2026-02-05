@@ -150,7 +150,7 @@ pub fn patch_density(raster: &Raster<f64>, params: DiversityParams) -> Result<Ra
             let mut row_data = vec![f64::NAN; cols];
 
             for (col, out) in row_data.iter_mut().enumerate() {
-                let win_size = (2 * params.radius + 1) as usize;
+                let win_size = 2 * params.radius + 1;
                 let mut grid = vec![f64::NAN; win_size * win_size];
                 let mut valid_count = 0usize;
 

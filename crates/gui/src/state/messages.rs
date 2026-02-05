@@ -18,18 +18,21 @@ pub enum AppMessage {
     AlgoComplete {
         name: String,
         result: Raster<f64>,
+        #[allow(dead_code)]
         elapsed: Duration,
     },
     /// An algorithm completed with u8 output (flow direction, geomorphons, etc.).
     AlgoCompleteU8 {
         name: String,
         result: Raster<u8>,
+        #[allow(dead_code)]
         elapsed: Duration,
     },
     /// An algorithm completed with i32 output (watershed IDs, etc.).
     AlgoCompleteI32 {
         name: String,
         result: Raster<i32>,
+        #[allow(dead_code)]
         elapsed: Duration,
     },
     /// An algorithm or IO operation failed.
@@ -41,6 +44,7 @@ pub enum AppMessage {
     Log(LogEntry),
     /// A raster was saved to disk.
     RasterSaved {
+        #[allow(dead_code)]
         dataset_id: DatasetId,
         path: PathBuf,
     },

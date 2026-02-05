@@ -140,7 +140,7 @@ impl StacClient {
 
         loop {
             let next = page.next_link().cloned();
-            all_items.extend(page.features.drain(..));
+            all_items.append(&mut page.features);
 
             if all_items.len() >= max {
                 break;
@@ -256,13 +256,12 @@ impl StacClient {
                 // Merge: start from original params, overlay link body
                 let mut base = serde_json::to_value(original_params)
                     .map_err(|e| CloudError::Network(format!("serializing params: {e}")))?;
-                if let Some(ref link_body) = link.body {
-                    if let (Some(base_obj), Some(link_obj)) =
+                if let Some(ref link_body) = link.body
+                    && let (Some(base_obj), Some(link_obj)) =
                         (base.as_object_mut(), link_body.as_object())
-                    {
-                        for (k, v) in link_obj {
-                            base_obj.insert(k.clone(), v.clone());
-                        }
+                {
+                    for (k, v) in link_obj {
+                        base_obj.insert(k.clone(), v.clone());
                     }
                 }
                 base

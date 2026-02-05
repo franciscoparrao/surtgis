@@ -23,19 +23,18 @@ use crate::tile_index::BBox;
 /// just to discover the CRS). Falls back to the COG metadata CRS.
 fn resolve_read_bbox(bbox: &BBox, item: &StacItem, reader: &CogReader) -> BBox {
     // 1. Try proj:epsg from the STAC item properties
-    if let Some(epsg) = item.epsg() {
-        if !reproject::is_wgs84(epsg) {
-            return reproject::reproject_bbox_to_cog(bbox, epsg);
-        }
+    if let Some(epsg) = item.epsg()
+        && !reproject::is_wgs84(epsg)
+    {
+        return reproject::reproject_bbox_to_cog(bbox, epsg);
     }
 
     // 2. Fallback: CRS from COG metadata
-    if let Some(crs) = reader.metadata().crs.as_ref() {
-        if let Some(epsg) = crs.epsg() {
-            if !reproject::is_wgs84(epsg) {
-                return reproject::reproject_bbox_to_cog(bbox, epsg);
-            }
-        }
+    if let Some(crs) = reader.metadata().crs.as_ref()
+        && let Some(epsg) = crs.epsg()
+        && !reproject::is_wgs84(epsg)
+    {
+        return reproject::reproject_bbox_to_cog(bbox, epsg);
     }
 
     *bbox

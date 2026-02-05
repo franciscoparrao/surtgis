@@ -52,7 +52,7 @@ pub fn contour_lines(dem: &Raster<f64>, params: ContourParams) -> Result<Raster<
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
 
-            for col in 0..cols {
+            for (col, out) in row_data.iter_mut().enumerate() {
                 let v = unsafe { dem.get_unchecked(row, col) };
                 if v.is_nan() {
                     continue;
@@ -61,21 +61,21 @@ pub fn contour_lines(dem: &Raster<f64>, params: ContourParams) -> Result<Raster<
                 // Check right neighbor
                 if col + 1 < cols {
                     let vr = unsafe { dem.get_unchecked(row, col + 1) };
-                    if !vr.is_nan() {
-                        if let Some(level) = contour_crossing(v, vr, params.interval, params.base) {
-                            row_data[col] = level;
-                            continue;
-                        }
+                    if !vr.is_nan()
+                        && let Some(level) = contour_crossing(v, vr, params.interval, params.base)
+                    {
+                        *out = level;
+                        continue;
                     }
                 }
 
                 // Check bottom neighbor
                 if row + 1 < rows {
                     let vb = unsafe { dem.get_unchecked(row + 1, col) };
-                    if !vb.is_nan() {
-                        if let Some(level) = contour_crossing(v, vb, params.interval, params.base) {
-                            row_data[col] = level;
-                        }
+                    if !vb.is_nan()
+                        && let Some(level) = contour_crossing(v, vb, params.interval, params.base)
+                    {
+                        *out = level;
                     }
                 }
             }

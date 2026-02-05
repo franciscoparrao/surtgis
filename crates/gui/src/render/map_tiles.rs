@@ -23,6 +23,7 @@ impl BasemapState {
     }
 
     /// Re-centre the map on the given WGS-84 lon/lat.
+    #[allow(dead_code)]
     pub fn set_center(&mut self, lon: f64, lat: f64) {
         self.center = lon_lat(lon, lat);
     }

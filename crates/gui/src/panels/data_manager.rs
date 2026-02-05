@@ -12,7 +12,7 @@ pub fn show_data_manager(ui: &mut Ui, workspace: &Workspace) -> Option<DatasetId
     ui.heading("Data");
     ui.separator();
 
-    if workspace.len() == 0 {
+    if workspace.is_empty() {
         ui.label("No datasets loaded.");
         return None;
     }

@@ -8,20 +8,12 @@ use crate::registry::{AlgorithmEntry, ParamKind, ParamValue};
 use crate::state::DatasetId;
 
 /// State for the tool dialog.
+#[derive(Default)]
 pub struct ToolDialogState {
     /// The algorithm being configured (None = no dialog open).
     pub algo_id: Option<String>,
     /// Current parameter values.
     pub values: HashMap<String, ParamValue>,
-}
-
-impl Default for ToolDialogState {
-    fn default() -> Self {
-        Self {
-            algo_id: None,
-            values: HashMap::new(),
-        }
-    }
 }
 
 impl ToolDialogState {

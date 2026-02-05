@@ -409,7 +409,7 @@ pub fn dispatch_algorithm(
                     let zones_f64 = inputs["zones"];
                     // Convert f64 zones raster to i32
                     let mut zones_i32 = Raster::<i32>::new(zones_f64.rows(), zones_f64.cols());
-                    zones_i32.set_transform(zones_f64.transform().clone());
+                    zones_i32.set_transform(*zones_f64.transform());
                     for r in 0..zones_f64.rows() {
                         for c in 0..zones_f64.cols() {
                             if let Ok(v) = zones_f64.get(r, c) {
@@ -421,14 +421,14 @@ pub fn dispatch_algorithm(
                     let results = zonal_statistics(&input, &zones_i32)?;
                     // Write mean values back to a raster (zone_id -> mean)
                     let mut out = Raster::<f64>::new(input.rows(), input.cols());
-                    out.set_transform(input.transform().clone());
+                    out.set_transform(*input.transform());
                     out.set_crs(input.crs().cloned());
                     for r in 0..input.rows() {
                         for c in 0..input.cols() {
-                            if let Ok(zone_val) = zones_i32.get(r, c) {
-                                if let Some(stats) = results.get(&zone_val) {
-                                    let _ = out.set(r, c, stats.mean);
-                                }
+                            if let Ok(zone_val) = zones_i32.get(r, c)
+                                && let Some(stats) = results.get(&zone_val)
+                            {
+                                let _ = out.set(r, c, stats.mean);
                             }
                         }
                     }
@@ -635,11 +635,11 @@ pub fn dispatch_algorithm(
                     let mut vmax = f64::NEG_INFINITY;
                     for r in 0..input.rows() {
                         for c in 0..input.cols() {
-                            if let Ok(v) = input.get(r, c) {
-                                if v.is_finite() {
-                                    vmin = vmin.min(v);
-                                    vmax = vmax.max(v);
-                                }
+                            if let Ok(v) = input.get(r, c)
+                                && v.is_finite()
+                            {
+                                vmin = vmin.min(v);
+                                vmax = vmax.max(v);
                             }
                         }
                     }
@@ -674,11 +674,11 @@ pub fn dispatch_algorithm(
                         let mut vmax = f64::NEG_INFINITY;
                         for r in 0..input.rows() {
                             for c in 0..input.cols() {
-                                if let Ok(v) = input.get(r, c) {
-                                    if v.is_finite() {
-                                        vmin = vmin.min(v);
-                                        vmax = vmax.max(v);
-                                    }
+                                if let Ok(v) = input.get(r, c)
+                                    && v.is_finite()
+                                {
+                                    vmin = vmin.min(v);
+                                    vmax = vmax.max(v);
                                 }
                             }
                         }
@@ -1098,7 +1098,7 @@ pub fn dispatch_algorithm(
                         max_points: Some(max_points),
                         rows: params_grid.0,
                         cols: params_grid.1,
-                        transform: params_grid.2.clone(),
+                        transform: params_grid.2,
                         ..IdwParams::default()
                     })?)
                 });
@@ -1110,7 +1110,7 @@ pub fn dispatch_algorithm(
                         max_radius: None,
                         rows: params_grid.0,
                         cols: params_grid.1,
-                        transform: params_grid.2.clone(),
+                        transform: params_grid.2,
                     })?)
                 });
             }
@@ -1120,7 +1120,7 @@ pub fn dispatch_algorithm(
                     Ok(natural_neighbor(&points, NaturalNeighborParams {
                         rows: params_grid.0,
                         cols: params_grid.1,
-                        transform: params_grid.2.clone(),
+                        transform: params_grid.2,
                         ..NaturalNeighborParams::default()
                     })?)
                 });
@@ -1131,7 +1131,7 @@ pub fn dispatch_algorithm(
                     Ok(tin_interpolation(&points, TinParams {
                         rows: params_grid.0,
                         cols: params_grid.1,
-                        transform: params_grid.2.clone(),
+                        transform: params_grid.2,
                     })?)
                 });
             }
@@ -1142,7 +1142,7 @@ pub fn dispatch_algorithm(
                     Ok(tps_interpolation(&points, TpsParams {
                         rows: params_grid.0,
                         cols: params_grid.1,
-                        transform: params_grid.2.clone(),
+                        transform: params_grid.2,
                         smoothing,
                     })?)
                 });
@@ -1159,7 +1159,7 @@ pub fn dispatch_algorithm(
                     let result = ordinary_kriging(&points, &fitted, OrdinaryKrigingParams {
                         rows: params_grid.0,
                         cols: params_grid.1,
-                        transform: params_grid.2.clone(),
+                        transform: params_grid.2,
                         max_points,
                         ..OrdinaryKrigingParams::default()
                     })?;
@@ -1316,7 +1316,7 @@ fn dispatch_interpolation<F>(
 ) where
     F: FnOnce(Vec<SamplePoint>, (usize, usize, GeoTransform)) -> anyhow::Result<Raster<f64>>,
 {
-    let transform = input.transform().clone();
+    let transform = *input.transform();
     let rows = input.rows();
     let cols = input.cols();
 
@@ -1324,12 +1324,12 @@ fn dispatch_interpolation<F>(
     let mut points = Vec::new();
     for r in 0..rows {
         for c in 0..cols {
-            if let Ok(v) = input.get(r, c) {
-                if v.is_finite() {
-                    let x = transform.origin_x + c as f64 * transform.pixel_width + r as f64 * transform.row_rotation;
-                    let y = transform.origin_y + c as f64 * transform.col_rotation + r as f64 * transform.pixel_height;
-                    points.push(SamplePoint::new(x, y, v));
-                }
+            if let Ok(v) = input.get(r, c)
+                && v.is_finite()
+            {
+                let x = transform.origin_x + c as f64 * transform.pixel_width + r as f64 * transform.row_rotation;
+                let y = transform.origin_y + c as f64 * transform.col_rotation + r as f64 * transform.pixel_height;
+                points.push(SamplePoint::new(x, y, v));
             }
         }
     }

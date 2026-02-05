@@ -8,12 +8,15 @@ use std::collections::HashMap;
 use egui::{ColorImage, Context, TextureHandle, TextureOptions};
 
 /// Tile size in pixels.
+#[allow(dead_code)]
 const TILE_SIZE: usize = 512;
 
 /// Maximum number of tiles kept in cache.
+#[allow(dead_code)]
 const MAX_TILES: usize = 256;
 
 /// Threshold: tiled renderer activates when rows*cols exceeds this.
+#[allow(dead_code)]
 pub const TILED_THRESHOLD: usize = 4096 * 4096;
 
 /// Unique key for a tile within a generation of the raster data.
@@ -25,6 +28,7 @@ struct TileKey {
 }
 
 /// Entry in the LRU list.
+#[allow(dead_code)]
 struct TileEntry {
     texture: TextureHandle,
     /// Last frame this tile was accessed.
@@ -32,29 +36,24 @@ struct TileEntry {
 }
 
 /// Tiled renderer with an LRU eviction cache.
+#[derive(Default)]
 pub struct TiledRenderer {
+    #[allow(dead_code)]
     cache: HashMap<TileKey, TileEntry>,
     /// Monotonically increasing generation counter; bumped when the raster data changes.
+    #[allow(dead_code)]
     generation: u64,
     /// Frame counter for LRU.
+    #[allow(dead_code)]
     frame: u64,
     /// Raster dimensions of the current generation.
+    #[allow(dead_code)]
     raster_rows: usize,
+    #[allow(dead_code)]
     raster_cols: usize,
 }
 
-impl Default for TiledRenderer {
-    fn default() -> Self {
-        Self {
-            cache: HashMap::new(),
-            generation: 0,
-            frame: 0,
-            raster_rows: 0,
-            raster_cols: 0,
-        }
-    }
-}
-
+#[allow(dead_code)]
 impl TiledRenderer {
     /// Call when the raster data changes (new dataset, different colormap, etc.).
     pub fn invalidate(&mut self, rows: usize, cols: usize) {
@@ -71,12 +70,12 @@ impl TiledRenderer {
 
     /// Number of tile columns.
     pub fn tile_cols(&self) -> usize {
-        (self.raster_cols + TILE_SIZE - 1) / TILE_SIZE
+        self.raster_cols.div_ceil(TILE_SIZE)
     }
 
     /// Number of tile rows.
     pub fn tile_rows(&self) -> usize {
-        (self.raster_rows + TILE_SIZE - 1) / TILE_SIZE
+        self.raster_rows.div_ceil(TILE_SIZE)
     }
 
     /// Begin a new frame (for LRU tracking).

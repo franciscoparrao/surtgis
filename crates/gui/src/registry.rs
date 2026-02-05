@@ -72,6 +72,7 @@ pub enum ParamKind {
         max: i64,
     },
     /// Boolean toggle.
+    #[allow(dead_code)]
     Bool { default: bool },
     /// Selection from a list of string options.
     Choice {
@@ -101,6 +102,7 @@ impl ParamValue {
         }
     }
 
+    #[allow(dead_code)]
     pub fn as_i64(&self) -> i64 {
         match self {
             Self::Int(v) => *v,
@@ -117,6 +119,7 @@ impl ParamValue {
         }
     }
 
+    #[allow(dead_code)]
     pub fn as_bool(&self) -> bool {
         match self {
             Self::Bool(v) => *v,
@@ -131,6 +134,7 @@ impl ParamValue {
         }
     }
 
+    #[allow(dead_code)]
     pub fn as_dataset_id(&self) -> Option<DatasetId> {
         match self {
             Self::InputRaster(id) => *id,
@@ -148,6 +152,7 @@ pub struct AlgorithmEntry {
     pub description: &'static str,
     pub params: Vec<ParamDef>,
     /// Number of input rasters required (1 for most, 2 for imagery indices).
+    #[allow(dead_code)]
     pub input_count: usize,
 }
 

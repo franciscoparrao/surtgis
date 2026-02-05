@@ -100,7 +100,7 @@ pub fn haralick_glcm(raster: &Raster<f64>, params: GlcmParams) -> Result<Raster<
 
             for (col, out) in row_data.iter_mut().enumerate() {
                 // Build GLCM from window
-                for v in &mut glcm { *v = 0.0; }
+                glcm.fill(0.0);
                 let mut total = 0.0;
 
                 for dir in &directions {

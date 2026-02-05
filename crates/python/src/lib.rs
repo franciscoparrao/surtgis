@@ -23,7 +23,7 @@ use surtgis_algorithms::terrain::{
     sky_view_factor as compute_svf,
     uncertainty as compute_uncertainty,
     AspectOutput, HillshadeParams, SlopeParams, SlopeUnits,
-    CurvatureParams, CurvatureType, DerivativeMethod,
+    CurvatureParams, CurvatureType, CurvatureFormula, DerivativeMethod,
     TpiParams, TriParams, GeomorphonParams, DevParams,
     MultiHillshadeParams, SvfParams,
     UncertaintyParams,
@@ -177,7 +177,7 @@ fn curvature_compute<'py>(
         "plan" | "tangential" => CurvatureType::Plan,
         _ => CurvatureType::General,
     };
-    let result = curvature(&raster, CurvatureParams { curvature_type: ct, method: DerivativeMethod::EvansYoung, ..Default::default() })
+    let result = curvature(&raster, CurvatureParams { curvature_type: ct, method: DerivativeMethod::EvansYoung, formula: CurvatureFormula::Full, z_factor: 1.0 })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
@@ -192,7 +192,7 @@ fn tpi_compute<'py>(
     radius: usize,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&dem, cell_size)?;
-    let result = compute_tpi(&raster, TpiParams { radius, ..Default::default() })
+    let result = compute_tpi(&raster, TpiParams { radius })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
@@ -222,7 +222,7 @@ fn geomorphons_compute<'py>(
     radius: usize,
 ) -> PyResult<Bound<'py, PyArray2<u8>>> {
     let raster = numpy_to_raster(&dem, cell_size)?;
-    let result = compute_geomorphons(&raster, GeomorphonParams { flatness_threshold: flatness, radius, ..Default::default() })
+    let result = compute_geomorphons(&raster, GeomorphonParams { flatness_threshold: flatness, radius })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_u8_to_numpy(py, &result))
 }
@@ -265,7 +265,7 @@ fn dev_compute<'py>(
     radius: usize,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&dem, cell_size)?;
-    let result = compute_dev(&raster, DevParams { radius, ..Default::default() })
+    let result = compute_dev(&raster, DevParams { radius })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
@@ -309,7 +309,7 @@ fn sky_view_factor_compute<'py>(
     radius: usize,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&dem, cell_size)?;
-    let result = compute_svf(&raster, SvfParams { directions, radius, ..Default::default() })
+    let result = compute_svf(&raster, SvfParams { directions, radius })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }

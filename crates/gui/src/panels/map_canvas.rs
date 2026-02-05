@@ -227,7 +227,7 @@ fn draw_scale_bar(
     };
 
     let bar_screen_px = (nice / geo_per_px) as f32;
-    if bar_screen_px < 20.0 || bar_screen_px > 400.0 {
+    if !(20.0..=400.0).contains(&bar_screen_px) {
         return;
     }
 
@@ -316,16 +316,16 @@ fn ensure_texture(
         dataset.rgba_cache = Some(rgba);
     }
 
-    if texture.is_none() {
-        if let Some(rgba) = &dataset.rgba_cache {
-            let (rows, cols) = (dataset.raster.rows(), dataset.raster.cols());
-            let image = egui::ColorImage::from_rgba_unmultiplied([cols, rows], rgba);
-            *texture = Some(ctx.load_texture(
-                &dataset.name,
-                image,
-                egui::TextureOptions::NEAREST,
-            ));
-        }
+    if texture.is_none()
+        && let Some(rgba) = &dataset.rgba_cache
+    {
+        let (rows, cols) = (dataset.raster.rows(), dataset.raster.cols());
+        let image = egui::ColorImage::from_rgba_unmultiplied([cols, rows], rgba);
+        *texture = Some(ctx.load_texture(
+            &dataset.name,
+            image,
+            egui::TextureOptions::NEAREST,
+        ));
     }
 }
 

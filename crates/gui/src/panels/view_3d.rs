@@ -102,11 +102,11 @@ pub fn show_view_3d(ui: &mut Ui, dataset: Option<&Dataset>, state: &mut View3dSt
     let step = state.grid_step.max(1);
     for r in (0..rows).step_by(step) {
         for c in (0..cols).step_by(step) {
-            if let Ok(v) = raster_f64.get(r, c) {
-                if v.is_finite() {
-                    z_min = z_min.min(v);
-                    z_max = z_max.max(v);
-                }
+            if let Ok(v) = raster_f64.get(r, c)
+                && v.is_finite()
+            {
+                z_min = z_min.min(v);
+                z_max = z_max.max(v);
             }
         }
     }
@@ -134,8 +134,8 @@ pub fn show_view_3d(ui: &mut Ui, dataset: Option<&Dataset>, state: &mut View3dSt
     let z_exag = state.z_exaggeration as f64;
 
     // Grid dimensions in steps.
-    let n_rows = (rows + step - 1) / step;
-    let n_cols = (cols + step - 1) / step;
+    let n_rows = rows.div_ceil(step);
+    let n_cols = cols.div_ceil(step);
 
     // Project 3D → 2D.  x_raster = col, y_raster = row, z = elevation.
     // Normalise so the grid spans ~[-1, 1] in x/y.
