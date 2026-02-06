@@ -4,14 +4,17 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Parallel processing strategies for SurtGis"
+keywords = ["gis", "parallel", "rayon", "raster", "tiling"]
+categories = ["science::geo", "concurrency"]
 
 [features]
 default = ["parallel"]
 parallel = ["dep:rayon", "dep:crossbeam", "surtgis-core/parallel"]
 
 [dependencies]
-surtgis-core = { path = "../core", default-features = false }
+surtgis-core = { version = "0.1.0", path = "../core", default-features = false }
 rayon = { workspace = true, optional = true }
 crossbeam = { workspace = true, optional = true }
 ndarray.workspace = true

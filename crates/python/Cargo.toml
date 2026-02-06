@@ -4,7 +4,9 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Python bindings for SurtGis geospatial algorithms via PyO3"
+publish = false  # Distributed via PyPI, not crates.io
 
 [lib]
 name = "surtgis"
@@ -15,7 +17,7 @@ default = ["parallel"]
 parallel = ["surtgis-algorithms/parallel"]
 
 [dependencies]
-surtgis-core = { path = "../core", default-features = false }
-surtgis-algorithms = { path = "../algorithms", default-features = false }
+surtgis-core = { version = "0.1.0", path = "../core", default-features = false }
+surtgis-algorithms = { version = "0.1.0", path = "../algorithms", default-features = false }
 pyo3.workspace = true
 numpy.workspace = true

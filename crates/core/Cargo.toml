@@ -4,7 +4,10 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Core types and traits for SurtGis geospatial library"
+keywords = ["gis", "geospatial", "raster", "geotiff", "dem"]
+categories = ["science::geo"]
 
 [features]
 default = ["parallel"]

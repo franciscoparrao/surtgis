@@ -4,7 +4,9 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Desktop GUI for SurtGis geospatial analysis (egui + eframe)"
+publish = false  # Distributed as compiled binary
 
 [[bin]]
 name = "surtgis-gui"
@@ -15,11 +17,11 @@ default = ["cloud"]
 cloud = ["dep:surtgis-cloud"]
 
 [dependencies]
-surtgis-core = { path = "../core", default-features = false }
-surtgis-algorithms = { path = "../algorithms" }
-surtgis-parallel = { path = "../parallel" }
-surtgis-colormap = { path = "../colormap" }
-surtgis-cloud = { path = "../cloud", optional = true, features = ["native"] }
+surtgis-core = { version = "0.1.0", path = "../core", default-features = false }
+surtgis-algorithms = { version = "0.1.0", path = "../algorithms" }
+surtgis-parallel = { version = "0.1.0", path = "../parallel" }
+surtgis-colormap = { version = "0.1.0", path = "../colormap" }
+surtgis-cloud = { version = "0.1.0", path = "../cloud", optional = true, features = ["native"] }
 
 eframe.workspace = true
 egui.workspace = true

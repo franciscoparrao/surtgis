@@ -4,15 +4,18 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Geospatial algorithms for SurtGis"
+repository.workspace = true
+description = "Geospatial algorithms for SurtGis: terrain, hydrology, imagery, interpolation"
+keywords = ["gis", "terrain", "hydrology", "ndvi", "raster"]
+categories = ["science::geo", "algorithms"]
 
 [features]
 default = ["parallel"]
 parallel = ["dep:rayon", "surtgis-core/parallel", "surtgis-parallel/parallel"]
 
 [dependencies]
-surtgis-core = { path = "../core", default-features = false }
-surtgis-parallel = { path = "../parallel", default-features = false }
+surtgis-core = { version = "0.1.0", path = "../core", default-features = false }
+surtgis-parallel = { version = "0.1.0", path = "../parallel", default-features = false }
 thiserror.workspace = true
 anyhow.workspace = true
 ndarray.workspace = true

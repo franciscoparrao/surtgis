@@ -4,7 +4,10 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Cloud Optimized GeoTIFF (COG) reader for SurtGis"
+repository.workspace = true
+description = "Cloud Optimized GeoTIFF (COG) reader and STAC client for SurtGis"
+keywords = ["cog", "stac", "geotiff", "cloud", "satellite"]
+categories = ["science::geo", "web-programming"]
 
 [features]
 default = ["deflate", "lzw"]
@@ -14,7 +17,7 @@ native = ["dep:tokio", "reqwest/rustls-tls"]
 wasm = ["dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:js-sys"]
 
 [dependencies]
-surtgis-core = { path = "../core", default-features = false }
+surtgis-core = { version = "0.1.0", path = "../core", default-features = false }
 thiserror.workspace = true
 serde.workspace = true
 ndarray.workspace = true

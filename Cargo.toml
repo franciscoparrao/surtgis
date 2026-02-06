@@ -32,7 +32,6 @@ serde_json = "1"
 # Geospatial
 geo = "0.29"
 geo-types = "0.7"
-proj = "0.28"
 gdal = { version = "0.17", features = ["bindgen"] }
 geozero = "0.14"
 rstar = "0.12"

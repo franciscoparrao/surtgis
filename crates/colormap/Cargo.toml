@@ -4,8 +4,11 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Color mapping and raster visualization for SurtGis"
+keywords = ["gis", "colormap", "visualization", "raster"]
+categories = ["science::geo", "graphics"]
 
 [dependencies]
-surtgis-core = { path = "../core", default-features = false, features = [] }
+surtgis-core = { version = "0.1.0", path = "../core", default-features = false, features = [] }
 num-traits.workspace = true
