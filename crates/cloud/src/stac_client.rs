@@ -189,12 +189,12 @@ impl StacClient {
         for attempt in 0..=self.options.max_retries {
             if attempt > 0 {
                 // Exponential backoff: 500ms, 1s, 2s, ...
-                #[cfg(not(target_arch = "wasm32"))]
+                #[cfg(feature = "native")]
                 {
                     let delay = Duration::from_millis(500 * (1 << (attempt - 1)));
                     tokio::time::sleep(delay).await;
                 }
-                // On WASM we skip the sleep (no tokio::time available).
+                // On WASM or without native feature we skip the sleep.
             }
 
             let resp = self
