@@ -9,7 +9,10 @@ use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 use surtgis_algorithms::hydrology::{
-    fill_sinks, flow_accumulation, flow_direction, watershed, FillSinksParams, WatershedParams,
+    breach_depressions, fill_sinks, flow_accumulation, flow_accumulation_mfd, flow_direction,
+    flow_direction_dinf, hand, priority_flood, stream_network, watershed, BreachParams,
+    FillSinksParams, HandParams, MfdParams, PriorityFloodParams, StreamNetworkParams,
+    WatershedParams,
 };
 use surtgis_algorithms::imagery::{
     band_math_binary, bsi, evi, mndwi, nbr, ndvi, ndwi, savi, BandMathOp, EviParams, SaviParams,
@@ -18,9 +21,13 @@ use surtgis_algorithms::morphology::{
     black_hat, closing, dilate, erode, gradient, opening, top_hat, StructuringElement,
 };
 use surtgis_algorithms::terrain::{
-    aspect, curvature, hillshade, landform_classification, slope, tpi, tri, AspectOutput,
-    CurvatureParams, CurvatureType, HillshadeParams, LandformParams, SlopeParams, SlopeUnits,
-    TpiParams, TriParams,
+    advanced_curvatures, aspect, convergence_index, curvature, dev, eastness, geomorphons,
+    hillshade, landform_classification, mrvbf, multidirectional_hillshade, negative_openness,
+    northness, positive_openness, sky_view_factor, slope, tpi, tri, twi, viewshed, vrm,
+    AdvancedCurvatureType, AspectOutput, ConvergenceParams, CurvatureParams, CurvatureType,
+    DevParams, GeomorphonParams, HillshadeParams, LandformParams, MultiHillshadeParams,
+    MrvbfParams, OpennessParams, SlopeParams, SlopeUnits, SvfParams, TpiParams, TriParams,
+    ViewshedParams, VrmParams,
 };
 use surtgis_core::io::{read_geotiff, write_geotiff, GeoTiffOptions};
 
@@ -38,6 +45,10 @@ struct Cli {
     /// Verbose output
     #[arg(short, long, global = true)]
     verbose: bool,
+
+    /// Compress output GeoTIFFs (deflate)
+    #[arg(long, global = true)]
+    compress: bool,
 
     #[command(subcommand)]
     command: Commands,
@@ -179,6 +190,127 @@ enum TerrainCommands {
         #[arg(long, default_value = "6.0")]
         slope_threshold: f64,
     },
+    /// Geomorphon landform classification (Jasiewicz & Stepinski 2013)
+    Geomorphons {
+        input: PathBuf,
+        output: PathBuf,
+        /// Lookup radius in cells
+        #[arg(short, long, default_value = "10")]
+        radius: usize,
+        /// Flatness threshold in degrees
+        #[arg(short, long, default_value = "1.0")]
+        flatness: f64,
+    },
+    /// Northness: cos(aspect), north-facing = 1, south-facing = -1
+    Northness {
+        input: PathBuf,
+        output: PathBuf,
+    },
+    /// Eastness: sin(aspect), east-facing = 1, west-facing = -1
+    Eastness {
+        input: PathBuf,
+        output: PathBuf,
+    },
+    /// Positive topographic openness (sky visibility above)
+    OpennessPositive {
+        input: PathBuf,
+        output: PathBuf,
+        /// Search radius in cells
+        #[arg(short, long, default_value = "10")]
+        radius: usize,
+        /// Number of azimuth directions
+        #[arg(short, long, default_value = "8")]
+        directions: usize,
+    },
+    /// Negative topographic openness (enclosure below)
+    OpennessNegative {
+        input: PathBuf,
+        output: PathBuf,
+        #[arg(short, long, default_value = "10")]
+        radius: usize,
+        #[arg(short, long, default_value = "8")]
+        directions: usize,
+    },
+    /// Sky View Factor (0=enclosed, 1=flat horizon)
+    Svf {
+        input: PathBuf,
+        output: PathBuf,
+        #[arg(short, long, default_value = "10")]
+        radius: usize,
+        #[arg(short, long, default_value = "16")]
+        directions: usize,
+    },
+    /// MRVBF/MRRTF: Multi-Resolution Valley/Ridge Bottom Flatness
+    Mrvbf {
+        input: PathBuf,
+        /// Output MRVBF file
+        output: PathBuf,
+        /// Optional MRRTF output file
+        #[arg(long)]
+        mrrtf_output: Option<PathBuf>,
+    },
+    /// Deviation from Mean Elevation
+    Dev {
+        input: PathBuf,
+        output: PathBuf,
+        #[arg(short, long, default_value = "10")]
+        radius: usize,
+    },
+    /// Vector Ruggedness Measure
+    Vrm {
+        input: PathBuf,
+        output: PathBuf,
+        #[arg(short, long, default_value = "1")]
+        radius: usize,
+    },
+    /// Florinsky advanced curvature (14 types)
+    AdvancedCurvature {
+        input: PathBuf,
+        output: PathBuf,
+        /// Curvature type: mean_h, gaussian_k, kmin, kmax, kh, kv, khe, kve, ka, kr, rotor, laplacian, unsphericity, difference
+        #[arg(short = 't', long, default_value = "mean_h")]
+        curvature_type: String,
+    },
+    /// Viewshed: binary line-of-sight visibility from an observer point
+    Viewshed {
+        input: PathBuf,
+        output: PathBuf,
+        /// Observer row (pixel coordinate)
+        #[arg(long)]
+        observer_row: usize,
+        /// Observer column (pixel coordinate)
+        #[arg(long)]
+        observer_col: usize,
+        /// Observer height above ground (meters)
+        #[arg(long, default_value = "1.8")]
+        observer_height: f64,
+        /// Target height above ground (meters)
+        #[arg(long, default_value = "0.0")]
+        target_height: f64,
+        /// Maximum visibility radius in cells (0 = unlimited)
+        #[arg(long, default_value = "0")]
+        max_radius: usize,
+    },
+    /// Convergence Index (-100=convergent, +100=divergent)
+    Convergence {
+        input: PathBuf,
+        output: PathBuf,
+        #[arg(short, long, default_value = "3")]
+        radius: usize,
+    },
+    /// Multi-directional hillshade (6 azimuths combined)
+    MultiHillshade {
+        input: PathBuf,
+        output: PathBuf,
+    },
+    /// Compute all standard terrain factors in one pass
+    All {
+        /// Input DEM file
+        input: PathBuf,
+        /// Output directory for all terrain products
+        #[arg(short, long)]
+        outdir: PathBuf,
+    },
 }
 
 // ─── Hydrology subcommands ──────────────────────────────────────────────
@@ -218,6 +350,76 @@ enum HydrologyCommands {
         /// Pour points as "row,col;row,col;..."
         #[arg(long)]
         pour_points: String,
+    },
+    /// Priority-Flood depression filling (Barnes 2014, optimal O(n log n))
+    PriorityFlood {
+        input: PathBuf,
+        output: PathBuf,
+        /// Minimum slope epsilon
+        #[arg(long, default_value = "0.0001")]
+        epsilon: f64,
+    },
+    /// Breach depressions (carve channels through barriers)
+    Breach {
+        input: PathBuf,
+        output: PathBuf,
+        /// Maximum breach depth (meters)
+        #[arg(long, default_value = "100.0")]
+        max_depth: f64,
+        /// Maximum breach length (cells)
+        #[arg(long, default_value = "1000")]
+        max_length: usize,
+        /// Fill remaining unfilled depressions
+        #[arg(long)]
+        fill_remaining: bool,
+    },
+    /// D-infinity flow direction (Tarboton 1997, continuous angles)
+    FlowDirectionDinf {
+        input: PathBuf,
+        output: PathBuf,
+    },
+    /// Multiple Flow Direction accumulation (Quinn et al. 1991)
+    FlowAccumulationMfd {
+        input: PathBuf,
+        output: PathBuf,
+        /// Flow partition exponent
+        #[arg(long, default_value = "1.1")]
+        exponent: f64,
+    },
+    /// Topographic Wetness Index (from DEM, full pipeline)
+    Twi {
+        /// Input DEM file
+        input: PathBuf,
+        output: PathBuf,
+    },
+    /// Height Above Nearest Drainage (from DEM, full pipeline)
+    Hand {
+        /// Input DEM file
+        input: PathBuf,
+        output: PathBuf,
+        /// Stream extraction threshold (contributing cells)
+        #[arg(long, default_value = "1000")]
+        threshold: f64,
+    },
+    /// Stream network extraction (from DEM, full pipeline)
+    StreamNetwork {
+        /// Input DEM file
+        input: PathBuf,
+        output: PathBuf,
+        /// Contributing area threshold
+        #[arg(long, default_value = "1000")]
+        threshold: f64,
+    },
+    /// Compute full hydrology pipeline from DEM
+    All {
+        /// Input DEM file
+        input: PathBuf,
+        /// Output directory
+        #[arg(short, long)]
+        outdir: PathBuf,
+        /// Stream threshold
+        #[arg(long, default_value = "1000")]
+        threshold: f64,
     },
 }
 
@@ -599,25 +801,43 @@ fn read_u8(path: &PathBuf) -> Result<surtgis_core::Raster<u8>> {
     Ok(raster)
 }
 
-fn write_result(raster: &surtgis_core::Raster<f64>, path: &PathBuf) -> Result<()> {
+fn write_opts(compress: bool) -> GeoTiffOptions {
+    GeoTiffOptions {
+        compression: if compress {
+            "deflate".to_string()
+        } else {
+            "NONE".to_string()
+        },
+    }
+}
+
+fn write_result(raster: &surtgis_core::Raster<f64>, path: &PathBuf, compress: bool) -> Result<()> {
     let pb = spinner("Writing output...");
-    write_geotiff(raster, path, Some(GeoTiffOptions::default()))
+    write_geotiff(raster, path, Some(write_opts(compress)))
         .context("Failed to write output")?;
     pb.finish_and_clear();
     Ok(())
 }
 
-fn write_result_u8(raster: &surtgis_core::Raster<u8>, path: &PathBuf) -> Result<()> {
+fn write_result_u8(
+    raster: &surtgis_core::Raster<u8>,
+    path: &PathBuf,
+    compress: bool,
+) -> Result<()> {
     let pb = spinner("Writing output...");
-    write_geotiff(raster, path, Some(GeoTiffOptions::default()))
+    write_geotiff(raster, path, Some(write_opts(compress)))
         .context("Failed to write output")?;
     pb.finish_and_clear();
     Ok(())
 }
 
-fn write_result_i32(raster: &surtgis_core::Raster<i32>, path: &PathBuf) -> Result<()> {
+fn write_result_i32(
+    raster: &surtgis_core::Raster<i32>,
+    path: &PathBuf,
+    compress: bool,
+) -> Result<()> {
     let pb = spinner("Writing output...");
-    write_geotiff(raster, path, Some(GeoTiffOptions::default()))
+    write_geotiff(raster, path, Some(write_opts(compress)))
         .context("Failed to write output")?;
     pb.finish_and_clear();
     Ok(())
@@ -670,13 +890,39 @@ fn parse_pour_points(s: &str) -> Result<Vec<(usize, usize)>> {
         .collect()
 }
 
+fn parse_advanced_curvature_type(s: &str) -> Result<AdvancedCurvatureType> {
+    match s.to_lowercase().as_str() {
+        "mean_h" | "mean" | "h" => Ok(AdvancedCurvatureType::MeanH),
+        "gaussian_k" | "gaussian" | "k" => Ok(AdvancedCurvatureType::GaussianK),
+        "kmin" | "minimal" => Ok(AdvancedCurvatureType::MinimalKmin),
+        "kmax" | "maximal" => Ok(AdvancedCurvatureType::MaximalKmax),
+        "kh" | "horizontal" => Ok(AdvancedCurvatureType::HorizontalKh),
+        "kv" | "vertical" => Ok(AdvancedCurvatureType::VerticalKv),
+        "khe" | "horizontal_excess" => Ok(AdvancedCurvatureType::HorizontalExcessKhe),
+        "kve" | "vertical_excess" => Ok(AdvancedCurvatureType::VerticalExcessKve),
+        "ka" | "accumulation" => Ok(AdvancedCurvatureType::AccumulationKa),
+        "kr" | "ring" => Ok(AdvancedCurvatureType::RingKr),
+        "rotor" => Ok(AdvancedCurvatureType::Rotor),
+        "laplacian" => Ok(AdvancedCurvatureType::Laplacian),
+        "unsphericity" | "m" => Ok(AdvancedCurvatureType::UnsphericitytM),
+        "difference" | "e" => Ok(AdvancedCurvatureType::DifferenceE),
+        _ => anyhow::bail!(
+            "Unknown curvature type: {}. Use mean_h, gaussian_k, kmin, kmax, kh, kv, khe, kve, ka, kr, rotor, laplacian, unsphericity, difference.",
+            s
+        ),
+    }
+}
+
 // ─── COG helpers ────────────────────────────────────────────────────────
 
 #[cfg(feature = "cloud")]
 fn parse_bbox(s: &str) -> Result<BBox> {
     let parts: Vec<&str> = s.split(',').collect();
     if parts.len() != 4 {
-        anyhow::bail!("Bbox must be min_x,min_y,max_x,max_y (got {} parts)", parts.len());
+        anyhow::bail!(
+            "Bbox must be min_x,min_y,max_x,max_y (got {} parts)",
+            parts.len()
+        );
     }
     let min_x: f64 = parts[0].trim().parse().context("Invalid min_x")?;
     let min_y: f64 = parts[1].trim().parse().context("Invalid min_y")?;
@@ -693,7 +939,12 @@ fn read_cog_dem(url: &str, bbox: &BBox) -> Result<surtgis_core::Raster<f64>> {
         read_cog(url, bbox, opts).context("Failed to read remote COG")?;
     pb.finish_and_clear();
     let (rows, cols) = raster.shape();
-    info!("Remote raster: {} x {} ({} cells)", cols, rows, raster.len());
+    info!(
+        "Remote raster: {} x {} ({} cells)",
+        cols,
+        rows,
+        raster.len()
+    );
     Ok(raster)
 }
 
@@ -701,7 +952,9 @@ fn read_cog_dem(url: &str, bbox: &BBox) -> Result<surtgis_core::Raster<f64>> {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    setup_logging(cli.verbose);
+    let compress = cli.compress;
+    let verbose = cli.verbose;
+    setup_logging(verbose);
 
     match cli.command {
         // ── Info ─────────────────────────────────────────────────────
@@ -712,7 +965,12 @@ fn main() -> Result<()> {
             let stats = raster.statistics();
 
             println!("File: {}", input.display());
-            println!("Dimensions: {} x {} ({} cells)", cols, rows, raster.len());
+            println!(
+                "Dimensions: {} x {} ({} cells)",
+                cols,
+                rows,
+                raster.len()
+            );
             println!("Cell size: {}", raster.cell_size());
             println!(
                 "Bounds: ({:.6}, {:.6}) - ({:.6}, {:.6})",
@@ -763,7 +1021,7 @@ fn main() -> Result<()> {
                 let result = slope(&dem, SlopeParams { units, z_factor })
                     .context("Failed to calculate slope")?;
                 let elapsed = start.elapsed();
-                write_result(&result, &output)?;
+                write_result(&result, &output, compress)?;
                 done("Slope", &output, elapsed);
             }
 
@@ -785,7 +1043,7 @@ fn main() -> Result<()> {
                 let start = Instant::now();
                 let result = aspect(&dem, fmt).context("Failed to calculate aspect")?;
                 let elapsed = start.elapsed();
-                write_result(&result, &output)?;
+                write_result(&result, &output, compress)?;
                 done("Aspect", &output, elapsed);
             }
 
@@ -809,7 +1067,7 @@ fn main() -> Result<()> {
                 )
                 .context("Failed to calculate hillshade")?;
                 let elapsed = start.elapsed();
-                write_result(&result, &output)?;
+                write_result(&result, &output, compress)?;
                 done("Hillshade", &output, elapsed);
             }
 
@@ -840,7 +1098,7 @@ fn main() -> Result<()> {
                 )
                 .context("Failed to calculate curvature")?;
                 let elapsed = start.elapsed();
-                write_result(&result, &output)?;
+                write_result(&result, &output, compress)?;
                 done("Curvature", &output, elapsed);
             }
 
@@ -854,7 +1112,7 @@ fn main() -> Result<()> {
                 let result =
                     tpi(&dem, TpiParams { radius }).context("Failed to calculate TPI")?;
                 let elapsed = start.elapsed();
-                write_result(&result, &output)?;
+                write_result(&result, &output, compress)?;
                 done("TPI", &output, elapsed);
             }
 
@@ -868,7 +1126,7 @@ fn main() -> Result<()> {
                 let result =
                     tri(&dem, TriParams { radius }).context("Failed to calculate TRI")?;
                 let elapsed = start.elapsed();
-                write_result(&result, &output)?;
+                write_result(&result, &output, compress)?;
                 done("TRI", &output, elapsed);
             }
 
@@ -893,8 +1151,323 @@ fn main() -> Result<()> {
                 )
                 .context("Failed to classify landforms")?;
                 let elapsed = start.elapsed();
-                write_result(&result, &output)?;
+                write_result(&result, &output, compress)?;
                 done("Landform classification", &output, elapsed);
+            }
+
+            TerrainCommands::Geomorphons {
+                input,
+                output,
+                radius,
+                flatness,
+            } => {
+                let dem = read_dem(&input)?;
+                let start = Instant::now();
+                let result = geomorphons(
+                    &dem,
+                    GeomorphonParams {
+                        radius,
+                        flatness_threshold: flatness,
+                    },
+                )
+                .context("Failed to compute geomorphons")?;
+                let elapsed = start.elapsed();
+                write_result_u8(&result, &output, compress)?;
+                done("Geomorphons", &output, elapsed);
+            }
+
+            TerrainCommands::Northness { input, output } => {
+                let dem = read_dem(&input)?;
+                let start = Instant::now();
+                let result = northness(&dem).context("Failed to compute northness")?;
+                let elapsed = start.elapsed();
+                write_result(&result, &output, compress)?;
+                done("Northness", &output, elapsed);
+            }
+
+            TerrainCommands::Eastness { input, output } => {
+                let dem = read_dem(&input)?;
+                let start = Instant::now();
+                let result = eastness(&dem).context("Failed to compute eastness")?;
+                let elapsed = start.elapsed();
+                write_result(&result, &output, compress)?;
+                done("Eastness", &output, elapsed);
+            }
+
+            TerrainCommands::OpennessPositive {
+                input,
+                output,
+                radius,
+                directions,
+            } => {
+                let dem = read_dem(&input)?;
+                let start = Instant::now();
+                let result =
+                    positive_openness(&dem, OpennessParams { radius, directions })
+                        .context("Failed to compute positive openness")?;
+                let elapsed = start.elapsed();
+                write_result(&result, &output, compress)?;
+                done("Positive openness", &output, elapsed);
+            }
+
+            TerrainCommands::OpennessNegative {
+                input,
+                output,
+                radius,
+                directions,
+            } => {
+                let dem = read_dem(&input)?;
+                let start = Instant::now();
+                let result =
+                    negative_openness(&dem, OpennessParams { radius, directions })
+                        .context("Failed to compute negative openness")?;
+                let elapsed = start.elapsed();
+                write_result(&result, &output, compress)?;
+                done("Negative openness", &output, elapsed);
+            }
+
+            TerrainCommands::Svf {
+                input,
+                output,
+                radius,
+                directions,
+            } => {
+                let dem = read_dem(&input)?;
+                let start = Instant::now();
+                let result = sky_view_factor(&dem, SvfParams { radius, directions })
+                    .context("Failed to compute SVF")?;
+                let elapsed = start.elapsed();
+                write_result(&result, &output, compress)?;
+                done("Sky View Factor", &output, elapsed);
+            }
+
+            TerrainCommands::Mrvbf {
+                input,
+                output,
+                mrrtf_output,
+            } => {
+                let dem = read_dem(&input)?;
+                let start = Instant::now();
+                let (mrvbf_r, mrrtf_r) =
+                    mrvbf(&dem, MrvbfParams::default()).context("Failed to compute MRVBF")?;
+                let elapsed = start.elapsed();
+                write_result(&mrvbf_r, &output, compress)?;
+                done("MRVBF", &output, elapsed);
+                if let Some(mrrtf_path) = mrrtf_output {
+                    write_result(&mrrtf_r, &mrrtf_path, compress)?;
+                    println!("MRRTF saved to: {}", mrrtf_path.display());
+                }
+            }
+
+            TerrainCommands::Dev {
+                input,
+                output,
+                radius,
+            } => {
+                let dem = read_dem(&input)?;
+                let start = Instant::now();
+                let result =
+                    dev(&dem, DevParams { radius }).context("Failed to compute DEV")?;
+                let elapsed = start.elapsed();
+                write_result(&result, &output, compress)?;
+                done("DEV", &output, elapsed);
+            }
+
+            TerrainCommands::Vrm {
+                input,
+                output,
+                radius,
+            } => {
+                let dem = read_dem(&input)?;
+                let start = Instant::now();
+                let result =
+                    vrm(&dem, VrmParams { radius }).context("Failed to compute VRM")?;
+                let elapsed = start.elapsed();
+                write_result(&result, &output, compress)?;
+                done("VRM", &output, elapsed);
+            }
+
+            TerrainCommands::AdvancedCurvature {
+                input,
+                output,
+                curvature_type,
+            } => {
+                let ct = parse_advanced_curvature_type(&curvature_type)?;
+                let dem = read_dem(&input)?;
+                let start = Instant::now();
+                let result = advanced_curvatures(&dem, ct)
+                    .context("Failed to compute advanced curvature")?;
+                let elapsed = start.elapsed();
+                write_result(&result, &output, compress)?;
+                done("Advanced curvature", &output, elapsed);
+            }
+
+            TerrainCommands::Viewshed {
+                input,
+                output,
+                observer_row,
+                observer_col,
+                observer_height,
+                target_height,
+                max_radius,
+            } => {
+                let dem = read_dem(&input)?;
+                let start = Instant::now();
+                let result = viewshed(
+                    &dem,
+                    ViewshedParams {
+                        observer_row,
+                        observer_col,
+                        observer_height,
+                        target_height,
+                        max_radius,
+                    },
+                )
+                .context("Failed to compute viewshed")?;
+                let elapsed = start.elapsed();
+                write_result_u8(&result, &output, compress)?;
+                done("Viewshed", &output, elapsed);
+            }
+
+            TerrainCommands::Convergence {
+                input,
+                output,
+                radius,
+            } => {
+                let dem = read_dem(&input)?;
+                let start = Instant::now();
+                let result = convergence_index(&dem, ConvergenceParams { radius })
+                    .context("Failed to compute convergence index")?;
+                let elapsed = start.elapsed();
+                write_result(&result, &output, compress)?;
+                done("Convergence index", &output, elapsed);
+            }
+
+            TerrainCommands::MultiHillshade { input, output } => {
+                let dem = read_dem(&input)?;
+                let start = Instant::now();
+                let result =
+                    multidirectional_hillshade(&dem, MultiHillshadeParams::default())
+                        .context("Failed to compute multi-directional hillshade")?;
+                let elapsed = start.elapsed();
+                write_result(&result, &output, compress)?;
+                done("Multi-directional hillshade", &output, elapsed);
+            }
+
+            TerrainCommands::All { input, outdir } => {
+                std::fs::create_dir_all(&outdir)
+                    .context("Failed to create output directory")?;
+                let dem = read_dem(&input)?;
+                let start = Instant::now();
+
+                println!("Computing all terrain factors...");
+
+                let s = slope(
+                    &dem,
+                    SlopeParams {
+                        units: SlopeUnits::Degrees,
+                        z_factor: 1.0,
+                    },
+                )
+                .context("slope")?;
+                write_result(&s, &outdir.join("slope.tif"), compress)?;
+                println!("  slope.tif");
+
+                let a = aspect(&dem, AspectOutput::Degrees).context("aspect")?;
+                write_result(&a, &outdir.join("aspect.tif"), compress)?;
+                println!("  aspect.tif");
+
+                let h = hillshade(
+                    &dem,
+                    HillshadeParams {
+                        azimuth: 315.0,
+                        altitude: 45.0,
+                        z_factor: 1.0,
+                        normalized: false,
+                    },
+                )
+                .context("hillshade")?;
+                write_result(&h, &outdir.join("hillshade.tif"), compress)?;
+                println!("  hillshade.tif");
+
+                let n = northness(&dem).context("northness")?;
+                write_result(&n, &outdir.join("northness.tif"), compress)?;
+                println!("  northness.tif");
+
+                let e = eastness(&dem).context("eastness")?;
+                write_result(&e, &outdir.join("eastness.tif"), compress)?;
+                println!("  eastness.tif");
+
+                let c = curvature(
+                    &dem,
+                    CurvatureParams {
+                        curvature_type: CurvatureType::General,
+                        z_factor: 1.0,
+                        ..Default::default()
+                    },
+                )
+                .context("curvature")?;
+                write_result(&c, &outdir.join("curvature.tif"), compress)?;
+                println!("  curvature.tif");
+
+                let t = tpi(&dem, TpiParams { radius: 10 }).context("tpi")?;
+                write_result(&t, &outdir.join("tpi.tif"), compress)?;
+                println!("  tpi.tif");
+
+                let tr = tri(&dem, TriParams { radius: 1 }).context("tri")?;
+                write_result(&tr, &outdir.join("tri.tif"), compress)?;
+                println!("  tri.tif");
+
+                let g = geomorphons(
+                    &dem,
+                    GeomorphonParams {
+                        radius: 10,
+                        flatness_threshold: 1.0,
+                    },
+                )
+                .context("geomorphons")?;
+                write_result_u8(&g, &outdir.join("geomorphons.tif"), compress)?;
+                println!("  geomorphons.tif");
+
+                let d = dev(&dem, DevParams { radius: 10 }).context("dev")?;
+                write_result(&d, &outdir.join("dev.tif"), compress)?;
+                println!("  dev.tif");
+
+                let v = vrm(&dem, VrmParams { radius: 1 }).context("vrm")?;
+                write_result(&v, &outdir.join("vrm.tif"), compress)?;
+                println!("  vrm.tif");
+
+                let ci =
+                    convergence_index(&dem, ConvergenceParams { radius: 3 }).context("convergence")?;
+                write_result(&ci, &outdir.join("convergence.tif"), compress)?;
+                println!("  convergence.tif");
+
+                let op = positive_openness(&dem, OpennessParams { radius: 10, directions: 8 })
+                    .context("openness_positive")?;
+                write_result(&op, &outdir.join("openness_positive.tif"), compress)?;
+                println!("  openness_positive.tif");
+
+                let on = negative_openness(&dem, OpennessParams { radius: 10, directions: 8 })
+                    .context("openness_negative")?;
+                write_result(&on, &outdir.join("openness_negative.tif"), compress)?;
+                println!("  openness_negative.tif");
+
+                let svf_r = sky_view_factor(&dem, SvfParams { radius: 10, directions: 16 })
+                    .context("svf")?;
+                write_result(&svf_r, &outdir.join("svf.tif"), compress)?;
+                println!("  svf.tif");
+
+                let (mrvbf_r, mrrtf_r) = mrvbf(&dem, MrvbfParams::default()).context("mrvbf")?;
+                write_result(&mrvbf_r, &outdir.join("mrvbf.tif"), compress)?;
+                write_result(&mrrtf_r, &outdir.join("mrrtf.tif"), compress)?;
+                println!("  mrvbf.tif, mrrtf.tif");
+
+                let elapsed = start.elapsed();
+                println!(
+                    "\nAll terrain factors saved to: {}",
+                    outdir.display()
+                );
+                println!("  17 products, processing time: {:.2?}", elapsed);
             }
         },
 
@@ -910,7 +1483,7 @@ fn main() -> Result<()> {
                 let result = fill_sinks(&dem, FillSinksParams { min_slope })
                     .context("Failed to fill sinks")?;
                 let elapsed = start.elapsed();
-                write_result(&result, &output)?;
+                write_result(&result, &output, compress)?;
                 done("Fill sinks", &output, elapsed);
             }
 
@@ -920,7 +1493,7 @@ fn main() -> Result<()> {
                 let result =
                     flow_direction(&dem).context("Failed to calculate flow direction")?;
                 let elapsed = start.elapsed();
-                write_result_u8(&result, &output)?;
+                write_result_u8(&result, &output, compress)?;
                 done("Flow direction", &output, elapsed);
             }
 
@@ -930,7 +1503,7 @@ fn main() -> Result<()> {
                 let result = flow_accumulation(&flow_dir)
                     .context("Failed to calculate flow accumulation")?;
                 let elapsed = start.elapsed();
-                write_result(&result, &output)?;
+                write_result(&result, &output, compress)?;
                 done("Flow accumulation", &output, elapsed);
             }
 
@@ -953,8 +1526,224 @@ fn main() -> Result<()> {
                 )
                 .context("Failed to delineate watersheds")?;
                 let elapsed = start.elapsed();
-                write_result_i32(&result, &output)?;
+                write_result_i32(&result, &output, compress)?;
                 done("Watershed", &output, elapsed);
+            }
+
+            HydrologyCommands::PriorityFlood {
+                input,
+                output,
+                epsilon,
+            } => {
+                let dem = read_dem(&input)?;
+                let start = Instant::now();
+                let result = priority_flood(&dem, PriorityFloodParams { epsilon })
+                    .context("Failed to run priority flood")?;
+                let elapsed = start.elapsed();
+                write_result(&result, &output, compress)?;
+                done("Priority flood", &output, elapsed);
+            }
+
+            HydrologyCommands::Breach {
+                input,
+                output,
+                max_depth,
+                max_length,
+                fill_remaining,
+            } => {
+                let dem = read_dem(&input)?;
+                let start = Instant::now();
+                let result = breach_depressions(
+                    &dem,
+                    BreachParams {
+                        max_depth,
+                        max_length,
+                        fill_remaining,
+                    },
+                )
+                .context("Failed to breach depressions")?;
+                let elapsed = start.elapsed();
+                write_result(&result, &output, compress)?;
+                done("Breach depressions", &output, elapsed);
+            }
+
+            HydrologyCommands::FlowDirectionDinf { input, output } => {
+                let dem = read_dem(&input)?;
+                let start = Instant::now();
+                let result = flow_direction_dinf(&dem)
+                    .context("Failed to compute D-infinity flow direction")?;
+                let elapsed = start.elapsed();
+                write_result(&result, &output, compress)?;
+                done("Flow direction (D-inf)", &output, elapsed);
+            }
+
+            HydrologyCommands::FlowAccumulationMfd {
+                input,
+                output,
+                exponent,
+            } => {
+                let dem = read_dem(&input)?;
+                let start = Instant::now();
+                let result = flow_accumulation_mfd(&dem, MfdParams { exponent })
+                    .context("Failed to compute MFD accumulation")?;
+                let elapsed = start.elapsed();
+                write_result(&result, &output, compress)?;
+                done("Flow accumulation (MFD)", &output, elapsed);
+            }
+
+            HydrologyCommands::Twi { input, output } => {
+                let dem = read_dem(&input)?;
+                let start = Instant::now();
+                // Internal pipeline: fill -> flow_dir -> flow_acc -> slope -> twi
+                let filled =
+                    priority_flood(&dem, PriorityFloodParams { epsilon: 0.0001 })
+                        .context("Failed to fill depressions")?;
+                let fdir =
+                    flow_direction(&filled).context("Failed to compute flow direction")?;
+                let facc = flow_accumulation(&fdir)
+                    .context("Failed to compute flow accumulation")?;
+                let slope_rad = slope(
+                    &filled,
+                    SlopeParams {
+                        units: SlopeUnits::Radians,
+                        z_factor: 1.0,
+                    },
+                )
+                .context("Failed to compute slope")?;
+                let result = twi(&facc, &slope_rad).context("Failed to compute TWI")?;
+                let elapsed = start.elapsed();
+                write_result(&result, &output, compress)?;
+                done("TWI", &output, elapsed);
+            }
+
+            HydrologyCommands::Hand {
+                input,
+                output,
+                threshold,
+            } => {
+                let dem = read_dem(&input)?;
+                let start = Instant::now();
+                let filled =
+                    priority_flood(&dem, PriorityFloodParams { epsilon: 0.0001 })
+                        .context("Failed to fill depressions")?;
+                let fdir =
+                    flow_direction(&filled).context("Failed to compute flow direction")?;
+                let facc = flow_accumulation(&fdir)
+                    .context("Failed to compute flow accumulation")?;
+                let result = hand(
+                    &dem,
+                    &fdir,
+                    &facc,
+                    HandParams {
+                        stream_threshold: threshold,
+                    },
+                )
+                .context("Failed to compute HAND")?;
+                let elapsed = start.elapsed();
+                write_result(&result, &output, compress)?;
+                done("HAND", &output, elapsed);
+            }
+
+            HydrologyCommands::StreamNetwork {
+                input,
+                output,
+                threshold,
+            } => {
+                let dem = read_dem(&input)?;
+                let start = Instant::now();
+                let filled =
+                    priority_flood(&dem, PriorityFloodParams { epsilon: 0.0001 })
+                        .context("Failed to fill depressions")?;
+                let fdir =
+                    flow_direction(&filled).context("Failed to compute flow direction")?;
+                let facc = flow_accumulation(&fdir)
+                    .context("Failed to compute flow accumulation")?;
+                let result = stream_network(&facc, StreamNetworkParams { threshold })
+                    .context("Failed to extract stream network")?;
+                let elapsed = start.elapsed();
+                write_result_u8(&result, &output, compress)?;
+                done("Stream network", &output, elapsed);
+            }
+
+            HydrologyCommands::All {
+                input,
+                outdir,
+                threshold,
+            } => {
+                std::fs::create_dir_all(&outdir)
+                    .context("Failed to create output directory")?;
+                let dem = read_dem(&input)?;
+                let start = Instant::now();
+
+                println!("Computing full hydrology pipeline...");
+
+                let filled =
+                    priority_flood(&dem, PriorityFloodParams { epsilon: 0.0001 })
+                        .context("fill")?;
+                write_result(&filled, &outdir.join("filled.tif"), compress)?;
+                println!("  filled.tif");
+
+                let fdir = flow_direction(&filled).context("flow direction")?;
+                write_result_u8(&fdir, &outdir.join("flow_direction_d8.tif"), compress)?;
+                println!("  flow_direction_d8.tif");
+
+                let fdir_dinf =
+                    flow_direction_dinf(&filled).context("flow direction dinf")?;
+                write_result(
+                    &fdir_dinf,
+                    &outdir.join("flow_direction_dinf.tif"),
+                    compress,
+                )?;
+                println!("  flow_direction_dinf.tif");
+
+                let facc = flow_accumulation(&fdir).context("flow accumulation")?;
+                write_result(&facc, &outdir.join("flow_accumulation.tif"), compress)?;
+                println!("  flow_accumulation.tif");
+
+                let facc_mfd = flow_accumulation_mfd(&filled, MfdParams { exponent: 1.1 })
+                    .context("mfd accumulation")?;
+                write_result(
+                    &facc_mfd,
+                    &outdir.join("flow_accumulation_mfd.tif"),
+                    compress,
+                )?;
+                println!("  flow_accumulation_mfd.tif");
+
+                let slope_rad = slope(
+                    &filled,
+                    SlopeParams {
+                        units: SlopeUnits::Radians,
+                        z_factor: 1.0,
+                    },
+                )
+                .context("slope")?;
+                let twi_r = twi(&facc, &slope_rad).context("twi")?;
+                write_result(&twi_r, &outdir.join("twi.tif"), compress)?;
+                println!("  twi.tif");
+
+                let streams = stream_network(&facc, StreamNetworkParams { threshold })
+                    .context("streams")?;
+                write_result_u8(&streams, &outdir.join("stream_network.tif"), compress)?;
+                println!("  stream_network.tif");
+
+                let hand_r = hand(
+                    &dem,
+                    &fdir,
+                    &facc,
+                    HandParams {
+                        stream_threshold: threshold,
+                    },
+                )
+                .context("hand")?;
+                write_result(&hand_r, &outdir.join("hand.tif"), compress)?;
+                println!("  hand.tif");
+
+                let elapsed = start.elapsed();
+                println!(
+                    "\nFull hydrology pipeline saved to: {}",
+                    outdir.display()
+                );
+                println!("  8 products, processing time: {:.2?}", elapsed);
             }
         },
 
@@ -966,7 +1755,7 @@ fn main() -> Result<()> {
                 let start = Instant::now();
                 let result = ndvi(&nir_r, &red_r).context("Failed to calculate NDVI")?;
                 let elapsed = start.elapsed();
-                write_result(&result, &output)?;
+                write_result(&result, &output, compress)?;
                 done("NDVI", &output, elapsed);
             }
 
@@ -976,7 +1765,7 @@ fn main() -> Result<()> {
                 let start = Instant::now();
                 let result = ndwi(&green_r, &nir_r).context("Failed to calculate NDWI")?;
                 let elapsed = start.elapsed();
-                write_result(&result, &output)?;
+                write_result(&result, &output, compress)?;
                 done("NDWI", &output, elapsed);
             }
 
@@ -991,7 +1780,7 @@ fn main() -> Result<()> {
                 let result =
                     mndwi(&green_r, &swir_r).context("Failed to calculate MNDWI")?;
                 let elapsed = start.elapsed();
-                write_result(&result, &output)?;
+                write_result(&result, &output, compress)?;
                 done("MNDWI", &output, elapsed);
             }
 
@@ -1001,7 +1790,7 @@ fn main() -> Result<()> {
                 let start = Instant::now();
                 let result = nbr(&nir_r, &swir_r).context("Failed to calculate NBR")?;
                 let elapsed = start.elapsed();
-                write_result(&result, &output)?;
+                write_result(&result, &output, compress)?;
                 done("NBR", &output, elapsed);
             }
 
@@ -1014,11 +1803,10 @@ fn main() -> Result<()> {
                 let nir_r = read_dem(&nir)?;
                 let red_r = read_dem(&red)?;
                 let start = Instant::now();
-                let result =
-                    savi(&nir_r, &red_r, SaviParams { l_factor })
-                        .context("Failed to calculate SAVI")?;
+                let result = savi(&nir_r, &red_r, SaviParams { l_factor })
+                    .context("Failed to calculate SAVI")?;
                 let elapsed = start.elapsed();
-                write_result(&result, &output)?;
+                write_result(&result, &output, compress)?;
                 done("SAVI", &output, elapsed);
             }
 
@@ -1035,7 +1823,7 @@ fn main() -> Result<()> {
                 let result = evi(&nir_r, &red_r, &blue_r, EviParams::default())
                     .context("Failed to calculate EVI")?;
                 let elapsed = start.elapsed();
-                write_result(&result, &output)?;
+                write_result(&result, &output, compress)?;
                 done("EVI", &output, elapsed);
             }
 
@@ -1054,7 +1842,7 @@ fn main() -> Result<()> {
                 let result = bsi(&swir_r, &red_r, &nir_r, &blue_r)
                     .context("Failed to calculate BSI")?;
                 let elapsed = start.elapsed();
-                write_result(&result, &output)?;
+                write_result(&result, &output, compress)?;
                 done("BSI", &output, elapsed);
             }
 
@@ -1066,7 +1854,7 @@ fn main() -> Result<()> {
                 let result = band_math_binary(&a_r, &b_r, op)
                     .context("Failed to perform band math")?;
                 let elapsed = start.elapsed();
-                write_result(&result, &output)?;
+                write_result(&result, &output, compress)?;
                 done("Band math", &output, elapsed);
             }
         },
@@ -1084,7 +1872,7 @@ fn main() -> Result<()> {
                 let start = Instant::now();
                 let result = erode(&raster, &se).context("Failed to erode")?;
                 let elapsed = start.elapsed();
-                write_result(&result, &output)?;
+                write_result(&result, &output, compress)?;
                 done("Erode", &output, elapsed);
             }
 
@@ -1099,7 +1887,7 @@ fn main() -> Result<()> {
                 let start = Instant::now();
                 let result = dilate(&raster, &se).context("Failed to dilate")?;
                 let elapsed = start.elapsed();
-                write_result(&result, &output)?;
+                write_result(&result, &output, compress)?;
                 done("Dilate", &output, elapsed);
             }
 
@@ -1114,7 +1902,7 @@ fn main() -> Result<()> {
                 let start = Instant::now();
                 let result = opening(&raster, &se).context("Failed to open")?;
                 let elapsed = start.elapsed();
-                write_result(&result, &output)?;
+                write_result(&result, &output, compress)?;
                 done("Opening", &output, elapsed);
             }
 
@@ -1129,7 +1917,7 @@ fn main() -> Result<()> {
                 let start = Instant::now();
                 let result = closing(&raster, &se).context("Failed to close")?;
                 let elapsed = start.elapsed();
-                write_result(&result, &output)?;
+                write_result(&result, &output, compress)?;
                 done("Closing", &output, elapsed);
             }
 
@@ -1142,9 +1930,10 @@ fn main() -> Result<()> {
                 let se = parse_se(&shape, radius)?;
                 let raster = read_dem(&input)?;
                 let start = Instant::now();
-                let result = gradient(&raster, &se).context("Failed to compute gradient")?;
+                let result =
+                    gradient(&raster, &se).context("Failed to compute gradient")?;
                 let elapsed = start.elapsed();
-                write_result(&result, &output)?;
+                write_result(&result, &output, compress)?;
                 done("Gradient", &output, elapsed);
             }
 
@@ -1157,9 +1946,10 @@ fn main() -> Result<()> {
                 let se = parse_se(&shape, radius)?;
                 let raster = read_dem(&input)?;
                 let start = Instant::now();
-                let result = top_hat(&raster, &se).context("Failed to compute top-hat")?;
+                let result =
+                    top_hat(&raster, &se).context("Failed to compute top-hat")?;
                 let elapsed = start.elapsed();
-                write_result(&result, &output)?;
+                write_result(&result, &output, compress)?;
                 done("Top-hat", &output, elapsed);
             }
 
@@ -1175,7 +1965,7 @@ fn main() -> Result<()> {
                 let result =
                     black_hat(&raster, &se).context("Failed to compute black-hat")?;
                 let elapsed = start.elapsed();
-                write_result(&result, &output)?;
+                write_result(&result, &output, compress)?;
                 done("Black-hat", &output, elapsed);
             }
         },
@@ -1194,19 +1984,32 @@ fn main() -> Result<()> {
                 let ovr = reader.overviews();
 
                 println!("URL: {}", meta.url);
-                println!("Dimensions: {} x {} ({} cells)", meta.width, meta.height,
-                    meta.width as u64 * meta.height as u64);
+                println!(
+                    "Dimensions: {} x {} ({} cells)",
+                    meta.width,
+                    meta.height,
+                    meta.width as u64 * meta.height as u64
+                );
                 println!("Tile size: {} x {}", meta.tile_width, meta.tile_height);
-                println!("Bits/sample: {}, Sample format: {}", meta.bits_per_sample, meta.sample_format);
-                println!("Compression: {}", match meta.compression {
-                    1 => "None",
-                    5 => "LZW",
-                    8 | 32946 => "DEFLATE",
-                    _ => "Other",
-                });
+                println!(
+                    "Bits/sample: {}, Sample format: {}",
+                    meta.bits_per_sample, meta.sample_format
+                );
+                println!(
+                    "Compression: {}",
+                    match meta.compression {
+                        1 => "None",
+                        5 => "LZW",
+                        8 | 32946 => "DEFLATE",
+                        _ => "Other",
+                    }
+                );
                 let gt = &meta.geo_transform;
                 println!("Origin: ({:.6}, {:.6})", gt.origin_x, gt.origin_y);
-                println!("Pixel size: ({:.6}, {:.6})", gt.pixel_width, gt.pixel_height);
+                println!(
+                    "Pixel size: ({:.6}, {:.6})",
+                    gt.pixel_width, gt.pixel_height
+                );
                 if let Some(crs) = &meta.crs {
                     println!("CRS: {}", crs);
                 }
@@ -1221,7 +2024,12 @@ fn main() -> Result<()> {
                 }
             }
 
-            CogCommands::Fetch { url, output, bbox, overview } => {
+            CogCommands::Fetch {
+                url,
+                output,
+                bbox,
+                overview,
+            } => {
                 let bbox = parse_bbox(&bbox)?;
                 let pb = spinner("Fetching COG tiles...");
                 let opts = CogReaderOptions::default();
@@ -1235,11 +2043,17 @@ fn main() -> Result<()> {
                 let elapsed = start.elapsed();
                 let (rows, cols) = raster.shape();
                 println!("Fetched: {} x {} ({} cells)", cols, rows, raster.len());
-                write_result(&raster, &output)?;
+                write_result(&raster, &output, compress)?;
                 done("COG fetch", &output, elapsed);
             }
 
-            CogCommands::Slope { url, output, bbox, units, z_factor } => {
+            CogCommands::Slope {
+                url,
+                output,
+                bbox,
+                units,
+                z_factor,
+            } => {
                 let bbox = parse_bbox(&bbox)?;
                 let dem = read_cog_dem(&url, &bbox)?;
                 let units = match units.to_lowercase().as_str() {
@@ -1255,11 +2069,16 @@ fn main() -> Result<()> {
                 let result = slope(&dem, SlopeParams { units, z_factor })
                     .context("Failed to calculate slope")?;
                 let elapsed = start.elapsed();
-                write_result(&result, &output)?;
+                write_result(&result, &output, compress)?;
                 done("COG slope", &output, elapsed);
             }
 
-            CogCommands::Aspect { url, output, bbox, format } => {
+            CogCommands::Aspect {
+                url,
+                output,
+                bbox,
+                format,
+            } => {
                 let bbox = parse_bbox(&bbox)?;
                 let dem = read_cog_dem(&url, &bbox)?;
                 let fmt = match format.to_lowercase().as_str() {
@@ -1272,44 +2091,68 @@ fn main() -> Result<()> {
                     }
                 };
                 let start = Instant::now();
-                let result = aspect(&dem, fmt).context("Failed to calculate aspect")?;
+                let result =
+                    aspect(&dem, fmt).context("Failed to calculate aspect")?;
                 let elapsed = start.elapsed();
-                write_result(&result, &output)?;
+                write_result(&result, &output, compress)?;
                 done("COG aspect", &output, elapsed);
             }
 
-            CogCommands::Hillshade { url, output, bbox, azimuth, altitude, z_factor } => {
+            CogCommands::Hillshade {
+                url,
+                output,
+                bbox,
+                azimuth,
+                altitude,
+                z_factor,
+            } => {
                 let bbox = parse_bbox(&bbox)?;
                 let dem = read_cog_dem(&url, &bbox)?;
                 let start = Instant::now();
                 let result = hillshade(
                     &dem,
-                    HillshadeParams { azimuth, altitude, z_factor, normalized: false },
-                ).context("Failed to calculate hillshade")?;
+                    HillshadeParams {
+                        azimuth,
+                        altitude,
+                        z_factor,
+                        normalized: false,
+                    },
+                )
+                .context("Failed to calculate hillshade")?;
                 let elapsed = start.elapsed();
-                write_result(&result, &output)?;
+                write_result(&result, &output, compress)?;
                 done("COG hillshade", &output, elapsed);
             }
 
-            CogCommands::Tpi { url, output, bbox, radius } => {
+            CogCommands::Tpi {
+                url,
+                output,
+                bbox,
+                radius,
+            } => {
                 let bbox = parse_bbox(&bbox)?;
                 let dem = read_cog_dem(&url, &bbox)?;
                 let start = Instant::now();
                 let result = tpi(&dem, TpiParams { radius })
                     .context("Failed to calculate TPI")?;
                 let elapsed = start.elapsed();
-                write_result(&result, &output)?;
+                write_result(&result, &output, compress)?;
                 done("COG TPI", &output, elapsed);
             }
 
-            CogCommands::FillSinks { url, output, bbox, min_slope } => {
+            CogCommands::FillSinks {
+                url,
+                output,
+                bbox,
+                min_slope,
+            } => {
                 let bbox = parse_bbox(&bbox)?;
                 let dem = read_cog_dem(&url, &bbox)?;
                 let start = Instant::now();
                 let result = fill_sinks(&dem, FillSinksParams { min_slope })
                     .context("Failed to fill sinks")?;
                 let elapsed = start.elapsed();
-                write_result(&result, &output)?;
+                write_result(&result, &output, compress)?;
                 done("COG fill-sinks", &output, elapsed);
             }
         },
@@ -1326,8 +2169,9 @@ fn main() -> Result<()> {
             } => {
                 let cat = StacCatalog::from_str_or_url(&catalog);
                 let pb = spinner("Searching STAC catalog...");
-                let client = StacClientBlocking::new(cat, StacClientOptions::default())
-                    .context("Failed to create STAC client")?;
+                let client =
+                    StacClientBlocking::new(cat, StacClientOptions::default())
+                        .context("Failed to create STAC client")?;
 
                 let mut params = StacSearchParams::new().limit(limit);
                 if let Some(ref b) = bbox {
@@ -1342,13 +2186,16 @@ fn main() -> Result<()> {
                     params = params.collections(&c);
                 }
 
-                let results = client.search(&params).context("STAC search failed")?;
+                let results =
+                    client.search(&params).context("STAC search failed")?;
                 pb.finish_and_clear();
 
                 println!(
                     "Found {} items (matched: {})",
                     results.len(),
-                    results.number_matched.map_or("?".to_string(), |n| n.to_string())
+                    results
+                        .number_matched
+                        .map_or("?".to_string(), |n| n.to_string())
                 );
                 println!();
 
@@ -1364,7 +2211,8 @@ fn main() -> Result<()> {
                         .map(|c| format!("{:.1}%", c))
                         .unwrap_or_else(|| "-".to_string());
                     let col = item.collection.as_deref().unwrap_or("-");
-                    let asset_keys: Vec<&str> = item.assets.keys().map(|k| k.as_str()).collect();
+                    let asset_keys: Vec<&str> =
+                        item.assets.keys().map(|k| k.as_str()).collect();
 
                     println!("  {} [{}]", item.id, col);
                     println!("    datetime: {}  cloud: {}", dt, cc);
@@ -1372,7 +2220,9 @@ fn main() -> Result<()> {
                 }
 
                 if results.has_next() {
-                    println!("\n  (more results available — increase --limit to fetch more)");
+                    println!(
+                        "\n  (more results available — increase --limit to fetch more)"
+                    );
                 }
             }
 
@@ -1396,33 +2246,51 @@ fn main() -> Result<()> {
                 }
 
                 let pb = spinner("Searching STAC catalog...");
-                let client = StacClientBlocking::new(cat, StacClientOptions::default())
-                    .context("Failed to create STAC client")?;
-                let results = client.search(&params).context("STAC search failed")?;
+                let client =
+                    StacClientBlocking::new(cat, StacClientOptions::default())
+                        .context("Failed to create STAC client")?;
+                let results =
+                    client.search(&params).context("STAC search failed")?;
 
                 let item = results.features.first().ok_or_else(|| {
                     anyhow::anyhow!("No items found matching the search criteria")
                 })?;
                 pb.finish_and_clear();
 
-                println!("Item: {} [{}]", item.id, item.collection.as_deref().unwrap_or("-"));
+                println!(
+                    "Item: {} [{}]",
+                    item.id,
+                    item.collection.as_deref().unwrap_or("-")
+                );
 
                 // Determine asset key
                 let asset_key = if let Some(ref k) = asset {
                     k.clone()
                 } else {
                     let (k, _) = item.first_cog_asset().ok_or_else(|| {
-                        anyhow::anyhow!("No COG asset found. Specify --asset explicitly. Available: {}",
-                            item.assets.keys().cloned().collect::<Vec<_>>().join(", "))
+                        anyhow::anyhow!(
+                            "No COG asset found. Specify --asset explicitly. Available: {}",
+                            item.assets
+                                .keys()
+                                .cloned()
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
                     })?;
                     println!("Auto-detected asset: {}", k);
                     k.clone()
                 };
 
                 let stac_asset = item.asset(&asset_key).ok_or_else(|| {
-                    anyhow::anyhow!("Asset '{}' not found. Available: {}",
+                    anyhow::anyhow!(
+                        "Asset '{}' not found. Available: {}",
                         asset_key,
-                        item.assets.keys().cloned().collect::<Vec<_>>().join(", "))
+                        item.assets
+                            .keys()
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
                 })?;
 
                 // Sign the href if needed
@@ -1445,11 +2313,16 @@ fn main() -> Result<()> {
                     use surtgis_cloud::reproject;
                     // Prefer proj:epsg from STAC item (no extra HTTP request)
                     let epsg = item.epsg().or_else(|| {
-                        reader.metadata().crs.as_ref().and_then(|c| c.epsg())
+                        reader
+                            .metadata()
+                            .crs
+                            .as_ref()
+                            .and_then(|c| c.epsg())
                     });
                     if let Some(epsg) = epsg {
                         if !reproject::is_wgs84(epsg) {
-                            let reprojected = reproject::reproject_bbox_to_cog(&bb, epsg);
+                            let reprojected =
+                                reproject::reproject_bbox_to_cog(&bb, epsg);
                             println!("Reprojected bbox to EPSG:{}", epsg);
                             reprojected
                         } else {
@@ -1467,8 +2340,13 @@ fn main() -> Result<()> {
                 let elapsed = start.elapsed();
 
                 let (rows, cols) = raster.shape();
-                println!("Fetched: {} x {} ({} cells)", cols, rows, raster.len());
-                write_result(&raster, &output)?;
+                println!(
+                    "Fetched: {} x {} ({} cells)",
+                    cols,
+                    rows,
+                    raster.len()
+                );
+                write_result(&raster, &output, compress)?;
                 done("STAC fetch", &output, elapsed);
             }
         },

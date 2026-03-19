@@ -8,9 +8,10 @@ use crate::raster::{GeoTransform, Raster, RasterElement};
 use std::fs::File;
 use std::io::Cursor;
 use std::path::Path;
-use tiff::decoder::{Decoder, DecodingResult};
+use tiff::decoder::{Decoder, DecodingResult, Limits};
 use tiff::encoder::colortype::Gray32Float;
-use tiff::encoder::TiffEncoder;
+use tiff::encoder::compression::DeflateLevel;
+use tiff::encoder::{Compression, TiffEncoder};
 use tiff::tags::Tag;
 
 /// Options for writing GeoTIFF files
@@ -60,7 +61,8 @@ where
     R: std::io::Read + std::io::Seek,
 {
     let mut decoder = Decoder::new(reader)
-        .map_err(|e| Error::Other(format!("TIFF decode error: {}", e)))?;
+        .map_err(|e| Error::Other(format!("TIFF decode error: {}", e)))?
+        .with_limits(Limits::unlimited());
 
     let (width, height) = decoder.dimensions()
         .map_err(|e| Error::Other(format!("Cannot read dimensions: {}", e)))?;
@@ -166,14 +168,18 @@ fn read_geotransform<R: std::io::Read + std::io::Seek>(
 pub fn write_geotiff<T, P>(
     raster: &Raster<T>,
     path: P,
-    _options: Option<GeoTiffOptions>,
+    options: Option<GeoTiffOptions>,
 ) -> Result<()>
 where
     T: RasterElement,
     P: AsRef<Path>,
 {
+    let compress = options
+        .as_ref()
+        .map(|o| o.compression.to_lowercase() != "none")
+        .unwrap_or(false);
     let file = File::create(path.as_ref())?;
-    encode_geotiff(raster, file)
+    encode_geotiff(raster, file, compress)
 }
 
 /// Write a Raster to an in-memory GeoTIFF buffer
@@ -182,24 +188,35 @@ where
 /// Useful for WASM environments where filesystem access is not available.
 pub fn write_geotiff_to_buffer<T>(
     raster: &Raster<T>,
-    _options: Option<GeoTiffOptions>,
+    options: Option<GeoTiffOptions>,
 ) -> Result<Vec<u8>>
 where
     T: RasterElement,
 {
+    let compress = options
+        .as_ref()
+        .map(|o| o.compression.to_lowercase() != "none")
+        .unwrap_or(false);
     let mut buf = Vec::new();
-    encode_geotiff(raster, Cursor::new(&mut buf))?;
+    encode_geotiff(raster, Cursor::new(&mut buf), compress)?;
     Ok(buf)
 }
 
 /// Internal: encode a Raster as GeoTIFF into any `Write + Seek` sink
-fn encode_geotiff<T, W>(raster: &Raster<T>, writer: W) -> Result<()>
+fn encode_geotiff<T, W>(raster: &Raster<T>, writer: W, compress: bool) -> Result<()>
 where
     T: RasterElement,
     W: std::io::Write + std::io::Seek,
 {
+    let compression = if compress {
+        Compression::Deflate(DeflateLevel::Balanced)
+    } else {
+        Compression::Uncompressed
+    };
+
     let mut encoder = TiffEncoder::new(writer)
-        .map_err(|e| Error::Other(format!("TIFF encoder error: {}", e)))?;
+        .map_err(|e| Error::Other(format!("TIFF encoder error: {}", e)))?
+        .with_compression(compression);
 
     let (rows, cols) = raster.shape();
 

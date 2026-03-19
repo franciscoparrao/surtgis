@@ -35,7 +35,7 @@ geo-types = "0.7"
 gdal = { version = "0.17", features = ["bindgen"] }
 geozero = "0.14"
 rstar = "0.12"
-tiff = "0.10"
+tiff = { version = "0.10", features = ["deflate"] }
 
 # Numerics
 ndarray = "0.16"
