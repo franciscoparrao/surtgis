@@ -82,7 +82,7 @@ pub use multiscale_curvatures::{multiscale_curvatures, MultiscaleCurvatureParams
 pub use northness_eastness::{northness, eastness, northness_eastness};
 pub use openness::{positive_openness, negative_openness, OpennessParams};
 pub use shape_index::{shape_index, curvedness};
-pub use slope::{slope, Slope, SlopeParams, SlopeUnits};
+pub use slope::{slope, Slope, SlopeParams, SlopeStreaming, SlopeUnits};
 pub use smoothing::{
     feature_preserving_smoothing, SmoothingParams,
     gaussian_smoothing, GaussianSmoothingParams,

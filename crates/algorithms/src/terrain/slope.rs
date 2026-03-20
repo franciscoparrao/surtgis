@@ -149,6 +149,100 @@ pub fn slope(dem: &Raster<f64>, params: SlopeParams) -> Result<Raster<f64>> {
     Ok(output)
 }
 
+// ─── Streaming implementation ──────────────────────────────────────────
+
+/// Streaming slope calculator implementing `WindowAlgorithm`.
+///
+/// Processes a DEM strip-by-strip with bounded memory.
+/// Uses the same Horn (1981) 3×3 method as `slope()`.
+#[derive(Debug, Clone)]
+pub struct SlopeStreaming {
+    pub units: SlopeUnits,
+    pub z_factor: f64,
+}
+
+impl Default for SlopeStreaming {
+    fn default() -> Self {
+        Self {
+            units: SlopeUnits::Degrees,
+            z_factor: 1.0,
+        }
+    }
+}
+
+impl surtgis_core::WindowAlgorithm for SlopeStreaming {
+    fn kernel_radius(&self) -> usize {
+        1 // 3×3 kernel
+    }
+
+    fn process_chunk(
+        &self,
+        input: &Array2<f64>,
+        output: &mut Array2<f64>,
+        nodata: Option<f64>,
+        cell_size_x: f64,
+        _cell_size_y: f64,
+    ) {
+        let (in_rows, cols) = input.dim();
+        let out_rows = output.nrows();
+        let radius = 1;
+
+        // For slope, we use cell_size_x (assuming square cells) with z_factor
+        let cell_size = cell_size_x * self.z_factor;
+        let eight_cs = 8.0 * cell_size;
+
+        for r in 0..out_rows {
+            let ir = r + radius; // input row corresponding to output row r
+            if ir == 0 || ir >= in_rows - 1 {
+                // Edge row — fill with NaN
+                for c in 0..cols {
+                    output[[r, c]] = f64::NAN;
+                }
+                continue;
+            }
+
+            for c in 0..cols {
+                if c == 0 || c >= cols - 1 {
+                    output[[r, c]] = f64::NAN;
+                    continue;
+                }
+
+                let e = input[[ir, c]];
+                if e.is_nan()
+                    || nodata.map_or(false, |nd| (e - nd).abs() < f64::EPSILON)
+                {
+                    output[[r, c]] = f64::NAN;
+                    continue;
+                }
+
+                let a = input[[ir - 1, c - 1]];
+                let b = input[[ir - 1, c]];
+                let cv = input[[ir - 1, c + 1]];
+                let d = input[[ir, c - 1]];
+                let f = input[[ir, c + 1]];
+                let g = input[[ir + 1, c - 1]];
+                let h = input[[ir + 1, c]];
+                let i = input[[ir + 1, c + 1]];
+
+                if [a, b, cv, d, f, g, h, i].iter().any(|v| v.is_nan()) {
+                    output[[r, c]] = f64::NAN;
+                    continue;
+                }
+
+                let dz_dx = ((cv + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_cs;
+                let dz_dy = ((g + 2.0 * h + i) - (a + 2.0 * b + cv)) / eight_cs;
+                let slope_rad = (dz_dx * dz_dx + dz_dy * dz_dy).sqrt().atan();
+
+                output[[r, c]] = match self.units {
+                    SlopeUnits::Degrees => slope_rad.to_degrees(),
+                    SlopeUnits::Percent => slope_rad.tan() * 100.0,
+                    SlopeUnits::Radians => slope_rad,
+                };
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
