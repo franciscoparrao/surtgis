@@ -40,15 +40,14 @@ pub fn cloud_mask_scl(
 ) -> Result<Raster<f64>> {
     let (rows, cols) = data.shape();
     let (sr, sc) = scl.shape();
-    if sr != rows || sc != cols {
-        return Err(Error::Other(format!(
-            "SCL raster {}x{} doesn't match data {}x{}",
-            sr, sc, rows, cols
-        )));
-    }
 
     let data_arr = data.data();
     let scl_arr = scl.data();
+
+    // Scale factors for nearest-neighbor resampling when SCL has different
+    // resolution (e.g., S2 SCL at 20m vs data at 10m)
+    let row_scale = sr as f64 / rows as f64;
+    let col_scale = sc as f64 / cols as f64;
 
     let mut output = Array2::<f64>::from_elem((rows, cols), f64::NAN);
 
@@ -58,8 +57,11 @@ pub fn cloud_mask_scl(
         .par_chunks_mut(cols)
         .enumerate()
         .for_each(|(row, out_row)| {
+            // Map data row to SCL row (nearest neighbor)
+            let scl_row = ((row as f64 * row_scale).floor() as usize).min(sr - 1);
             for col in 0..cols {
-                let scl_val = scl_arr[[row, col]] as u8;
+                let scl_col = ((col as f64 * col_scale).floor() as usize).min(sc - 1);
+                let scl_val = scl_arr[[scl_row, scl_col]] as u8;
                 if valid_classes.contains(&scl_val) {
                     out_row[col] = data_arr[[row, col]];
                 }
@@ -114,5 +116,46 @@ mod tests {
         assert!(d[[1, 0]].is_nan());                  // class 3 = shadow → NaN
         assert!((d[[1, 1]] - 100.0).abs() < 1e-10); // class 6 = keep
         assert!(d[[1, 2]].is_nan());                  // class 8 = cloud → NaN
+    }
+
+    #[test]
+    fn test_cloud_mask_different_resolution() {
+        // Data at 10m: 4x4
+        let data = make_raster(vec![
+            vec![100.0, 100.0, 100.0, 100.0],
+            vec![100.0, 100.0, 100.0, 100.0],
+            vec![100.0, 100.0, 100.0, 100.0],
+            vec![100.0, 100.0, 100.0, 100.0],
+        ]);
+        // SCL at 20m: 2x2 (half resolution)
+        // top-left=4 (veg), top-right=9 (cloud)
+        // bottom-left=9 (cloud), bottom-right=5 (soil)
+        let scl = make_raster(vec![
+            vec![4.0, 9.0],
+            vec![9.0, 5.0],
+        ]);
+
+        let result = cloud_mask_scl(&data, &scl, SCL_VALID_DEFAULT).unwrap();
+        let d = result.data();
+
+        // Top-left quadrant (SCL=4=veg) → keep
+        assert!((d[[0, 0]] - 100.0).abs() < 1e-10);
+        assert!((d[[0, 1]] - 100.0).abs() < 1e-10);
+        assert!((d[[1, 0]] - 100.0).abs() < 1e-10);
+        assert!((d[[1, 1]] - 100.0).abs() < 1e-10);
+
+        // Top-right quadrant (SCL=9=cloud) → NaN
+        assert!(d[[0, 2]].is_nan());
+        assert!(d[[0, 3]].is_nan());
+        assert!(d[[1, 2]].is_nan());
+        assert!(d[[1, 3]].is_nan());
+
+        // Bottom-left quadrant (SCL=9=cloud) → NaN
+        assert!(d[[2, 0]].is_nan());
+        assert!(d[[3, 0]].is_nan());
+
+        // Bottom-right quadrant (SCL=5=soil) → keep
+        assert!((d[[2, 2]] - 100.0).abs() < 1e-10);
+        assert!((d[[3, 3]] - 100.0).abs() < 1e-10);
     }
 }
