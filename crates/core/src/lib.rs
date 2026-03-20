@@ -12,11 +12,13 @@
 pub mod crs;
 pub mod error;
 pub mod io;
+pub mod mosaic;
 pub mod raster;
 pub mod vector;
 
 pub use crs::CRS;
 pub use error::{Error, Result};
+pub use mosaic::{mosaic, MosaicOptions};
 pub use raster::{GeoTransform, Raster, RasterElement};
 
 /// Prelude for convenient imports

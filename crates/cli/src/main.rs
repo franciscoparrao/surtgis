@@ -84,6 +84,14 @@ enum Commands {
         #[command(subcommand)]
         algorithm: MorphologyCommands,
     },
+    /// Mosaic multiple rasters into one covering the union extent
+    Mosaic {
+        /// Input raster files (at least 2)
+        #[arg(short, long, required = true)]
+        input: Vec<PathBuf>,
+        /// Output GeoTIFF file
+        output: PathBuf,
+    },
     /// Read and process Cloud Optimized GeoTIFFs (COGs) via HTTP
     #[cfg(feature = "cloud")]
     Cog {
@@ -880,6 +888,29 @@ enum StacCommands {
         /// Datetime or range
         #[arg(long)]
         datetime: Option<String>,
+        /// Output GeoTIFF file
+        output: PathBuf,
+    },
+    /// Search STAC catalog, fetch ALL matching COG assets, mosaic, and save
+    FetchMosaic {
+        /// Catalog: "pc" (Planetary Computer), "es" (Earth Search), or full URL
+        #[arg(long, default_value = "es")]
+        catalog: String,
+        /// Bounding box: west,south,east,north
+        #[arg(long)]
+        bbox: String,
+        /// Collection (e.g. "cop-dem-glo-30", "sentinel-2-l2a")
+        #[arg(long)]
+        collection: String,
+        /// Asset key to fetch (e.g. "data", "red", "B04"). Auto-detects COG if omitted.
+        #[arg(long)]
+        asset: Option<String>,
+        /// Datetime or range
+        #[arg(long)]
+        datetime: Option<String>,
+        /// Maximum items to fetch and mosaic
+        #[arg(long, default_value = "20")]
+        max_items: u32,
         /// Output GeoTIFF file
         output: PathBuf,
     },
@@ -2308,6 +2339,32 @@ fn main() -> Result<()> {
             }
         },
 
+        // ── Mosaic ───────────────────────────────────────────────────
+        Commands::Mosaic { input, output } => {
+            if input.len() < 2 {
+                anyhow::bail!("mosaic requires at least 2 input rasters");
+            }
+            let rasters: Vec<surtgis_core::Raster<f64>> = input
+                .iter()
+                .map(|p| read_dem(p))
+                .collect::<Result<Vec<_>>>()?;
+            let refs: Vec<&surtgis_core::Raster<f64>> = rasters.iter().collect();
+            let start = Instant::now();
+            let result = surtgis_core::mosaic(&refs, None)
+                .context("Failed to mosaic rasters")?;
+            let elapsed = start.elapsed();
+            let (rows, cols) = result.shape();
+            write_result(&result, &output, compress)?;
+            println!(
+                "Mosaic: {} tiles → {} x {} ({} cells)",
+                input.len(),
+                cols,
+                rows,
+                result.len()
+            );
+            done("Mosaic", &output, elapsed);
+        }
+
         // ── COG (remote processing) ───────────────────────────────────
         #[cfg(feature = "cloud")]
         Commands::Cog { action } => match action {
@@ -2686,6 +2743,171 @@ fn main() -> Result<()> {
                 );
                 write_result(&raster, &output, compress)?;
                 done("STAC fetch", &output, elapsed);
+            }
+
+            StacCommands::FetchMosaic {
+                catalog,
+                bbox,
+                collection,
+                asset,
+                datetime,
+                max_items,
+                output,
+            } => {
+                let cat = StacCatalog::from_str_or_url(&catalog);
+                let bb = parse_bbox(&bbox)?;
+
+                let mut params = StacSearchParams::new()
+                    .bbox(bb.min_x, bb.min_y, bb.max_x, bb.max_y)
+                    .collections(&[collection.as_str()])
+                    .limit(max_items);
+                if let Some(ref dt) = datetime {
+                    params = params.datetime(dt);
+                }
+
+                let pb = spinner("Searching STAC catalog...");
+                let client_opts = StacClientOptions {
+                    max_items: max_items as usize,
+                    ..StacClientOptions::default()
+                };
+                let client = StacClientBlocking::new(cat, client_opts)
+                    .context("Failed to create STAC client")?;
+                let items = client.search_all(&params).context("STAC search failed")?;
+                pb.finish_and_clear();
+
+                if items.is_empty() {
+                    anyhow::bail!("No items found matching the search criteria");
+                }
+                println!("Found {} items, fetching and mosaicking...", items.len());
+
+                // Determine asset key from first item
+                let asset_key = if let Some(ref k) = asset {
+                    k.clone()
+                } else {
+                    let (k, _) = items[0].first_cog_asset().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "No COG asset found. Specify --asset explicitly. Available: {}",
+                            items[0]
+                                .assets
+                                .keys()
+                                .cloned()
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    })?;
+                    println!("Auto-detected asset: {}", k);
+                    k.clone()
+                };
+
+                let start = Instant::now();
+                let mut rasters: Vec<surtgis_core::Raster<f64>> = Vec::new();
+
+                for (i, item) in items.iter().enumerate() {
+                    let pb = spinner(&format!(
+                        "Fetching tile {} of {} [{}]...",
+                        i + 1,
+                        items.len(),
+                        item.id
+                    ));
+
+                    let stac_asset = match item.asset(&asset_key) {
+                        Some(a) => a,
+                        None => {
+                            pb.finish_and_clear();
+                            eprintln!(
+                                "  Warning: item {} missing asset '{}', skipping",
+                                item.id, asset_key
+                            );
+                            continue;
+                        }
+                    };
+
+                    let href = client
+                        .sign_asset_href(
+                            &stac_asset.href,
+                            item.collection.as_deref().unwrap_or(""),
+                        )
+                        .context("Failed to sign asset URL")?;
+
+                    let opts = CogReaderOptions::default();
+                    let mut reader = match CogReaderBlocking::open(&href, opts) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            pb.finish_and_clear();
+                            eprintln!(
+                                "  Warning: failed to open COG for {}: {}, skipping",
+                                item.id, e
+                            );
+                            continue;
+                        }
+                    };
+
+                    // Auto-reproject bbox if COG is in a projected CRS
+                    let read_bb = {
+                        use surtgis_cloud::reproject;
+                        let epsg = item.epsg().or_else(|| {
+                            reader
+                                .metadata()
+                                .crs
+                                .as_ref()
+                                .and_then(|c| c.epsg())
+                        });
+                        if let Some(epsg) = epsg {
+                            if !reproject::is_wgs84(epsg) {
+                                reproject::reproject_bbox_to_cog(&bb, epsg)
+                            } else {
+                                bb
+                            }
+                        } else {
+                            bb
+                        }
+                    };
+
+                    match reader.read_bbox::<f64>(&read_bb, None) {
+                        Ok(raster) => {
+                            pb.finish_and_clear();
+                            let (rows, cols) = raster.shape();
+                            println!(
+                                "  [{}/{}] {} — {} x {}",
+                                i + 1,
+                                items.len(),
+                                item.id,
+                                cols,
+                                rows
+                            );
+                            rasters.push(raster);
+                        }
+                        Err(e) => {
+                            pb.finish_and_clear();
+                            eprintln!(
+                                "  Warning: failed to read tile {}: {}, skipping",
+                                item.id, e
+                            );
+                        }
+                    }
+                }
+
+                if rasters.is_empty() {
+                    anyhow::bail!("No tiles were successfully fetched");
+                }
+
+                let pb = spinner("Mosaicking tiles...");
+                let refs: Vec<&surtgis_core::Raster<f64>> = rasters.iter().collect();
+                let result = surtgis_core::mosaic(&refs, None)
+                    .context("Failed to mosaic tiles")?;
+                pb.finish_and_clear();
+
+                let elapsed = start.elapsed();
+                let (rows, cols) = result.shape();
+                println!(
+                    "Mosaic: {} tiles → {} x {} ({} cells)",
+                    rasters.len(),
+                    cols,
+                    rows,
+                    result.len()
+                );
+                write_result(&result, &output, compress)?;
+                done("STAC fetch-mosaic", &output, elapsed);
             }
         },
     }
