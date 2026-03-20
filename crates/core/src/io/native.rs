@@ -248,14 +248,44 @@ where
         .write_tag(Tag::Unknown(33922), tiepoint.as_slice())
         .map_err(|e| Error::Other(format!("Cannot write tiepoint tag: {}", e)))?;
 
-    // GeoKeyDirectoryTag (34735) — minimal entry so tools like WhiteboxTools
-    // recognize this as a valid GeoTIFF. GTModelTypeGeoKey=1 (Projected),
-    // GTRasterTypeGeoKey=1 (RasterPixelIsArea).
-    let geokeys: Vec<u16> = vec![
-        1, 1, 0, 2, // Version 1.1.0, 2 keys
-        1024, 0, 1, 1, // GTModelTypeGeoKey = ModelTypeProjected
-        1025, 0, 1, 1, // GTRasterTypeGeoKey = RasterPixelIsArea
-    ];
+    // GeoKeyDirectoryTag (34735) — embed actual CRS from raster metadata.
+    // GeoKey structure: [KeyDirectoryVersion, KeyRevision, MinorRevision, NumberOfKeys,
+    //                    KeyID, TIFFTagLocation, Count, Value_Offset, ...]
+    let geokeys: Vec<u16> = if let Some(crs) = raster.crs() {
+        if let Some(epsg) = crs.epsg() {
+            if epsg == 4326 {
+                // Geographic CRS (WGS84)
+                vec![
+                    1, 1, 0, 3, // Version 1.1.0, 3 keys
+                    1024, 0, 1, 2,    // GTModelTypeGeoKey = ModelTypeGeographic
+                    1025, 0, 1, 1,    // GTRasterTypeGeoKey = RasterPixelIsArea
+                    2048, 0, 1, epsg as u16, // GeographicTypeGeoKey = EPSG code
+                ]
+            } else {
+                // Projected CRS (e.g., UTM zones EPSG:326xx/327xx)
+                vec![
+                    1, 1, 0, 3, // Version 1.1.0, 3 keys
+                    1024, 0, 1, 1,    // GTModelTypeGeoKey = ModelTypeProjected
+                    1025, 0, 1, 1,    // GTRasterTypeGeoKey = RasterPixelIsArea
+                    3072, 0, 1, epsg as u16, // ProjectedCSTypeGeoKey = EPSG code
+                ]
+            }
+        } else {
+            // CRS without EPSG code — write generic projected
+            vec![
+                1, 1, 0, 2,
+                1024, 0, 1, 1, // ModelTypeProjected
+                1025, 0, 1, 1, // RasterPixelIsArea
+            ]
+        }
+    } else {
+        // No CRS — write generic projected (backward compatible)
+        vec![
+            1, 1, 0, 2,
+            1024, 0, 1, 1,
+            1025, 0, 1, 1,
+        ]
+    };
     image
         .encoder()
         .write_tag(Tag::Unknown(34735), geokeys.as_slice())
