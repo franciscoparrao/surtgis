@@ -20,6 +20,10 @@ use surtgis_algorithms::imagery::{
     BandMathOp, EviParams, ReclassEntry, ReclassifyParams, SaviParams,
 };
 use std::collections::{BTreeMap, HashMap};
+use surtgis_algorithms::landscape::{
+    class_metrics, label_patches, landscape_metrics, patch_metrics, patches_to_csv,
+    Connectivity,
+};
 use surtgis_algorithms::morphology::{
     black_hat, closing, dilate, erode, gradient, opening, top_hat, StructuringElement,
 };
@@ -83,6 +87,11 @@ enum Commands {
     Morphology {
         #[command(subcommand)]
         algorithm: MorphologyCommands,
+    },
+    /// Landscape ecology metrics (global patch/class/landscape level)
+    Landscape {
+        #[command(subcommand)]
+        algorithm: LandscapeCommands,
     },
     /// Mosaic multiple rasters into one covering the union extent
     Mosaic {
@@ -749,6 +758,60 @@ enum MorphologyCommands {
     },
 }
 
+// ─── Landscape subcommands ─────────────────────────────────────────────
+
+#[derive(Subcommand)]
+enum LandscapeCommands {
+    /// Label connected patches in a classification raster
+    LabelPatches {
+        /// Input classification raster (integer class values)
+        input: PathBuf,
+        /// Output labeled patch raster (i32 IDs)
+        output: PathBuf,
+        /// Connectivity: 4 (cardinal) or 8 (cardinal+diagonal)
+        #[arg(short, long, default_value = "4")]
+        connectivity: u8,
+    },
+    /// Compute per-patch metrics (PARA, FRAC, area, perimeter) as CSV
+    PatchMetrics {
+        /// Input classification raster
+        input: PathBuf,
+        /// Output CSV file with per-patch metrics
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Connectivity: 4 or 8
+        #[arg(short, long, default_value = "4")]
+        connectivity: u8,
+    },
+    /// Compute per-class metrics (AI, COHESION, proportion)
+    ClassMetrics {
+        /// Input classification raster
+        input: PathBuf,
+        /// Connectivity: 4 or 8
+        #[arg(short, long, default_value = "4")]
+        connectivity: u8,
+    },
+    /// Compute global landscape metrics (SHDI, SIDI)
+    LandscapeMetrics {
+        /// Input classification raster
+        input: PathBuf,
+    },
+    /// Full landscape analysis: label + patch metrics + class metrics + landscape metrics
+    Analyze {
+        /// Input classification raster
+        input: PathBuf,
+        /// Output labeled raster (optional)
+        #[arg(long)]
+        output_labels: Option<PathBuf>,
+        /// Output CSV with per-patch metrics (optional)
+        #[arg(long)]
+        output_csv: Option<PathBuf>,
+        /// Connectivity: 4 or 8
+        #[arg(short, long, default_value = "4")]
+        connectivity: u8,
+    },
+}
+
 // ─── COG subcommands ──────────────────────────────────────────────────
 
 #[cfg(feature = "cloud")]
@@ -1044,6 +1107,14 @@ fn parse_se(shape: &str, radius: usize) -> Result<StructuringElement> {
     Ok(se)
 }
 
+fn parse_connectivity(c: u8) -> Result<Connectivity> {
+    match c {
+        4 => Ok(Connectivity::Four),
+        8 => Ok(Connectivity::Eight),
+        _ => anyhow::bail!("Connectivity must be 4 or 8, got: {}", c),
+    }
+}
+
 fn parse_band_math_op(s: &str) -> Result<BandMathOp> {
     match s.to_lowercase().as_str() {
         "add" | "+" => Ok(BandMathOp::Add),
@@ -1168,15 +1239,79 @@ fn read_cog_dem(url: &str, bbox: &BBox) -> Result<surtgis_core::Raster<f64>> {
 
 /// Fetch a single asset from a STAC item as a raster.
 #[cfg(feature = "cloud")]
+/// Sentinel-2 band name aliases: common name → catalog-specific keys.
+/// Tries the exact key first, then aliases.
+#[cfg(feature = "cloud")]
+fn resolve_asset_key<'a>(item: &'a StacItem, key: &'a str) -> Option<(&'a str, &'a surtgis_cloud::stac_models::StacAsset)> {
+    // Try exact key first
+    if let Some(asset) = item.asset(key) {
+        return Some((key, asset));
+    }
+
+    // Alias table: common name ↔ Sentinel-2 band codes
+    let aliases: &[(&str, &[&str])] = &[
+        ("red",     &["B04", "b04", "Red"]),
+        ("green",   &["B03", "b03", "Green"]),
+        ("blue",    &["B02", "b02", "Blue"]),
+        ("nir",     &["B08", "b08", "nir08", "Nir"]),
+        ("nir08",   &["B08", "b08", "nir"]),
+        ("nir09",   &["B09", "b09"]),
+        ("rededge1",&["B05", "b05"]),
+        ("rededge2",&["B06", "b06"]),
+        ("rededge3",&["B07", "b07"]),
+        ("swir16",  &["B11", "b11", "swir1", "SWIR1"]),
+        ("swir22",  &["B12", "b12", "swir2", "SWIR2"]),
+        ("scl",     &["SCL"]),
+        ("coastal", &["B01", "b01"]),
+        ("wvp",     &["B09", "b09"]),
+        // Reverse: band code → common name
+        ("B02",  &["blue", "Blue"]),
+        ("B03",  &["green", "Green"]),
+        ("B04",  &["red", "Red"]),
+        ("B08",  &["nir", "nir08"]),
+        ("B05",  &["rededge1"]),
+        ("B06",  &["rededge2"]),
+        ("B07",  &["rededge3"]),
+        ("B11",  &["swir16", "swir1"]),
+        ("B12",  &["swir22", "swir2"]),
+        ("SCL",  &["scl"]),
+    ];
+
+    let key_lower = key.to_lowercase();
+    for &(name, alt_keys) in aliases {
+        if name.to_lowercase() == key_lower {
+            for &alt in alt_keys {
+                if let Some(asset) = item.asset(alt) {
+                    return Some((alt, asset));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Fetch a single asset from a STAC item as a raster.
+#[cfg(feature = "cloud")]
 fn fetch_stac_asset(
     item: &StacItem,
     asset_key: &str,
     bbox: &BBox,
     client: &StacClientBlocking,
 ) -> Result<surtgis_core::Raster<f64>> {
-    let stac_asset = item
-        .asset(asset_key)
-        .ok_or_else(|| anyhow::anyhow!("Item {} missing asset '{}'", item.id, asset_key))?;
+    let (resolved_key, stac_asset) = resolve_asset_key(item, asset_key)
+        .ok_or_else(|| {
+            let available: Vec<&str> = item.assets.keys().map(|k| k.as_str()).collect();
+            anyhow::anyhow!(
+                "Item {} missing asset '{}'. Available: {}",
+                item.id, asset_key, available.join(", ")
+            )
+        })?;
+
+    if resolved_key != asset_key {
+        info!("Resolved asset '{}' → '{}'", asset_key, resolved_key);
+    }
+
+    let stac_asset = stac_asset.clone();
 
     let href = client
         .sign_asset_href(&stac_asset.href, item.collection.as_deref().unwrap_or(""))
@@ -2408,6 +2543,140 @@ fn main() -> Result<()> {
                 let elapsed = start.elapsed();
                 write_result(&result, &output, compress)?;
                 done("Black-hat", &output, elapsed);
+            }
+        },
+
+        // ── Landscape ───────────────────────────────────────────────
+        Commands::Landscape { algorithm } => match algorithm {
+            LandscapeCommands::LabelPatches {
+                input,
+                output,
+                connectivity,
+            } => {
+                let conn = parse_connectivity(connectivity)?;
+                let raster = read_dem(&input)?;
+                let start = Instant::now();
+                let (labels, num_patches) = label_patches(&raster, conn)
+                    .context("Failed to label patches")?;
+                let elapsed = start.elapsed();
+                write_result_i32(&labels, &output, compress)?;
+                println!("{} patches found", num_patches);
+                done("Label patches", &output, elapsed);
+            }
+
+            LandscapeCommands::PatchMetrics {
+                input,
+                output,
+                connectivity,
+            } => {
+                let conn = parse_connectivity(connectivity)?;
+                let raster = read_dem(&input)?;
+                let start = Instant::now();
+                let (labels, num_patches) = label_patches(&raster, conn)
+                    .context("Failed to label patches")?;
+                let patches = patch_metrics(&raster, &labels, num_patches)
+                    .context("Failed to compute patch metrics")?;
+                let elapsed = start.elapsed();
+                let csv = patches_to_csv(&patches);
+                std::fs::write(&output, &csv).context("Failed to write CSV")?;
+                println!("{} patches, {} classes", patches.len(),
+                    patches.iter().map(|p| p.class).collect::<std::collections::HashSet<_>>().len());
+                done("Patch metrics", &output, elapsed);
+            }
+
+            LandscapeCommands::ClassMetrics {
+                input,
+                connectivity,
+            } => {
+                let conn = parse_connectivity(connectivity)?;
+                let raster = read_dem(&input)?;
+                let start = Instant::now();
+                let (labels, num_patches) = label_patches(&raster, conn)
+                    .context("Failed to label patches")?;
+                let patches = patch_metrics(&raster, &labels, num_patches)
+                    .context("Failed to compute patch metrics")?;
+                let cm = class_metrics(&raster, &patches)
+                    .context("Failed to compute class metrics")?;
+                let elapsed = start.elapsed();
+
+                println!("{:<10} {:>10} {:>10} {:>8} {:>12} {:>8} {:>10}",
+                    "Class", "Area(m²)", "Proportion", "Patches", "MeanArea", "AI", "Cohesion");
+                println!("{}", "-".repeat(78));
+                for c in &cm {
+                    println!("{:<10} {:>10.1} {:>10.4} {:>8} {:>12.1} {:>8.1} {:>10.1}",
+                        c.class, c.area_m2, c.proportion, c.num_patches,
+                        c.mean_patch_area_m2, c.ai, c.cohesion);
+                }
+                println!("\n  Processing time: {:.2?}", elapsed);
+            }
+
+            LandscapeCommands::LandscapeMetrics { input } => {
+                let raster = read_dem(&input)?;
+                let start = Instant::now();
+                let lm = landscape_metrics(&raster)
+                    .context("Failed to compute landscape metrics")?;
+                let elapsed = start.elapsed();
+
+                println!("Landscape Metrics:");
+                println!("  SHDI (Shannon):  {:.4}", lm.shdi);
+                println!("  SIDI (Simpson):  {:.4}", lm.sidi);
+                println!("  Classes:         {}", lm.num_classes);
+                println!("  Total cells:     {}", lm.total_cells);
+                println!("  Total area:      {:.1} m²", lm.total_area_m2);
+                println!("  Processing time: {:.2?}", elapsed);
+            }
+
+            LandscapeCommands::Analyze {
+                input,
+                output_labels,
+                output_csv,
+                connectivity,
+            } => {
+                let conn = parse_connectivity(connectivity)?;
+                let raster = read_dem(&input)?;
+                let start = Instant::now();
+
+                // 1. Label patches
+                let (labels, num_patches) = label_patches(&raster, conn)
+                    .context("Failed to label patches")?;
+                println!("Patches: {}", num_patches);
+
+                // 2. Patch metrics
+                let patches = patch_metrics(&raster, &labels, num_patches)
+                    .context("Failed to compute patch metrics")?;
+
+                // 3. Class metrics
+                let cm = class_metrics(&raster, &patches)
+                    .context("Failed to compute class metrics")?;
+
+                println!("\n{:<10} {:>10} {:>10} {:>8} {:>8} {:>10}",
+                    "Class", "Proportion", "Patches", "AI", "Cohesion", "MeanArea");
+                println!("{}", "-".repeat(66));
+                for c in &cm {
+                    println!("{:<10} {:>10.4} {:>8} {:>8.1} {:>10.1} {:>10.1}",
+                        c.class, c.proportion, c.num_patches, c.ai, c.cohesion,
+                        c.mean_patch_area_m2);
+                }
+
+                // 4. Landscape metrics
+                let lm = landscape_metrics(&raster)
+                    .context("Failed to compute landscape metrics")?;
+                println!("\nLandscape: SHDI={:.4}  SIDI={:.4}  classes={}",
+                    lm.shdi, lm.sidi, lm.num_classes);
+
+                // 5. Write outputs
+                if let Some(ref lp) = output_labels {
+                    write_result_i32(&labels, lp, compress)?;
+                    println!("Labels saved to: {}", lp.display());
+                }
+                if let Some(ref cp) = output_csv {
+                    let csv = patches_to_csv(&patches);
+                    std::fs::write(cp, &csv).context("Failed to write CSV")?;
+                    println!("Patch CSV saved to: {}", cp.display());
+                }
+
+                let elapsed = start.elapsed();
+                println!("\n  Processing time: {:.2?}", elapsed);
             }
         },
 
