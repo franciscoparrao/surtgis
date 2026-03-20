@@ -19,7 +19,7 @@ use surtgis_algorithms::imagery::{
     mndwi, msavi, nbr, ndbi, ndmi, ndre, ndsi, ndvi, ndwi, ngrdi, reci, reclassify, savi,
     BandMathOp, EviParams, ReclassEntry, ReclassifyParams, SaviParams,
 };
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use surtgis_algorithms::morphology::{
     black_hat, closing, dilate, erode, gradient, opening, top_hat, StructuringElement,
 };
@@ -37,7 +37,7 @@ use surtgis_core::io::{read_geotiff, write_geotiff, GeoTiffOptions};
 #[cfg(feature = "cloud")]
 use surtgis_cloud::blocking::{CogReaderBlocking, StacClientBlocking, read_cog};
 #[cfg(feature = "cloud")]
-use surtgis_cloud::{BBox, CogReaderOptions, StacCatalog, StacClientOptions, StacSearchParams};
+use surtgis_cloud::{BBox, CogReaderOptions, StacCatalog, StacClientOptions, StacItem, StacSearchParams};
 
 // ─── CLI structure ──────────────────────────────────────────────────────
 
@@ -914,6 +914,35 @@ enum StacCommands {
         /// Output GeoTIFF file
         output: PathBuf,
     },
+    /// End-to-end satellite composite: search → mosaic per date → cloud-mask → median composite
+    Composite {
+        /// Catalog: "pc" (Planetary Computer), "es" (Earth Search), or full URL
+        #[arg(long, default_value = "es")]
+        catalog: String,
+        /// Bounding box: west,south,east,north
+        #[arg(long)]
+        bbox: String,
+        /// Collection (e.g. "sentinel-2-l2a")
+        #[arg(long)]
+        collection: String,
+        /// Data asset to composite (e.g. "red", "nir", "B04")
+        #[arg(long)]
+        asset: String,
+        /// Datetime range (e.g. "2024-01-01/2024-12-31")
+        #[arg(long)]
+        datetime: String,
+        /// Maximum number of temporal scenes to composite
+        #[arg(long, default_value = "12")]
+        max_scenes: usize,
+        /// SCL asset key for cloud masking
+        #[arg(long, default_value = "scl")]
+        scl_asset: String,
+        /// SCL classes to keep (comma-separated, default: vegetation,soil,water,snow)
+        #[arg(long, default_value = "4,5,6,11")]
+        scl_keep: String,
+        /// Output GeoTIFF file
+        output: PathBuf,
+    },
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────
@@ -1134,6 +1163,49 @@ fn read_cog_dem(url: &str, bbox: &BBox) -> Result<surtgis_core::Raster<f64>> {
         rows,
         raster.len()
     );
+    Ok(raster)
+}
+
+/// Fetch a single asset from a STAC item as a raster.
+#[cfg(feature = "cloud")]
+fn fetch_stac_asset(
+    item: &StacItem,
+    asset_key: &str,
+    bbox: &BBox,
+    client: &StacClientBlocking,
+) -> Result<surtgis_core::Raster<f64>> {
+    let stac_asset = item
+        .asset(asset_key)
+        .ok_or_else(|| anyhow::anyhow!("Item {} missing asset '{}'", item.id, asset_key))?;
+
+    let href = client
+        .sign_asset_href(&stac_asset.href, item.collection.as_deref().unwrap_or(""))
+        .context("Failed to sign asset URL")?;
+
+    let opts = CogReaderOptions::default();
+    let mut reader =
+        CogReaderBlocking::open(&href, opts).context("Failed to open remote COG")?;
+
+    // Auto-reproject bbox if COG is in a projected CRS
+    let read_bb = {
+        use surtgis_cloud::reproject;
+        let epsg = item
+            .epsg()
+            .or_else(|| reader.metadata().crs.as_ref().and_then(|c| c.epsg()));
+        if let Some(epsg) = epsg {
+            if !reproject::is_wgs84(epsg) {
+                reproject::reproject_bbox_to_cog(bbox, epsg)
+            } else {
+                *bbox
+            }
+        } else {
+            *bbox
+        }
+    };
+
+    let raster: surtgis_core::Raster<f64> = reader
+        .read_bbox(&read_bb, None)
+        .context("Failed to read bounding box from COG")?;
     Ok(raster)
 }
 
@@ -2908,6 +2980,192 @@ fn main() -> Result<()> {
                 );
                 write_result(&result, &output, compress)?;
                 done("STAC fetch-mosaic", &output, elapsed);
+            }
+
+            StacCommands::Composite {
+                catalog,
+                bbox,
+                collection,
+                asset,
+                datetime,
+                max_scenes,
+                scl_asset,
+                scl_keep,
+                output,
+            } => {
+                let cat = StacCatalog::from_str_or_url(&catalog);
+                let bb = parse_bbox(&bbox)?;
+                let keep_classes = parse_scl_classes(&scl_keep)?;
+
+                // Search with high limit to find enough items across dates
+                let search_limit = (max_scenes * 4) as u32; // ~4 tiles per date
+                let params = StacSearchParams::new()
+                    .bbox(bb.min_x, bb.min_y, bb.max_x, bb.max_y)
+                    .collections(&[collection.as_str()])
+                    .datetime(&datetime)
+                    .limit(search_limit);
+
+                let pb = spinner("Searching STAC catalog...");
+                let client_opts = StacClientOptions {
+                    max_items: (max_scenes * 4) as usize,
+                    ..StacClientOptions::default()
+                };
+                let client = StacClientBlocking::new(cat, client_opts)
+                    .context("Failed to create STAC client")?;
+                let items = client.search_all(&params).context("STAC search failed")?;
+                pb.finish_and_clear();
+
+                if items.is_empty() {
+                    anyhow::bail!("No items found matching the search criteria");
+                }
+
+                // Group items by acquisition date (YYYY-MM-DD)
+                let mut by_date: BTreeMap<String, Vec<&StacItem>> = BTreeMap::new();
+                for item in &items {
+                    let date = item
+                        .properties
+                        .datetime
+                        .as_deref()
+                        .unwrap_or("")
+                        .get(..10)
+                        .unwrap_or("unknown")
+                        .to_string();
+                    by_date.entry(date).or_default().push(item);
+                }
+
+                // Take up to max_scenes dates
+                let dates: Vec<String> =
+                    by_date.keys().take(max_scenes).cloned().collect();
+
+                println!(
+                    "Found {} items across {} dates (using {} dates)",
+                    items.len(),
+                    by_date.len(),
+                    dates.len()
+                );
+
+                let start = Instant::now();
+                let mut clean_scenes: Vec<surtgis_core::Raster<f64>> = Vec::new();
+
+                for (di, date) in dates.iter().enumerate() {
+                    let group = &by_date[date];
+                    println!(
+                        "Processing date {}/{}: {} ({} tiles)...",
+                        di + 1,
+                        dates.len(),
+                        date,
+                        group.len()
+                    );
+
+                    // Fetch data + SCL tiles for this date
+                    let mut data_tiles: Vec<surtgis_core::Raster<f64>> = Vec::new();
+                    let mut scl_tiles: Vec<surtgis_core::Raster<f64>> = Vec::new();
+
+                    for item in group {
+                        // Fetch data asset
+                        match fetch_stac_asset(item, &asset, &bb, &client) {
+                            Ok(r) => data_tiles.push(r),
+                            Err(e) => {
+                                eprintln!(
+                                    "  Warning: {} asset '{}': {}, skipping",
+                                    item.id, asset, e
+                                );
+                                continue;
+                            }
+                        }
+
+                        // Fetch SCL asset
+                        match fetch_stac_asset(item, &scl_asset, &bb, &client) {
+                            Ok(r) => scl_tiles.push(r),
+                            Err(e) => {
+                                // Remove the data tile we just added since SCL failed
+                                data_tiles.pop();
+                                eprintln!(
+                                    "  Warning: {} asset '{}': {}, skipping",
+                                    item.id, scl_asset, e
+                                );
+                            }
+                        }
+                    }
+
+                    if data_tiles.is_empty() {
+                        eprintln!("  No tiles for date {}, skipping", date);
+                        continue;
+                    }
+
+                    // Mosaic spatial tiles for this date
+                    let data_mosaic = if data_tiles.len() == 1 {
+                        data_tiles.into_iter().next().unwrap()
+                    } else {
+                        let refs: Vec<&surtgis_core::Raster<f64>> =
+                            data_tiles.iter().collect();
+                        surtgis_core::mosaic(&refs, None)
+                            .context("Failed to mosaic data tiles")?
+                    };
+
+                    let scl_mosaic = if scl_tiles.len() == 1 {
+                        scl_tiles.into_iter().next().unwrap()
+                    } else {
+                        let refs: Vec<&surtgis_core::Raster<f64>> =
+                            scl_tiles.iter().collect();
+                        surtgis_core::mosaic(&refs, None)
+                            .context("Failed to mosaic SCL tiles")?
+                    };
+
+                    // Cloud mask
+                    let clean = cloud_mask_scl(&data_mosaic, &scl_mosaic, &keep_classes)
+                        .context("Failed to apply cloud mask")?;
+
+                    // Count clear pixels
+                    let total = clean.len();
+                    let clear = clean
+                        .data()
+                        .iter()
+                        .filter(|v| v.is_finite())
+                        .count();
+                    let (rows, cols) = clean.shape();
+                    println!(
+                        "  {} x {}, {:.0}% clear",
+                        cols,
+                        rows,
+                        100.0 * clear as f64 / total as f64
+                    );
+
+                    clean_scenes.push(clean);
+                }
+
+                if clean_scenes.len() < 2 {
+                    if clean_scenes.len() == 1 {
+                        println!("Only 1 scene available, writing directly (no composite)");
+                        write_result(&clean_scenes[0], &output, compress)?;
+                    } else {
+                        anyhow::bail!("No clean scenes available for compositing");
+                    }
+                } else {
+                    // Median composite
+                    let pb = spinner(&format!(
+                        "Computing median composite of {} scenes...",
+                        clean_scenes.len()
+                    ));
+                    let refs: Vec<&surtgis_core::Raster<f64>> =
+                        clean_scenes.iter().collect();
+                    let result = median_composite(&refs)
+                        .context("Failed to compute median composite")?;
+                    pb.finish_and_clear();
+
+                    let (rows, cols) = result.shape();
+                    println!(
+                        "Composite: {} scenes → {} x {} ({} cells)",
+                        clean_scenes.len(),
+                        cols,
+                        rows,
+                        result.len()
+                    );
+                    write_result(&result, &output, compress)?;
+                }
+
+                let elapsed = start.elapsed();
+                done("STAC composite", &output, elapsed);
             }
         },
     }
