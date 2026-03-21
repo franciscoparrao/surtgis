@@ -19,10 +19,10 @@ gdal = ["surtgis-core/gdal"]
 cloud = ["dep:surtgis-cloud"]
 
 [dependencies]
-surtgis-core = { version = "0.1.0", path = "../core" }
-surtgis-algorithms = { version = "0.1.0", path = "../algorithms" }
-surtgis-parallel = { version = "0.1.0", path = "../parallel" }
-surtgis-cloud = { version = "0.1.0", path = "../cloud", features = ["native"], optional = true }
+surtgis-core = { version = "0.2.0", path = "../core" }
+surtgis-algorithms = { version = "0.2.0", path = "../algorithms" }
+surtgis-parallel = { version = "0.2.0", path = "../parallel" }
+surtgis-cloud = { version = "0.2.0", path = "../cloud", features = ["native"], optional = true }
 clap.workspace = true
 anyhow.workspace = true
 tracing.workspace = true

@@ -14,8 +14,8 @@ default = ["parallel"]
 parallel = ["dep:rayon", "surtgis-core/parallel", "surtgis-parallel/parallel"]
 
 [dependencies]
-surtgis-core = { version = "0.1.0", path = "../core", default-features = false }
-surtgis-parallel = { version = "0.1.0", path = "../parallel", default-features = false }
+surtgis-core = { version = "0.2.0", path = "../core", default-features = false }
+surtgis-parallel = { version = "0.2.0", path = "../parallel", default-features = false }
 thiserror.workspace = true
 anyhow.workspace = true
 ndarray.workspace = true
