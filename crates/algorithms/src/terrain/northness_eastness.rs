@@ -133,6 +133,167 @@ pub fn northness_eastness(dem: &Raster<f64>) -> Result<(Raster<f64>, Raster<f64>
     Ok((north, east))
 }
 
+// ─── Streaming implementations ─────────────────────────────────────────
+
+/// Streaming northness calculator implementing `WindowAlgorithm`.
+///
+/// Computes Horn (1981) gradients and returns `cos(aspect)`.
+/// Flat cells (zero gradient) produce NaN.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NorthnessStreaming;
+
+impl surtgis_core::WindowAlgorithm for NorthnessStreaming {
+    fn kernel_radius(&self) -> usize {
+        1 // 3×3 kernel
+    }
+
+    fn process_chunk(
+        &self,
+        input: &Array2<f64>,
+        output: &mut Array2<f64>,
+        nodata: Option<f64>,
+        _cell_size_x: f64,
+        _cell_size_y: f64,
+    ) {
+        let (in_rows, cols) = input.dim();
+        let out_rows = output.nrows();
+        let radius = 1;
+
+        const FLAT_THRESHOLD: f64 = 1e-10;
+
+        for r in 0..out_rows {
+            let ir = r + radius;
+            if ir == 0 || ir >= in_rows - 1 {
+                for c in 0..cols {
+                    output[[r, c]] = f64::NAN;
+                }
+                continue;
+            }
+
+            for c in 0..cols {
+                if c == 0 || c >= cols - 1 {
+                    output[[r, c]] = f64::NAN;
+                    continue;
+                }
+
+                let e = input[[ir, c]];
+                if e.is_nan()
+                    || nodata.map_or(false, |nd| (e - nd).abs() < f64::EPSILON)
+                {
+                    output[[r, c]] = f64::NAN;
+                    continue;
+                }
+
+                let a = input[[ir - 1, c - 1]];
+                let b = input[[ir - 1, c]];
+                let cv = input[[ir - 1, c + 1]];
+                let d = input[[ir, c - 1]];
+                let f = input[[ir, c + 1]];
+                let g = input[[ir + 1, c - 1]];
+                let h = input[[ir + 1, c]];
+                let i = input[[ir + 1, c + 1]];
+
+                if [a, b, cv, d, f, g, h, i].iter().any(|v| v.is_nan()) {
+                    output[[r, c]] = f64::NAN;
+                    continue;
+                }
+
+                // Horn's method for gradients (unnormalised — the 8*cs factor
+                // cancels out in atan2 so we can skip it for aspect)
+                let dz_dx = (cv + 2.0 * f + i) - (a + 2.0 * d + g);
+                let dz_dy = (g + 2.0 * h + i) - (a + 2.0 * b + cv);
+
+                if dz_dx.abs() < FLAT_THRESHOLD && dz_dy.abs() < FLAT_THRESHOLD {
+                    output[[r, c]] = f64::NAN;
+                    continue;
+                }
+
+                // Compass bearing (0=North, clockwise)
+                let aspect_rad = (-dz_dx).atan2(dz_dy);
+                output[[r, c]] = aspect_rad.cos();
+            }
+        }
+    }
+}
+
+/// Streaming eastness calculator implementing `WindowAlgorithm`.
+///
+/// Computes Horn (1981) gradients and returns `sin(aspect)`.
+/// Flat cells (zero gradient) produce NaN.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EastnessStreaming;
+
+impl surtgis_core::WindowAlgorithm for EastnessStreaming {
+    fn kernel_radius(&self) -> usize {
+        1 // 3×3 kernel
+    }
+
+    fn process_chunk(
+        &self,
+        input: &Array2<f64>,
+        output: &mut Array2<f64>,
+        nodata: Option<f64>,
+        _cell_size_x: f64,
+        _cell_size_y: f64,
+    ) {
+        let (in_rows, cols) = input.dim();
+        let out_rows = output.nrows();
+        let radius = 1;
+
+        const FLAT_THRESHOLD: f64 = 1e-10;
+
+        for r in 0..out_rows {
+            let ir = r + radius;
+            if ir == 0 || ir >= in_rows - 1 {
+                for c in 0..cols {
+                    output[[r, c]] = f64::NAN;
+                }
+                continue;
+            }
+
+            for c in 0..cols {
+                if c == 0 || c >= cols - 1 {
+                    output[[r, c]] = f64::NAN;
+                    continue;
+                }
+
+                let e = input[[ir, c]];
+                if e.is_nan()
+                    || nodata.map_or(false, |nd| (e - nd).abs() < f64::EPSILON)
+                {
+                    output[[r, c]] = f64::NAN;
+                    continue;
+                }
+
+                let a = input[[ir - 1, c - 1]];
+                let b = input[[ir - 1, c]];
+                let cv = input[[ir - 1, c + 1]];
+                let d = input[[ir, c - 1]];
+                let f = input[[ir, c + 1]];
+                let g = input[[ir + 1, c - 1]];
+                let h = input[[ir + 1, c]];
+                let i = input[[ir + 1, c + 1]];
+
+                if [a, b, cv, d, f, g, h, i].iter().any(|v| v.is_nan()) {
+                    output[[r, c]] = f64::NAN;
+                    continue;
+                }
+
+                let dz_dx = (cv + 2.0 * f + i) - (a + 2.0 * d + g);
+                let dz_dy = (g + 2.0 * h + i) - (a + 2.0 * b + cv);
+
+                if dz_dx.abs() < FLAT_THRESHOLD && dz_dy.abs() < FLAT_THRESHOLD {
+                    output[[r, c]] = f64::NAN;
+                    continue;
+                }
+
+                let aspect_rad = (-dz_dx).atan2(dz_dy);
+                output[[r, c]] = aspect_rad.sin();
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

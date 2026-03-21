@@ -122,6 +122,97 @@ pub fn tpi(dem: &Raster<f64>, params: TpiParams) -> Result<Raster<f64>> {
     Ok(output)
 }
 
+// ─── Streaming implementation ──────────────────────────────────────────
+
+/// Streaming TPI calculator implementing `WindowAlgorithm`.
+///
+/// Processes a DEM strip-by-strip with bounded memory.
+/// Uses the same square neighborhood as `tpi()`.
+#[derive(Debug, Clone)]
+pub struct TpiStreaming {
+    pub radius: usize,
+}
+
+impl Default for TpiStreaming {
+    fn default() -> Self {
+        Self { radius: 1 }
+    }
+}
+
+impl surtgis_core::WindowAlgorithm for TpiStreaming {
+    fn kernel_radius(&self) -> usize {
+        self.radius
+    }
+
+    fn process_chunk(
+        &self,
+        input: &Array2<f64>,
+        output: &mut Array2<f64>,
+        nodata: Option<f64>,
+        _cell_size_x: f64,
+        _cell_size_y: f64,
+    ) {
+        let (in_rows, cols) = input.dim();
+        let out_rows = output.nrows();
+        let radius = self.radius;
+        let r_i = radius as isize;
+
+        for r in 0..out_rows {
+            let ir = r + radius; // input row corresponding to output row r
+            // Check vertical edges: need full window above and below
+            if ir < radius || ir + radius >= in_rows {
+                for c in 0..cols {
+                    output[[r, c]] = f64::NAN;
+                }
+                continue;
+            }
+
+            for c in 0..cols {
+                // Check horizontal edges
+                if c < radius || c + radius >= cols {
+                    output[[r, c]] = f64::NAN;
+                    continue;
+                }
+
+                let center = input[[ir, c]];
+                if center.is_nan()
+                    || nodata.map_or(false, |nd| (center - nd).abs() < f64::EPSILON)
+                {
+                    output[[r, c]] = f64::NAN;
+                    continue;
+                }
+
+                let mut sum = 0.0;
+                let mut count = 0u32;
+                let ci = c as isize;
+
+                for dr in -r_i..=r_i {
+                    for dc in -r_i..=r_i {
+                        if dr == 0 && dc == 0 {
+                            continue; // exclude center
+                        }
+                        let nr = (ir as isize + dr) as usize;
+                        let nc = (ci + dc) as usize;
+                        let nv = input[[nr, nc]];
+                        if !nv.is_nan()
+                            && nodata.map_or(true, |nd| (nv - nd).abs() >= f64::EPSILON)
+                        {
+                            sum += nv;
+                            count += 1;
+                        }
+                    }
+                }
+
+                if count > 0 {
+                    output[[r, c]] = center - sum / count as f64;
+                } else {
+                    output[[r, c]] = f64::NAN;
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

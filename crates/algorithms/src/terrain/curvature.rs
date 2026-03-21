@@ -253,6 +253,174 @@ pub fn curvature(dem: &Raster<f64>, params: CurvatureParams) -> Result<Raster<f6
     Ok(output)
 }
 
+// ─── Streaming implementation ──────────────────────────────────────────
+
+/// Streaming curvature calculator implementing `WindowAlgorithm`.
+///
+/// Processes a DEM strip-by-strip with bounded memory.
+/// Uses the same Evans-Young / Zevenbergen-Thorne derivative methods
+/// and full/simplified curvature formulas as `curvature()`.
+#[derive(Debug, Clone)]
+pub struct CurvatureStreaming {
+    pub curvature_type: CurvatureType,
+    pub method: DerivativeMethod,
+    pub formula: CurvatureFormula,
+    pub z_factor: f64,
+}
+
+impl Default for CurvatureStreaming {
+    fn default() -> Self {
+        Self {
+            curvature_type: CurvatureType::General,
+            method: DerivativeMethod::EvansYoung,
+            formula: CurvatureFormula::Full,
+            z_factor: 1.0,
+        }
+    }
+}
+
+impl surtgis_core::WindowAlgorithm for CurvatureStreaming {
+    fn kernel_radius(&self) -> usize {
+        1 // 3×3 kernel
+    }
+
+    fn process_chunk(
+        &self,
+        input: &Array2<f64>,
+        output: &mut Array2<f64>,
+        nodata: Option<f64>,
+        cell_size_x: f64,
+        _cell_size_y: f64,
+    ) {
+        let (in_rows, cols) = input.dim();
+        let out_rows = output.nrows();
+        let radius = 1;
+
+        let cs = cell_size_x * self.z_factor;
+        let cs2 = cs * cs;
+        let method = self.method;
+        let formula = self.formula;
+
+        // Precompute method-specific constants
+        let two_cs = 2.0 * cs;
+        let cs6 = 6.0 * cs;
+        let cs2_3 = 3.0 * cs2;
+        let cs2_4 = 4.0 * cs2;
+
+        for r in 0..out_rows {
+            let ir = r + radius;
+            if ir == 0 || ir >= in_rows - 1 {
+                for c in 0..cols {
+                    output[[r, c]] = f64::NAN;
+                }
+                continue;
+            }
+
+            for c in 0..cols {
+                if c == 0 || c >= cols - 1 {
+                    output[[r, c]] = f64::NAN;
+                    continue;
+                }
+
+                let z5 = input[[ir, c]];
+                if z5.is_nan()
+                    || nodata.map_or(false, |nd| (z5 - nd).abs() < f64::EPSILON)
+                {
+                    output[[r, c]] = f64::NAN;
+                    continue;
+                }
+
+                let z1 = input[[ir - 1, c - 1]];
+                let z2 = input[[ir - 1, c]];
+                let z3 = input[[ir - 1, c + 1]];
+                let z4 = input[[ir, c - 1]];
+                let z6 = input[[ir, c + 1]];
+                let z7 = input[[ir + 1, c - 1]];
+                let z8 = input[[ir + 1, c]];
+                let z9 = input[[ir + 1, c + 1]];
+
+                if [z1, z2, z3, z4, z6, z7, z8, z9].iter().any(|v| v.is_nan()) {
+                    output[[r, c]] = f64::NAN;
+                    continue;
+                }
+
+                // Compute partial derivatives based on method
+                let (p, q, r_d, s, t) = match method {
+                    DerivativeMethod::EvansYoung => {
+                        let p = (z3 + z6 + z9 - z1 - z4 - z7) / cs6;
+                        let q = (z1 + z2 + z3 - z7 - z8 - z9) / cs6;
+                        let r_d = (z1 + z3 + z4 + z6 + z7 + z9
+                            - 2.0 * (z2 + z5 + z8))
+                            / cs2_3;
+                        let s = (z3 + z7 - z1 - z9) / cs2_4;
+                        let t = (z1 + z2 + z3 + z7 + z8 + z9
+                            - 2.0 * (z4 + z5 + z6))
+                            / cs2_3;
+                        (p, q, r_d, s, t)
+                    }
+                    DerivativeMethod::ZevenbergenThorne => {
+                        let p = (z6 - z4) / two_cs;
+                        let q = (z2 - z8) / two_cs;
+                        let r_d = (z4 - 2.0 * z5 + z6) / cs2;
+                        let s = (z3 - z1 - z9 + z7) / (4.0 * cs2);
+                        let t = (z2 - 2.0 * z5 + z8) / cs2;
+                        (p, q, r_d, s, t)
+                    }
+                };
+
+                let p2 = p * p;
+                let q2 = q * q;
+                let p2q2 = p2 + q2;
+
+                output[[r, c]] = match (self.curvature_type, formula) {
+                    // --- Full formulas (with denominators) ---
+                    (CurvatureType::General, CurvatureFormula::Full) => {
+                        let w = 1.0 + p2q2;
+                        -((1.0 + q2) * r_d - 2.0 * p * q * s + (1.0 + p2) * t)
+                            / (2.0 * w * w.sqrt())
+                    }
+                    (CurvatureType::Profile, CurvatureFormula::Full) => {
+                        if p2q2 < 1e-20 {
+                            0.0
+                        } else {
+                            let w = 1.0 + p2q2;
+                            -(p2 * r_d + 2.0 * p * q * s + q2 * t)
+                                / (p2q2 * w * w.sqrt())
+                        }
+                    }
+                    (CurvatureType::Plan, CurvatureFormula::Full) => {
+                        if p2q2 < 1e-20 {
+                            0.0
+                        } else {
+                            let w_sqrt = (1.0 + p2q2).sqrt();
+                            -(q2 * r_d - 2.0 * p * q * s + p2 * t)
+                                / (p2q2 * w_sqrt)
+                        }
+                    }
+                    // --- Simplified formulas (legacy Z&T, no denominators) ---
+                    (CurvatureType::General, CurvatureFormula::Simplified) => {
+                        -(r_d + t) / 2.0
+                    }
+                    (CurvatureType::Profile, CurvatureFormula::Simplified) => {
+                        if p2q2 < 1e-20 {
+                            0.0
+                        } else {
+                            -(p2 * r_d + 2.0 * p * q * s + q2 * t) / p2q2
+                        }
+                    }
+                    (CurvatureType::Plan, CurvatureFormula::Simplified) => {
+                        if p2q2 < 1e-20 {
+                            0.0
+                        } else {
+                            -(q2 * r_d - 2.0 * p * q * s + p2 * t) / p2q2
+                        }
+                    }
+                };
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

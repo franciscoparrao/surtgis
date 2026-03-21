@@ -129,6 +129,97 @@ pub fn tri(dem: &Raster<f64>, params: TriParams) -> Result<Raster<f64>> {
     Ok(output)
 }
 
+// ─── Streaming implementation ──────────────────────────────────────────
+
+/// Streaming TRI calculator implementing `WindowAlgorithm`.
+///
+/// Processes a DEM strip-by-strip with bounded memory.
+/// Uses the same Riley et al. (1999) method as `tri()`:
+/// `TRI = sqrt( sum( (z_neighbor - z_center)^2 ) / n )`
+#[derive(Debug, Clone)]
+pub struct TriStreaming {
+    pub radius: usize,
+}
+
+impl Default for TriStreaming {
+    fn default() -> Self {
+        Self { radius: 1 }
+    }
+}
+
+impl surtgis_core::WindowAlgorithm for TriStreaming {
+    fn kernel_radius(&self) -> usize {
+        self.radius
+    }
+
+    fn process_chunk(
+        &self,
+        input: &Array2<f64>,
+        output: &mut Array2<f64>,
+        nodata: Option<f64>,
+        _cell_size_x: f64,
+        _cell_size_y: f64,
+    ) {
+        let (in_rows, cols) = input.dim();
+        let out_rows = output.nrows();
+        let radius = self.radius;
+        let r_i = radius as isize;
+
+        for r in 0..out_rows {
+            let ir = r + radius;
+            if ir < radius || ir + radius >= in_rows {
+                for c in 0..cols {
+                    output[[r, c]] = f64::NAN;
+                }
+                continue;
+            }
+
+            for c in 0..cols {
+                if c < radius || c + radius >= cols {
+                    output[[r, c]] = f64::NAN;
+                    continue;
+                }
+
+                let center = input[[ir, c]];
+                if center.is_nan()
+                    || nodata.map_or(false, |nd| (center - nd).abs() < f64::EPSILON)
+                {
+                    output[[r, c]] = f64::NAN;
+                    continue;
+                }
+
+                let mut sum_sq = 0.0;
+                let mut count = 0u32;
+                let ci = c as isize;
+
+                for dr in -r_i..=r_i {
+                    for dc in -r_i..=r_i {
+                        if dr == 0 && dc == 0 {
+                            continue;
+                        }
+                        let nr = (ir as isize + dr) as usize;
+                        let nc = (ci + dc) as usize;
+                        let nv = input[[nr, nc]];
+                        if !nv.is_nan()
+                            && nodata.map_or(true, |nd| (nv - nd).abs() >= f64::EPSILON)
+                        {
+                            let diff = nv - center;
+                            sum_sq += diff * diff;
+                            count += 1;
+                        }
+                    }
+                }
+
+                if count > 0 {
+                    output[[r, c]] = (sum_sq / count as f64).sqrt();
+                } else {
+                    output[[r, c]] = f64::NAN;
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

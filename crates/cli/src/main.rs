@@ -32,9 +32,10 @@ use surtgis_algorithms::terrain::{
     hillshade, landform_classification, mrvbf, multidirectional_hillshade, negative_openness,
     northness, positive_openness, sky_view_factor, slope, tpi, tri, twi, viewshed, vrm,
     AdvancedCurvatureType, AspectOutput, AspectStreaming, ConvergenceParams, CurvatureParams,
-    CurvatureType, DevParams, GeomorphonParams, HillshadeParams, HillshadeStreaming,
-    LandformParams, MultiHillshadeParams, MrvbfParams, OpennessParams, SlopeParams,
-    SlopeStreaming, SlopeUnits, SvfParams, TpiParams, TriParams, ViewshedParams, VrmParams,
+    CurvatureStreaming, CurvatureType, DevParams, EastnessStreaming, GeomorphonParams,
+    HillshadeParams, HillshadeStreaming, LandformParams, MultiHillshadeParams, MrvbfParams,
+    NorthnessStreaming, OpennessParams, SlopeParams, SlopeStreaming, SlopeUnits, SvfParams,
+    TpiParams, TpiStreaming, TriParams, TriStreaming, ViewshedParams, VrmParams,
 };
 use surtgis_core::StripProcessor;
 use surtgis_core::io::{read_geotiff, write_geotiff, GeoTiffOptions};
@@ -1535,20 +1536,39 @@ fn main() -> Result<()> {
                         CurvatureType::General
                     }
                 };
-                let dem = read_dem(&input)?;
-                let start = Instant::now();
-                let result = curvature(
-                    &dem,
-                    CurvatureParams {
+                // Auto-detect streaming for large files
+                let use_streaming = streaming || std::fs::metadata(&input)
+                    .map(|m| m.len() > 500_000_000).unwrap_or(false);
+
+                if use_streaming {
+                    let algo = CurvatureStreaming {
                         curvature_type: ct,
                         z_factor,
                         ..Default::default()
-                    },
-                )
-                .context("Failed to calculate curvature")?;
-                let elapsed = start.elapsed();
-                write_result(&result, &output, compress)?;
-                done("Curvature", &output, elapsed);
+                    };
+                    let processor = StripProcessor::new(256);
+                    let start = Instant::now();
+                    let (rows, cols) = processor.process(&input, &output, &algo, compress)
+                        .context("Failed to calculate curvature (streaming)")?;
+                    let elapsed = start.elapsed();
+                    println!("Curvature (streaming): {} x {}", cols, rows);
+                    done("Curvature", &output, elapsed);
+                } else {
+                    let dem = read_dem(&input)?;
+                    let start = Instant::now();
+                    let result = curvature(
+                        &dem,
+                        CurvatureParams {
+                            curvature_type: ct,
+                            z_factor,
+                            ..Default::default()
+                        },
+                    )
+                    .context("Failed to calculate curvature")?;
+                    let elapsed = start.elapsed();
+                    write_result(&result, &output, compress)?;
+                    done("Curvature", &output, elapsed);
+                }
             }
 
             TerrainCommands::Tpi {
@@ -1556,13 +1576,28 @@ fn main() -> Result<()> {
                 output,
                 radius,
             } => {
-                let dem = read_dem(&input)?;
-                let start = Instant::now();
-                let result =
-                    tpi(&dem, TpiParams { radius }).context("Failed to calculate TPI")?;
-                let elapsed = start.elapsed();
-                write_result(&result, &output, compress)?;
-                done("TPI", &output, elapsed);
+                // Auto-detect streaming for large files
+                let use_streaming = streaming || std::fs::metadata(&input)
+                    .map(|m| m.len() > 500_000_000).unwrap_or(false);
+
+                if use_streaming {
+                    let algo = TpiStreaming { radius };
+                    let processor = StripProcessor::new(256);
+                    let start = Instant::now();
+                    let (rows, cols) = processor.process(&input, &output, &algo, compress)
+                        .context("Failed to calculate TPI (streaming)")?;
+                    let elapsed = start.elapsed();
+                    println!("TPI (streaming): {} x {}", cols, rows);
+                    done("TPI", &output, elapsed);
+                } else {
+                    let dem = read_dem(&input)?;
+                    let start = Instant::now();
+                    let result =
+                        tpi(&dem, TpiParams { radius }).context("Failed to calculate TPI")?;
+                    let elapsed = start.elapsed();
+                    write_result(&result, &output, compress)?;
+                    done("TPI", &output, elapsed);
+                }
             }
 
             TerrainCommands::Tri {
@@ -1570,13 +1605,28 @@ fn main() -> Result<()> {
                 output,
                 radius,
             } => {
-                let dem = read_dem(&input)?;
-                let start = Instant::now();
-                let result =
-                    tri(&dem, TriParams { radius }).context("Failed to calculate TRI")?;
-                let elapsed = start.elapsed();
-                write_result(&result, &output, compress)?;
-                done("TRI", &output, elapsed);
+                // Auto-detect streaming for large files
+                let use_streaming = streaming || std::fs::metadata(&input)
+                    .map(|m| m.len() > 500_000_000).unwrap_or(false);
+
+                if use_streaming {
+                    let algo = TriStreaming { radius };
+                    let processor = StripProcessor::new(256);
+                    let start = Instant::now();
+                    let (rows, cols) = processor.process(&input, &output, &algo, compress)
+                        .context("Failed to calculate TRI (streaming)")?;
+                    let elapsed = start.elapsed();
+                    println!("TRI (streaming): {} x {}", cols, rows);
+                    done("TRI", &output, elapsed);
+                } else {
+                    let dem = read_dem(&input)?;
+                    let start = Instant::now();
+                    let result =
+                        tri(&dem, TriParams { radius }).context("Failed to calculate TRI")?;
+                    let elapsed = start.elapsed();
+                    write_result(&result, &output, compress)?;
+                    done("TRI", &output, elapsed);
+                }
             }
 
             TerrainCommands::Landform {
@@ -1626,21 +1676,51 @@ fn main() -> Result<()> {
             }
 
             TerrainCommands::Northness { input, output } => {
-                let dem = read_dem(&input)?;
-                let start = Instant::now();
-                let result = northness(&dem).context("Failed to compute northness")?;
-                let elapsed = start.elapsed();
-                write_result(&result, &output, compress)?;
-                done("Northness", &output, elapsed);
+                // Auto-detect streaming for large files
+                let use_streaming = streaming || std::fs::metadata(&input)
+                    .map(|m| m.len() > 500_000_000).unwrap_or(false);
+
+                if use_streaming {
+                    let algo = NorthnessStreaming;
+                    let processor = StripProcessor::new(256);
+                    let start = Instant::now();
+                    let (rows, cols) = processor.process(&input, &output, &algo, compress)
+                        .context("Failed to compute northness (streaming)")?;
+                    let elapsed = start.elapsed();
+                    println!("Northness (streaming): {} x {}", cols, rows);
+                    done("Northness", &output, elapsed);
+                } else {
+                    let dem = read_dem(&input)?;
+                    let start = Instant::now();
+                    let result = northness(&dem).context("Failed to compute northness")?;
+                    let elapsed = start.elapsed();
+                    write_result(&result, &output, compress)?;
+                    done("Northness", &output, elapsed);
+                }
             }
 
             TerrainCommands::Eastness { input, output } => {
-                let dem = read_dem(&input)?;
-                let start = Instant::now();
-                let result = eastness(&dem).context("Failed to compute eastness")?;
-                let elapsed = start.elapsed();
-                write_result(&result, &output, compress)?;
-                done("Eastness", &output, elapsed);
+                // Auto-detect streaming for large files
+                let use_streaming = streaming || std::fs::metadata(&input)
+                    .map(|m| m.len() > 500_000_000).unwrap_or(false);
+
+                if use_streaming {
+                    let algo = EastnessStreaming;
+                    let processor = StripProcessor::new(256);
+                    let start = Instant::now();
+                    let (rows, cols) = processor.process(&input, &output, &algo, compress)
+                        .context("Failed to compute eastness (streaming)")?;
+                    let elapsed = start.elapsed();
+                    println!("Eastness (streaming): {} x {}", cols, rows);
+                    done("Eastness", &output, elapsed);
+                } else {
+                    let dem = read_dem(&input)?;
+                    let start = Instant::now();
+                    let result = eastness(&dem).context("Failed to compute eastness")?;
+                    let elapsed = start.elapsed();
+                    write_result(&result, &output, compress)?;
+                    done("Eastness", &output, elapsed);
+                }
             }
 
             TerrainCommands::OpennessPositive {
