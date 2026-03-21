@@ -146,6 +146,158 @@ fn compute_aspect_at(dem: &Raster<f64>, row: usize, col: usize, rows: usize, col
     aspect
 }
 
+// ─── Streaming implementation ──────────────────────────────────────────
+
+/// Streaming Convergence Index calculator implementing `WindowAlgorithm`.
+///
+/// Processes a DEM strip-by-strip with bounded memory.
+/// Uses the same Kiss (2004) / Köthe & Lehmeier (1996) method as
+/// `convergence_index()`.
+///
+/// The kernel radius is `radius + 1` because aspect computation at each
+/// neighbor requires a 3x3 Horn window around that neighbor.
+#[derive(Debug, Clone)]
+pub struct ConvergenceStreaming {
+    pub radius: usize,
+}
+
+impl Default for ConvergenceStreaming {
+    fn default() -> Self {
+        Self { radius: 1 }
+    }
+}
+
+impl ConvergenceStreaming {
+    /// Compute aspect at a single cell using Horn's method.
+    /// Returns aspect in degrees (0=N, clockwise) or `None` if flat/edge/NaN.
+    fn aspect_at(input: &Array2<f64>, row: usize, col: usize) -> Option<f64> {
+        let (rows, cols) = input.dim();
+        if row == 0 || row >= rows - 1 || col == 0 || col >= cols - 1 {
+            return None;
+        }
+
+        let a = input[[row - 1, col - 1]];
+        let b = input[[row - 1, col]];
+        let c = input[[row - 1, col + 1]];
+        let d = input[[row, col - 1]];
+        let f = input[[row, col + 1]];
+        let g = input[[row + 1, col - 1]];
+        let h = input[[row + 1, col]];
+        let i = input[[row + 1, col + 1]];
+
+        if [a, b, c, d, f, g, h, i].iter().any(|v| v.is_nan()) {
+            return None;
+        }
+
+        let dz_dx = ((c + 2.0 * f + i) - (a + 2.0 * d + g)) / 8.0;
+        let dz_dy = ((g + 2.0 * h + i) - (a + 2.0 * b + c)) / 8.0;
+
+        if dz_dx.abs() < f64::EPSILON && dz_dy.abs() < f64::EPSILON {
+            return None; // Flat, no aspect
+        }
+
+        let mut aspect = (-dz_dx).atan2(dz_dy).to_degrees();
+        if aspect < 0.0 {
+            aspect += 360.0;
+        }
+        Some(aspect)
+    }
+}
+
+impl surtgis_core::WindowAlgorithm for ConvergenceStreaming {
+    fn kernel_radius(&self) -> usize {
+        // Need radius for neighborhood + 1 for Horn's method at border neighbors
+        self.radius + 1
+    }
+
+    fn process_chunk(
+        &self,
+        input: &Array2<f64>,
+        output: &mut Array2<f64>,
+        nodata: Option<f64>,
+        _cell_size_x: f64,
+        _cell_size_y: f64,
+    ) {
+        let (in_rows, cols) = input.dim();
+        let out_rows = output.nrows();
+        let kr = self.radius + 1; // kernel radius (the value returned by kernel_radius)
+        let r = self.radius as isize;
+
+        for row_out in 0..out_rows {
+            let ir = row_out + kr; // input row corresponding to output row
+
+            // Check vertical edges: need full kernel above and below
+            if ir < kr || ir + kr >= in_rows {
+                for c in 0..cols {
+                    output[[row_out, c]] = f64::NAN;
+                }
+                continue;
+            }
+
+            for c in 0..cols {
+                // Check horizontal edges
+                if c < kr || c + kr >= cols {
+                    output[[row_out, c]] = f64::NAN;
+                    continue;
+                }
+
+                let z0 = input[[ir, c]];
+                if z0.is_nan()
+                    || nodata.map_or(false, |nd| (z0 - nd).abs() < f64::EPSILON)
+                {
+                    output[[row_out, c]] = f64::NAN;
+                    continue;
+                }
+
+                let mut sum_deviation = 0.0;
+                let mut count = 0;
+
+                for dr in -r..=r {
+                    for dc in -r..=r {
+                        if dr == 0 && dc == 0 {
+                            continue;
+                        }
+
+                        let nr = (ir as isize + dr) as usize;
+                        let nc = (c as isize + dc) as usize;
+
+                        // Compute aspect at neighbor
+                        let aspect_n = match Self::aspect_at(input, nr, nc) {
+                            Some(a) => a,
+                            None => continue,
+                        };
+
+                        // Direction from neighbor toward center (azimuth from north)
+                        // dr,dc are offsets from center to neighbor; reverse and convert
+                        let dir_to_center = (-(dc as f64)).atan2(dr as f64);
+                        let dir_deg = dir_to_center.to_degrees();
+                        let dir_deg = if dir_deg < 0.0 { dir_deg + 360.0 } else { dir_deg };
+
+                        // Angular difference
+                        let mut diff = (aspect_n - dir_deg).abs();
+                        if diff > 180.0 {
+                            diff = 360.0 - diff;
+                        }
+
+                        // Convergence: aspect points toward center (diff near 0)
+                        // Divergence: aspect points away (diff near 180)
+                        sum_deviation += diff;
+                        count += 1;
+                    }
+                }
+
+                if count > 0 {
+                    let avg_deviation = sum_deviation / count as f64;
+                    // Scale to [-100, 100]: 0° → -100 (convergent), 90° → 0, 180° → +100 (divergent)
+                    output[[row_out, c]] = (avg_deviation / 90.0 - 1.0) * 100.0;
+                } else {
+                    output[[row_out, c]] = f64::NAN;
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

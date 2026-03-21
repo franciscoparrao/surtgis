@@ -31,11 +31,12 @@ use surtgis_algorithms::terrain::{
     advanced_curvatures, aspect, convergence_index, curvature, dev, eastness, geomorphons,
     hillshade, landform_classification, mrvbf, multidirectional_hillshade, negative_openness,
     northness, positive_openness, sky_view_factor, slope, tpi, tri, twi, viewshed, vrm,
-    AdvancedCurvatureType, AspectOutput, AspectStreaming, ConvergenceParams, CurvatureParams,
-    CurvatureStreaming, CurvatureType, DevParams, EastnessStreaming, GeomorphonParams,
-    HillshadeParams, HillshadeStreaming, LandformParams, MultiHillshadeParams, MrvbfParams,
-    NorthnessStreaming, OpennessParams, SlopeParams, SlopeStreaming, SlopeUnits, SvfParams,
-    TpiParams, TpiStreaming, TriParams, TriStreaming, ViewshedParams, VrmParams,
+    AdvancedCurvatureType, AspectOutput, AspectStreaming, ConvergenceParams, ConvergenceStreaming,
+    CurvatureParams, CurvatureStreaming, CurvatureType, DevParams, DevStreaming,
+    EastnessStreaming, GeomorphonParams, HillshadeParams, HillshadeStreaming, LandformParams,
+    MultiHillshadeParams, MultiHillshadeStreaming, MrvbfParams, NorthnessStreaming, OpennessParams,
+    SlopeParams, SlopeStreaming, SlopeUnits, SvfParams, TpiParams, TpiStreaming, TriParams,
+    TriStreaming, ViewshedParams, VrmParams, VrmStreaming,
 };
 use surtgis_core::StripProcessor;
 use surtgis_core::io::{read_geotiff, write_geotiff, GeoTiffOptions};
@@ -1793,13 +1794,28 @@ fn main() -> Result<()> {
                 output,
                 radius,
             } => {
-                let dem = read_dem(&input)?;
-                let start = Instant::now();
-                let result =
-                    dev(&dem, DevParams { radius }).context("Failed to compute DEV")?;
-                let elapsed = start.elapsed();
-                write_result(&result, &output, compress)?;
-                done("DEV", &output, elapsed);
+                // Auto-detect streaming for large files
+                let use_streaming = streaming || std::fs::metadata(&input)
+                    .map(|m| m.len() > 500_000_000).unwrap_or(false);
+
+                if use_streaming {
+                    let algo = DevStreaming { radius };
+                    let processor = StripProcessor::new(256);
+                    let start = Instant::now();
+                    let (rows, cols) = processor.process(&input, &output, &algo, compress)
+                        .context("Failed to compute DEV (streaming)")?;
+                    let elapsed = start.elapsed();
+                    println!("DEV (streaming): {} x {}", cols, rows);
+                    done("DEV", &output, elapsed);
+                } else {
+                    let dem = read_dem(&input)?;
+                    let start = Instant::now();
+                    let result =
+                        dev(&dem, DevParams { radius }).context("Failed to compute DEV")?;
+                    let elapsed = start.elapsed();
+                    write_result(&result, &output, compress)?;
+                    done("DEV", &output, elapsed);
+                }
             }
 
             TerrainCommands::Vrm {
@@ -1807,13 +1823,28 @@ fn main() -> Result<()> {
                 output,
                 radius,
             } => {
-                let dem = read_dem(&input)?;
-                let start = Instant::now();
-                let result =
-                    vrm(&dem, VrmParams { radius }).context("Failed to compute VRM")?;
-                let elapsed = start.elapsed();
-                write_result(&result, &output, compress)?;
-                done("VRM", &output, elapsed);
+                // Auto-detect streaming for large files
+                let use_streaming = streaming || std::fs::metadata(&input)
+                    .map(|m| m.len() > 500_000_000).unwrap_or(false);
+
+                if use_streaming {
+                    let algo = VrmStreaming { radius };
+                    let processor = StripProcessor::new(256);
+                    let start = Instant::now();
+                    let (rows, cols) = processor.process(&input, &output, &algo, compress)
+                        .context("Failed to compute VRM (streaming)")?;
+                    let elapsed = start.elapsed();
+                    println!("VRM (streaming): {} x {}", cols, rows);
+                    done("VRM", &output, elapsed);
+                } else {
+                    let dem = read_dem(&input)?;
+                    let start = Instant::now();
+                    let result =
+                        vrm(&dem, VrmParams { radius }).context("Failed to compute VRM")?;
+                    let elapsed = start.elapsed();
+                    write_result(&result, &output, compress)?;
+                    done("VRM", &output, elapsed);
+                }
             }
 
             TerrainCommands::AdvancedCurvature {
@@ -1863,24 +1894,54 @@ fn main() -> Result<()> {
                 output,
                 radius,
             } => {
-                let dem = read_dem(&input)?;
-                let start = Instant::now();
-                let result = convergence_index(&dem, ConvergenceParams { radius })
-                    .context("Failed to compute convergence index")?;
-                let elapsed = start.elapsed();
-                write_result(&result, &output, compress)?;
-                done("Convergence index", &output, elapsed);
+                // Auto-detect streaming for large files
+                let use_streaming = streaming || std::fs::metadata(&input)
+                    .map(|m| m.len() > 500_000_000).unwrap_or(false);
+
+                if use_streaming {
+                    let algo = ConvergenceStreaming { radius };
+                    let processor = StripProcessor::new(256);
+                    let start = Instant::now();
+                    let (rows, cols) = processor.process(&input, &output, &algo, compress)
+                        .context("Failed to compute convergence index (streaming)")?;
+                    let elapsed = start.elapsed();
+                    println!("Convergence (streaming): {} x {}", cols, rows);
+                    done("Convergence index", &output, elapsed);
+                } else {
+                    let dem = read_dem(&input)?;
+                    let start = Instant::now();
+                    let result = convergence_index(&dem, ConvergenceParams { radius })
+                        .context("Failed to compute convergence index")?;
+                    let elapsed = start.elapsed();
+                    write_result(&result, &output, compress)?;
+                    done("Convergence index", &output, elapsed);
+                }
             }
 
             TerrainCommands::MultiHillshade { input, output } => {
-                let dem = read_dem(&input)?;
-                let start = Instant::now();
-                let result =
-                    multidirectional_hillshade(&dem, MultiHillshadeParams::default())
-                        .context("Failed to compute multi-directional hillshade")?;
-                let elapsed = start.elapsed();
-                write_result(&result, &output, compress)?;
-                done("Multi-directional hillshade", &output, elapsed);
+                // Auto-detect streaming for large files
+                let use_streaming = streaming || std::fs::metadata(&input)
+                    .map(|m| m.len() > 500_000_000).unwrap_or(false);
+
+                if use_streaming {
+                    let algo = MultiHillshadeStreaming::default();
+                    let processor = StripProcessor::new(256);
+                    let start = Instant::now();
+                    let (rows, cols) = processor.process(&input, &output, &algo, compress)
+                        .context("Failed to compute multi-directional hillshade (streaming)")?;
+                    let elapsed = start.elapsed();
+                    println!("Multi-directional hillshade (streaming): {} x {}", cols, rows);
+                    done("Multi-directional hillshade", &output, elapsed);
+                } else {
+                    let dem = read_dem(&input)?;
+                    let start = Instant::now();
+                    let result =
+                        multidirectional_hillshade(&dem, MultiHillshadeParams::default())
+                            .context("Failed to compute multi-directional hillshade")?;
+                    let elapsed = start.elapsed();
+                    write_result(&result, &output, compress)?;
+                    done("Multi-directional hillshade", &output, elapsed);
+                }
             }
 
             TerrainCommands::All { input, outdir } => {

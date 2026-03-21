@@ -161,6 +161,136 @@ pub fn vrm(dem: &Raster<f64>, params: VrmParams) -> Result<Raster<f64>> {
     Ok(output)
 }
 
+// ─── Streaming implementation ──────────────────────────────────────────
+
+/// Streaming VRM calculator implementing `WindowAlgorithm`.
+///
+/// Processes a DEM strip-by-strip with bounded memory.
+/// Uses the same Sappington et al. (2007) method as `vrm()`:
+/// `VRM = 1 - |R| / n` where R is the resultant of unit normal vectors.
+///
+/// The kernel radius is `radius + 1` because VRM needs a 3x3 Horn window
+/// to compute normals at each neighbor, plus the neighborhood radius.
+#[derive(Debug, Clone)]
+pub struct VrmStreaming {
+    pub radius: usize,
+}
+
+impl Default for VrmStreaming {
+    fn default() -> Self {
+        Self { radius: 1 }
+    }
+}
+
+impl VrmStreaming {
+    /// Compute unit normal vector at a single cell using Horn's method.
+    /// Returns `(nx, ny, nz)` or `None` if any neighbor is NaN.
+    fn normal_at(input: &Array2<f64>, row: usize, col: usize) -> Option<(f64, f64, f64)> {
+        let (rows, cols) = input.dim();
+        if row == 0 || row >= rows - 1 || col == 0 || col >= cols - 1 {
+            return None;
+        }
+
+        let z1 = input[[row - 1, col - 1]];
+        let z2 = input[[row - 1, col]];
+        let z3 = input[[row - 1, col + 1]];
+        let z4 = input[[row, col - 1]];
+        let z6 = input[[row, col + 1]];
+        let z7 = input[[row + 1, col - 1]];
+        let z8 = input[[row + 1, col]];
+        let z9 = input[[row + 1, col + 1]];
+
+        if z1.is_nan() || z2.is_nan() || z3.is_nan()
+            || z4.is_nan() || z6.is_nan()
+            || z7.is_nan() || z8.is_nan() || z9.is_nan()
+        {
+            return None;
+        }
+
+        // Horn's method (unnormalized gradients)
+        let dz_dx = (z3 + 2.0 * z6 + z9) - (z1 + 2.0 * z4 + z7);
+        let dz_dy = (z7 + 2.0 * z8 + z9) - (z1 + 2.0 * z2 + z3);
+
+        let slope = (dz_dx * dz_dx + dz_dy * dz_dy).sqrt().atan();
+
+        let aspect = if dz_dx.abs() < 1e-15 && dz_dy.abs() < 1e-15 {
+            0.0
+        } else {
+            let a = (-dz_dy).atan2(-dz_dx);
+            if a < 0.0 { a + 2.0 * std::f64::consts::PI } else { a }
+        };
+
+        let sin_s = slope.sin();
+        let cos_s = slope.cos();
+        Some((sin_s * aspect.sin(), sin_s * aspect.cos(), cos_s))
+    }
+}
+
+impl surtgis_core::WindowAlgorithm for VrmStreaming {
+    fn kernel_radius(&self) -> usize {
+        // Need radius for neighborhood + 1 for Horn's method at the border neighbors
+        self.radius + 1
+    }
+
+    fn process_chunk(
+        &self,
+        input: &Array2<f64>,
+        output: &mut Array2<f64>,
+        _nodata: Option<f64>,
+        _cell_size_x: f64,
+        _cell_size_y: f64,
+    ) {
+        let (in_rows, cols) = input.dim();
+        let out_rows = output.nrows();
+        let kr = self.radius + 1; // kernel radius (the value returned by kernel_radius)
+        let r = self.radius;
+
+        for row_out in 0..out_rows {
+            let ir = row_out + kr; // input row corresponding to output row
+
+            // Check vertical edges: need full kernel above and below
+            if ir < kr || ir + kr >= in_rows {
+                for c in 0..cols {
+                    output[[row_out, c]] = f64::NAN;
+                }
+                continue;
+            }
+
+            for c in 0..cols {
+                // Check horizontal edges: need r+1 on each side
+                if c < kr || c + kr >= cols {
+                    output[[row_out, c]] = f64::NAN;
+                    continue;
+                }
+
+                // Sum normal vectors in the neighborhood
+                let mut sum_x = 0.0;
+                let mut sum_y = 0.0;
+                let mut sum_z = 0.0;
+                let mut count = 0_usize;
+
+                for nr in (ir - r)..=(ir + r) {
+                    for nc in (c - r)..=(c + r) {
+                        if let Some((nx, ny, nz)) = Self::normal_at(input, nr, nc) {
+                            sum_x += nx;
+                            sum_y += ny;
+                            sum_z += nz;
+                            count += 1;
+                        }
+                    }
+                }
+
+                if count > 0 {
+                    let resultant = (sum_x * sum_x + sum_y * sum_y + sum_z * sum_z).sqrt();
+                    output[[row_out, c]] = 1.0 - resultant / count as f64;
+                } else {
+                    output[[row_out, c]] = f64::NAN;
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

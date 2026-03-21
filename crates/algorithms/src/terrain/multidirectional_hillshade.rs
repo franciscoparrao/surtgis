@@ -153,6 +153,144 @@ pub fn multidirectional_hillshade(
     Ok(output)
 }
 
+// ─── Streaming implementation ──────────────────────────────────────────
+
+/// Streaming multi-directional hillshade calculator implementing `WindowAlgorithm`.
+///
+/// Processes a DEM strip-by-strip with bounded memory.
+/// Uses the same USGS Mark (1992) method as `multidirectional_hillshade()`:
+/// weighted blend of hillshade from 6 azimuths.
+#[derive(Debug, Clone)]
+pub struct MultiHillshadeStreaming {
+    pub altitude: f64,
+    pub z_factor: f64,
+    pub normalized: bool,
+}
+
+impl Default for MultiHillshadeStreaming {
+    fn default() -> Self {
+        Self {
+            altitude: 45.0,
+            z_factor: 1.0,
+            normalized: false,
+        }
+    }
+}
+
+impl surtgis_core::WindowAlgorithm for MultiHillshadeStreaming {
+    fn kernel_radius(&self) -> usize {
+        1 // 3x3 Horn kernel
+    }
+
+    fn process_chunk(
+        &self,
+        input: &Array2<f64>,
+        output: &mut Array2<f64>,
+        nodata: Option<f64>,
+        cell_size_x: f64,
+        _cell_size_y: f64,
+    ) {
+        let (in_rows, cols) = input.dim();
+        let out_rows = output.nrows();
+        let radius = 1;
+
+        let cell_size = cell_size_x * self.z_factor;
+        let eight_cs = 8.0 * cell_size;
+
+        let zenith_rad = (90.0 - self.altitude).to_radians();
+        let cos_zenith = zenith_rad.cos();
+        let sin_zenith = zenith_rad.sin();
+
+        // 6 equally-spaced azimuths converted to the mathematical convention
+        let azimuths_rad: Vec<f64> = (0..6)
+            .map(|i| (360.0 - (i as f64 * 60.0) + 90.0).to_radians())
+            .collect();
+
+        for r in 0..out_rows {
+            let ir = r + radius; // input row corresponding to output row r
+            if ir == 0 || ir >= in_rows - 1 {
+                for c in 0..cols {
+                    output[[r, c]] = f64::NAN;
+                }
+                continue;
+            }
+
+            for c in 0..cols {
+                if c == 0 || c >= cols - 1 {
+                    output[[r, c]] = f64::NAN;
+                    continue;
+                }
+
+                let e = input[[ir, c]];
+                if e.is_nan()
+                    || nodata.map_or(false, |nd| (e - nd).abs() < f64::EPSILON)
+                {
+                    output[[r, c]] = f64::NAN;
+                    continue;
+                }
+
+                let a = input[[ir - 1, c - 1]];
+                let b = input[[ir - 1, c]];
+                let cv = input[[ir - 1, c + 1]];
+                let d = input[[ir, c - 1]];
+                let f = input[[ir, c + 1]];
+                let g = input[[ir + 1, c - 1]];
+                let h = input[[ir + 1, c]];
+                let i = input[[ir + 1, c + 1]];
+
+                if [a, b, cv, d, f, g, h, i].iter().any(|v| v.is_nan()) {
+                    output[[r, c]] = f64::NAN;
+                    continue;
+                }
+
+                // Horn's method gradients
+                let dz_dx = ((cv + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_cs;
+                let dz_dy = ((g + 2.0 * h + i) - (a + 2.0 * b + cv)) / eight_cs;
+
+                let slope_rad = (dz_dx * dz_dx + dz_dy * dz_dy).sqrt().atan();
+                let cos_slope = slope_rad.cos();
+                let sin_slope = slope_rad.sin();
+
+                let aspect_rad = if dz_dx.abs() < 1e-10 && dz_dy.abs() < 1e-10 {
+                    0.0
+                } else {
+                    let asp = (-dz_dy).atan2(-dz_dx);
+                    if asp < 0.0 { 2.0 * PI + asp } else { asp }
+                };
+
+                // Compute weighted blend of hillshade from each azimuth
+                let mut weighted_sum = 0.0;
+                let mut weight_total = 0.0;
+
+                for az in &azimuths_rad {
+                    let shade = cos_zenith * cos_slope
+                        + sin_zenith * sin_slope * (az - aspect_rad).cos();
+                    let shade = shade.max(0.0);
+
+                    // Weight: highest when azimuth is perpendicular to aspect
+                    let angle_diff = az - aspect_rad + PI / 2.0;
+                    let w = 1.0 + angle_diff.cos().powi(2);
+
+                    weighted_sum += shade * w;
+                    weight_total += w;
+                }
+
+                let shade_val = if weight_total > 0.0 {
+                    (weighted_sum / weight_total).min(1.0)
+                } else {
+                    0.0
+                };
+
+                output[[r, c]] = if self.normalized {
+                    shade_val
+                } else {
+                    (shade_val * 255.0).round()
+                };
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
