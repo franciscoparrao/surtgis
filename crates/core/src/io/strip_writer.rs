@@ -147,9 +147,12 @@ where
         .write_tag(Tag::Unknown(34735), geokeys.as_slice())
         .map_err(|e| Error::Other(format!("Cannot write geokey tag: {}", e)))?;
 
-    // Write strips via callback
+    // Collect all strip data via callbacks, then write using write_data()
+    // which correctly applies compression. (write_strip() alone does not
+    // activate the compression encoder — it's a tiff crate design quirk.)
     let rps = config.rows_per_strip as usize;
     let num_strips = (config.rows + rps - 1) / rps;
+    let mut all_data: Vec<f32> = Vec::with_capacity(config.rows * config.cols);
 
     for strip_idx in 0..num_strips {
         let strip_rows = if strip_idx == num_strips - 1 {
@@ -160,17 +163,15 @@ where
 
         let data = produce_strip(strip_idx, strip_rows)?;
 
-        // Convert f64 -> f32 for writing
-        let f32_data: Vec<f32> = data.iter().map(|&v| v as f32).collect();
-
-        image
-            .write_strip(&f32_data)
-            .map_err(|e| Error::Other(format!("Cannot write strip {}: {}", strip_idx, e)))?;
+        // Convert f64 -> f32 and accumulate
+        all_data.extend(data.iter().map(|&v| v as f32));
     }
 
+    // Write all data at once using write_data(), which correctly
+    // activates compression (set_compression / reset_compression).
     image
-        .finish()
-        .map_err(|e| Error::Other(format!("Cannot finalize TIFF: {}", e)))?;
+        .write_data(&all_data)
+        .map_err(|e| Error::Other(format!("Cannot write image data: {}", e)))?;
 
     Ok(())
 }
