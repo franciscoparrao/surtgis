@@ -5,7 +5,7 @@
 use crate::maybe_rayon::*;
 use ndarray::Array2;
 use surtgis_core::raster::Raster;
-use surtgis_core::{Error, Result};
+use surtgis_core::Result;
 
 /// Default SCL classes to keep (clear pixels):
 /// 4=Vegetation, 5=Bare soil, 6=Water, 11=Snow/Ice

@@ -17,8 +17,7 @@ use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::Result;
 
-/// D8 neighbor offsets for 8 facets (E, NE, N, NW, W, SW, S, SE)
-/// Each facet is defined by two adjacent cardinal/diagonal neighbors.
+/// D8 neighbor offsets (E, NE, N, NW, W, SW, S, SE)
 const D8_OFFSETS: [(isize, isize); 8] = [
     (0, 1),   // 0: E
     (-1, 1),  // 1: NE
@@ -36,31 +35,31 @@ const D8_DIST: [f64; 8] = [
     1.0, std::f64::consts::SQRT_2, 1.0, std::f64::consts::SQRT_2,
 ];
 
-/// The 8 triangular facets around a cell.
-/// Each facet is defined by the center cell and two adjacent neighbors.
-/// facet_neighbors[i] = (neighbor_a_index, neighbor_b_index) into D8_OFFSETS.
-/// The angle of facet i starts at the azimuth of neighbor a.
-const FACET_NEIGHBORS: [(usize, usize); 8] = [
-    (0, 1), // E-NE facet (azimuth 0 to π/4)
-    (1, 2), // NE-N facet (π/4 to π/2)
-    (2, 3), // N-NW facet (π/2 to 3π/4)
-    (3, 4), // NW-W facet (3π/4 to π)
-    (4, 5), // W-SW facet (π to 5π/4)
-    (5, 6), // SW-S facet (5π/4 to 3π/2)
-    (6, 7), // S-SE facet (3π/2 to 7π/4)
-    (7, 0), // SE-E facet (7π/4 to 2π)
-];
-
-/// Base angle for each facet (azimuth in radians, clockwise from East=0)
-const FACET_BASE_ANGLE: [f64; 8] = [
-    0.0,                                // E
-    std::f64::consts::FRAC_PI_4,        // NE (π/4)
-    std::f64::consts::FRAC_PI_2,        // N (π/2)
-    3.0 * std::f64::consts::FRAC_PI_4,  // NW (3π/4)
-    std::f64::consts::PI,               // W (π)
-    5.0 * std::f64::consts::FRAC_PI_4,  // SW (5π/4)
-    3.0 * std::f64::consts::FRAC_PI_2,  // S (3π/2)
-    7.0 * std::f64::consts::FRAC_PI_4,  // SE (7π/4)
+/// Tarboton (1997) facet decomposition — matches TauDEM exactly.
+///
+/// Each facet is defined by a CARDINAL neighbor (e1 direction) and an
+/// adjacent DIAGONAL neighbor (e2 direction). The base_angle is the
+/// azimuth of the cardinal direction; `sign` controls whether θ is
+/// added (+1) or subtracted (-1) to reach the diagonal.
+///
+/// Facet tuple: (cardinal_idx, diagonal_idx, base_angle, sign)
+const TARBOTON_FACETS: [(usize, usize, f64, f64); 8] = [
+    // K=1 in TauDEM: E→NE,   angle = 0     + θ
+    (0, 1, 0.0, 1.0),
+    // K=2 in TauDEM: N→NE,   angle = π/2   - θ
+    (2, 1, std::f64::consts::FRAC_PI_2, -1.0),
+    // K=3 in TauDEM: N→NW,   angle = π/2   + θ
+    (2, 3, std::f64::consts::FRAC_PI_2, 1.0),
+    // K=4 in TauDEM: W→NW,   angle = π     - θ
+    (4, 3, std::f64::consts::PI, -1.0),
+    // K=5 in TauDEM: W→SW,   angle = π     + θ
+    (4, 5, std::f64::consts::PI, 1.0),
+    // K=6 in TauDEM: S→SW,   angle = 3π/2  - θ
+    (6, 5, 3.0 * std::f64::consts::FRAC_PI_2, -1.0),
+    // K=7 in TauDEM: S→SE,   angle = 3π/2  + θ
+    (6, 7, 3.0 * std::f64::consts::FRAC_PI_2, 1.0),
+    // K=8 in TauDEM: E→SE,   angle = 2π    - θ
+    (0, 7, 2.0 * std::f64::consts::PI, -1.0),
 ];
 
 /// Result of D-infinity computation
@@ -120,65 +119,69 @@ pub fn flow_direction_dinf(dem: &Raster<f64>) -> Result<Raster<f64>> {
                 zn[idx] = nval;
             }
 
-            // Find steepest facet
+            // Find steepest facet using Tarboton (1997) decomposition.
+            // Each facet uses a CARDINAL neighbor for e1 and an adjacent
+            // DIAGONAL neighbor for e2, with d1 = d2 = cell_size.
             let mut best_slope = 0.0_f64;
             let mut best_angle = -1.0_f64;
 
-            for facet in 0..8 {
-                let (a_idx, b_idx) = FACET_NEIGHBORS[facet];
-
-                if zn[a_idx].is_nan() || zn[b_idx].is_nan() {
-                    // Fall back to single-direction slope for available neighbors
+            for &(card_idx, diag_idx, base_angle, sign) in &TARBOTON_FACETS {
+                if zn[card_idx].is_nan() || zn[diag_idx].is_nan() {
                     continue;
                 }
 
-                // Tarboton's facet decomposition:
-                // e1 = (z0 - z_a) / d1  (slope along the cardinal edge)
-                // e2 = (z_a - z_b) / d2  (slope along the perpendicular)
-                // where d1 and d2 are distances.
+                // e1: slope from center toward cardinal neighbor (d1 = cs)
+                // e2: cross-slope from cardinal toward diagonal (d2 = cs)
+                let e1 = (z0 - zn[card_idx]) / cs;
+                let e2 = (zn[card_idx] - zn[diag_idx]) / cs;
 
-                // For facets where neighbor a is cardinal, d1=cs, d2=cs
-                // For facets where neighbor a is diagonal, d1=diag, d2=cs
-                let d1 = D8_DIST[a_idx] * cs;
-                let d2 = cs; // perpendicular distance within the facet
-
-                let e1 = (z0 - zn[a_idx]) / d1;
-                let e2 = (zn[a_idx] - zn[b_idx]) / d2;
-
-                // Steepest direction within this facet
-                let mut theta: f64; // angle within facet [0, π/4]
+                let theta: f64;
                 let slope: f64;
 
                 if e1 == 0.0 && e2 == 0.0 {
                     continue; // flat facet
                 }
 
-                if e2 == 0.0 {
+                // Use atan2 (matching TauDEM's VSLOPE) to correctly handle
+                // all sign combinations of e1 and e2.
+                let raw = e2.atan2(e1);
+                let ad = std::f64::consts::FRAC_PI_4; // atan2(cs, cs) for square grid
+
+                if raw < 0.0 {
+                    // Steepest direction is along the cardinal edge
                     theta = 0.0;
                     slope = e1;
+                } else if raw > ad {
+                    // Steepest direction is along the diagonal edge
+                    theta = ad;
+                    slope = (z0 - zn[diag_idx]) / diag;
                 } else {
-                    theta = (e2 / e1).atan();
-                    if theta < 0.0 {
-                        theta = 0.0;
-                        slope = e1;
-                    } else if theta > std::f64::consts::FRAC_PI_4 {
-                        theta = std::f64::consts::FRAC_PI_4;
-                        // Slope along the diagonal to neighbor b
-                        slope = (z0 - zn[b_idx]) / diag;
-                    } else {
-                        slope = (e1 * e1 + e2 * e2).sqrt();
-                    }
+                    theta = raw;
+                    slope = (e1 * e1 + e2 * e2).sqrt();
                 }
 
                 if slope > best_slope {
                     best_slope = slope;
-                    best_angle = FACET_BASE_ANGLE[facet] + theta;
+                    let mut angle = base_angle + sign * theta;
+                    // Normalize to [0, 2π)
+                    let two_pi = 2.0 * std::f64::consts::PI;
+                    if angle >= two_pi { angle -= two_pi; }
+                    if angle < 0.0 { angle += two_pi; }
+                    best_angle = angle;
                 }
             }
 
-            // If no steepest facet found but we have downslope neighbors,
-            // fall back to D8-style single-direction
+            // Fallback for edge/nodata cells: D8-style single-direction
             if best_angle < 0.0 && !all_valid {
+                let cardinal_angles = [
+                    0.0, std::f64::consts::FRAC_PI_4,
+                    std::f64::consts::FRAC_PI_2,
+                    3.0 * std::f64::consts::FRAC_PI_4,
+                    std::f64::consts::PI,
+                    5.0 * std::f64::consts::FRAC_PI_4,
+                    3.0 * std::f64::consts::FRAC_PI_2,
+                    7.0 * std::f64::consts::FRAC_PI_4,
+                ];
                 for (idx, _) in D8_OFFSETS.iter().enumerate() {
                     if zn[idx].is_nan() {
                         continue;
@@ -187,7 +190,7 @@ pub fn flow_direction_dinf(dem: &Raster<f64>) -> Result<Raster<f64>> {
                     let slope = (z0 - zn[idx]) / dist;
                     if slope > best_slope {
                         best_slope = slope;
-                        best_angle = FACET_BASE_ANGLE[idx];
+                        best_angle = cardinal_angles[idx];
                     }
                 }
             }
@@ -247,7 +250,6 @@ pub fn flow_dinf(dem: &Raster<f64>) -> Result<DinfResult> {
     }
 
     let pi4 = std::f64::consts::FRAC_PI_4;
-    let two_pi = 2.0 * std::f64::consts::PI;
 
     for &(row, col, _) in &cells {
         let angle = angle_raster.get(row, col).unwrap();
@@ -257,37 +259,36 @@ pub fn flow_dinf(dem: &Raster<f64>) -> Result<DinfResult> {
 
         let current_acc = accumulation[(row, col)];
 
-        // Determine which two D8 neighbors bracket this angle
-        // facet index = floor(angle / (π/4))
-        let facet = ((angle / pi4) % 8.0).floor() as usize;
-        let facet = facet.min(7); // safety clamp
+        // Determine which two D8 neighbors bracket this angle.
+        // D8 directions: E=0, NE=1, N=2, NW=3, W=4, SW=5, S=6, SE=7
+        // at angles 0, π/4, π/2, ..., 7π/4
+        let sector = ((angle / pi4) % 8.0).floor() as usize;
+        let lower_idx = sector.min(7);
+        let upper_idx = (lower_idx + 1) % 8;
 
-        let (a_idx, b_idx) = FACET_NEIGHBORS[facet];
-
-        // Angular offset within the facet
-        let base = FACET_BASE_ANGLE[facet];
-        let mut alpha = angle - base;
-        if alpha < 0.0 { alpha += two_pi; }
+        // Angular offset within the sector [0, π/4]
+        let mut alpha = angle - (lower_idx as f64) * pi4;
+        if alpha < 0.0 { alpha = 0.0; }
         if alpha > pi4 { alpha = pi4; }
 
-        // Proportion to neighbor b (at base + π/4)
-        let frac_b = alpha / pi4;
-        let frac_a = 1.0 - frac_b;
+        // Proportional split
+        let frac_upper = alpha / pi4;
+        let frac_lower = 1.0 - frac_upper;
 
-        // Distribute to neighbor a
-        let (dr_a, dc_a) = D8_OFFSETS[a_idx];
-        let nr_a = row as isize + dr_a;
-        let nc_a = col as isize + dc_a;
-        if nr_a >= 0 && nc_a >= 0 && (nr_a as usize) < rows && (nc_a as usize) < cols {
-            accumulation[(nr_a as usize, nc_a as usize)] += current_acc * frac_a;
+        // Distribute to lower neighbor
+        let (dr_lo, dc_lo) = D8_OFFSETS[lower_idx];
+        let nr_lo = row as isize + dr_lo;
+        let nc_lo = col as isize + dc_lo;
+        if nr_lo >= 0 && nc_lo >= 0 && (nr_lo as usize) < rows && (nc_lo as usize) < cols {
+            accumulation[(nr_lo as usize, nc_lo as usize)] += current_acc * frac_lower;
         }
 
-        // Distribute to neighbor b
-        let (dr_b, dc_b) = D8_OFFSETS[b_idx];
-        let nr_b = row as isize + dr_b;
-        let nc_b = col as isize + dc_b;
-        if nr_b >= 0 && nc_b >= 0 && (nr_b as usize) < rows && (nc_b as usize) < cols {
-            accumulation[(nr_b as usize, nc_b as usize)] += current_acc * frac_b;
+        // Distribute to upper neighbor
+        let (dr_up, dc_up) = D8_OFFSETS[upper_idx];
+        let nr_up = row as isize + dr_up;
+        let nc_up = col as isize + dc_up;
+        if nr_up >= 0 && nc_up >= 0 && (nr_up as usize) < rows && (nc_up as usize) < cols {
+            accumulation[(nr_up as usize, nc_up as usize)] += current_acc * frac_upper;
         }
     }
 

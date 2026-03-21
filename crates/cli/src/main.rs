@@ -1299,6 +1299,7 @@ fn resolve_asset_key<'a>(item: &'a StacItem, key: &'a str) -> Option<(&'a str, &
 
 /// Fetch a single asset from a STAC item as a raster.
 #[cfg(feature = "cloud")]
+#[allow(dead_code)]
 fn fetch_stac_asset(
     item: &StacItem,
     asset_key: &str,
@@ -3510,6 +3511,7 @@ fn main() -> Result<()> {
 
                 // ── Phase 1: Resolve asset URLs for all items (no data download) ──
                 // For each date, collect (data_href, scl_href, epsg) tuples
+                #[allow(dead_code)]
                 struct SceneInfo {
                     date: String,
                     data_hrefs: Vec<String>,

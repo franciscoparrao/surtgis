@@ -22,16 +22,25 @@ use surtgis_algorithms::terrain::{
     curvedness as compute_curvedness,
     sky_view_factor as compute_svf,
     uncertainty as compute_uncertainty,
+    viewshed as compute_viewshed,
+    positive_openness, negative_openness,
+    mrvbf as compute_mrvbf,
+    vrm as compute_vrm,
+    advanced_curvatures,
     AspectOutput, HillshadeParams, SlopeParams, SlopeUnits,
     CurvatureParams, CurvatureType, CurvatureFormula, DerivativeMethod,
     TpiParams, TriParams, GeomorphonParams, DevParams,
-    MultiHillshadeParams, SvfParams,
-    UncertaintyParams,
+    MultiHillshadeParams, SvfParams, OpennessParams, MrvbfParams, VrmParams,
+    UncertaintyParams, ViewshedParams, AdvancedCurvatureType,
 };
 use surtgis_algorithms::hydrology::{
     fill_sinks, flow_direction, flow_accumulation,
+    flow_direction_dinf as compute_flow_direction_dinf,
     priority_flood, hand as compute_hand,
+    breach_depressions, flow_accumulation_mfd,
+    stream_network as compute_stream_network,
     FillSinksParams, PriorityFloodParams, HandParams,
+    BreachParams, MfdParams, StreamNetworkParams,
 };
 use surtgis_algorithms::imagery::{
     ndvi as compute_ndvi, ndwi as compute_ndwi, savi as compute_savi,
@@ -329,6 +338,126 @@ fn uncertainty_slope<'py>(
     Ok(raster_to_numpy(py, &result.slope_rmse))
 }
 
+/// Compute viewshed from observer location.
+#[pyfunction]
+#[pyo3(signature = (dem, cell_size=1.0, observer_row=0, observer_col=0, observer_height=1.8, target_height=0.0, max_radius=0))]
+fn viewshed_compute<'py>(
+    py: Python<'py>,
+    dem: PyReadonlyArray2<'py, f64>,
+    cell_size: f64,
+    observer_row: usize,
+    observer_col: usize,
+    observer_height: f64,
+    target_height: f64,
+    max_radius: usize,
+) -> PyResult<Bound<'py, PyArray2<u8>>> {
+    let raster = numpy_to_raster(&dem, cell_size)?;
+    let result = compute_viewshed(&raster, ViewshedParams {
+        observer_row, observer_col,
+        observer_height, target_height,
+        max_radius,
+    }).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(raster_u8_to_numpy(py, &result))
+}
+
+/// Compute positive openness (above-horizon visibility).
+#[pyfunction]
+#[pyo3(signature = (dem, cell_size=1.0, directions=8, radius=10))]
+fn openness_positive<'py>(
+    py: Python<'py>,
+    dem: PyReadonlyArray2<'py, f64>,
+    cell_size: f64,
+    directions: usize,
+    radius: usize,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let raster = numpy_to_raster(&dem, cell_size)?;
+    let result = positive_openness(&raster, OpennessParams { directions, radius })
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(raster_to_numpy(py, &result))
+}
+
+/// Compute negative openness (below-horizon enclosure).
+#[pyfunction]
+#[pyo3(signature = (dem, cell_size=1.0, directions=8, radius=10))]
+fn openness_negative<'py>(
+    py: Python<'py>,
+    dem: PyReadonlyArray2<'py, f64>,
+    cell_size: f64,
+    directions: usize,
+    radius: usize,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let raster = numpy_to_raster(&dem, cell_size)?;
+    let result = negative_openness(&raster, OpennessParams { directions, radius })
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(raster_to_numpy(py, &result))
+}
+
+/// Compute MRVBF (Multi-resolution Valley Bottom Flatness).
+/// Returns a tuple (mrvbf, mrrtf).
+#[pyfunction]
+#[pyo3(signature = (dem, cell_size=1.0))]
+fn mrvbf_compute<'py>(
+    py: Python<'py>,
+    dem: PyReadonlyArray2<'py, f64>,
+    cell_size: f64,
+) -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>)> {
+    let raster = numpy_to_raster(&dem, cell_size)?;
+    let (mrvbf, mrrtf) = compute_mrvbf(&raster, MrvbfParams::default())
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok((raster_to_numpy(py, &mrvbf), raster_to_numpy(py, &mrrtf)))
+}
+
+/// Compute VRM (Vector Ruggedness Measure).
+#[pyfunction]
+#[pyo3(signature = (dem, cell_size=1.0, radius=1))]
+fn vrm_compute<'py>(
+    py: Python<'py>,
+    dem: PyReadonlyArray2<'py, f64>,
+    cell_size: f64,
+    radius: usize,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let raster = numpy_to_raster(&dem, cell_size)?;
+    let result = compute_vrm(&raster, VrmParams { radius })
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(raster_to_numpy(py, &result))
+}
+
+/// Compute advanced curvature (Florinsky system).
+/// ctype options: "mean_h", "gaussian_k", "unsphericity_m", "difference_e",
+/// "minimal_kmin", "maximal_kmax", "horizontal_kh", "vertical_kv",
+/// "horizontal_excess_khe", "vertical_excess_kve", "accumulation_ka",
+/// "ring_kr", "rotor", "laplacian"
+#[pyfunction]
+#[pyo3(signature = (dem, cell_size=1.0, ctype="mean_h"))]
+fn advanced_curvature<'py>(
+    py: Python<'py>,
+    dem: PyReadonlyArray2<'py, f64>,
+    cell_size: f64,
+    ctype: &str,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let raster = numpy_to_raster(&dem, cell_size)?;
+    let curv_type = match ctype {
+        "mean_h" | "mean" => AdvancedCurvatureType::MeanH,
+        "gaussian_k" | "gaussian" => AdvancedCurvatureType::GaussianK,
+        "unsphericity_m" | "unsphericity" => AdvancedCurvatureType::UnsphericitytM,
+        "difference_e" | "difference" => AdvancedCurvatureType::DifferenceE,
+        "minimal_kmin" | "kmin" => AdvancedCurvatureType::MinimalKmin,
+        "maximal_kmax" | "kmax" => AdvancedCurvatureType::MaximalKmax,
+        "horizontal_kh" | "kh" => AdvancedCurvatureType::HorizontalKh,
+        "vertical_kv" | "kv" => AdvancedCurvatureType::VerticalKv,
+        "horizontal_excess_khe" | "khe" => AdvancedCurvatureType::HorizontalExcessKhe,
+        "vertical_excess_kve" | "kve" => AdvancedCurvatureType::VerticalExcessKve,
+        "accumulation_ka" | "ka" => AdvancedCurvatureType::AccumulationKa,
+        "ring_kr" | "kr" => AdvancedCurvatureType::RingKr,
+        "rotor" => AdvancedCurvatureType::Rotor,
+        "laplacian" => AdvancedCurvatureType::Laplacian,
+        _ => return Err(PyValueError::new_err(format!("Unknown curvature type: {}", ctype))),
+    };
+    let result = advanced_curvatures(&raster, curv_type)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(raster_to_numpy(py, &result))
+}
+
 // ===========================================================================
 // Hydrology
 // ===========================================================================
@@ -373,6 +502,21 @@ fn flow_direction_d8<'py>(
     let result = flow_direction(&raster)
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_u8_to_numpy(py, &result))
+}
+
+/// Compute D-infinity flow direction (Tarboton 1997).
+/// Returns continuous flow angles in radians [0, 2π), -1 for pits.
+#[pyfunction]
+#[pyo3(signature = (dem, cell_size=1.0))]
+fn flow_direction_dinf<'py>(
+    py: Python<'py>,
+    dem: PyReadonlyArray2<'py, f64>,
+    cell_size: f64,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let raster = numpy_to_raster(&dem, cell_size)?;
+    let result = compute_flow_direction_dinf(&raster)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(raster_to_numpy(py, &result))
 }
 
 /// Compute flow accumulation from D8 flow direction raster.
@@ -430,6 +574,58 @@ fn hand_compute<'py>(
     let result = compute_hand(&raster, &fdir, &facc, HandParams { stream_threshold })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
+}
+
+/// Breach depressions (Lindsay 2016) - preferred over filling.
+#[pyfunction]
+#[pyo3(signature = (dem, cell_size=1.0))]
+fn breach_fill<'py>(
+    py: Python<'py>,
+    dem: PyReadonlyArray2<'py, f64>,
+    cell_size: f64,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let raster = numpy_to_raster(&dem, cell_size)?;
+    let result = breach_depressions(&raster, BreachParams::default())
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(raster_to_numpy(py, &result))
+}
+
+/// Compute MFD (Multiple Flow Direction) accumulation.
+#[pyfunction]
+#[pyo3(signature = (dem, cell_size=1.0, exponent=1.1))]
+fn flow_accumulation_mfd_compute<'py>(
+    py: Python<'py>,
+    dem: PyReadonlyArray2<'py, f64>,
+    cell_size: f64,
+    exponent: f64,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let raster = numpy_to_raster(&dem, cell_size)?;
+    let filled = fill_sinks(&raster, FillSinksParams::default())
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = flow_accumulation_mfd(&filled, MfdParams { exponent })
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(raster_to_numpy(py, &result))
+}
+
+/// Extract stream network from flow accumulation.
+#[pyfunction]
+#[pyo3(signature = (dem, cell_size=1.0, threshold=1000.0))]
+fn stream_network_compute<'py>(
+    py: Python<'py>,
+    dem: PyReadonlyArray2<'py, f64>,
+    cell_size: f64,
+    threshold: f64,
+) -> PyResult<Bound<'py, PyArray2<u8>>> {
+    let raster = numpy_to_raster(&dem, cell_size)?;
+    let filled = fill_sinks(&raster, FillSinksParams::default())
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let fdir = flow_direction(&filled)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let facc = flow_accumulation(&fdir)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = compute_stream_network(&facc, StreamNetworkParams { threshold })
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(raster_u8_to_numpy(py, &result))
 }
 
 // ===========================================================================
@@ -639,14 +835,24 @@ fn surtgis(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(curvedness_compute, m)?)?;
     m.add_function(wrap_pyfunction!(sky_view_factor_compute, m)?)?;
     m.add_function(wrap_pyfunction!(uncertainty_slope, m)?)?;
+    m.add_function(wrap_pyfunction!(viewshed_compute, m)?)?;
+    m.add_function(wrap_pyfunction!(openness_positive, m)?)?;
+    m.add_function(wrap_pyfunction!(openness_negative, m)?)?;
+    m.add_function(wrap_pyfunction!(mrvbf_compute, m)?)?;
+    m.add_function(wrap_pyfunction!(vrm_compute, m)?)?;
+    m.add_function(wrap_pyfunction!(advanced_curvature, m)?)?;
 
     // Hydrology
     m.add_function(wrap_pyfunction!(fill_depressions, m)?)?;
     m.add_function(wrap_pyfunction!(priority_flood_fill, m)?)?;
     m.add_function(wrap_pyfunction!(flow_direction_d8, m)?)?;
+    m.add_function(wrap_pyfunction!(flow_direction_dinf, m)?)?;
     m.add_function(wrap_pyfunction!(flow_accumulation_d8, m)?)?;
     m.add_function(wrap_pyfunction!(twi_compute, m)?)?;
     m.add_function(wrap_pyfunction!(hand_compute, m)?)?;
+    m.add_function(wrap_pyfunction!(breach_fill, m)?)?;
+    m.add_function(wrap_pyfunction!(flow_accumulation_mfd_compute, m)?)?;
+    m.add_function(wrap_pyfunction!(stream_network_compute, m)?)?;
 
     // Imagery
     m.add_function(wrap_pyfunction!(ndvi_compute, m)?)?;
