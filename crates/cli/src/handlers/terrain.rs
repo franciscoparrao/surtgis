@@ -5,14 +5,16 @@ use std::time::Instant;
 
 use surtgis_algorithms::terrain::{
     advanced_curvatures, aspect, convergence_index, curvature, dev, eastness, geomorphons,
-    hillshade, landform_classification, mrvbf, multidirectional_hillshade, negative_openness,
-    northness, positive_openness, sky_view_factor, slope, tpi, tri, viewshed, vrm,
+    hillshade, landform_classification, ls_factor, mrvbf, multidirectional_hillshade,
+    negative_openness, northness, positive_openness, relative_slope_position, sky_view_factor,
+    slope, surface_area_ratio, tpi, tri, valley_depth, viewshed, vrm,
     AspectOutput, AspectStreaming, ConvergenceParams, ConvergenceStreaming,
     CurvatureParams, CurvatureStreaming, CurvatureType, DevParams, DevStreaming,
     EastnessStreaming, GeomorphonParams, HillshadeParams, HillshadeStreaming, LandformParams,
-    MultiHillshadeParams, MultiHillshadeStreaming, MrvbfParams, NorthnessStreaming, OpennessParams,
-    SlopeParams, SlopeStreaming, SlopeUnits, SvfParams, TpiParams, TpiStreaming, TriParams,
-    TriStreaming, ViewshedParams, VrmParams, VrmStreaming,
+    LsFactorParams, MultiHillshadeParams, MultiHillshadeStreaming, MrvbfParams,
+    NorthnessStreaming, OpennessParams, SarParams, SlopeParams, SlopeStreaming, SlopeUnits,
+    SvfParams, TpiParams, TpiStreaming, TriParams, TriStreaming, ViewshedParams, VrmParams,
+    VrmStreaming,
 };
 use surtgis_core::StripProcessor;
 
@@ -549,6 +551,47 @@ pub fn handle(algorithm: TerrainCommands, compress: bool, streaming: bool) -> Re
                 write_result(&result, &output, compress)?;
                 done("Multi-directional hillshade", &output, elapsed);
             }
+        }
+
+        TerrainCommands::LsFactor { flow_acc, slope: slope_path, output, cell_size } => {
+            let facc = read_dem(&flow_acc)?;
+            let slp = read_dem(&slope_path)?;
+            let start = Instant::now();
+            let result = ls_factor(&facc, &slp, LsFactorParams { cell_size, ..Default::default() })
+                .context("Failed to compute LS-Factor")?;
+            let elapsed = start.elapsed();
+            write_result(&result, &output, compress)?;
+            done("LS-Factor", &output, elapsed);
+        }
+
+        TerrainCommands::ValleyDepth { input, output } => {
+            let dem = read_dem(&input)?;
+            let start = Instant::now();
+            let result = valley_depth(&dem).context("Failed to compute valley depth")?;
+            let elapsed = start.elapsed();
+            write_result(&result, &output, compress)?;
+            done("Valley depth", &output, elapsed);
+        }
+
+        TerrainCommands::RelativeSlopePosition { hand, valley_depth: vd_path, output } => {
+            let hand_r = read_dem(&hand)?;
+            let vd_r = read_dem(&vd_path)?;
+            let start = Instant::now();
+            let result = relative_slope_position(&hand_r, &vd_r)
+                .context("Failed to compute relative slope position")?;
+            let elapsed = start.elapsed();
+            write_result(&result, &output, compress)?;
+            done("Relative slope position", &output, elapsed);
+        }
+
+        TerrainCommands::SurfaceAreaRatio { input, output, radius } => {
+            let dem = read_dem(&input)?;
+            let start = Instant::now();
+            let result = surface_area_ratio(&dem, SarParams { radius })
+                .context("Failed to compute surface area ratio")?;
+            let elapsed = start.elapsed();
+            write_result(&result, &output, compress)?;
+            done("Surface area ratio", &output, elapsed);
         }
 
         TerrainCommands::All { input, outdir } => {

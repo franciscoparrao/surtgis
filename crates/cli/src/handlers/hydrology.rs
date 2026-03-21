@@ -4,10 +4,12 @@ use anyhow::{Context, Result};
 use std::time::Instant;
 
 use surtgis_algorithms::hydrology::{
-    breach_depressions, fill_sinks, flow_accumulation, flow_accumulation_mfd, flow_direction,
-    flow_direction_dinf, hand, priority_flood, stream_network, watershed, BreachParams,
-    FillSinksParams, HandParams, MfdParams, PriorityFloodParams, StreamNetworkParams,
-    WatershedParams,
+    basin_morphometry, breach_depressions, drainage_density, fill_sinks, flow_accumulation,
+    flow_accumulation_mfd, flow_direction, flow_direction_dinf, hand, hypsometric_integral,
+    priority_flood, sediment_connectivity, stream_network, watershed,
+    BreachParams, DrainageDensityParams,
+    FillSinksParams, HandParams, MfdParams, PriorityFloodParams, SedimentConnectivityParams,
+    StreamNetworkParams, WatershedParams,
 };
 use surtgis_algorithms::terrain::{slope, twi, SlopeParams, SlopeUnits};
 
@@ -208,6 +210,68 @@ pub fn handle(algorithm: HydrologyCommands, compress: bool) -> Result<()> {
             let elapsed = start.elapsed();
             write_result_u8(&result, &output, compress)?;
             done("Stream network", &output, elapsed);
+        }
+
+        HydrologyCommands::DrainageDensity { input, output, radius, cell_size } => {
+            let streams = read_dem(&input)?;
+            let start = Instant::now();
+            let result = drainage_density(&streams, DrainageDensityParams { radius, cell_size })
+                .context("Failed to compute drainage density")?;
+            let elapsed = start.elapsed();
+            write_result(&result, &output, compress)?;
+            done("Drainage density", &output, elapsed);
+        }
+
+        HydrologyCommands::HypsometricIntegral { dem, watersheds } => {
+            let dem_r = read_dem(&dem)?;
+            let ws_r: surtgis_core::Raster<i32> = surtgis_core::io::read_geotiff(&watersheds, None)
+                .context("Failed to read watershed raster")?;
+            let start = Instant::now();
+            let hi = hypsometric_integral(&dem_r, &ws_r)
+                .context("Failed to compute hypsometric integral")?;
+            let elapsed = start.elapsed();
+            println!("{:<12} {:>10}", "Watershed", "HI");
+            println!("{}", "-".repeat(24));
+            let mut sorted: Vec<_> = hi.iter().collect();
+            sorted.sort_by_key(|&(&k, _)| k);
+            for &(&id, &val) in &sorted {
+                println!("{:<12} {:>10.4}", id, val);
+            }
+            println!("\n  Processing time: {:.2?}", elapsed);
+        }
+
+        HydrologyCommands::SedimentConnectivity { slope, flow_acc, flow_dir, output, threshold } => {
+            let slp = read_dem(&slope)?;
+            let facc = read_dem(&flow_acc)?;
+            let fdir: surtgis_core::Raster<u8> = surtgis_core::io::read_geotiff(&flow_dir, None)
+                .context("Failed to read flow direction")?;
+            let start = Instant::now();
+            let result = sediment_connectivity(
+                &slp, &facc, &fdir,
+                SedimentConnectivityParams { stream_threshold: threshold },
+                None,
+            ).context("Failed to compute sediment connectivity")?;
+            let elapsed = start.elapsed();
+            write_result(&result, &output, compress)?;
+            done("Sediment connectivity", &output, elapsed);
+        }
+
+        HydrologyCommands::BasinMorphometry { input, cell_size } => {
+            let ws_r: surtgis_core::Raster<i32> = surtgis_core::io::read_geotiff(&input, None)
+                .context("Failed to read watershed raster")?;
+            let start = Instant::now();
+            let metrics = basin_morphometry(&ws_r, cell_size)
+                .context("Failed to compute basin morphometry")?;
+            let elapsed = start.elapsed();
+            println!("{:<8} {:>10} {:>10} {:>10} {:>10} {:>10}",
+                "Basin", "Area(m2)", "Perim(m)", "Circular", "Elongat", "Compact");
+            println!("{}", "-".repeat(68));
+            for m in &metrics {
+                println!("{:<8} {:>10.1} {:>10.1} {:>10.4} {:>10.4} {:>10.4}",
+                    m.watershed_id, m.area_m2, m.perimeter_m,
+                    m.circularity, m.elongation, m.compactness);
+            }
+            println!("\n  Processing time: {:.2?}", elapsed);
         }
 
         HydrologyCommands::All {

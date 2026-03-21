@@ -287,6 +287,43 @@ pub enum TerrainCommands {
         input: PathBuf,
         output: PathBuf,
     },
+    /// LS-Factor for RUSLE soil erosion model
+    LsFactor {
+        /// Flow accumulation raster
+        #[arg(long)]
+        flow_acc: PathBuf,
+        /// Slope raster (radians)
+        #[arg(long)]
+        slope: PathBuf,
+        /// Output file
+        output: PathBuf,
+        /// Cell size in meters
+        #[arg(long, default_value = "1.0")]
+        cell_size: f64,
+    },
+    /// Valley depth: vertical distance to ridge surface
+    ValleyDepth {
+        input: PathBuf,
+        output: PathBuf,
+    },
+    /// Relative Slope Position (0=valley, 1=ridge)
+    RelativeSlopePosition {
+        /// HAND raster
+        #[arg(long)]
+        hand: PathBuf,
+        /// Valley depth raster
+        #[arg(long)]
+        valley_depth: PathBuf,
+        /// Output file
+        output: PathBuf,
+    },
+    /// Surface Area Ratio (3D/2D area roughness)
+    SurfaceAreaRatio {
+        input: PathBuf,
+        output: PathBuf,
+        #[arg(short, long, default_value = "1")]
+        radius: usize,
+    },
     /// Compute all standard terrain factors in one pass
     All {
         /// Input DEM file
@@ -393,6 +430,49 @@ pub enum HydrologyCommands {
         /// Contributing area threshold
         #[arg(long, default_value = "1000")]
         threshold: f64,
+    },
+    /// Drainage density: stream length per unit area
+    DrainageDensity {
+        /// Stream network raster (binary: 1=stream)
+        input: PathBuf,
+        output: PathBuf,
+        #[arg(short, long, default_value = "10")]
+        radius: usize,
+        #[arg(long, default_value = "1.0")]
+        cell_size: f64,
+    },
+    /// Hypsometric integral per watershed
+    HypsometricIntegral {
+        /// DEM file
+        #[arg(long)]
+        dem: PathBuf,
+        /// Watershed raster (i32 IDs)
+        #[arg(long)]
+        watersheds: PathBuf,
+    },
+    /// Sediment Connectivity Index (Borselli 2008)
+    SedimentConnectivity {
+        /// Slope raster (radians)
+        #[arg(long)]
+        slope: PathBuf,
+        /// Flow accumulation raster
+        #[arg(long)]
+        flow_acc: PathBuf,
+        /// D8 flow direction raster
+        #[arg(long)]
+        flow_dir: PathBuf,
+        /// Output file
+        output: PathBuf,
+        /// Stream threshold (flow accumulation cells)
+        #[arg(long, default_value = "1000")]
+        threshold: f64,
+    },
+    /// Basin morphometric parameters per watershed
+    BasinMorphometry {
+        /// Watershed raster (i32 IDs)
+        input: PathBuf,
+        #[arg(long, default_value = "1.0")]
+        cell_size: f64,
     },
     /// Compute full hydrology pipeline from DEM
     All {
@@ -621,6 +701,21 @@ pub enum ImageryCommands {
         input: Vec<PathBuf>,
         /// Output file
         output: PathBuf,
+    },
+    /// dNBR: differenced Normalized Burn Ratio (pre/post fire)
+    Dnbr {
+        #[arg(long)]
+        pre_nir: PathBuf,
+        #[arg(long)]
+        pre_swir: PathBuf,
+        #[arg(long)]
+        post_nir: PathBuf,
+        #[arg(long)]
+        post_swir: PathBuf,
+        output: PathBuf,
+        /// Also output burn severity classification
+        #[arg(long)]
+        severity_output: Option<PathBuf>,
     },
     /// Cloud mask using Sentinel-2 SCL band
     CloudMask {

@@ -5,9 +5,9 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use surtgis_algorithms::imagery::{
-    band_math_binary, bsi, cloud_mask_scl, evi, evi2, gndvi, index_builder, median_composite,
-    mndwi, msavi, nbr, ndbi, ndmi, ndre, ndsi, ndvi, ndwi, ngrdi, reci, reclassify, savi,
-    EviParams, ReclassifyParams, SaviParams,
+    band_math_binary, bsi, burn_severity_classify, cloud_mask_scl, dnbr, evi, evi2, gndvi,
+    index_builder, median_composite, mndwi, msavi, nbr, ndbi, ndmi, ndre, ndsi, ndvi, ndwi,
+    ngrdi, reci, reclassify, savi, EviParams, ReclassifyParams, SaviParams,
 };
 
 use crate::commands::ImageryCommands;
@@ -288,6 +288,25 @@ pub fn handle(algorithm: ImageryCommands, compress: bool) -> Result<()> {
             write_result(&result, &output, compress)?;
             println!("  {} input rasters composited", input.len());
             done("Median composite", &output, elapsed);
+        }
+
+        ImageryCommands::Dnbr { pre_nir, pre_swir, post_nir, post_swir, output, severity_output } => {
+            let pn = read_dem(&pre_nir)?;
+            let ps = read_dem(&pre_swir)?;
+            let on = read_dem(&post_nir)?;
+            let os = read_dem(&post_swir)?;
+            let start = Instant::now();
+            let result = dnbr(&pn, &ps, &on, &os).context("Failed to compute dNBR")?;
+            let elapsed = start.elapsed();
+            write_result(&result, &output, compress)?;
+            done("dNBR", &output, elapsed);
+
+            if let Some(sev_path) = severity_output {
+                let severity = burn_severity_classify(&result)
+                    .context("Failed to classify burn severity")?;
+                write_result(&severity, &sev_path, compress)?;
+                println!("Burn severity saved to: {}", sev_path.display());
+            }
         }
 
         ImageryCommands::CloudMask {
