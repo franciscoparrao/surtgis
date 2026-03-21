@@ -31,11 +31,12 @@ use surtgis_algorithms::terrain::{
     advanced_curvatures, aspect, convergence_index, curvature, dev, eastness, geomorphons,
     hillshade, landform_classification, mrvbf, multidirectional_hillshade, negative_openness,
     northness, positive_openness, sky_view_factor, slope, tpi, tri, twi, viewshed, vrm,
-    AdvancedCurvatureType, AspectOutput, ConvergenceParams, CurvatureParams, CurvatureType,
-    DevParams, GeomorphonParams, HillshadeParams, LandformParams, MultiHillshadeParams,
-    MrvbfParams, OpennessParams, SlopeParams, SlopeUnits, SvfParams, TpiParams, TriParams,
-    ViewshedParams, VrmParams,
+    AdvancedCurvatureType, AspectOutput, AspectStreaming, ConvergenceParams, CurvatureParams,
+    CurvatureType, DevParams, GeomorphonParams, HillshadeParams, HillshadeStreaming,
+    LandformParams, MultiHillshadeParams, MrvbfParams, OpennessParams, SlopeParams,
+    SlopeStreaming, SlopeUnits, SvfParams, TpiParams, TriParams, ViewshedParams, VrmParams,
 };
+use surtgis_core::StripProcessor;
 use surtgis_core::io::{read_geotiff, write_geotiff, GeoTiffOptions};
 
 #[cfg(feature = "cloud")]
@@ -56,6 +57,10 @@ struct Cli {
     /// Compress output GeoTIFFs (deflate)
     #[arg(long, global = true)]
     compress: bool,
+
+    /// Force streaming mode for large rasters (auto-detected if >500MB)
+    #[arg(long, global = true)]
+    streaming: bool,
 
     #[command(subcommand)]
     command: Commands,
@@ -1349,6 +1354,7 @@ fn fetch_stac_asset(
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let compress = cli.compress;
+    let streaming = cli.streaming;
     let verbose = cli.verbose;
     setup_logging(verbose);
 
@@ -1412,13 +1418,29 @@ fn main() -> Result<()> {
                         SlopeUnits::Degrees
                     }
                 };
-                let dem = read_dem(&input)?;
-                let start = Instant::now();
-                let result = slope(&dem, SlopeParams { units, z_factor })
-                    .context("Failed to calculate slope")?;
-                let elapsed = start.elapsed();
-                write_result(&result, &output, compress)?;
-                done("Slope", &output, elapsed);
+
+                // Auto-detect streaming for large files
+                let use_streaming = streaming || std::fs::metadata(&input)
+                    .map(|m| m.len() > 500_000_000).unwrap_or(false);
+
+                if use_streaming {
+                    let algo = SlopeStreaming { units, z_factor };
+                    let processor = StripProcessor::new(256);
+                    let start = Instant::now();
+                    let (rows, cols) = processor.process(&input, &output, &algo, compress)
+                        .context("Failed to calculate slope (streaming)")?;
+                    let elapsed = start.elapsed();
+                    println!("Slope (streaming): {} x {}", cols, rows);
+                    done("Slope", &output, elapsed);
+                } else {
+                    let dem = read_dem(&input)?;
+                    let start = Instant::now();
+                    let result = slope(&dem, SlopeParams { units, z_factor })
+                        .context("Failed to calculate slope")?;
+                    let elapsed = start.elapsed();
+                    write_result(&result, &output, compress)?;
+                    done("Slope", &output, elapsed);
+                }
             }
 
             TerrainCommands::Aspect {
@@ -1435,12 +1457,28 @@ fn main() -> Result<()> {
                         AspectOutput::Degrees
                     }
                 };
-                let dem = read_dem(&input)?;
-                let start = Instant::now();
-                let result = aspect(&dem, fmt).context("Failed to calculate aspect")?;
-                let elapsed = start.elapsed();
-                write_result(&result, &output, compress)?;
-                done("Aspect", &output, elapsed);
+
+                // Auto-detect streaming for large files
+                let use_streaming = streaming || std::fs::metadata(&input)
+                    .map(|m| m.len() > 500_000_000).unwrap_or(false);
+
+                if use_streaming {
+                    let algo = AspectStreaming { output_format: fmt };
+                    let processor = StripProcessor::new(256);
+                    let start = Instant::now();
+                    let (rows, cols) = processor.process(&input, &output, &algo, compress)
+                        .context("Failed to calculate aspect (streaming)")?;
+                    let elapsed = start.elapsed();
+                    println!("Aspect (streaming): {} x {}", cols, rows);
+                    done("Aspect", &output, elapsed);
+                } else {
+                    let dem = read_dem(&input)?;
+                    let start = Instant::now();
+                    let result = aspect(&dem, fmt).context("Failed to calculate aspect")?;
+                    let elapsed = start.elapsed();
+                    write_result(&result, &output, compress)?;
+                    done("Aspect", &output, elapsed);
+                }
             }
 
             TerrainCommands::Hillshade {
@@ -1450,21 +1488,36 @@ fn main() -> Result<()> {
                 altitude,
                 z_factor,
             } => {
-                let dem = read_dem(&input)?;
-                let start = Instant::now();
-                let result = hillshade(
-                    &dem,
-                    HillshadeParams {
-                        azimuth,
-                        altitude,
-                        z_factor,
-                        normalized: false,
-                    },
-                )
-                .context("Failed to calculate hillshade")?;
-                let elapsed = start.elapsed();
-                write_result(&result, &output, compress)?;
-                done("Hillshade", &output, elapsed);
+                // Auto-detect streaming for large files
+                let use_streaming = streaming || std::fs::metadata(&input)
+                    .map(|m| m.len() > 500_000_000).unwrap_or(false);
+
+                if use_streaming {
+                    let algo = HillshadeStreaming { azimuth, altitude, z_factor };
+                    let processor = StripProcessor::new(256);
+                    let start = Instant::now();
+                    let (rows, cols) = processor.process(&input, &output, &algo, compress)
+                        .context("Failed to calculate hillshade (streaming)")?;
+                    let elapsed = start.elapsed();
+                    println!("Hillshade (streaming): {} x {}", cols, rows);
+                    done("Hillshade", &output, elapsed);
+                } else {
+                    let dem = read_dem(&input)?;
+                    let start = Instant::now();
+                    let result = hillshade(
+                        &dem,
+                        HillshadeParams {
+                            azimuth,
+                            altitude,
+                            z_factor,
+                            normalized: false,
+                        },
+                    )
+                    .context("Failed to calculate hillshade")?;
+                    let elapsed = start.elapsed();
+                    write_result(&result, &output, compress)?;
+                    done("Hillshade", &output, elapsed);
+                }
             }
 
             TerrainCommands::Curvature {

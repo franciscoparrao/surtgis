@@ -169,6 +169,129 @@ pub fn aspect(dem: &Raster<f64>, output_format: AspectOutput) -> Result<Raster<f
     Ok(output)
 }
 
+// ─── Streaming implementation ──────────────────────────────────────────
+
+/// Streaming aspect calculator implementing `WindowAlgorithm`.
+///
+/// Processes a DEM strip-by-strip with bounded memory.
+/// Uses the same Horn (1981) 3×3 method as `aspect()`.
+#[derive(Debug, Clone)]
+pub struct AspectStreaming {
+    pub output_format: AspectOutput,
+}
+
+impl Default for AspectStreaming {
+    fn default() -> Self {
+        Self {
+            output_format: AspectOutput::Degrees,
+        }
+    }
+}
+
+impl surtgis_core::WindowAlgorithm for AspectStreaming {
+    fn kernel_radius(&self) -> usize {
+        1 // 3×3 kernel
+    }
+
+    fn process_chunk(
+        &self,
+        input: &Array2<f64>,
+        output: &mut Array2<f64>,
+        nodata: Option<f64>,
+        _cell_size_x: f64,
+        _cell_size_y: f64,
+    ) {
+        let (in_rows, cols) = input.dim();
+        let out_rows = output.nrows();
+        let radius = 1;
+
+        const FLAT_THRESHOLD: f64 = 1e-10;
+
+        for r in 0..out_rows {
+            let ir = r + radius; // input row corresponding to output row r
+            if ir == 0 || ir >= in_rows - 1 {
+                // Edge row — fill with NaN
+                for c in 0..cols {
+                    output[[r, c]] = f64::NAN;
+                }
+                continue;
+            }
+
+            for c in 0..cols {
+                if c == 0 || c >= cols - 1 {
+                    output[[r, c]] = f64::NAN;
+                    continue;
+                }
+
+                let e = input[[ir, c]];
+                if e.is_nan()
+                    || nodata.map_or(false, |nd| (e - nd).abs() < f64::EPSILON)
+                {
+                    output[[r, c]] = f64::NAN;
+                    continue;
+                }
+
+                let a = input[[ir - 1, c - 1]];
+                let b = input[[ir - 1, c]];
+                let cv = input[[ir - 1, c + 1]];
+                let d = input[[ir, c - 1]];
+                let f = input[[ir, c + 1]];
+                let g = input[[ir + 1, c - 1]];
+                let h = input[[ir + 1, c]];
+                let i = input[[ir + 1, c + 1]];
+
+                if [a, b, cv, d, f, g, h, i].iter().any(|v| v.is_nan()) {
+                    output[[r, c]] = f64::NAN;
+                    continue;
+                }
+
+                // Horn's method for gradients
+                let dz_dx = (cv + 2.0 * f + i) - (a + 2.0 * d + g);
+                let dz_dy = (g + 2.0 * h + i) - (a + 2.0 * b + cv);
+
+                // Check for flat area
+                if dz_dx.abs() < FLAT_THRESHOLD && dz_dy.abs() < FLAT_THRESHOLD {
+                    output[[r, c]] = f64::NAN;
+                    continue;
+                }
+
+                // Compass bearing (0=North, clockwise)
+                let aspect_north = (-dz_dx).atan2(dz_dy);
+                let aspect_north = if aspect_north < 0.0 {
+                    aspect_north + 2.0 * PI
+                } else {
+                    aspect_north
+                };
+
+                output[[r, c]] = match self.output_format {
+                    AspectOutput::Degrees => aspect_north.to_degrees(),
+                    AspectOutput::Radians => aspect_north,
+                    AspectOutput::Compass => {
+                        let deg = aspect_north.to_degrees();
+                        if !(22.5..337.5).contains(&deg) {
+                            1.0 // N
+                        } else if deg < 67.5 {
+                            2.0 // NE
+                        } else if deg < 112.5 {
+                            3.0 // E
+                        } else if deg < 157.5 {
+                            4.0 // SE
+                        } else if deg < 202.5 {
+                            5.0 // S
+                        } else if deg < 247.5 {
+                            6.0 // SW
+                        } else if deg < 292.5 {
+                            7.0 // W
+                        } else {
+                            8.0 // NW
+                        }
+                    }
+                };
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

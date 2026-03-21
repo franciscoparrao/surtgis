@@ -93,21 +93,30 @@ impl StripProcessor {
             let actual_out_rows = out_end - out_start;
 
             // Input range with halo (clamped to image bounds)
-            let in_start = if out_start >= radius {
-                out_start - radius
-            } else {
-                0
-            };
+            let in_start = out_start.saturating_sub(radius);
             let in_end = (out_end + radius).min(rows);
-            let in_rows = in_end - in_start;
 
-            // Read input rows (with halo)
-            let input = reader.read_rows(in_start, in_rows)?;
+            // Read the available input rows
+            let raw_input = reader.read_rows(in_start, in_end - in_start)?;
+
+            // Build a padded input buffer that always has exactly
+            // (actual_out_rows + 2*radius) rows with the output centered.
+            // Rows outside the image are filled with NaN.
+            let padded_rows = actual_out_rows + 2 * radius;
+            let mut input = Array2::<f64>::from_elem((padded_rows, cols), f64::NAN);
+
+            // How many halo rows are missing at the top?
+            let top_pad = radius.saturating_sub(out_start);
+            // Copy raw data into the padded buffer at the right offset
+            let copy_rows = raw_input.nrows().min(padded_rows - top_pad);
+            input
+                .slice_mut(ndarray::s![top_pad..top_pad + copy_rows, ..])
+                .assign(&raw_input.slice(ndarray::s![..copy_rows, ..]));
 
             // Prepare output buffer
             let mut output = Array2::<f64>::from_elem((actual_out_rows, cols), f64::NAN);
 
-            // Process: algorithm reads from input (with halo), writes to output
+            // Process: input[radius..radius+actual_out_rows] are the center rows
             algorithm.process_chunk(&input, &mut output, nodata, cell_size_x, cell_size_y);
 
             current_out_row = out_end;

@@ -65,7 +65,7 @@ pub use accumulation_zones::{
     accumulation_zones, ZONE_ACCUMULATION, ZONE_DISPERSION,
     ZONE_TRANSITIONAL_ACC, ZONE_TRANSITIONAL_DISP,
 };
-pub use aspect::{aspect, Aspect, AspectOutput};
+pub use aspect::{aspect, Aspect, AspectOutput, AspectStreaming};
 pub use contour::{contour_lines, ContourParams};
 pub use cost_distance::{cost_distance, CostDistanceParams};
 pub use convergence::{convergence_index, ConvergenceParams};
@@ -73,7 +73,7 @@ pub use curvature::{curvature, Curvature, CurvatureParams, CurvatureType, Deriva
 pub use curvature_advanced::{advanced_curvatures, all_curvatures, AdvancedCurvatureType, AllCurvatures};
 pub use dev::{dev, Dev, DevParams};
 pub use geomorphons::{geomorphons, GeomorphonParams};
-pub use hillshade::{hillshade, Hillshade, HillshadeParams};
+pub use hillshade::{hillshade, Hillshade, HillshadeParams, HillshadeStreaming};
 pub use landform::{landform_classification, Landform, LandformParams};
 pub use log_transform::log_transform;
 pub use mrvbf::{mrvbf, MrvbfParams};

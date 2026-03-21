@@ -160,6 +160,124 @@ pub fn hillshade(dem: &Raster<f64>, params: HillshadeParams) -> Result<Raster<f6
     Ok(output)
 }
 
+// ─── Streaming implementation ──────────────────────────────────────────
+
+/// Streaming hillshade calculator implementing `WindowAlgorithm`.
+///
+/// Processes a DEM strip-by-strip with bounded memory.
+/// Uses the same Horn (1981) 3×3 method as `hillshade()`.
+#[derive(Debug, Clone)]
+pub struct HillshadeStreaming {
+    /// Sun azimuth in degrees (0 = North, clockwise)
+    pub azimuth: f64,
+    /// Sun altitude in degrees above horizon (0-90)
+    pub altitude: f64,
+    /// Z-factor for vertical exaggeration
+    pub z_factor: f64,
+}
+
+impl Default for HillshadeStreaming {
+    fn default() -> Self {
+        Self {
+            azimuth: 315.0,
+            altitude: 45.0,
+            z_factor: 1.0,
+        }
+    }
+}
+
+impl surtgis_core::WindowAlgorithm for HillshadeStreaming {
+    fn kernel_radius(&self) -> usize {
+        1 // 3×3 kernel
+    }
+
+    fn process_chunk(
+        &self,
+        input: &Array2<f64>,
+        output: &mut Array2<f64>,
+        nodata: Option<f64>,
+        cell_size_x: f64,
+        _cell_size_y: f64,
+    ) {
+        let (in_rows, cols) = input.dim();
+        let out_rows = output.nrows();
+        let radius = 1;
+
+        // Pre-compute illumination angles (same convention as hillshade())
+        let azimuth_rad = (360.0 - self.azimuth + 90.0).to_radians();
+        let zenith_rad = (90.0 - self.altitude).to_radians();
+        let cos_zenith = zenith_rad.cos();
+        let sin_zenith = zenith_rad.sin();
+
+        let cell_size = cell_size_x * self.z_factor;
+        let eight_cs = 8.0 * cell_size;
+
+        for r in 0..out_rows {
+            let ir = r + radius; // input row corresponding to output row r
+            if ir == 0 || ir >= in_rows - 1 {
+                // Edge row — fill with NaN
+                for c in 0..cols {
+                    output[[r, c]] = f64::NAN;
+                }
+                continue;
+            }
+
+            for c in 0..cols {
+                if c == 0 || c >= cols - 1 {
+                    output[[r, c]] = f64::NAN;
+                    continue;
+                }
+
+                let e = input[[ir, c]];
+                if e.is_nan()
+                    || nodata.map_or(false, |nd| (e - nd).abs() < f64::EPSILON)
+                {
+                    output[[r, c]] = f64::NAN;
+                    continue;
+                }
+
+                let a = input[[ir - 1, c - 1]];
+                let b = input[[ir - 1, c]];
+                let cv = input[[ir - 1, c + 1]];
+                let d = input[[ir, c - 1]];
+                let f = input[[ir, c + 1]];
+                let g = input[[ir + 1, c - 1]];
+                let h = input[[ir + 1, c]];
+                let i = input[[ir + 1, c + 1]];
+
+                if [a, b, cv, d, f, g, h, i].iter().any(|v| v.is_nan()) {
+                    output[[r, c]] = f64::NAN;
+                    continue;
+                }
+
+                // Horn's method for gradients
+                let dz_dx = ((cv + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_cs;
+                let dz_dy = ((g + 2.0 * h + i) - (a + 2.0 * b + cv)) / eight_cs;
+
+                // Calculate slope and aspect
+                let slope_rad = (dz_dx * dz_dx + dz_dy * dz_dy).sqrt().atan();
+
+                let aspect_rad = if dz_dx.abs() < 1e-10 && dz_dy.abs() < 1e-10 {
+                    0.0 // Flat
+                } else {
+                    let asp = (-dz_dy).atan2(-dz_dx);
+                    if asp < 0.0 {
+                        2.0 * PI + asp
+                    } else {
+                        asp
+                    }
+                };
+
+                // Hillshade formula
+                let shade = cos_zenith * slope_rad.cos()
+                    + sin_zenith * slope_rad.sin() * (azimuth_rad - aspect_rad).cos();
+
+                output[[r, c]] = (shade.clamp(0.0, 1.0) * 255.0).round();
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
