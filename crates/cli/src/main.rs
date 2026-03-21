@@ -3461,7 +3461,7 @@ fn main() -> Result<()> {
                 let keep_classes = parse_scl_classes(&scl_keep)?;
 
                 // Search with high limit to find enough items across dates
-                let search_limit = (max_scenes * 4) as u32; // ~4 tiles per date
+                let search_limit = (max_scenes * 4) as u32;
                 let params = StacSearchParams::new()
                     .bbox(bb.min_x, bb.min_y, bb.max_x, bb.max_y)
                     .collections(&[collection.as_str()])
@@ -3496,7 +3496,6 @@ fn main() -> Result<()> {
                     by_date.entry(date).or_default().push(item);
                 }
 
-                // Take up to max_scenes dates
                 let dates: Vec<String> =
                     by_date.keys().take(max_scenes).cloned().collect();
 
@@ -3508,126 +3507,240 @@ fn main() -> Result<()> {
                 );
 
                 let start = Instant::now();
-                let mut clean_scenes: Vec<surtgis_core::Raster<f64>> = Vec::new();
 
-                for (di, date) in dates.iter().enumerate() {
+                // ── Phase 1: Resolve asset URLs for all items (no data download) ──
+                // For each date, collect (data_href, scl_href, epsg) tuples
+                struct SceneInfo {
+                    date: String,
+                    data_hrefs: Vec<String>,
+                    scl_hrefs: Vec<String>,
+                    epsg: Option<u32>,
+                }
+
+                let mut scenes: Vec<SceneInfo> = Vec::new();
+
+                for date in &dates {
                     let group = &by_date[date];
-                    println!(
-                        "Processing date {}/{}: {} ({} tiles)...",
-                        di + 1,
-                        dates.len(),
-                        date,
-                        group.len()
-                    );
-
-                    // Fetch data + SCL tiles for this date
-                    let mut data_tiles: Vec<surtgis_core::Raster<f64>> = Vec::new();
-                    let mut scl_tiles: Vec<surtgis_core::Raster<f64>> = Vec::new();
+                    let mut data_hrefs = Vec::new();
+                    let mut scl_hrefs = Vec::new();
+                    let mut scene_epsg = None;
 
                     for item in group {
-                        // Fetch data asset
-                        match fetch_stac_asset(item, &asset, &bb, &client) {
-                            Ok(r) => data_tiles.push(r),
-                            Err(e) => {
-                                eprintln!(
-                                    "  Warning: {} asset '{}': {}, skipping",
-                                    item.id, asset, e
-                                );
+                        // Resolve and sign data asset
+                        let data_result = resolve_asset_key(item, &asset)
+                            .and_then(|(_, a)| {
+                                client.sign_asset_href(
+                                    &a.href,
+                                    item.collection.as_deref().unwrap_or(""),
+                                ).ok().map(|h| (h, item.epsg()))
+                            });
+                        // Resolve and sign SCL asset
+                        let scl_result = resolve_asset_key(item, &scl_asset)
+                            .and_then(|(_, a)| {
+                                client.sign_asset_href(
+                                    &a.href,
+                                    item.collection.as_deref().unwrap_or(""),
+                                ).ok()
+                            });
+
+                        if let (Some((dh, epsg)), Some(sh)) = (data_result, scl_result) {
+                            data_hrefs.push(dh);
+                            scl_hrefs.push(sh);
+                            if scene_epsg.is_none() {
+                                scene_epsg = epsg;
+                            }
+                        }
+                    }
+
+                    if !data_hrefs.is_empty() {
+                        scenes.push(SceneInfo {
+                            date: date.clone(),
+                            data_hrefs,
+                            scl_hrefs,
+                            epsg: scene_epsg,
+                        });
+                    }
+                }
+
+                if scenes.is_empty() {
+                    anyhow::bail!("No valid scenes found");
+                }
+
+                // ── Phase 2: Determine output grid from first scene's metadata ──
+                let first_href = &scenes[0].data_hrefs[0];
+                let opts = CogReaderOptions::default();
+                let probe_reader = CogReaderBlocking::open(first_href, opts)
+                    .context("Failed to probe first COG")?;
+                let probe_meta = probe_reader.metadata();
+
+                // Reproject user bbox to COG CRS if needed
+                let cog_bb = {
+                    use surtgis_cloud::reproject;
+                    if let Some(epsg) = scenes[0].epsg {
+                        if !reproject::is_wgs84(epsg) {
+                            reproject::reproject_bbox_to_cog(&bb, epsg)
+                        } else { bb }
+                    } else { bb }
+                };
+
+                let pixel_width = probe_meta.geo_transform.pixel_width.abs();
+                let pixel_height = probe_meta.geo_transform.pixel_height.abs();
+                let out_cols = ((cog_bb.max_x - cog_bb.min_x) / pixel_width).round() as usize;
+                let out_rows = ((cog_bb.max_y - cog_bb.min_y) / pixel_height).round() as usize;
+
+                let out_transform = surtgis_core::GeoTransform::new(
+                    cog_bb.min_x, cog_bb.max_y, pixel_width, -pixel_height,
+                );
+                let out_crs = scenes[0].epsg.map(surtgis_core::CRS::from_epsg);
+
+                println!(
+                    "Output grid: {} x {} ({:.1}M cells), {} dates",
+                    out_cols, out_rows,
+                    (out_cols * out_rows) as f64 / 1e6,
+                    scenes.len()
+                );
+
+                // ── Phase 3: Strip-by-strip processing ──
+                let strip_rows = 512usize; // rows per output strip
+                let num_strips = (out_rows + strip_rows - 1) / strip_rows;
+                let n_scenes = scenes.len();
+
+                let config = surtgis_core::io::StripWriterConfig {
+                    rows: out_rows,
+                    cols: out_cols,
+                    transform: out_transform,
+                    crs: out_crs,
+                    compress,
+                    rows_per_strip: strip_rows as u32,
+                };
+
+                let scenes_ref = &scenes;
+                let keep_ref = &keep_classes;
+                let mut strip_idx_counter = 0usize;
+
+                surtgis_core::io::write_geotiff_streaming(
+                    &output,
+                    &config,
+                    |_strip_idx, strip_out_rows| {
+                        let current_strip = strip_idx_counter;
+                        strip_idx_counter += 1;
+
+                        let row_start = current_strip * strip_rows;
+                        let row_end = (row_start + strip_out_rows).min(out_rows);
+                        let actual_rows = row_end - row_start;
+
+                        // Geographic bbox for this strip
+                        let strip_min_y = cog_bb.max_y - (row_end as f64 * pixel_height);
+                        let strip_max_y = cog_bb.max_y - (row_start as f64 * pixel_height);
+                        let strip_bb = BBox::new(
+                            cog_bb.min_x, strip_min_y, cog_bb.max_x, strip_max_y,
+                        );
+
+                        print!(
+                            "\r  Strip {}/{} (rows {}-{})...",
+                            current_strip + 1, num_strips, row_start, row_end
+                        );
+
+                        // Collect masked strips from each scene
+                        let mut scene_strips: Vec<ndarray::Array2<f64>> = Vec::with_capacity(n_scenes);
+
+                        for scene in scenes_ref {
+                            // Read data tiles for this strip bbox
+                            let mut data_tiles: Vec<surtgis_core::Raster<f64>> = Vec::new();
+                            let mut scl_tiles: Vec<surtgis_core::Raster<f64>> = Vec::new();
+
+                            for (dh, sh) in scene.data_hrefs.iter().zip(scene.scl_hrefs.iter()) {
+                                let opts = CogReaderOptions::default();
+                                // Read data window
+                                if let Ok(mut dr) = CogReaderBlocking::open(dh, opts) {
+                                    if let Ok(r) = dr.read_bbox::<f64>(&strip_bb, None) {
+                                        data_tiles.push(r);
+                                    }
+                                }
+                                let opts2 = CogReaderOptions::default();
+                                // Read SCL window
+                                if let Ok(mut sr) = CogReaderBlocking::open(sh, opts2) {
+                                    if let Ok(r) = sr.read_bbox::<f64>(&strip_bb, None) {
+                                        scl_tiles.push(r);
+                                    }
+                                }
+                            }
+
+                            if data_tiles.is_empty() || scl_tiles.is_empty() {
                                 continue;
                             }
-                        }
 
-                        // Fetch SCL asset
-                        match fetch_stac_asset(item, &scl_asset, &bb, &client) {
-                            Ok(r) => scl_tiles.push(r),
-                            Err(e) => {
-                                // Remove the data tile we just added since SCL failed
-                                data_tiles.pop();
-                                eprintln!(
-                                    "  Warning: {} asset '{}': {}, skipping",
-                                    item.id, scl_asset, e
-                                );
+                            // Mosaic spatial tiles for this date's strip
+                            let data_m = if data_tiles.len() == 1 {
+                                data_tiles.into_iter().next().unwrap()
+                            } else {
+                                let refs: Vec<&surtgis_core::Raster<f64>> = data_tiles.iter().collect();
+                                match surtgis_core::mosaic(&refs, None) {
+                                    Ok(m) => m,
+                                    Err(_) => continue,
+                                }
+                            };
+
+                            let scl_m = if scl_tiles.len() == 1 {
+                                scl_tiles.into_iter().next().unwrap()
+                            } else {
+                                let refs: Vec<&surtgis_core::Raster<f64>> = scl_tiles.iter().collect();
+                                match surtgis_core::mosaic(&refs, None) {
+                                    Ok(m) => m,
+                                    Err(_) => continue,
+                                }
+                            };
+
+                            // Cloud mask
+                            if let Ok(clean) = cloud_mask_scl(&data_m, &scl_m, keep_ref) {
+                                scene_strips.push(clean.data().to_owned());
                             }
                         }
-                    }
 
-                    if data_tiles.is_empty() {
-                        eprintln!("  No tiles for date {}, skipping", date);
-                        continue;
-                    }
+                        // Compute per-pixel median across scenes for this strip
+                        let mut output = ndarray::Array2::<f64>::from_elem(
+                            (actual_rows, out_cols), f64::NAN,
+                        );
 
-                    // Mosaic spatial tiles for this date
-                    let data_mosaic = if data_tiles.len() == 1 {
-                        data_tiles.into_iter().next().unwrap()
-                    } else {
-                        let refs: Vec<&surtgis_core::Raster<f64>> =
-                            data_tiles.iter().collect();
-                        surtgis_core::mosaic(&refs, None)
-                            .context("Failed to mosaic data tiles")?
-                    };
+                        if !scene_strips.is_empty() {
+                            // All strips should cover roughly the same area but may differ
+                            // in exact dimensions. Use the output grid as reference.
+                            let n = scene_strips.len();
+                            for r in 0..actual_rows {
+                                for c in 0..out_cols {
+                                    let mut values: Vec<f64> = Vec::with_capacity(n);
+                                    for strip in &scene_strips {
+                                        if r < strip.nrows() && c < strip.ncols() {
+                                            let v = strip[[r, c]];
+                                            if v.is_finite() {
+                                                values.push(v);
+                                            }
+                                        }
+                                    }
+                                    if !values.is_empty() {
+                                        values.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+                                        let mid = values.len() / 2;
+                                        output[[r, c]] = if values.len() % 2 == 0 {
+                                            (values[mid - 1] + values[mid]) / 2.0
+                                        } else {
+                                            values[mid]
+                                        };
+                                    }
+                                }
+                            }
+                        }
 
-                    let scl_mosaic = if scl_tiles.len() == 1 {
-                        scl_tiles.into_iter().next().unwrap()
-                    } else {
-                        let refs: Vec<&surtgis_core::Raster<f64>> =
-                            scl_tiles.iter().collect();
-                        surtgis_core::mosaic(&refs, None)
-                            .context("Failed to mosaic SCL tiles")?
-                    };
+                        Ok(output)
+                    },
+                ).context("Failed to write streaming composite")?;
 
-                    // Cloud mask
-                    let clean = cloud_mask_scl(&data_mosaic, &scl_mosaic, &keep_classes)
-                        .context("Failed to apply cloud mask")?;
-
-                    // Count clear pixels
-                    let total = clean.len();
-                    let clear = clean
-                        .data()
-                        .iter()
-                        .filter(|v| v.is_finite())
-                        .count();
-                    let (rows, cols) = clean.shape();
-                    println!(
-                        "  {} x {}, {:.0}% clear",
-                        cols,
-                        rows,
-                        100.0 * clear as f64 / total as f64
-                    );
-
-                    clean_scenes.push(clean);
-                }
-
-                if clean_scenes.len() < 2 {
-                    if clean_scenes.len() == 1 {
-                        println!("Only 1 scene available, writing directly (no composite)");
-                        write_result(&clean_scenes[0], &output, compress)?;
-                    } else {
-                        anyhow::bail!("No clean scenes available for compositing");
-                    }
-                } else {
-                    // Median composite
-                    let pb = spinner(&format!(
-                        "Computing median composite of {} scenes...",
-                        clean_scenes.len()
-                    ));
-                    let refs: Vec<&surtgis_core::Raster<f64>> =
-                        clean_scenes.iter().collect();
-                    let result = median_composite(&refs)
-                        .context("Failed to compute median composite")?;
-                    pb.finish_and_clear();
-
-                    let (rows, cols) = result.shape();
-                    println!(
-                        "Composite: {} scenes → {} x {} ({} cells)",
-                        clean_scenes.len(),
-                        cols,
-                        rows,
-                        result.len()
-                    );
-                    write_result(&result, &output, compress)?;
-                }
-
+                println!(); // newline after \r progress
                 let elapsed = start.elapsed();
+                println!(
+                    "Composite: {} scenes → {} x {} ({:.1}M cells)",
+                    scenes.len(), out_cols, out_rows,
+                    (out_cols * out_rows) as f64 / 1e6,
+                );
                 done("STAC composite", &output, elapsed);
             }
         },
