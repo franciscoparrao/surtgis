@@ -1,0 +1,973 @@
+//! CLI command and subcommand definitions.
+
+use clap::{Parser, Subcommand};
+use std::path::PathBuf;
+
+// ─── CLI structure ──────────────────────────────────────────────────────
+
+#[derive(Parser)]
+#[command(name = "surtgis")]
+#[command(author, version, about = "High-performance geospatial analysis", long_about = None)]
+pub struct Cli {
+    /// Verbose output
+    #[arg(short, long, global = true)]
+    pub verbose: bool,
+
+    /// Compress output GeoTIFFs (deflate)
+    #[arg(long, global = true)]
+    pub compress: bool,
+
+    /// Force streaming mode for large rasters (auto-detected if >500MB)
+    #[arg(long, global = true)]
+    pub streaming: bool,
+
+    #[command(subcommand)]
+    pub command: Commands,
+}
+
+#[derive(Subcommand)]
+pub enum Commands {
+    /// Show information about a raster file
+    Info {
+        /// Input raster file
+        input: PathBuf,
+    },
+    /// Terrain analysis algorithms
+    Terrain {
+        #[command(subcommand)]
+        algorithm: TerrainCommands,
+    },
+    /// Hydrology algorithms
+    Hydrology {
+        #[command(subcommand)]
+        algorithm: HydrologyCommands,
+    },
+    /// Imagery / spectral index algorithms
+    Imagery {
+        #[command(subcommand)]
+        algorithm: ImageryCommands,
+    },
+    /// Mathematical morphology algorithms
+    Morphology {
+        #[command(subcommand)]
+        algorithm: MorphologyCommands,
+    },
+    /// Landscape ecology metrics (global patch/class/landscape level)
+    Landscape {
+        #[command(subcommand)]
+        algorithm: LandscapeCommands,
+    },
+    /// Mosaic multiple rasters into one covering the union extent
+    Mosaic {
+        /// Input raster files (at least 2)
+        #[arg(short, long, required = true)]
+        input: Vec<PathBuf>,
+        /// Output GeoTIFF file
+        output: PathBuf,
+    },
+    /// Read and process Cloud Optimized GeoTIFFs (COGs) via HTTP
+    #[cfg(feature = "cloud")]
+    Cog {
+        #[command(subcommand)]
+        action: CogCommands,
+    },
+    /// Search and fetch data from STAC catalogs (Planetary Computer, Earth Search)
+    #[cfg(feature = "cloud")]
+    Stac {
+        #[command(subcommand)]
+        action: StacCommands,
+    },
+}
+
+// ─── Terrain subcommands ────────────────────────────────────────────────
+
+#[derive(Subcommand)]
+pub enum TerrainCommands {
+    /// Calculate slope from DEM
+    Slope {
+        /// Input DEM file
+        input: PathBuf,
+        /// Output file
+        output: PathBuf,
+        /// Output units: degrees, percent, radians
+        #[arg(short, long, default_value = "degrees")]
+        units: String,
+        /// Z-factor for unit conversion
+        #[arg(short, long, default_value = "1.0")]
+        z_factor: f64,
+    },
+    /// Calculate aspect from DEM
+    Aspect {
+        /// Input DEM file
+        input: PathBuf,
+        /// Output file
+        output: PathBuf,
+        /// Output format: degrees, radians, compass
+        #[arg(short, long, default_value = "degrees")]
+        format: String,
+    },
+    /// Calculate hillshade from DEM
+    Hillshade {
+        /// Input DEM file
+        input: PathBuf,
+        /// Output file
+        output: PathBuf,
+        /// Sun azimuth in degrees (0=North, clockwise)
+        #[arg(short, long, default_value = "315")]
+        azimuth: f64,
+        /// Sun altitude in degrees above horizon
+        #[arg(short = 'l', long, default_value = "45")]
+        altitude: f64,
+        /// Z-factor for vertical exaggeration
+        #[arg(short, long, default_value = "1.0")]
+        z_factor: f64,
+    },
+    /// Calculate surface curvature from DEM
+    Curvature {
+        /// Input DEM file
+        input: PathBuf,
+        /// Output file
+        output: PathBuf,
+        /// Curvature type: general, profile, plan
+        #[arg(short = 't', long, default_value = "general")]
+        curvature_type: String,
+        /// Z-factor for unit conversion
+        #[arg(short, long, default_value = "1.0")]
+        z_factor: f64,
+    },
+    /// Calculate Topographic Position Index
+    Tpi {
+        /// Input DEM file
+        input: PathBuf,
+        /// Output file
+        output: PathBuf,
+        /// Neighborhood radius in cells
+        #[arg(short, long, default_value = "1")]
+        radius: usize,
+    },
+    /// Calculate Terrain Ruggedness Index
+    Tri {
+        /// Input DEM file
+        input: PathBuf,
+        /// Output file
+        output: PathBuf,
+        /// Neighborhood radius in cells
+        #[arg(short, long, default_value = "1")]
+        radius: usize,
+    },
+    /// Landform classification (multi-scale TPI + slope)
+    Landform {
+        /// Input DEM file
+        input: PathBuf,
+        /// Output file (class codes 1-11)
+        output: PathBuf,
+        /// Small-scale TPI radius
+        #[arg(long, default_value = "3")]
+        small_radius: usize,
+        /// Large-scale TPI radius
+        #[arg(long, default_value = "10")]
+        large_radius: usize,
+        /// Standardized TPI threshold (z-score)
+        #[arg(long, default_value = "1.0")]
+        threshold: f64,
+        /// Slope threshold (degrees) for gentle/steep
+        #[arg(long, default_value = "6.0")]
+        slope_threshold: f64,
+    },
+    /// Geomorphon landform classification (Jasiewicz & Stepinski 2013)
+    Geomorphons {
+        input: PathBuf,
+        output: PathBuf,
+        /// Lookup radius in cells
+        #[arg(short, long, default_value = "10")]
+        radius: usize,
+        /// Flatness threshold in degrees
+        #[arg(short, long, default_value = "1.0")]
+        flatness: f64,
+    },
+    /// Northness: cos(aspect), north-facing = 1, south-facing = -1
+    Northness {
+        input: PathBuf,
+        output: PathBuf,
+    },
+    /// Eastness: sin(aspect), east-facing = 1, west-facing = -1
+    Eastness {
+        input: PathBuf,
+        output: PathBuf,
+    },
+    /// Positive topographic openness (sky visibility above)
+    OpennessPositive {
+        input: PathBuf,
+        output: PathBuf,
+        /// Search radius in cells
+        #[arg(short, long, default_value = "10")]
+        radius: usize,
+        /// Number of azimuth directions
+        #[arg(short, long, default_value = "8")]
+        directions: usize,
+    },
+    /// Negative topographic openness (enclosure below)
+    OpennessNegative {
+        input: PathBuf,
+        output: PathBuf,
+        #[arg(short, long, default_value = "10")]
+        radius: usize,
+        #[arg(short, long, default_value = "8")]
+        directions: usize,
+    },
+    /// Sky View Factor (0=enclosed, 1=flat horizon)
+    Svf {
+        input: PathBuf,
+        output: PathBuf,
+        #[arg(short, long, default_value = "10")]
+        radius: usize,
+        #[arg(short, long, default_value = "16")]
+        directions: usize,
+    },
+    /// MRVBF/MRRTF: Multi-Resolution Valley/Ridge Bottom Flatness
+    Mrvbf {
+        input: PathBuf,
+        /// Output MRVBF file
+        output: PathBuf,
+        /// Optional MRRTF output file
+        #[arg(long)]
+        mrrtf_output: Option<PathBuf>,
+    },
+    /// Deviation from Mean Elevation
+    Dev {
+        input: PathBuf,
+        output: PathBuf,
+        #[arg(short, long, default_value = "10")]
+        radius: usize,
+    },
+    /// Vector Ruggedness Measure
+    Vrm {
+        input: PathBuf,
+        output: PathBuf,
+        #[arg(short, long, default_value = "1")]
+        radius: usize,
+    },
+    /// Florinsky advanced curvature (14 types)
+    AdvancedCurvature {
+        input: PathBuf,
+        output: PathBuf,
+        /// Curvature type: mean_h, gaussian_k, kmin, kmax, kh, kv, khe, kve, ka, kr, rotor, laplacian, unsphericity, difference
+        #[arg(short = 't', long, default_value = "mean_h")]
+        curvature_type: String,
+    },
+    /// Viewshed: binary line-of-sight visibility from an observer point
+    Viewshed {
+        input: PathBuf,
+        output: PathBuf,
+        /// Observer row (pixel coordinate)
+        #[arg(long)]
+        observer_row: usize,
+        /// Observer column (pixel coordinate)
+        #[arg(long)]
+        observer_col: usize,
+        /// Observer height above ground (meters)
+        #[arg(long, default_value = "1.8")]
+        observer_height: f64,
+        /// Target height above ground (meters)
+        #[arg(long, default_value = "0.0")]
+        target_height: f64,
+        /// Maximum visibility radius in cells (0 = unlimited)
+        #[arg(long, default_value = "0")]
+        max_radius: usize,
+    },
+    /// Convergence Index (-100=convergent, +100=divergent)
+    Convergence {
+        input: PathBuf,
+        output: PathBuf,
+        #[arg(short, long, default_value = "3")]
+        radius: usize,
+    },
+    /// Multi-directional hillshade (6 azimuths combined)
+    MultiHillshade {
+        input: PathBuf,
+        output: PathBuf,
+    },
+    /// Compute all standard terrain factors in one pass
+    All {
+        /// Input DEM file
+        input: PathBuf,
+        /// Output directory for all terrain products
+        #[arg(short, long)]
+        outdir: PathBuf,
+    },
+}
+
+// ─── Hydrology subcommands ──────────────────────────────────────────────
+
+#[derive(Subcommand)]
+pub enum HydrologyCommands {
+    /// Fill sinks / depressions in DEM (Planchon-Darboux 2001)
+    FillSinks {
+        /// Input DEM file
+        input: PathBuf,
+        /// Output file
+        output: PathBuf,
+        /// Minimum slope to enforce
+        #[arg(long, default_value = "0.01")]
+        min_slope: f64,
+    },
+    /// D8 flow direction from DEM
+    FlowDirection {
+        /// Input DEM file
+        input: PathBuf,
+        /// Output file (D8 codes: 1,2,4,8,16,32,64,128)
+        output: PathBuf,
+    },
+    /// Flow accumulation from flow direction raster
+    FlowAccumulation {
+        /// Input flow direction raster (D8 codes)
+        input: PathBuf,
+        /// Output file (upstream cell count)
+        output: PathBuf,
+    },
+    /// Watershed delineation from flow direction
+    Watershed {
+        /// Input flow direction raster (D8 codes)
+        input: PathBuf,
+        /// Output file (basin IDs)
+        output: PathBuf,
+        /// Pour points as "row,col;row,col;..."
+        #[arg(long)]
+        pour_points: String,
+    },
+    /// Priority-Flood depression filling (Barnes 2014, optimal O(n log n))
+    PriorityFlood {
+        input: PathBuf,
+        output: PathBuf,
+        /// Minimum slope epsilon
+        #[arg(long, default_value = "0.0001")]
+        epsilon: f64,
+    },
+    /// Breach depressions (carve channels through barriers)
+    Breach {
+        input: PathBuf,
+        output: PathBuf,
+        /// Maximum breach depth (meters)
+        #[arg(long, default_value = "100.0")]
+        max_depth: f64,
+        /// Maximum breach length (cells)
+        #[arg(long, default_value = "1000")]
+        max_length: usize,
+        /// Fill remaining unfilled depressions
+        #[arg(long)]
+        fill_remaining: bool,
+    },
+    /// D-infinity flow direction (Tarboton 1997, continuous angles)
+    FlowDirectionDinf {
+        input: PathBuf,
+        output: PathBuf,
+    },
+    /// Multiple Flow Direction accumulation (Quinn et al. 1991)
+    FlowAccumulationMfd {
+        input: PathBuf,
+        output: PathBuf,
+        /// Flow partition exponent
+        #[arg(long, default_value = "1.1")]
+        exponent: f64,
+    },
+    /// Topographic Wetness Index (from DEM, full pipeline)
+    Twi {
+        /// Input DEM file
+        input: PathBuf,
+        output: PathBuf,
+    },
+    /// Height Above Nearest Drainage (from DEM, full pipeline)
+    Hand {
+        /// Input DEM file
+        input: PathBuf,
+        output: PathBuf,
+        /// Stream extraction threshold (contributing cells)
+        #[arg(long, default_value = "1000")]
+        threshold: f64,
+    },
+    /// Stream network extraction (from DEM, full pipeline)
+    StreamNetwork {
+        /// Input DEM file
+        input: PathBuf,
+        output: PathBuf,
+        /// Contributing area threshold
+        #[arg(long, default_value = "1000")]
+        threshold: f64,
+    },
+    /// Compute full hydrology pipeline from DEM
+    All {
+        /// Input DEM file
+        input: PathBuf,
+        /// Output directory
+        #[arg(short, long)]
+        outdir: PathBuf,
+        /// Stream threshold
+        #[arg(long, default_value = "1000")]
+        threshold: f64,
+    },
+}
+
+// ─── Imagery subcommands ────────────────────────────────────────────────
+
+#[derive(Subcommand)]
+pub enum ImageryCommands {
+    /// NDVI: Normalized Difference Vegetation Index
+    Ndvi {
+        /// NIR band file
+        #[arg(long)]
+        nir: PathBuf,
+        /// Red band file
+        #[arg(long)]
+        red: PathBuf,
+        /// Output file
+        output: PathBuf,
+    },
+    /// NDWI: Normalized Difference Water Index
+    Ndwi {
+        /// Green band file
+        #[arg(long)]
+        green: PathBuf,
+        /// NIR band file
+        #[arg(long)]
+        nir: PathBuf,
+        /// Output file
+        output: PathBuf,
+    },
+    /// MNDWI: Modified Normalized Difference Water Index
+    Mndwi {
+        /// Green band file
+        #[arg(long)]
+        green: PathBuf,
+        /// SWIR band file
+        #[arg(long)]
+        swir: PathBuf,
+        /// Output file
+        output: PathBuf,
+    },
+    /// NBR: Normalized Burn Ratio
+    Nbr {
+        /// NIR band file
+        #[arg(long)]
+        nir: PathBuf,
+        /// SWIR band file
+        #[arg(long)]
+        swir: PathBuf,
+        /// Output file
+        output: PathBuf,
+    },
+    /// SAVI: Soil-Adjusted Vegetation Index
+    Savi {
+        /// NIR band file
+        #[arg(long)]
+        nir: PathBuf,
+        /// Red band file
+        #[arg(long)]
+        red: PathBuf,
+        /// Output file
+        output: PathBuf,
+        /// Soil brightness correction factor (0..1)
+        #[arg(short, long, default_value = "0.5")]
+        l_factor: f64,
+    },
+    /// EVI: Enhanced Vegetation Index
+    Evi {
+        /// NIR band file
+        #[arg(long)]
+        nir: PathBuf,
+        /// Red band file
+        #[arg(long)]
+        red: PathBuf,
+        /// Blue band file
+        #[arg(long)]
+        blue: PathBuf,
+        /// Output file
+        output: PathBuf,
+    },
+    /// BSI: Bare Soil Index
+    Bsi {
+        /// SWIR band file
+        #[arg(long)]
+        swir: PathBuf,
+        /// Red band file
+        #[arg(long)]
+        red: PathBuf,
+        /// NIR band file
+        #[arg(long)]
+        nir: PathBuf,
+        /// Blue band file
+        #[arg(long)]
+        blue: PathBuf,
+        /// Output file
+        output: PathBuf,
+    },
+    /// Band math: arithmetic between two raster bands
+    BandMath {
+        /// First input raster
+        #[arg(short)]
+        a: PathBuf,
+        /// Second input raster
+        #[arg(short)]
+        b: PathBuf,
+        /// Output file
+        output: PathBuf,
+        /// Operation: add, subtract, multiply, divide, power, min, max
+        #[arg(long)]
+        op: String,
+    },
+    /// Compute custom spectral index from arithmetic expression
+    ///
+    /// Common formulas:
+    ///   NDVI:  "(NIR - Red) / (NIR + Red)"
+    ///   EXG:   "2 * Green - Red - Blue"
+    ///   VARI:  "(Green - Red) / (Green + Red - Blue)"
+    ///   Clay:  "SWIR1 / SWIR2"
+    Calc {
+        /// Arithmetic expression using band names
+        #[arg(short, long)]
+        expression: String,
+        /// Band assignments as NAME=path (repeatable)
+        #[arg(short, long, value_name = "NAME=FILE")]
+        band: Vec<String>,
+        /// Output file
+        output: PathBuf,
+    },
+    /// EVI2: Two-band Enhanced Vegetation Index
+    Evi2 {
+        #[arg(long)]
+        nir: PathBuf,
+        #[arg(long)]
+        red: PathBuf,
+        output: PathBuf,
+    },
+    /// GNDVI: Green Normalized Difference Vegetation Index
+    Gndvi {
+        #[arg(long)]
+        nir: PathBuf,
+        #[arg(long)]
+        green: PathBuf,
+        output: PathBuf,
+    },
+    /// NGRDI: Normalized Green-Red Difference Index
+    Ngrdi {
+        #[arg(long)]
+        green: PathBuf,
+        #[arg(long)]
+        red: PathBuf,
+        output: PathBuf,
+    },
+    /// RECI: Red Edge Chlorophyll Index
+    Reci {
+        #[arg(long)]
+        nir: PathBuf,
+        #[arg(long)]
+        red_edge: PathBuf,
+        output: PathBuf,
+    },
+    /// NDRE: Normalized Difference Red Edge Index
+    Ndre {
+        #[arg(long)]
+        nir: PathBuf,
+        #[arg(long)]
+        red_edge: PathBuf,
+        output: PathBuf,
+    },
+    /// NDSI: Normalized Difference Snow Index
+    Ndsi {
+        #[arg(long)]
+        green: PathBuf,
+        #[arg(long)]
+        swir: PathBuf,
+        output: PathBuf,
+    },
+    /// NDMI: Normalized Difference Moisture Index
+    Ndmi {
+        #[arg(long)]
+        nir: PathBuf,
+        #[arg(long)]
+        swir: PathBuf,
+        output: PathBuf,
+    },
+    /// NDBI: Normalized Difference Built-up Index
+    Ndbi {
+        #[arg(long)]
+        swir: PathBuf,
+        #[arg(long)]
+        nir: PathBuf,
+        output: PathBuf,
+    },
+    /// MSAVI: Modified Soil-Adjusted Vegetation Index
+    Msavi {
+        #[arg(long)]
+        nir: PathBuf,
+        #[arg(long)]
+        red: PathBuf,
+        output: PathBuf,
+    },
+    /// Reclassify raster values into discrete classes
+    Reclassify {
+        input: PathBuf,
+        output: PathBuf,
+        /// Class definition as "min,max,value" (repeatable)
+        #[arg(long, value_name = "MIN,MAX,VALUE")]
+        class: Vec<String>,
+        /// Default value for unclassified cells
+        #[arg(long, default_value = "NaN")]
+        default: String,
+    },
+    /// Per-pixel median composite across multiple rasters
+    MedianComposite {
+        /// Input raster files (at least 2, repeatable)
+        #[arg(short, long)]
+        input: Vec<PathBuf>,
+        /// Output file
+        output: PathBuf,
+    },
+    /// Cloud mask using Sentinel-2 SCL band
+    CloudMask {
+        /// Input raster to mask
+        input: PathBuf,
+        /// SCL classification raster
+        #[arg(long)]
+        scl: PathBuf,
+        /// Output file
+        output: PathBuf,
+        /// SCL classes to keep (comma-separated, default: 4,5,6,11)
+        #[arg(long, default_value = "4,5,6,11")]
+        keep: String,
+    },
+}
+
+// ─── Morphology subcommands ─────────────────────────────────────────────
+
+#[derive(Subcommand)]
+pub enum MorphologyCommands {
+    /// Erosion (minimum filter)
+    Erode {
+        /// Input raster
+        input: PathBuf,
+        /// Output file
+        output: PathBuf,
+        /// Structuring element shape: square, cross, disk
+        #[arg(long, default_value = "square")]
+        shape: String,
+        /// Structuring element radius in cells
+        #[arg(short, long, default_value = "1")]
+        radius: usize,
+    },
+    /// Dilation (maximum filter)
+    Dilate {
+        /// Input raster
+        input: PathBuf,
+        /// Output file
+        output: PathBuf,
+        #[arg(long, default_value = "square")]
+        shape: String,
+        #[arg(short, long, default_value = "1")]
+        radius: usize,
+    },
+    /// Opening (erosion then dilation) — removes small bright features
+    Opening {
+        /// Input raster
+        input: PathBuf,
+        /// Output file
+        output: PathBuf,
+        #[arg(long, default_value = "square")]
+        shape: String,
+        #[arg(short, long, default_value = "1")]
+        radius: usize,
+    },
+    /// Closing (dilation then erosion) — removes small dark features
+    Closing {
+        /// Input raster
+        input: PathBuf,
+        /// Output file
+        output: PathBuf,
+        #[arg(long, default_value = "square")]
+        shape: String,
+        #[arg(short, long, default_value = "1")]
+        radius: usize,
+    },
+    /// Morphological gradient (dilation - erosion) — edge detection
+    Gradient {
+        /// Input raster
+        input: PathBuf,
+        /// Output file
+        output: PathBuf,
+        #[arg(long, default_value = "square")]
+        shape: String,
+        #[arg(short, long, default_value = "1")]
+        radius: usize,
+    },
+    /// Top-hat transform (original - opening) — bright feature extraction
+    TopHat {
+        /// Input raster
+        input: PathBuf,
+        /// Output file
+        output: PathBuf,
+        #[arg(long, default_value = "square")]
+        shape: String,
+        #[arg(short, long, default_value = "1")]
+        radius: usize,
+    },
+    /// Black-hat transform (closing - original) — dark feature extraction
+    BlackHat {
+        /// Input raster
+        input: PathBuf,
+        /// Output file
+        output: PathBuf,
+        #[arg(long, default_value = "square")]
+        shape: String,
+        #[arg(short, long, default_value = "1")]
+        radius: usize,
+    },
+}
+
+// ─── Landscape subcommands ─────────────────────────────────────────────
+
+#[derive(Subcommand)]
+pub enum LandscapeCommands {
+    /// Label connected patches in a classification raster
+    LabelPatches {
+        /// Input classification raster (integer class values)
+        input: PathBuf,
+        /// Output labeled patch raster (i32 IDs)
+        output: PathBuf,
+        /// Connectivity: 4 (cardinal) or 8 (cardinal+diagonal)
+        #[arg(short, long, default_value = "4")]
+        connectivity: u8,
+    },
+    /// Compute per-patch metrics (PARA, FRAC, area, perimeter) as CSV
+    PatchMetrics {
+        /// Input classification raster
+        input: PathBuf,
+        /// Output CSV file with per-patch metrics
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Connectivity: 4 or 8
+        #[arg(short, long, default_value = "4")]
+        connectivity: u8,
+    },
+    /// Compute per-class metrics (AI, COHESION, proportion)
+    ClassMetrics {
+        /// Input classification raster
+        input: PathBuf,
+        /// Connectivity: 4 or 8
+        #[arg(short, long, default_value = "4")]
+        connectivity: u8,
+    },
+    /// Compute global landscape metrics (SHDI, SIDI)
+    LandscapeMetrics {
+        /// Input classification raster
+        input: PathBuf,
+    },
+    /// Full landscape analysis: label + patch metrics + class metrics + landscape metrics
+    Analyze {
+        /// Input classification raster
+        input: PathBuf,
+        /// Output labeled raster (optional)
+        #[arg(long)]
+        output_labels: Option<PathBuf>,
+        /// Output CSV with per-patch metrics (optional)
+        #[arg(long)]
+        output_csv: Option<PathBuf>,
+        /// Connectivity: 4 or 8
+        #[arg(short, long, default_value = "4")]
+        connectivity: u8,
+    },
+}
+
+// ─── COG subcommands ──────────────────────────────────────────────────
+
+#[cfg(feature = "cloud")]
+#[derive(Subcommand)]
+pub enum CogCommands {
+    /// Show metadata of a remote COG
+    Info {
+        /// URL of the COG file
+        url: String,
+    },
+    /// Read a bounding box from a remote COG and save to local file
+    Fetch {
+        /// URL of the COG file
+        url: String,
+        /// Output GeoTIFF file
+        output: PathBuf,
+        /// Bounding box: min_x,min_y,max_x,max_y
+        #[arg(long)]
+        bbox: String,
+        /// Overview level (0 = full resolution)
+        #[arg(long)]
+        overview: Option<usize>,
+    },
+    /// Calculate slope from a remote COG DEM
+    Slope {
+        /// URL of the COG DEM
+        url: String,
+        /// Output file
+        output: PathBuf,
+        /// Bounding box: min_x,min_y,max_x,max_y
+        #[arg(long)]
+        bbox: String,
+        /// Output units: degrees, percent, radians
+        #[arg(short, long, default_value = "degrees")]
+        units: String,
+        /// Z-factor for unit conversion
+        #[arg(short, long, default_value = "1.0")]
+        z_factor: f64,
+    },
+    /// Calculate aspect from a remote COG DEM
+    Aspect {
+        /// URL of the COG DEM
+        url: String,
+        /// Output file
+        output: PathBuf,
+        /// Bounding box: min_x,min_y,max_x,max_y
+        #[arg(long)]
+        bbox: String,
+        /// Output format: degrees, radians, compass
+        #[arg(short, long, default_value = "degrees")]
+        format: String,
+    },
+    /// Calculate hillshade from a remote COG DEM
+    Hillshade {
+        /// URL of the COG DEM
+        url: String,
+        /// Output file
+        output: PathBuf,
+        /// Bounding box: min_x,min_y,max_x,max_y
+        #[arg(long)]
+        bbox: String,
+        /// Sun azimuth in degrees (0=North, clockwise)
+        #[arg(short, long, default_value = "315")]
+        azimuth: f64,
+        /// Sun altitude in degrees above horizon
+        #[arg(short = 'l', long, default_value = "45")]
+        altitude: f64,
+        /// Z-factor for vertical exaggeration
+        #[arg(short, long, default_value = "1.0")]
+        z_factor: f64,
+    },
+    /// Calculate TPI from a remote COG DEM
+    Tpi {
+        /// URL of the COG DEM
+        url: String,
+        /// Output file
+        output: PathBuf,
+        /// Bounding box: min_x,min_y,max_x,max_y
+        #[arg(long)]
+        bbox: String,
+        /// Neighborhood radius in cells
+        #[arg(short, long, default_value = "1")]
+        radius: usize,
+    },
+    /// Fill sinks from a remote COG DEM
+    FillSinks {
+        /// URL of the COG DEM
+        url: String,
+        /// Output file
+        output: PathBuf,
+        /// Bounding box: min_x,min_y,max_x,max_y
+        #[arg(long)]
+        bbox: String,
+        /// Minimum slope to enforce
+        #[arg(long, default_value = "0.01")]
+        min_slope: f64,
+    },
+}
+
+// ─── STAC subcommands ────────────────────────────────────────────────
+
+#[cfg(feature = "cloud")]
+#[derive(Subcommand)]
+pub enum StacCommands {
+    /// Search a STAC catalog and list matching items
+    Search {
+        /// Catalog: "pc" (Planetary Computer), "es" (Earth Search), or full URL
+        #[arg(long, default_value = "es")]
+        catalog: String,
+        /// Bounding box: west,south,east,north
+        #[arg(long)]
+        bbox: Option<String>,
+        /// Datetime or range (e.g. "2024-06-01/2024-06-30")
+        #[arg(long)]
+        datetime: Option<String>,
+        /// Collections (comma-separated, e.g. "sentinel-2-l2a")
+        #[arg(long)]
+        collections: Option<String>,
+        /// Maximum items to return
+        #[arg(long, default_value = "10")]
+        limit: u32,
+    },
+    /// Search a STAC catalog, fetch the first COG asset, and save to a GeoTIFF
+    Fetch {
+        /// Catalog: "pc" (Planetary Computer), "es" (Earth Search), or full URL
+        #[arg(long, default_value = "es")]
+        catalog: String,
+        /// Bounding box: west,south,east,north
+        #[arg(long)]
+        bbox: String,
+        /// Collection (e.g. "sentinel-2-l2a")
+        #[arg(long)]
+        collection: String,
+        /// Asset key to fetch (e.g. "red", "nir", "B04"). Auto-detects COG if omitted.
+        #[arg(long)]
+        asset: Option<String>,
+        /// Datetime or range
+        #[arg(long)]
+        datetime: Option<String>,
+        /// Output GeoTIFF file
+        output: PathBuf,
+    },
+    /// Search STAC catalog, fetch ALL matching COG assets, mosaic, and save
+    FetchMosaic {
+        /// Catalog: "pc" (Planetary Computer), "es" (Earth Search), or full URL
+        #[arg(long, default_value = "es")]
+        catalog: String,
+        /// Bounding box: west,south,east,north
+        #[arg(long)]
+        bbox: String,
+        /// Collection (e.g. "cop-dem-glo-30", "sentinel-2-l2a")
+        #[arg(long)]
+        collection: String,
+        /// Asset key to fetch (e.g. "data", "red", "B04"). Auto-detects COG if omitted.
+        #[arg(long)]
+        asset: Option<String>,
+        /// Datetime or range
+        #[arg(long)]
+        datetime: Option<String>,
+        /// Maximum items to fetch and mosaic
+        #[arg(long, default_value = "20")]
+        max_items: u32,
+        /// Output GeoTIFF file
+        output: PathBuf,
+    },
+    /// End-to-end satellite composite: search -> mosaic per date -> cloud-mask -> median composite
+    Composite {
+        /// Catalog: "pc" (Planetary Computer), "es" (Earth Search), or full URL
+        #[arg(long, default_value = "es")]
+        catalog: String,
+        /// Bounding box: west,south,east,north
+        #[arg(long)]
+        bbox: String,
+        /// Collection (e.g. "sentinel-2-l2a")
+        #[arg(long)]
+        collection: String,
+        /// Data asset to composite (e.g. "red", "nir", "B04")
+        #[arg(long)]
+        asset: String,
+        /// Datetime range (e.g. "2024-01-01/2024-12-31")
+        #[arg(long)]
+        datetime: String,
+        /// Maximum number of temporal scenes to composite
+        #[arg(long, default_value = "12")]
+        max_scenes: usize,
+        /// SCL asset key for cloud masking
+        #[arg(long, default_value = "scl")]
+        scl_asset: String,
+        /// SCL classes to keep (comma-separated, default: vegetation,soil,water,snow)
+        #[arg(long, default_value = "4,5,6,11")]
+        scl_keep: String,
+        /// Output GeoTIFF file
+        output: PathBuf,
+    },
+}
