@@ -31,13 +31,14 @@ use super::aspect::{aspect, AspectOutput};
 pub fn northness(dem: &Raster<f64>) -> Result<Raster<f64>> {
     let aspect_raster = aspect(dem, AspectOutput::Radians)?;
     let (rows, cols) = aspect_raster.shape();
+    let aspect_data = aspect_raster.data();
 
     let data: Vec<f64> = (0..rows)
         .into_par_iter()
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
             for (col, row_data_col) in row_data.iter_mut().enumerate() {
-                let a = unsafe { aspect_raster.get_unchecked(row, col) };
+                let a = aspect_data[[row, col]];
                 // aspect returns -1.0 for flat/nodata cells
                 if a < 0.0 || a.is_nan() {
                     continue;
@@ -69,13 +70,14 @@ pub fn northness(dem: &Raster<f64>) -> Result<Raster<f64>> {
 pub fn eastness(dem: &Raster<f64>) -> Result<Raster<f64>> {
     let aspect_raster = aspect(dem, AspectOutput::Radians)?;
     let (rows, cols) = aspect_raster.shape();
+    let aspect_data = aspect_raster.data();
 
     let data: Vec<f64> = (0..rows)
         .into_par_iter()
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
             for (col, row_data_col) in row_data.iter_mut().enumerate() {
-                let a = unsafe { aspect_raster.get_unchecked(row, col) };
+                let a = aspect_data[[row, col]];
                 if a < 0.0 || a.is_nan() {
                     continue;
                 }
@@ -102,13 +104,14 @@ pub fn eastness(dem: &Raster<f64>) -> Result<Raster<f64>> {
 pub fn northness_eastness(dem: &Raster<f64>) -> Result<(Raster<f64>, Raster<f64>)> {
     let aspect_raster = aspect(dem, AspectOutput::Radians)?;
     let (rows, cols) = aspect_raster.shape();
+    let aspect_data = aspect_raster.data();
 
     let pairs: Vec<(f64, f64)> = (0..rows)
         .into_par_iter()
         .flat_map(|row| {
             let mut row_data = vec![(f64::NAN, f64::NAN); cols];
             for (col, row_data_col) in row_data.iter_mut().enumerate() {
-                let a = unsafe { aspect_raster.get_unchecked(row, col) };
+                let a = aspect_data[[row, col]];
                 if a < 0.0 || a.is_nan() {
                     continue;
                 }

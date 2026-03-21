@@ -40,6 +40,7 @@ pub fn convergence_index(dem: &Raster<f64>, params: ConvergenceParams) -> Result
 
     let (rows, cols) = dem.shape();
     let r = params.radius as isize;
+    let data = dem.data();
 
     let output_data: Vec<f64> = (0..rows)
         .into_par_iter()
@@ -47,7 +48,7 @@ pub fn convergence_index(dem: &Raster<f64>, params: ConvergenceParams) -> Result
             let mut row_data = vec![f64::NAN; cols];
 
             for (col, row_data_col) in row_data.iter_mut().enumerate() {
-                let z0 = unsafe { dem.get_unchecked(row, col) };
+                let z0 = data[[row, col]];
                 if z0.is_nan() {
                     continue;
                 }
@@ -69,7 +70,7 @@ pub fn convergence_index(dem: &Raster<f64>, params: ConvergenceParams) -> Result
                         }
 
                         // Compute aspect at neighbor
-                        let aspect_n = compute_aspect_at(dem, nr as usize, nc as usize, rows, cols);
+                        let aspect_n = compute_aspect_at(data, nr as usize, nc as usize, rows, cols);
                         if aspect_n.is_nan() {
                             continue;
                         }
@@ -114,19 +115,19 @@ pub fn convergence_index(dem: &Raster<f64>, params: ConvergenceParams) -> Result
 }
 
 /// Compute aspect at a single cell (degrees, 0=N, clockwise)
-fn compute_aspect_at(dem: &Raster<f64>, row: usize, col: usize, rows: usize, cols: usize) -> f64 {
+fn compute_aspect_at(data: &Array2<f64>, row: usize, col: usize, rows: usize, cols: usize) -> f64 {
     if row == 0 || row >= rows - 1 || col == 0 || col >= cols - 1 {
         return f64::NAN;
     }
 
-    let a = unsafe { dem.get_unchecked(row - 1, col - 1) };
-    let b = unsafe { dem.get_unchecked(row - 1, col) };
-    let c = unsafe { dem.get_unchecked(row - 1, col + 1) };
-    let d = unsafe { dem.get_unchecked(row, col - 1) };
-    let f = unsafe { dem.get_unchecked(row, col + 1) };
-    let g = unsafe { dem.get_unchecked(row + 1, col - 1) };
-    let h = unsafe { dem.get_unchecked(row + 1, col) };
-    let i = unsafe { dem.get_unchecked(row + 1, col + 1) };
+    let a = data[[row - 1, col - 1]];
+    let b = data[[row - 1, col]];
+    let c = data[[row - 1, col + 1]];
+    let d = data[[row, col - 1]];
+    let f = data[[row, col + 1]];
+    let g = data[[row + 1, col - 1]];
+    let h = data[[row + 1, col]];
+    let i = data[[row + 1, col + 1]];
 
     if [a, b, c, d, f, g, h, i].iter().any(|v| v.is_nan()) {
         return f64::NAN;

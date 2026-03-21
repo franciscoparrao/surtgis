@@ -139,29 +139,32 @@ pub fn curvature(dem: &Raster<f64>, params: CurvatureParams) -> Result<Raster<f6
     let cs2_3 = 3.0 * cs2;
     let cs2_4 = 4.0 * cs2;
 
+    let data = dem.data();
+
     let output_data: Vec<f64> = (0..rows)
         .into_par_iter()
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
 
             for (col, row_data_col) in row_data.iter_mut().enumerate() {
-                let z5 = unsafe { dem.get_unchecked(row, col) };
-                if z5.is_nan() || nodata.is_some_and(|nd| (z5 - nd).abs() < f64::EPSILON) {
-                    continue;
-                }
-
+                // Skip edges first
                 if row == 0 || row == rows - 1 || col == 0 || col == cols - 1 {
                     continue;
                 }
 
-                let z1 = unsafe { dem.get_unchecked(row - 1, col - 1) };
-                let z2 = unsafe { dem.get_unchecked(row - 1, col) };
-                let z3 = unsafe { dem.get_unchecked(row - 1, col + 1) };
-                let z4 = unsafe { dem.get_unchecked(row, col - 1) };
-                let z6 = unsafe { dem.get_unchecked(row, col + 1) };
-                let z7 = unsafe { dem.get_unchecked(row + 1, col - 1) };
-                let z8 = unsafe { dem.get_unchecked(row + 1, col) };
-                let z9 = unsafe { dem.get_unchecked(row + 1, col + 1) };
+                let z5 = data[[row, col]];
+                if z5.is_nan() || nodata.is_some_and(|nd| (z5 - nd).abs() < f64::EPSILON) {
+                    continue;
+                }
+
+                let z1 = data[[row - 1, col - 1]];
+                let z2 = data[[row - 1, col]];
+                let z3 = data[[row - 1, col + 1]];
+                let z4 = data[[row, col - 1]];
+                let z6 = data[[row, col + 1]];
+                let z7 = data[[row + 1, col - 1]];
+                let z8 = data[[row + 1, col]];
+                let z9 = data[[row + 1, col + 1]];
 
                 if [z1, z2, z3, z4, z6, z7, z8, z9].iter().any(|v| v.is_nan()) {
                     continue;

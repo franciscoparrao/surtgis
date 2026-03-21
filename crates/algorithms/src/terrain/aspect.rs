@@ -66,6 +66,8 @@ pub fn aspect(dem: &Raster<f64>, output_format: AspectOutput) -> Result<Raster<f
     // Threshold for considering a surface flat
     const FLAT_THRESHOLD: f64 = 1e-10;
 
+    let data = dem.data();
+
     // Process rows in parallel
     let output_data: Vec<f64> = (0..rows)
         .into_par_iter()
@@ -73,28 +75,28 @@ pub fn aspect(dem: &Raster<f64>, output_format: AspectOutput) -> Result<Raster<f
             let mut row_data = vec![-1.0; cols];
 
             for (col, row_data_col) in row_data.iter_mut().enumerate() {
-                // Get center value
-                let e = unsafe { dem.get_unchecked(row, col) };
-                if e.is_nan() || (nodata.is_some() && (e - nodata.unwrap()).abs() < f64::EPSILON) {
-                    *row_data_col = -1.0;
-                    continue;
-                }
-
-                // Skip edges
+                // Skip edges first
                 if row == 0 || row == rows - 1 || col == 0 || col == cols - 1 {
                     *row_data_col = -1.0;
                     continue;
                 }
 
+                // Get center value
+                let e = data[[row, col]];
+                if e.is_nan() || (nodata.is_some() && (e - nodata.unwrap()).abs() < f64::EPSILON) {
+                    *row_data_col = -1.0;
+                    continue;
+                }
+
                 // Get 3x3 neighborhood
-                let a = unsafe { dem.get_unchecked(row - 1, col - 1) };
-                let b = unsafe { dem.get_unchecked(row - 1, col) };
-                let c = unsafe { dem.get_unchecked(row - 1, col + 1) };
-                let d = unsafe { dem.get_unchecked(row, col - 1) };
-                let f = unsafe { dem.get_unchecked(row, col + 1) };
-                let g = unsafe { dem.get_unchecked(row + 1, col - 1) };
-                let h = unsafe { dem.get_unchecked(row + 1, col) };
-                let i = unsafe { dem.get_unchecked(row + 1, col + 1) };
+                let a = data[[row - 1, col - 1]];
+                let b = data[[row - 1, col]];
+                let c = data[[row - 1, col + 1]];
+                let d = data[[row, col - 1]];
+                let f = data[[row, col + 1]];
+                let g = data[[row + 1, col - 1]];
+                let h = data[[row + 1, col]];
+                let i = data[[row + 1, col + 1]];
 
                 // Check for nodata in neighborhood
                 if [a, b, c, d, f, g, h, i].iter().any(|v| v.is_nan()) {
