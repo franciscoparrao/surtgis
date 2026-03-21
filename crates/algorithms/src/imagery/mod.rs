@@ -12,6 +12,7 @@ mod cloud_mask;
 mod composite;
 mod index_builder;
 mod indices;
+mod burn_severity;
 mod reclassify;
 
 pub use band_math::{band_math, band_math_binary, BandMathOp};
@@ -27,3 +28,4 @@ pub use indices::{
     normalized_difference, reci, savi, EviParams, SaviParams, SpectralIndex,
 };
 pub use reclassify::{reclassify, ReclassEntry, ReclassifyParams};
+pub use burn_severity::{dnbr, burn_severity_classify};

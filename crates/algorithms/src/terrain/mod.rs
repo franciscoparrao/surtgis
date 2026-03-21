@@ -59,6 +59,10 @@ mod spheroidal_grid;
 mod ssa_2d;
 mod uncertainty;
 mod vrm;
+mod ls_factor;
+mod valley_depth;
+mod relative_slope_position;
+mod surface_area_ratio;
 mod wind_exposure;
 
 pub use accumulation_zones::{
@@ -110,3 +114,7 @@ pub use solar_radiation::{solar_vector, surface_normal, cos_incidence_vectorial,
 pub use spheroidal_grid::{cell_dimensions, geographic_cell_sizes, slope_geographic, vincenty_distance, SpheroidalParams, CellDimensions};
 pub use ssa_2d::{ssa_2d, Ssa2dParams};
 pub use uncertainty::{uncertainty, UncertaintyParams, UncertaintyResult};
+pub use ls_factor::{ls_factor, LsFactorParams};
+pub use valley_depth::valley_depth;
+pub use relative_slope_position::relative_slope_position;
+pub use surface_area_ratio::{surface_area_ratio, SarParams};

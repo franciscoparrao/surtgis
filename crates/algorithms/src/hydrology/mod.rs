@@ -23,6 +23,10 @@ mod priority_flood;
 mod stream_network;
 mod watershed;
 mod watershed_parallel;
+mod drainage_density;
+mod hypsometric;
+mod sediment_connectivity;
+mod basin_morphometry;
 mod advanced;
 
 pub use breach::{breach_depressions, BreachParams};
@@ -43,3 +47,7 @@ pub use advanced::{
     strahler_order, flow_path_length, isobasins, flood_fill_simulation,
     IsobasinParams, FloodSimParams,
 };
+pub use drainage_density::{drainage_density, DrainageDensityParams};
+pub use hypsometric::hypsometric_integral;
+pub use sediment_connectivity::{sediment_connectivity, SedimentConnectivityParams};
+pub use basin_morphometry::{basin_morphometry, BasinMorphometry};
