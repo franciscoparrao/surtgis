@@ -1,45 +1,64 @@
 # SurtGIS
 
-**High-performance geospatial analysis platform written in Rust.**
+**High-performance geospatial analysis library and CLI in Rust.**
 
-SurtGIS provides 105 geospatial algorithms across 9 categories, a desktop GUI, WASM support for browser-based analysis, and cloud data access via STAC/COG. Comparable in scope to SAGA-GIS, with Rust's performance, memory safety, and native parallelism.
+136 algorithms, 90 CLI subcommands, streaming I/O for arbitrarily large DEMs, and an end-to-end satellite composite pipeline — all from a single binary with no external dependencies.
+
+> **Quickstart**: [Análisis de terreno de los Andes en 5 minutos](https://territorio-digital.cl/blog/surtgis-quickstart-analisis-terreno)
+
+## Quick example
+
+```bash
+cargo install surtgis
+
+# Download DEM + compute all terrain factors
+surtgis stac fetch-mosaic --collection cop-dem-glo-30 --bbox -70.5,-33.6,-70.2,-33.3 dem.tif
+surtgis terrain all dem.tif --outdir factors/ --compress
+
+# Cloud-free Sentinel-2 composite
+surtgis stac composite --collection sentinel-2-l2a --asset red \
+  --datetime 2024-01-01/2024-12-31 --bbox -70.5,-33.6,-70.2,-33.3 composite.tif
+
+# Clip by watershed polygon
+surtgis clip --polygon watershed.shp factors/slope.tif slope_clipped.tif
+```
 
 ## Highlights
 
-- **105 algorithms** in 9 categories: terrain, hydrology, imagery, classification, texture, statistics, morphology, interpolation, landscape
-- **Desktop GUI** — egui-based SAGA-style workspace with algorithm tree, basemap tiles, STAC browser, 3D view
-- **WASM** — 33 algorithms compiled to WebAssembly, usable from JavaScript/TypeScript
-- **Cloud** — COG reader with HTTP range requests, STAC client for Planetary Computer / Earth Search
-- **Python bindings** — PyO3 interface for GeoTIFF I/O and raster processing
-- **Parallel by default** — Rayon-based multi-core execution
-- **No external dependencies** — native GeoTIFF reader/writer, no GDAL required
+- **136 algorithms** — terrain, hydrology, imagery, landscape, classification, statistics, morphology, interpolation
+- **90 CLI subcommands** — batch modes (`terrain all`, `hydrology all`), expression-based indices, landscape metrics
+- **Streaming I/O** — 12 terrain algorithms process DEMs of any size with ~200MB RAM
+- **STAC composite** — end-to-end satellite pipeline: search → mosaic → cloud-mask → median composite
+- **Vector formats** — GeoJSON, Shapefile (.shp), GeoPackage (.gpkg) for clip and rasterize
+- **Cloud native** — COG reader with HTTP range requests, STAC client for Planetary Computer / Earth Search
+- **Cross-platform** — compiles to native (Rayon), WebAssembly (browser), Python (PyO3)
+- **No external dependencies** — native GeoTIFF I/O with DEFLATE compression, no GDAL required
 
 ## Architecture
 
 ```
 surtgis/
-├── surtgis-core           # Raster<T>, GeoTransform, CRS, GeoTIFF I/O
-├── surtgis-algorithms     # 105 algorithms in 10 modules
-├── surtgis-parallel       # Tiled processing, parallel strategies
-├── surtgis-gui            # egui desktop application
-├── surtgis-cli            # Command-line interface
-├── surtgis-cloud          # COG reader, STAC client
+├── surtgis-core           # Raster<T>, GeoTransform, CRS, GeoTIFF I/O, streaming, mosaic, vector
+├── surtgis-algorithms     # 136 algorithms in 10 modules
+├── surtgis-parallel       # Rayon-based parallel strategies
+├── surtgis-cli            # 90 CLI subcommands (14 modular files)
+├── surtgis-cloud          # COG reader, STAC client, bbox reprojection
 ├── surtgis-wasm           # WebAssembly bindings (33 algos)
 ├── surtgis-python         # Python bindings (PyO3)
+├── surtgis-gui            # egui desktop application
 └── surtgis-colormap       # Color schemes and raster rendering
 ```
 
 ## Performance
 
-Benchmarks on a 4096x4096 DEM (16.8M cells), release mode:
+Benchmarks on full GeoTIFF pipelines (read → compute → write), DEMs up to 20K² (400M cells):
 
-| Algorithm | SurtGIS | GDAL 3.11 | SAGA 9.9.1 | WhiteboxTools 2.4 | R / terra 1.8 |
-|-----------|--------:|----------:|-----------:|-------------------:|--------------:|
-| **Slope** | 187 ms | 516 ms (2.8x) | 3675 ms (19.6x) | 3937 ms (21.0x) | 640 ms (3.4x) |
-| **Aspect** | 471 ms | 1232 ms (2.6x) | 3901 ms (8.3x) | 4254 ms (9.0x) | 928 ms (2.0x) |
-| **Hillshade** | 444 ms | 616 ms (1.4x) | 2768 ms (6.2x) | 3217 ms (7.3x) | 3550 ms (8.0x) |
-
-> Multipliers show `tool_time / surtgis_time`. SurtGIS times are pure computation; external tools include process startup and I/O.
+| Algorithm | vs GDAL | vs GRASS GIS | vs WhiteboxTools |
+|-----------|---------|-------------|-----------------|
+| Slope | 1.7–1.8× faster | 4.5–4.9× | — |
+| Aspect | 2.0× | 3.5–4.8× | 4.2–7.9× |
+| Flow accumulation | — | 7.5–23.1× | 7.5–7.7× |
+| Depression filling | — | — | 1.6–2.6× |
 
 ## Algorithms (105)
 
