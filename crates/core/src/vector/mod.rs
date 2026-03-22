@@ -1,13 +1,14 @@
-//! Vector data structures (placeholder for future implementation)
+//! Vector data structures and operations.
 
-// TODO: Implement vector types
-// - Feature: geometry + attributes
-// - FeatureCollection: collection of features
-// - Geometry wrappers around geo-types
+pub mod geojson_reader;
+pub mod rasterize;
 
 use geo_types::Geometry;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+pub use geojson_reader::{parse_geojson, read_geojson};
+pub use rasterize::{clip_raster, clip_raster_by_polygon, rasterize_polygons};
 
 /// Attribute value types
 #[derive(Debug, Clone, Serialize, Deserialize)]

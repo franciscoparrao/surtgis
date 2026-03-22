@@ -57,6 +57,29 @@ pub enum Commands {
         #[command(subcommand)]
         algorithm: LandscapeCommands,
     },
+    /// Clip a raster by a GeoJSON polygon
+    Clip {
+        /// Input raster file
+        input: PathBuf,
+        /// GeoJSON file with polygon(s) to clip by
+        #[arg(long)]
+        polygon: PathBuf,
+        /// Output file
+        output: PathBuf,
+    },
+    /// Rasterize a GeoJSON file to a raster grid
+    Rasterize {
+        /// Input GeoJSON file
+        input: PathBuf,
+        /// Output raster file
+        output: PathBuf,
+        /// Reference raster for grid dimensions and transform
+        #[arg(long)]
+        reference: PathBuf,
+        /// Property to use as raster value (default: sequential 1..N)
+        #[arg(long)]
+        attribute: Option<String>,
+    },
     /// Mosaic multiple rasters into one covering the union extent
     Mosaic {
         /// Input raster files (at least 2)
