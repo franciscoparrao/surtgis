@@ -79,6 +79,10 @@ rfd = "0.15"
 crossbeam-channel = "0.5"
 image = { version = "0.25", default-features = false, features = ["png"] }
 
+# Vector formats
+shapefile = { version = "0.7", features = ["geo-types"] }
+rusqlite = { version = "0.39", features = ["bundled"] }
+
 # Testing & Benchmarks
 criterion = { version = "0.5", features = ["html_reports"] }
 approx = "0.5"

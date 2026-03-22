@@ -9,8 +9,8 @@ use crate::helpers;
 
 pub fn handle_clip(input: PathBuf, polygon: PathBuf, output: PathBuf, compress: bool) -> Result<()> {
     let raster = helpers::read_dem(&input)?;
-    let features = surtgis_core::vector::read_geojson(&polygon)
-        .context("Failed to read GeoJSON")?;
+    let features = surtgis_core::vector::read_vector(&polygon)
+        .context("Failed to read vector file")?;
 
     let start = Instant::now();
     let result = surtgis_core::vector::clip_raster(&raster, &features)
@@ -38,8 +38,8 @@ pub fn handle_rasterize(
     attribute: Option<String>,
     compress: bool,
 ) -> Result<()> {
-    let features = surtgis_core::vector::read_geojson(&input)
-        .context("Failed to read GeoJSON")?;
+    let features = surtgis_core::vector::read_vector(&input)
+        .context("Failed to read vector file")?;
     let ref_raster = helpers::read_dem(&reference)?;
 
     let (rows, cols) = ref_raster.shape();

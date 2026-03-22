@@ -13,6 +13,8 @@ categories = ["science::geo"]
 default = ["parallel"]
 gdal = ["dep:gdal"]
 parallel = ["ndarray/rayon"]
+shapefile = ["dep:shapefile"]
+geopackage = ["dep:rusqlite"]
 
 [dependencies]
 thiserror.workspace = true
@@ -25,6 +27,8 @@ ndarray.workspace = true
 num-traits.workspace = true
 ordered-float.workspace = true
 gdal = { workspace = true, optional = true }
+shapefile = { workspace = true, optional = true }
+rusqlite = { workspace = true, optional = true }
 tiff.workspace = true
 
 [dev-dependencies]

@@ -57,19 +57,19 @@ pub enum Commands {
         #[command(subcommand)]
         algorithm: LandscapeCommands,
     },
-    /// Clip a raster by a GeoJSON polygon
+    /// Clip a raster by polygon (.geojson, .shp, .gpkg)
     Clip {
         /// Input raster file
         input: PathBuf,
-        /// GeoJSON file with polygon(s) to clip by
+        /// Vector file with polygon(s) (.geojson, .shp, .gpkg)
         #[arg(long)]
         polygon: PathBuf,
         /// Output file
         output: PathBuf,
     },
-    /// Rasterize a GeoJSON file to a raster grid
+    /// Rasterize a vector file to a raster grid (.geojson, .shp, .gpkg)
     Rasterize {
-        /// Input GeoJSON file
+        /// Input vector file (.geojson, .shp, .gpkg)
         input: PathBuf,
         /// Output raster file
         output: PathBuf,
