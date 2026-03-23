@@ -124,7 +124,36 @@ where
         raster.set_transform(transform);
     }
 
+    // Try to read CRS from GeoKeyDirectory (tag 34735)
+    if let Some(crs) = read_crs(&mut decoder) {
+        raster.set_crs(Some(crs));
+    }
+
     Ok(raster)
+}
+
+/// Attempt to read CRS EPSG code from GeoKeyDirectory tag
+fn read_crs<R: std::io::Read + std::io::Seek>(
+    decoder: &mut Decoder<R>,
+) -> Option<crate::crs::CRS> {
+    let geokeys = decoder.get_tag_u16_vec(Tag::Unknown(34735)).ok()?;
+    if geokeys.len() < 4 {
+        return None;
+    }
+    let num_keys = geokeys[3] as usize;
+    for i in 0..num_keys {
+        let base = 4 + i * 4;
+        if base + 3 >= geokeys.len() {
+            break;
+        }
+        let key_id = geokeys[base];
+        let value = geokeys[base + 3];
+        // ProjectedCSTypeGeoKey (3072) or GeographicTypeGeoKey (2048)
+        if (key_id == 3072 || key_id == 2048) && value > 0 {
+            return Some(crate::crs::CRS::from_epsg(value as u32));
+        }
+    }
+    None
 }
 
 /// Attempt to read GeoTransform from TIFF tags
