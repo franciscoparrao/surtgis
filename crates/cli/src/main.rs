@@ -26,6 +26,7 @@ fn main() -> Result<()> {
         Commands::Landscape { algorithm } => handlers::landscape::handle(algorithm, compress)?,
         Commands::Clip { input, polygon, output } => handlers::clip::handle_clip(input, polygon, output, compress)?,
         Commands::Rasterize { input, output, reference, attribute } => handlers::clip::handle_rasterize(input, output, reference, attribute, compress)?,
+        Commands::Resample { input, output, reference, method } => handlers::clip::handle_resample(input, output, reference, method, compress)?,
         Commands::Mosaic { input, output } => handlers::mosaic::handle(input, output, compress)?,
         #[cfg(feature = "cloud")]
         Commands::Cog { action } => handlers::cog::handle(action, compress)?,

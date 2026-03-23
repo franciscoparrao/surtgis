@@ -80,6 +80,19 @@ pub enum Commands {
         #[arg(long)]
         attribute: Option<String>,
     },
+    /// Resample a raster to match the grid of a reference raster
+    Resample {
+        /// Input raster to resample
+        input: PathBuf,
+        /// Output resampled raster
+        output: PathBuf,
+        /// Reference raster defining the target grid
+        #[arg(long)]
+        reference: PathBuf,
+        /// Interpolation method: nearest or bilinear
+        #[arg(short, long, default_value = "bilinear")]
+        method: String,
+    },
     /// Mosaic multiple rasters into one covering the union extent
     Mosaic {
         /// Input raster files (at least 2)

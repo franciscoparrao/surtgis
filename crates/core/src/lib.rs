@@ -14,6 +14,7 @@ pub mod error;
 pub mod io;
 pub mod mosaic;
 pub mod raster;
+pub mod resample;
 pub mod streaming;
 pub mod vector;
 
@@ -21,6 +22,7 @@ pub use crs::CRS;
 pub use error::{Error, Result};
 pub use mosaic::{mosaic, MosaicOptions};
 pub use raster::{GeoTransform, Raster, RasterElement};
+pub use resample::{resample_to_grid, ResampleMethod};
 pub use streaming::{StripProcessor, WindowAlgorithm};
 
 /// Prelude for convenient imports

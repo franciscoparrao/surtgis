@@ -1,4 +1,4 @@
-//! Handlers for clip and rasterize commands.
+//! Handlers for clip, rasterize, and resample commands.
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -57,5 +57,41 @@ pub fn handle_rasterize(
     helpers::write_result(&result, &output, compress)?;
     println!("{} features rasterized", features.len());
     helpers::done("Rasterize", &output, elapsed);
+    Ok(())
+}
+
+pub fn handle_resample(
+    input: PathBuf,
+    output: PathBuf,
+    reference: PathBuf,
+    method: String,
+    compress: bool,
+) -> Result<()> {
+    let method = match method.to_lowercase().as_str() {
+        "nearest" | "nn" => surtgis_core::ResampleMethod::NearestNeighbor,
+        "bilinear" | "linear" => surtgis_core::ResampleMethod::Bilinear,
+        _ => {
+            eprintln!("Unknown method '{}', using bilinear", method);
+            surtgis_core::ResampleMethod::Bilinear
+        }
+    };
+
+    let source = helpers::read_dem(&input)?;
+    let ref_raster = helpers::read_dem(&reference)?;
+
+    let (src_rows, src_cols) = source.shape();
+    let (ref_rows, ref_cols) = ref_raster.shape();
+
+    let start = Instant::now();
+    let result = surtgis_core::resample_to_grid(&source, &ref_raster, method)
+        .context("Failed to resample")?;
+    let elapsed = start.elapsed();
+
+    helpers::write_result(&result, &output, compress)?;
+    println!(
+        "Resampled: {} x {} → {} x {}",
+        src_cols, src_rows, ref_cols, ref_rows
+    );
+    helpers::done("Resample", &output, elapsed);
     Ok(())
 }
