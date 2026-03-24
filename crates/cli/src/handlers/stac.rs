@@ -378,6 +378,7 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             max_scenes,
             scl_asset,
             scl_keep,
+            align_to,
             output,
         } => {
             let cat = StacCatalog::from_str_or_url(&catalog);
@@ -660,6 +661,33 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             ).context("Failed to write streaming composite")?;
 
             println!(); // newline after \r progress
+
+            // If --align-to is specified, resample the output to match the reference grid
+            if let Some(ref align_path) = align_to {
+                let composite: surtgis_core::Raster<f64> =
+                    surtgis_core::io::read_geotiff(&output, None)
+                        .context("Failed to re-read composite for alignment")?;
+                let reference: surtgis_core::Raster<f64> =
+                    surtgis_core::io::read_geotiff(align_path, None)
+                        .context("Failed to read alignment reference raster")?;
+
+                let pb = spinner("Aligning to reference grid...");
+                let aligned = surtgis_core::resample_to_grid(
+                    &composite,
+                    &reference,
+                    surtgis_core::ResampleMethod::Bilinear,
+                )
+                .context("Failed to resample to reference grid")?;
+                pb.finish_and_clear();
+
+                let (ar, ac) = aligned.shape();
+                write_result(&aligned, &output, compress)?;
+                println!(
+                    "Aligned to reference: {} x {} -> {} x {}",
+                    out_cols, out_rows, ac, ar
+                );
+            }
+
             let elapsed = start.elapsed();
             println!(
                 "Composite: {} scenes -> {} x {} ({:.1}M cells)",

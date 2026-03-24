@@ -1098,6 +1098,9 @@ pub enum StacCommands {
         /// SCL classes to keep (comma-separated, default: vegetation,soil,water,snow)
         #[arg(long, default_value = "4,5,6,11")]
         scl_keep: String,
+        /// Align output to this raster's grid (resamples to match origin, cell size, dims)
+        #[arg(long)]
+        align_to: Option<PathBuf>,
         /// Output GeoTIFF file
         output: PathBuf,
     },
