@@ -12,6 +12,7 @@ categories = ["science::geo", "algorithms"]
 [features]
 default = ["parallel"]
 parallel = ["dep:rayon", "surtgis-core/parallel", "surtgis-parallel/parallel"]
+shapefile = ["surtgis-core/shapefile"]
 
 [dependencies]
 surtgis-core = { version = "0.2.0", path = "../core", default-features = false }
