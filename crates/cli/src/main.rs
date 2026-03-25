@@ -3,6 +3,7 @@
 mod commands;
 mod handlers;
 mod helpers;
+mod memory;
 mod streaming;
 
 use anyhow::Result;
@@ -15,16 +16,23 @@ fn main() -> Result<()> {
     let compress = cli.compress;
     let streaming = cli.streaming;
     let verbose = cli.verbose;
+
+    // Parse max_memory to bytes if provided
+    let mem_limit_bytes = cli.max_memory
+        .as_ref()
+        .map(|s| memory::parse_memory_size(s))
+        .transpose()?;
+
     helpers::setup_logging(verbose);
 
     match cli.command {
         Commands::Info { input } => handlers::info::handle(input)?,
-        Commands::Terrain { algorithm } => handlers::terrain::handle(algorithm, compress, streaming)?,
-        Commands::Hydrology { algorithm } => handlers::hydrology::handle(algorithm, compress)?,
+        Commands::Terrain { algorithm } => handlers::terrain::handle(algorithm, compress, streaming, mem_limit_bytes)?,
+        Commands::Hydrology { algorithm } => handlers::hydrology::handle(algorithm, compress, mem_limit_bytes)?,
         Commands::Imagery { algorithm } => handlers::imagery::handle(algorithm, compress)?,
         Commands::Morphology { algorithm } => handlers::morphology::handle(algorithm, compress)?,
         Commands::Landscape { algorithm } => handlers::landscape::handle(algorithm, compress)?,
-        Commands::Clip { input, polygon, output } => handlers::clip::handle_clip(input, polygon, output, compress)?,
+        Commands::Clip { input, polygon, output } => handlers::clip::handle_clip(input, polygon, output, compress, mem_limit_bytes)?,
         Commands::Rasterize { input, output, reference, attribute } => handlers::clip::handle_rasterize(input, output, reference, attribute, compress)?,
         Commands::Resample { input, output, reference, method } => handlers::clip::handle_resample(input, output, reference, method, compress)?,
         Commands::Mosaic { input, output } => handlers::mosaic::handle(input, output, compress)?,

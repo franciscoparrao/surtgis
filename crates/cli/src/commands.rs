@@ -21,6 +21,11 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub streaming: bool,
 
+    /// Maximum memory to use (e.g., 4G, 1024MB, 500MiB).
+    /// If raster would exceed this when decompressed, force streaming.
+    #[arg(long, global = true)]
+    pub max_memory: Option<String>,
+
     #[command(subcommand)]
     pub command: Commands,
 }

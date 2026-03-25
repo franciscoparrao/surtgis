@@ -22,8 +22,9 @@ use crate::commands::TerrainCommands;
 use crate::helpers::{
     done, parse_advanced_curvature_type, read_dem, write_result, write_result_u8,
 };
+use crate::memory;
 
-pub fn handle(algorithm: TerrainCommands, compress: bool, streaming: bool) -> Result<()> {
+pub fn handle(algorithm: TerrainCommands, compress: bool, streaming: bool, mem_limit_bytes: Option<u64>) -> Result<()> {
     match algorithm {
         TerrainCommands::Slope {
             input,
@@ -42,8 +43,7 @@ pub fn handle(algorithm: TerrainCommands, compress: bool, streaming: bool) -> Re
             };
 
             // Auto-detect streaming for large files
-            let use_streaming = streaming || std::fs::metadata(&input)
-                .map(|m| m.len() > 500_000_000).unwrap_or(false);
+            let use_streaming = memory::should_stream(&input, mem_limit_bytes, streaming)?;
 
             if use_streaming {
                 let algo = SlopeStreaming { units, z_factor };

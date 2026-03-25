@@ -17,8 +17,9 @@ use crate::commands::HydrologyCommands;
 use crate::helpers::{
     done, parse_pour_points, read_dem, read_u8, write_result, write_result_i32, write_result_u8,
 };
+use crate::memory;
 
-pub fn handle(algorithm: HydrologyCommands, compress: bool) -> Result<()> {
+pub fn handle(algorithm: HydrologyCommands, compress: bool, mem_limit_bytes: Option<u64>) -> Result<()> {
     match algorithm {
         HydrologyCommands::FillSinks {
             input,
@@ -281,6 +282,18 @@ pub fn handle(algorithm: HydrologyCommands, compress: bool) -> Result<()> {
         } => {
             std::fs::create_dir_all(&outdir)
                 .context("Failed to create output directory")?;
+
+            // Check if DEM exceeds memory limit
+            if let Some(limit) = mem_limit_bytes {
+                if let Ok(est_size) = memory::estimate_decompressed_size(&input) {
+                    if est_size > limit {
+                        eprintln!("Warning: DEM size ({:.2} GB) exceeds --max-memory limit ({:.2} GB)",
+                                 est_size as f64 / 1e9, limit as f64 / 1e9);
+                        eprintln!("Note: Hydrology 'all' pipeline requires full in-memory processing");
+                    }
+                }
+            }
+
             let dem = read_dem(&input)?;
             let start = Instant::now();
 

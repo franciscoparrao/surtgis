@@ -6,8 +6,20 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 
 use crate::helpers;
+use crate::memory;
 
-pub fn handle_clip(input: PathBuf, polygon: PathBuf, output: PathBuf, compress: bool) -> Result<()> {
+pub fn handle_clip(input: PathBuf, polygon: PathBuf, output: PathBuf, compress: bool, mem_limit_bytes: Option<u64>) -> Result<()> {
+    // Validate that DEM doesn't exceed memory limit (clip requires in-memory processing)
+    if let Some(limit) = mem_limit_bytes {
+        if let Ok(est_size) = memory::estimate_decompressed_size(&input) {
+            if est_size > limit {
+                eprintln!("Warning: DEM size ({:.2} GB) exceeds --max-memory limit ({:.2} GB)",
+                         est_size as f64 / 1e9, limit as f64 / 1e9);
+                eprintln!("Note: Clip operation requires in-memory processing and cannot stream");
+            }
+        }
+    }
+
     let raster = helpers::read_dem(&input)?;
     let features = surtgis_core::vector::read_vector(&polygon)
         .context("Failed to read vector file")?;
