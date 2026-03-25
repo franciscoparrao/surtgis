@@ -208,7 +208,7 @@ mod tests {
         .unwrap();
 
         // Read back and verify
-        let mut reader = StripReader::open(path).unwrap();
+        let reader = StripReader::open(path).unwrap();
         assert_eq!(reader.rows(), rows);
         assert_eq!(reader.cols(), cols);
 

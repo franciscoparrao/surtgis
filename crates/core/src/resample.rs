@@ -6,8 +6,8 @@
 
 use ndarray::Array2;
 
-use crate::error::{Error, Result};
-use crate::raster::{GeoTransform, Raster};
+use crate::error::Result;
+use crate::raster::Raster;
 
 /// Interpolation method for resampling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -148,9 +148,13 @@ pub fn read_vector(path: &std::path::Path) -> crate::error::Result<FeatureCollec
         _ => {
             let mut supported = vec![".geojson", ".json"];
             #[cfg(feature = "shapefile")]
-            supported.push(".shp");
+            {
+                supported.push(".shp");
+            }
             #[cfg(feature = "geopackage")]
-            supported.push(".gpkg");
+            {
+                supported.push(".gpkg");
+            }
             Err(crate::error::Error::Other(format!(
                 "Unsupported vector format: '.{}'. Supported: {}",
                 ext,
