@@ -118,6 +118,11 @@ pub enum Commands {
         #[command(subcommand)]
         action: StacCommands,
     },
+    /// Pipeline: integrated workflows for specific use cases
+    Pipeline {
+        #[command(subcommand)]
+        action: PipelineCommands,
+    },
 }
 
 // ─── Terrain subcommands ────────────────────────────────────────────────
@@ -1108,5 +1113,41 @@ pub enum StacCommands {
         align_to: Option<PathBuf>,
         /// Output GeoTIFF file
         output: PathBuf,
+    },
+}
+
+// ─── Pipeline workflows ─────────────────────────────────────────────────
+
+#[derive(Subcommand)]
+pub enum PipelineCommands {
+    /// Compute susceptibility factors from DEM + S2 imagery
+    Susceptibility {
+        /// DEM source: "copernicus-dem-glo-30" or local path
+        #[arg(long)]
+        dem: String,
+
+        /// S2 source: "sentinel-2-l2a" or "earth-search" or "skip"
+        #[arg(long)]
+        s2: String,
+
+        /// Bounding box: "west,south,east,north"
+        #[arg(long)]
+        bbox: String,
+
+        /// Date range: "YYYY-MM-DD/YYYY-MM-DD"
+        #[arg(long)]
+        datetime: String,
+
+        /// Output directory (will be created)
+        #[arg(long)]
+        outdir: PathBuf,
+
+        /// Max scenes for S2 (default: 12)
+        #[arg(long, default_value = "12")]
+        max_scenes: usize,
+
+        /// Cloud mask classes to keep for S2 (default: "4,5,6,11")
+        #[arg(long, default_value = "4,5,6,11")]
+        scl_keep: String,
     },
 }

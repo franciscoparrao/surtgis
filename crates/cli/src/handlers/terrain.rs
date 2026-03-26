@@ -713,3 +713,122 @@ pub fn handle(algorithm: TerrainCommands, compress: bool, streaming: bool, mem_l
 
     Ok(())
 }
+
+/// Compute all terrain factors from DEM (public for pipeline use)
+pub fn handle_terrain_all(input: &std::path::Path, outdir: &std::path::Path, compress: bool) -> Result<()> {
+    std::fs::create_dir_all(outdir)
+        .context("Failed to create output directory")?;
+    let dem = read_dem(&input.to_path_buf())?;
+    let start = std::time::Instant::now();
+
+    println!("Computing all terrain factors...");
+
+    let s = slope(
+        &dem,
+        SlopeParams {
+            units: SlopeUnits::Degrees,
+            z_factor: 1.0,
+        },
+    )
+    .context("slope")?;
+    write_result(&s, &outdir.join("slope.tif"), compress)?;
+    println!("  slope.tif");
+
+    let a = aspect(&dem, AspectOutput::Degrees).context("aspect")?;
+    write_result(&a, &outdir.join("aspect.tif"), compress)?;
+    println!("  aspect.tif");
+
+    let h = hillshade(
+        &dem,
+        HillshadeParams {
+            azimuth: 315.0,
+            altitude: 45.0,
+            z_factor: 1.0,
+            normalized: false,
+        },
+    )
+    .context("hillshade")?;
+    write_result(&h, &outdir.join("hillshade.tif"), compress)?;
+    println!("  hillshade.tif");
+
+    let n = northness(&dem).context("northness")?;
+    write_result(&n, &outdir.join("northness.tif"), compress)?;
+    println!("  northness.tif");
+
+    let e = eastness(&dem).context("eastness")?;
+    write_result(&e, &outdir.join("eastness.tif"), compress)?;
+    println!("  eastness.tif");
+
+    let c = curvature(
+        &dem,
+        CurvatureParams {
+            curvature_type: CurvatureType::General,
+            z_factor: 1.0,
+            ..Default::default()
+        },
+    )
+    .context("curvature")?;
+    write_result(&c, &outdir.join("curvature.tif"), compress)?;
+    println!("  curvature.tif");
+
+    let t = tpi(&dem, TpiParams { radius: 10 }).context("tpi")?;
+    write_result(&t, &outdir.join("tpi.tif"), compress)?;
+    println!("  tpi.tif");
+
+    let tr = tri(&dem, TriParams { radius: 1 }).context("tri")?;
+    write_result(&tr, &outdir.join("tri.tif"), compress)?;
+    println!("  tri.tif");
+
+    let g = geomorphons(
+        &dem,
+        GeomorphonParams {
+            radius: 10,
+            flatness_threshold: 1.0,
+        },
+    )
+    .context("geomorphons")?;
+    write_result_u8(&g, &outdir.join("geomorphons.tif"), compress)?;
+    println!("  geomorphons.tif");
+
+    let d = dev(&dem, DevParams { radius: 10 }).context("dev")?;
+    write_result(&d, &outdir.join("dev.tif"), compress)?;
+    println!("  dev.tif");
+
+    let v = vrm(&dem, VrmParams { radius: 1 }).context("vrm")?;
+    write_result(&v, &outdir.join("vrm.tif"), compress)?;
+    println!("  vrm.tif");
+
+    let ci =
+        convergence_index(&dem, ConvergenceParams { radius: 3 }).context("convergence")?;
+    write_result(&ci, &outdir.join("convergence.tif"), compress)?;
+    println!("  convergence.tif");
+
+    let op = positive_openness(&dem, OpennessParams { radius: 10, directions: 8 })
+        .context("openness_positive")?;
+    write_result(&op, &outdir.join("openness_positive.tif"), compress)?;
+    println!("  openness_positive.tif");
+
+    let on = negative_openness(&dem, OpennessParams { radius: 10, directions: 8 })
+        .context("openness_negative")?;
+    write_result(&on, &outdir.join("openness_negative.tif"), compress)?;
+    println!("  openness_negative.tif");
+
+    let svf_r = sky_view_factor(&dem, SvfParams { radius: 10, directions: 16 })
+        .context("svf")?;
+    write_result(&svf_r, &outdir.join("svf.tif"), compress)?;
+    println!("  svf.tif");
+
+    let (mrvbf_r, mrrtf_r) = mrvbf(&dem, MrvbfParams::default()).context("mrvbf")?;
+    write_result(&mrvbf_r, &outdir.join("mrvbf.tif"), compress)?;
+    write_result(&mrrtf_r, &outdir.join("mrrtf.tif"), compress)?;
+    println!("  mrvbf.tif, mrrtf.tif");
+
+    let elapsed = start.elapsed();
+    println!(
+        "\nAll terrain factors saved to: {}",
+        outdir.display()
+    );
+    println!("  17 products, processing time: {:.2?}", elapsed);
+
+    Ok(())
+}

@@ -371,3 +371,100 @@ pub fn handle(algorithm: HydrologyCommands, compress: bool, mem_limit_bytes: Opt
 
     Ok(())
 }
+
+/// Compute all hydrology factors from DEM (public for pipeline use)
+pub fn handle_hydrology_all(
+    input: &std::path::Path,
+    outdir: &std::path::Path,
+    compress: bool,
+    mem_limit_bytes: Option<u64>,
+) -> Result<()> {
+    std::fs::create_dir_all(outdir)
+        .context("Failed to create output directory")?;
+
+    // Check if DEM exceeds memory limit
+    if let Some(limit) = mem_limit_bytes {
+        if let Ok(est_size) = memory::estimate_decompressed_size(input) {
+            if est_size > limit {
+                eprintln!("Warning: DEM size ({:.2} GB) exceeds --max-memory limit ({:.2} GB)",
+                         est_size as f64 / 1e9, limit as f64 / 1e9);
+                eprintln!("Note: Hydrology 'all' pipeline requires full in-memory processing");
+            }
+        }
+    }
+
+    let dem = read_dem(&input.to_path_buf())?;
+    let start = std::time::Instant::now();
+
+    println!("Computing full hydrology pipeline...");
+
+    let filled =
+        priority_flood(&dem, PriorityFloodParams { epsilon: 0.0001 })
+            .context("fill")?;
+    write_result(&filled, &outdir.join("filled.tif"), compress)?;
+    println!("  filled.tif");
+
+    let fdir = flow_direction(&filled).context("flow direction")?;
+    write_result_u8(&fdir, &outdir.join("flow_direction_d8.tif"), compress)?;
+    println!("  flow_direction_d8.tif");
+
+    let fdir_dinf =
+        flow_direction_dinf(&filled).context("flow direction dinf")?;
+    write_result(
+        &fdir_dinf,
+        &outdir.join("flow_direction_dinf.tif"),
+        compress,
+    )?;
+    println!("  flow_direction_dinf.tif");
+
+    let facc = flow_accumulation(&fdir).context("flow accumulation")?;
+    write_result(&facc, &outdir.join("flow_accumulation.tif"), compress)?;
+    println!("  flow_accumulation.tif");
+
+    let facc_mfd = flow_accumulation_mfd(&filled, MfdParams { exponent: 1.1 })
+        .context("mfd accumulation")?;
+    write_result(
+        &facc_mfd,
+        &outdir.join("flow_accumulation_mfd.tif"),
+        compress,
+    )?;
+    println!("  flow_accumulation_mfd.tif");
+
+    let slope_rad = slope(
+        &filled,
+        SlopeParams {
+            units: SlopeUnits::Radians,
+            z_factor: 1.0,
+        },
+    )
+    .context("slope")?;
+    let twi_r = twi(&facc, &slope_rad).context("twi")?;
+    write_result(&twi_r, &outdir.join("twi.tif"), compress)?;
+    println!("  twi.tif");
+
+    let streams = stream_network(&facc, StreamNetworkParams { threshold: 1000.0 })
+        .context("streams")?;
+    write_result_u8(&streams, &outdir.join("stream_network.tif"), compress)?;
+    println!("  stream_network.tif");
+
+    let hand_r = hand(
+        &dem,
+        &fdir,
+        &facc,
+        HandParams {
+            stream_threshold: 1000.0,
+        },
+    )
+    .context("hand")?;
+    write_result(&hand_r, &outdir.join("hand.tif"), compress)?;
+    println!("  hand.tif");
+
+    let elapsed = start.elapsed();
+    println!(
+        "\nFull hydrology pipeline saved to: {}",
+        outdir.display()
+    );
+    println!("  8 products, processing time: {:.2?}", elapsed);
+
+    Ok(())
+}
