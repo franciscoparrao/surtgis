@@ -236,12 +236,13 @@ pub fn detect_band_type(asset_key: &str, item: &StacItem) -> BandType {
     detect_band_type_from_name(&key_lower)
 }
 
-/// Detect band type from name/key string
+/// Detect band type from name/key string (case-insensitive)
 fn detect_band_type_from_name(name: &str) -> BandType {
-    match name {
+    let name_lower = name.to_lowercase();
+    match name_lower.as_str() {
         // Sentinel-2 bands
-        "b02" | "blue" | "coastal" => BandType::Blue,
-        "b03" | "green" => BandType::Green,
+        "b02" | "blue" | "coastal" | "banda_azul" => BandType::Blue,
+        "b03" | "green" | "banda_verde" => BandType::Green,
         "b04" | "red" | "banda_roja" | "rouge" => BandType::Red,
         "b08" | "b8" | "nir" | "nir08" | "infrared" | "proche_infrarouge" => BandType::Nir,
         "b11" | "swir1" | "swir16" | "mid_infrared" => BandType::Swir1,
@@ -259,14 +260,14 @@ fn detect_band_type_from_name(name: &str) -> BandType {
 
         // SAR bands
         "vv" | "vv_amplitude" | "vh" | "vh_amplitude" => {
-            if name.contains("vh") {
+            if name_lower.contains("vh") {
                 BandType::Sar(SarPol::VH)
             } else {
                 BandType::Sar(SarPol::VV)
             }
         }
         "hh" | "hh_amplitude" | "hv" | "hv_amplitude" => {
-            if name.contains("hv") {
+            if name_lower.contains("hv") {
                 BandType::Sar(SarPol::HV)
             } else {
                 BandType::Sar(SarPol::HH)
@@ -354,5 +355,98 @@ mod tests {
             num_classes: 12,
         };
         assert_eq!(scl, CloudMaskType::Categorical { asset: "SCL".to_string(), num_classes: 12 });
+    }
+
+    #[test]
+    fn test_band_type_case_insensitive() {
+        // Ensure case-insensitive matching works
+        assert_eq!(detect_band_type_from_name("b04"), BandType::Red);
+        assert_eq!(detect_band_type_from_name("B04"), BandType::Red);
+        assert_eq!(detect_band_type_from_name("RED"), BandType::Red);
+        assert_eq!(detect_band_type_from_name("Red"), BandType::Red);
+    }
+
+    #[test]
+    fn test_sar_band_type_equality() {
+        assert_eq!(
+            detect_band_type_from_name("vv"),
+            BandType::Sar(SarPol::VV)
+        );
+        assert_eq!(
+            detect_band_type_from_name("VV"),
+            BandType::Sar(SarPol::VV)
+        );
+    }
+
+    #[test]
+    fn test_thermal_band_detection() {
+        assert_eq!(detect_band_type_from_name("thermal"), BandType::Thermal);
+        assert_eq!(detect_band_type_from_name("tirs1"), BandType::Thermal);
+        assert_eq!(detect_band_type_from_name("b10"), BandType::Thermal);
+        assert_eq!(detect_band_type_from_name("lwir"), BandType::Thermal);
+        assert_eq!(detect_band_type_from_name("st_b10"), BandType::Thermal);
+    }
+
+    #[test]
+    fn test_panchromatic_detection() {
+        assert_eq!(detect_band_type_from_name("pan"), BandType::Pan);
+        assert_eq!(detect_band_type_from_name("panchromatic"), BandType::Pan);
+    }
+
+    #[test]
+    fn test_swir_bands() {
+        assert_eq!(detect_band_type_from_name("b11"), BandType::Swir1);
+        assert_eq!(detect_band_type_from_name("b12"), BandType::Swir2);
+        assert_eq!(detect_band_type_from_name("swir1"), BandType::Swir1);
+        assert_eq!(detect_band_type_from_name("swir2"), BandType::Swir2);
+    }
+
+    #[test]
+    fn test_unknown_band_type() {
+        assert_eq!(detect_band_type_from_name("unknown_band"), BandType::Unknown);
+        assert_eq!(detect_band_type_from_name("xyz"), BandType::Unknown);
+        assert_eq!(detect_band_type_from_name(""), BandType::Unknown);
+    }
+
+    #[test]
+    fn test_landsat_collection_all_bands() {
+        // Test full Landsat band suite
+        assert_eq!(detect_band_type_from_name("sr_b1"), BandType::Blue);
+        assert_eq!(detect_band_type_from_name("sr_b2"), BandType::Blue);
+        assert_eq!(detect_band_type_from_name("sr_b3"), BandType::Green);
+        assert_eq!(detect_band_type_from_name("sr_b4"), BandType::Red);
+        assert_eq!(detect_band_type_from_name("sr_b5"), BandType::Nir);
+        assert_eq!(detect_band_type_from_name("sr_b6"), BandType::Swir1);
+        assert_eq!(detect_band_type_from_name("sr_b7"), BandType::Swir2);
+        assert_eq!(detect_band_type_from_name("st_b10"), BandType::Thermal);
+    }
+
+    #[test]
+    fn test_eo_band_common_names() {
+        // Test EO-specific naming patterns
+        assert_eq!(detect_band_type_from_name("nir08"), BandType::Nir);  // S2 narrow NIR
+        assert_eq!(detect_band_type_from_name("swir16"), BandType::Swir1);  // S2 SWIR naming
+        assert_eq!(detect_band_type_from_name("swir22"), BandType::Swir2);
+    }
+
+    #[test]
+    fn test_multilingual_comprehensive() {
+        // Spanish
+        assert_eq!(detect_band_type_from_name("banda_roja"), BandType::Red);
+        assert_eq!(detect_band_type_from_name("banda_verde"), BandType::Green);
+        assert_eq!(detect_band_type_from_name("banda_azul"), BandType::Blue);
+
+        // French
+        assert_eq!(detect_band_type_from_name("rouge"), BandType::Red);
+        assert_eq!(detect_band_type_from_name("proche_infrarouge"), BandType::Nir);
+    }
+
+    #[test]
+    fn test_sarpol_display() {
+        assert_eq!(format!("{}", SarPol::VV), "VV");
+        assert_eq!(format!("{}", SarPol::VH), "VH");
+        assert_eq!(format!("{}", SarPol::HH), "HH");
+        assert_eq!(format!("{}", SarPol::HV), "HV");
+        assert_eq!(format!("{}", SarPol::Quad), "Quad");
     }
 }
