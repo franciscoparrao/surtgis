@@ -1,0 +1,132 @@
+This is pdfTeX, Version 3.141592653-2.6-1.40.25 (TeX Live 2023/Debian) (preloaded format=latex 2026.1.12)  7 FEB 2026 21:03
+entering extended mode
+ restricted \write18 enabled.
+ %&-line parsing enabled.
+**elsarticle.ins
+(./elsarticle.ins
+LaTeX2e <2023-11-01> patch level 1
+L3 programming layer <2024-01-22>
+(/usr/share/texlive/texmf-dist/tex/latex/base/docstrip.tex
+\blockLevel=\count187
+\emptyLines=\count188
+\processedLines=\count189
+\commentsRemoved=\count190
+\commentsPassed=\count191
+\codeLinesPassed=\count192
+\TotalprocessedLines=\count193
+\TotalcommentsRemoved=\count194
+\TotalcommentsPassed=\count195
+\TotalcodeLinesPassed=\count196
+\NumberOfFiles=\count197
+\inFile=\read2
+\inputcheck=\read3
+\off@0=\count198
+\off@1=\count199
+\off@2=\count266
+\off@3=\count267
+\off@4=\count268
+\off@5=\count269
+\off@6=\count270
+\off@7=\count271
+\off@8=\count272
+\off@9=\count273
+\off@10=\count274
+\off@11=\count275
+\off@12=\count276
+\off@13=\count277
+\off@14=\count278
+\off@15=\count279
+\@maxfiles=\count280
+\@maxoutfiles=\count281
+
+Utility: `docstrip' v2.6b <2022-09-03>
+English documentation    <2023-10-10>
+
+**********************************************************
+* This program converts documented macro-files into fast *
+* loadable files by stripping off (nearly) all comments! *
+**********************************************************
+
+********************************************************
+* No Configuration file found, using default settings. *
+********************************************************
+
+)
+
+Generating file(s) ./elsarticle.cls 
+\openout0 = `./elsarticle.cls'.
+
+
+Processing file elsarticle.dtx (class) -> elsarticle.cls
+% % % % % % % % % % % % % % % % % % % % % <*driver . . . . . . . . . . > % % %
+% % % % % % % % % % % % % % % % % % % % % % % % % % % % % . % % % % % % % % %
+% % % % % % % % % % % % % <*class . . . . . . . . . . . . . . . . . . . . . .
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . % % % % % . . . . . .
+. . . . . . . . . . . . . . . . % . . . . . . . . . . . . . . . . . . . . . .
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+. . . . . . . . . . . . . . . . . . . . . . . . / . . . . . . . . . . . . . .
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+. . . . . . / . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+. . . . . . . . / . . % % % % % . . . . . . . . . . . . . . . % % % % . . . .
+. . . % % % % % . . . . . . . . . . . . . . . . . . . . . . . . % % % % % . .
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . % % %
+% % . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+. . . . . . . . . . . . . . . . . . . . . . % % % % % % % . . . . . . . . . .
+. . . % % . % % % % % % . . . . . . . . . . . . . . % % . % % % % % . . . . .
+. . . . . . . . . % % . . . % % % % % . . . . . . . . . . . . . . . . . . . .
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . > % % %
+File elsarticle.dtx ended by \endinput.
+Lines  processed: 1528
+Comments removed: 137
+Comments  passed: 17
+Codelines passed: 1370
+
+*************************************************************
+*                                                           *
+* To finish the installation you have to move the following *
+* file into a directory searched by TeX:                    *
+*                                                           *
+*     elsarticle.cls                                        *
+*         and                                               *
+*     elsarticle-*.bst                                      *
+*                                                           *
+* To produce the documentation go to the ../contrib folder  *
+* and run the file elsdoc.tex through pdfLaTeX              *
+* or use the Makefile which is far more easier.             *
+*                                                           *
+* Happy TeXing!                                             *
+*                                                           *
+*************************************************************
+ ) 
+Here is how much of TeX's memory you used:
+ 330 strings out of 476107
+ 3558 string characters out of 5793959
+ 1922972 words of memory out of 5000000
+ 22434 multiletter control sequences out of 15000+600000
+ 558069 words of font info for 36 fonts, out of 8000000 for 9000
+ 59 hyphenation exceptions out of 8191
+ 12i,0n,15p,184b,120s stack positions out of 10000i,1000n,20000p,200000b,200000s
+
+No pages of output.

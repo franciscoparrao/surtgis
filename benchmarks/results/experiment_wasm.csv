@@ -1,0 +1,13 @@
+algorithm,size,target,median_s,iqr_s,peak_mem_mb,node_version,v8_version
+slope,1000,wasm_nodejs,0.1288,0.0746,121.8,v22.19.0,12.4.254.21-node.29
+aspect,1000,wasm_nodejs,0.0973,0.0198,137.4,v22.19.0,12.4.254.21-node.29
+hillshade,1000,wasm_nodejs,0.2292,0.1963,118.7,v22.19.0,12.4.254.21-node.29
+tpi,1000,wasm_nodejs,2.6090,1.0003,151.0,v22.19.0,12.4.254.21-node.29
+fill,1000,wasm_nodejs,0.3983,0.1128,120.5,v22.19.0,12.4.254.21-node.29
+flow_acc,1000,wasm_nodejs,0.2903,0.1235,151.0,v22.19.0,12.4.254.21-node.29
+slope,5000,wasm_nodejs,2.3274,0.4690,1306.7,v22.19.0,12.4.254.21-node.29
+aspect,5000,wasm_nodejs,3.0685,0.5049,1401.7,v22.19.0,12.4.254.21-node.29
+hillshade,5000,wasm_nodejs,8.8797,3.7704,1306.5,v22.19.0,12.4.254.21-node.29
+tpi,5000,wasm_nodejs,NA,NA,NA,v22.19.0,12.4.254.21-node.29
+fill,5000,wasm_nodejs,NA,NA,NA,v22.19.0,12.4.254.21-node.29
+flow_acc,5000,wasm_nodejs,NA,NA,NA,v22.19.0,12.4.254.21-node.29

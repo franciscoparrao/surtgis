@@ -1,0 +1,953 @@
+%% SurtGIS paper for Environmental Modelling & Software
+%% Using elsarticle with Harvard (author-year) bibliography style
+%%
+\documentclass[preprint,review,12pt,authoryear]{elsarticle}
+
+\usepackage{amssymb}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{lineno}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{siunitx}
+
+\journal{Environmental Modelling \& Software}
+
+\begin{document}
+
+\begin{frontmatter}
+
+\title{SurtGIS: A High-Performance Geospatial Analysis Library in Rust with WebAssembly and Python Support}
+
+\author[anon]{[Removed for review]}
+
+\affiliation[anon]{organization={[Removed for review]}}
+
+\begin{abstract}
+We present SurtGIS, an open-source geospatial analysis library in Rust providing 127 terrain, hydrological, and remote sensing algorithms. The library compiles to native code with automatic parallelization via Rayon, to WebAssembly for browser-based applications, and exposes Python bindings through PyO3. Key contributions include Florinsky's complete 14-curvature morphometric system, three depression handling algorithms, and four flow direction methods. Benchmarks on synthetic DEMs up to $20{,}000^2$ cells demonstrate speedups on full GeoTIFF pipelines: 1.7--1.8$\times$ over GDAL and 4.5--4.9$\times$ over GRASS~GIS for slope; 2.0$\times$ over GDAL for aspect; and 7.5--23.1$\times$ for D8 flow accumulation. WebAssembly adds 10--32$\times$ overhead versus native Rust but enables browser-based terrain analysis unavailable in existing tools. Numerical accuracy is within $5.7 \times 10^{-5}$~degrees RMSE against analytical solutions.
+\end{abstract}
+
+%%Graphical abstract
+\begin{graphicalabstract}
+\includegraphics[width=\textwidth]{graphical_abstract.pdf}
+\end{graphicalabstract}
+
+\begin{highlights}
+\item Rust library with 127 terrain, hydrology, and imagery algorithms
+\item Compiles to native, WebAssembly, and Python from one codebase
+\item Open-source implementation of Florinsky's 14-curvature system
+\item 1.8$\times$ faster than GDAL for slope; 23$\times$ for flow accumulation vs GRASS
+\item Numerical accuracy within $10^{-5}$~degrees of analytical solutions
+\end{highlights}
+
+\begin{keyword}
+terrain analysis \sep digital elevation model \sep hydrology \sep WebAssembly \sep Rust \sep geomorphometry
+\end{keyword}
+
+\end{frontmatter}
+
+\linenumbers
+
+%% ============================================================
+\section{Introduction}
+\label{sec:introduction}
+
+Digital terrain analysis is fundamental to environmental modeling, encompassing slope stability assessment, hydrological network extraction, landform classification, and habitat suitability mapping \citep{florinsky2025}. The increasing availability of high-resolution elevation data---from lidar surveys at sub-meter resolution to global datasets such as SRTM \citep{farr2007srtm} and Copernicus DEM at 30\,m---has created demand for efficient, accessible, and reproducible geospatial processing tools.
+
+Current geospatial software presents researchers with a trade-off between performance and accessibility. Python-based tools such as rasterio and richdem offer ease of use but are constrained by interpreter overhead for pixel-level computation. Compiled libraries such as GDAL \citep{gdal2024} provide performance but lack comprehensive terrain analysis algorithms and cannot execute in browser environments. Specialized tools such as WhiteboxTools \citep{lindsay2016wbt} and GRASS GIS \citep{neteler2012} offer extensive algorithm collections but are either partially proprietary or require heavyweight installations unsuitable for web deployment. RichDEM \citep{barnes2016richdem} provides efficient C++ implementations of hydrological algorithms with Python bindings, SAGA GIS \citep{conrad2015} offers a comprehensive suite of terrain analysis modules, and TauDEM \citep{tarboton2015taudem} provides the reference D-infinity flow implementation \citep{tarboton1997} via MPI-based parallelism. In the Python ecosystem, pysheds \citep{bartos2020pysheds} and pyflwdir \citep{eilander2021pyflwdir} provide lightweight hydrological routing but lack terrain morphometry and browser deployment. TauDEM is excluded from the performance benchmarks because its MPI deployment model targets distributed-memory clusters rather than shared-memory workstations, making direct timing comparisons on a single node misleading.
+
+The emergence of cloud-native geospatial platforms \citep{gorelick2017gee} and formats---Cloud-Optimized GeoTIFF (COG), SpatioTemporal Asset Catalogs \citep[STAC;][]{stac2021}---and browser-based GIS applications has created a need for geospatial libraries that can run natively in web browsers. WebAssembly (Wasm) enables near-native performance in browsers \citep{haas2017}, yet no existing library provides comprehensive terrain and hydrological algorithms compiled to this target.
+
+We present SurtGIS, an open-source geospatial analysis library implemented in Rust that addresses these limitations. Rust's ownership system guarantees memory safety without garbage collection \citep{perkel2020rust}, its zero-cost abstractions enable C-level performance, and its first-class WebAssembly compilation support enables identical algorithms to run across desktop, server, and browser environments. The library provides:
+
+\begin{enumerate}
+    \item 127 distinct computational operations for terrain analysis, hydrology, remote sensing, landscape ecology, and texture analysis (complete inventory and counting methodology in Supplementary Table~S1);
+    \item An open-source implementation of Florinsky's complete 14-curvature morphometric system \citep{florinsky2025};
+    \item A unified codebase that compiles to native (with Rayon parallelization), WebAssembly (sequential fallback), and Python (via PyO3);
+    \item Cloud-native data access through integrated STAC client and COG reader.
+\end{enumerate}
+
+This paper is structured as follows: Section~\ref{sec:software} describes the software architecture and algorithms; Section~\ref{sec:example} provides an illustrative example; Section~\ref{sec:casestudy} presents an application example; Section~\ref{sec:performance} presents the performance evaluation; Section~\ref{sec:comparison} compares with existing tools; and Section~\ref{sec:conclusions} discusses impact and conclusions.
+
+%% ============================================================
+\section{Software description}
+\label{sec:software}
+
+\subsection{Architecture}
+\label{subsec:architecture}
+
+SurtGIS is organized as a Rust workspace comprising seven crates: \texttt{surtgis-core} (raster data structures, native GeoTIFF I/O, NoData handling), \texttt{surtgis-algorithms} (all geospatial algorithms), \texttt{surtgis-parallel} (Rayon-based parallel adapters), \texttt{surtgis-cloud} (STAC client, COG reader; experimental), \texttt{surtgis-wasm} (WebAssembly bindings), \texttt{surtgis-python} (PyO3 bindings), and \texttt{surtgis-cli} (command-line interface). This modular architecture allows users to depend only on the components they need.
+
+The algorithmic crate uses a \texttt{maybe\_rayon} compile-time pattern: a Cargo feature flag selects between Rayon's parallel iterators---based on work-stealing scheduling \citep{blumofe1999}---on native targets and sequential fallback iterators on WebAssembly, so every algorithm is written once and automatically benefits from multi-core parallelism where available.
+
+The raster data model stores elevation and derived grids as contiguous \texttt{ndarray::Array2<f64>} arrays with associated metadata (cell size, NoData value, spatial reference, affine transform). This in-memory representation enables efficient cache-friendly access patterns for moving-window operations that dominate terrain analysis workloads, though it requires holding the full dataset in RAM (see Section~\ref{subsec:scalability} for memory implications).
+
+\paragraph{Data robustness.} All algorithms propagate NoData values: boundary cells and neighbors of NoData pixels produce NoData in the output rather than artifacts. Non-square pixels (different $\Delta x$ and $\Delta y$) are supported via the affine transform metadata; slope and curvature computations use per-axis cell sizes. Input validation uses Rust's \texttt{Result} type throughout the API, with explicit error types for invalid rasters (empty, non-finite values), unsupported CRS, and I/O failures. \textbf{Important:} geographic CRS inputs (e.g., WGS84 in degrees) are currently processed in degree units, which produces physically meaningless slope and curvature values; users must reproject to a metric CRS (e.g., UTM) before analysis. NaN and infinity values in input rasters are treated as NoData.
+
+\subsection{Terrain analysis algorithms}
+\label{subsec:terrain}
+
+SurtGIS implements a comprehensive set of terrain analysis algorithms organized into several categories (Table~\ref{tab:terrain}).
+
+\begin{table}[htbp]
+\centering
+\caption{Terrain analysis algorithms implemented in SurtGIS.}
+\label{tab:terrain}
+\begin{tabular}{@{}lp{9cm}@{}}
+\toprule
+Category & Algorithms \\
+\midrule
+Basic derivatives & Slope, aspect, northness, eastness \\
+Hillshading & Analytical hillshade, multidirectional hillshade \\
+Curvature (classical) & Profile, plan, general, tangential curvature \\
+Curvature (Florinsky) & 14 types: $H$, $K$, $M$, $E$, $k_{\min}$, $k_{\max}$, $k_h$, $k_v$, $k_{he}$, $k_{ve}$, $K_a$, $K_r$, rotor, Laplacian \\
+Landform indices & TPI, TRI, DEV, VRM, geomorphons, MRVBF/MRRTF \\
+Visibility & Viewshed (R2, XDraw, PDERL), SVF, positive/negative openness \\
+Multiresolution & Gaussian scale-space, Chebyshev spectral derivatives, 2D-SSA \\
+Other & Convergence index, wind exposure, solar radiation, contour lines, cost distance, uncertainty propagation \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Slope and aspect}
+
+SurtGIS computes slope and aspect using Horn's method \citep{horn1981}, which estimates first-order partial derivatives from a $3 \times 3$ moving window using a weighted finite-difference scheme. The slope gradient is:
+
+\begin{equation}
+\text{slope} = \arctan\!\sqrt{\left(\frac{\partial z}{\partial x}\right)^2 + \left(\frac{\partial z}{\partial y}\right)^2}
+\label{eq:slope}
+\end{equation}
+
+\noindent where the partial derivatives are estimated by the Horn (1981) $3 \times 3$ kernel:
+\begin{equation}
+\frac{\partial z}{\partial x} = \frac{(z_{+1,-1} + 2z_{+1,0} + z_{+1,+1}) - (z_{-1,-1} + 2z_{-1,0} + z_{-1,+1})}{8 \Delta x}
+\label{eq:horn_kernel}
+\end{equation}
+\noindent (and analogously for $\partial z / \partial y$), using weights $[1, 2, 1]$ for the central row/column. This is the same method used by GDAL and GRASS GIS. WhiteboxTools uses a 3rd-order bivariate Taylor polynomial on a $5 \times 5$ neighborhood \citep{florinsky2016}, which is more robust against noise but produces systematically different slope estimates than Horn's $3 \times 3$ kernel; this methodological difference accounts for the cross-tool deviations reported in Section~\ref{subsec:accuracy}.
+
+\subsubsection{Florinsky's 14-curvature system}
+
+A key contribution of SurtGIS is the open-source implementation of the complete morphometric variable system described by \citet{florinsky2025}. Surface curvatures are computed from partial derivatives estimated via the Evans--Young method \citep{evans1972} on a $3\times3$ moving window. A local bivariate polynomial $z = rx^2/2 + sxy + ty^2/2 + px + qy + z_0$ is fitted by least squares to the nine elevation values in the window, yielding the first-order ($p = \partial z/\partial x$, $q = \partial z/\partial y$) and second-order ($r = \partial^2 z/\partial x^2$, $s = \partial^2 z/\partial x \partial y$, $t = \partial^2 z/\partial y^2$) partial derivatives. From these, the 14 curvature types are derived:
+
+\begin{equation}
+H = -\frac{(1+q^2)r - 2pqs + (1+p^2)t}{2(1+p^2+q^2)^{3/2}}
+\label{eq:mean_curv}
+\end{equation}
+
+\begin{equation}
+K = \frac{rt - s^2}{(1+p^2+q^2)^2}
+\label{eq:gauss_curv}
+\end{equation}
+
+\noindent where $H$ is mean curvature and $K$ is Gaussian curvature. Note that the sign convention for $H$ (Eq.~\ref{eq:mean_curv}) follows \citet{florinsky2025}: the negative sign in the numerator yields $H > 0$ for convex surfaces (ridges) and $H < 0$ for concave surfaces (valleys). Some references omit this negation, producing the opposite convention; users should verify sign semantics when comparing across tools. The remaining 12 curvatures (unsphericity $M$, difference $E$, principal curvatures $k_{\min}$ and $k_{\max}$, horizontal $k_h$, vertical $k_v$, excess curvatures $k_{he}$ and $k_{ve}$, accumulation $K_a$, ring $K_r$, rotor, and Laplacian) are derived from combinations of $H$, $K$, and the partial derivatives. SAGA GIS implements a subset (profile, plan, tangential, longitudinal, minimal, maximal curvature) based on earlier Florinsky work, but does not include the excess curvatures ($k_{he}$, $k_{ve}$), accumulation ($K_a$), ring ($K_r$), unsphericity ($M$), or difference ($E$) curvatures from the 2025 formulation. A comprehensive taxonomy of surface curvatures and their physical interpretation is provided by \citet{minar2020}. To our knowledge---based on a survey of GDAL, GRASS, SAGA, WhiteboxTools, RichDEM, and TauDEM documentation as of February 2026---SurtGIS is the first open-source library to implement the complete 14-type system as defined by \citet{florinsky2025}. We acknowledge that the book's recent publication date (2025) means other implementations may emerge.
+
+\subsubsection{Geomorphons}
+
+The geomorphon classification algorithm \citep{jasiewicz2013} identifies landform elements by analyzing the ternary pattern of elevation differences along eight cardinal and diagonal directions within a search radius. SurtGIS implements this with configurable flatness threshold and lookup radius, producing a 10-class landform map (flat, peak, ridge, shoulder, spur, slope, hollow, footslope, valley, pit).
+
+\subsection{Hydrological algorithms}
+\label{subsec:hydrology}
+
+The hydrology module provides a complete pipeline from raw DEM to derived hydrological indices (Table~\ref{tab:hydrology}).
+
+\begin{table}[htbp]
+\centering
+\caption{Hydrological algorithms implemented in SurtGIS.}
+\label{tab:hydrology}
+\begin{tabular}{@{}lp{9cm}@{}}
+\toprule
+Stage & Algorithms \\
+\midrule
+Depression handling & Planchon--Darboux filling \citep{planchon2001}, Priority-Flood \citep{barnes2014}, breach depressions \citep{lindsay2016} \\
+Flow direction & D8 \citep{ocallaghan1984}, MFD \citep{quinn1991}, D-infinity \citep{tarboton1997}, TFGA \citep{li2024tfga} \\
+Flow accumulation & D8, MFD, D-infinity accumulation \\
+Derived indices & TWI \citep{kopecky2021}, SPI ($= A_s \tan\beta$), STI ($= (A_s/22.13)^{0.6} (\sin\beta/0.0896)^{1.3}$) \citep{wilson2000terrain}, HAND \citep{nobre2011}$^{b}$ \\
+Network extraction & Stream network, watershed delineation$^{a}$ \\
+\bottomrule
+\end{tabular}
+\smallskip
+
+{\footnotesize $^{a}$Watershed delineation and stream network extraction are implemented but not benchmarked; these are downstream operations that depend on the flow direction grid and are dominated by I/O rather than algorithmic computation. $^{b}$$A_s$ denotes specific catchment area (contributing area per unit contour width, m$^2$/m); $\beta$ is the local slope angle.}
+\end{table}
+
+Depression handling is a critical preprocessing step. SurtGIS implements three approaches: (1) the Planchon--Darboux filling algorithm \citep{planchon2001}, which produces flat areas that can affect flow routing; (2) the Priority-Flood algorithm \citep{barnes2014}, an optimal $O(N \log N)$ method using a priority queue; and (3) the breach-based approach of \citet{lindsay2016}, which carves channels through barriers to maintain more natural flow paths.
+
+For flow direction, the D8 algorithm \citep{ocallaghan1984} assigns flow to the single steepest downslope neighbor. The Multiple Flow Direction (MFD) algorithm of \citet{quinn1991} distributes flow proportionally to all downslope neighbors based on slope, better representing sheet flow on gentle terrain. The D-infinity algorithm of \citet{tarboton1997}, implemented in TauDEM \citep{tarboton2015taudem}, uses triangular facets to determine a continuous flow angle, partitioning flow between the two cells that bracket this angle.
+
+\subsection{Additional modules}
+\label{subsec:additional}
+
+Beyond terrain and hydrology, SurtGIS includes modules for remote sensing (7 spectral indices including NDVI, NDWI, EVI), landscape ecology (patch metrics, Shannon diversity, edge density), texture analysis (GLCM, Gabor filters, local binary patterns), classification (K-means, random forest, maximum likelihood), and morphological operations. These modules share the same cross-platform compilation model but are not the focus of the benchmarks presented here; a complete inventory of all 127 algorithms is provided in Supplementary Table~S1.
+
+\subsection{Cross-platform deployment}
+\label{subsec:deployment}
+
+SurtGIS compiles to three deployment targets from the same codebase:
+
+\paragraph{Native (desktop/server)} Compiled with Rayon for automatic data parallelism. Published as Rust crates on \url{https://crates.io}.
+
+\paragraph{Python} Bindings via PyO3 \citep{pyo3_2024} expose 56 functions covering terrain, hydrology, imagery, and morphology with NumPy array input/output. Functions are organized under a flat \texttt{surtgis} namespace (e.g., \texttt{surtgis.slope()}, \texttt{surtgis.advanced\_curvature()}); a submodule structure (\texttt{surtgis.terrain}, \texttt{surtgis.hydrology}) is planned for a future release. Data transfer uses NumPy's buffer protocol for zero-copy access where possible; when the Rust function requires owned data, a single \texttt{memcpy} is performed. Published on PyPI as the \texttt{surtgis} package, installable via \texttt{pip install surtgis}. Prebuilt wheels are provided for Linux (x86\_64, aarch64), macOS (x86\_64, ARM64), and Windows (x86\_64). The remaining 71 algorithms are progressively exposed in each release, with full Python coverage targeted for version~1.0; all 127 are accessible via the native Rust API.
+
+\paragraph{WebAssembly} Compiled via \texttt{wasm-pack} with JavaScript/TypeScript bindings. Published on npm as the \texttt{surtgis} package. Enables terrain analysis directly in web browsers without server-side processing.
+
+%% ============================================================
+\section{Illustrative example}
+\label{sec:example}
+
+To demonstrate SurtGIS's capabilities, we present a terrain characterization workflow in Python. The example loads a DEM, computes terrain derivatives, and extracts hydrological features:
+
+\begin{verbatim}
+import numpy as np
+import surtgis
+
+# Load DEM (100x100 cells, 30m resolution)
+dem = np.loadtxt("dem.asc", skiprows=6)
+cell_size = 30.0
+
+# Terrain derivatives
+slope = surtgis.slope(dem, cell_size)
+aspect = surtgis.aspect_degrees(dem, cell_size)
+hillshade = surtgis.hillshade_compute(
+    dem, cell_size, azimuth=315.0, altitude=45.0)
+
+# Florinsky curvatures
+mean_curv = surtgis.advanced_curvature(
+    dem, cell_size, ctype="mean_h")
+gaussian_curv = surtgis.advanced_curvature(
+    dem, cell_size, ctype="gaussian_k")
+
+# Hydrology pipeline
+filled = surtgis.priority_flood_fill(dem, cell_size)
+twi = surtgis.twi_compute(dem, cell_size)
+hand = surtgis.hand_compute(dem, cell_size)
+streams = surtgis.stream_network_compute(
+    dem, cell_size, threshold=100.0)
+\end{verbatim}
+
+The same algorithms are available in the browser through the WebAssembly bindings, enabling interactive web applications where users can upload a DEM and compute terrain derivatives client-side without transmitting data to a server.
+
+%% ============================================================
+\section{Application example: Andean terrain characterization}
+\label{sec:casestudy}
+
+To illustrate SurtGIS's workflow capabilities, we present a terrain characterization of a mountainous region in the central Chilean Andes (approximately $33.5^{\circ}$S, $70.3^{\circ}$W), using a Copernicus DEM 30\,m tile reprojected to UTM zone~19S ($662 \times 785$ cells, cell size $= 28.4$\,m). The study area spans elevations from 2{,}859\,m to 5{,}979\,m and covers approximately $19 \times 22$\,km of rugged terrain characterized by deeply incised valleys and steep ridge systems. We chose this high-relief Andean setting because it exercises SurtGIS's full range of terrain and hydrological algorithms---steep slopes, high curvature contrasts, deep depressions, and a well-defined drainage network---rather than for operational flood mapping, which would require flatter, lower-elevation terrain and observed inundation data for calibration. This type of multi-layer terrain characterization is commonly required for landslide susceptibility mapping, hydrological modeling, and habitat characterization \citep{amatulli2018}.
+
+SurtGIS computes eight analysis layers from the DEM in a single Python session (Figure~\ref{fig:casestudy}): slope, aspect, hillshade, mean curvature ($H$), geomorphon classification, depression-filled surface, Topographic Wetness Index (TWI), and Height Above Nearest Drainage (HAND) with stream network extraction. The entire workflow---including GeoTIFF I/O---executes in 0.3\,s on the test hardware (0.5\,M cells; for performance on larger DEMs, see Section~\ref{sec:performance}).
+
+\paragraph{Terrain morphology.} The mean slope of 29\textdegree{} confirms the rugged character of the study area (Figure~\ref{fig:casestudy}b). Florinsky's mean curvature $H$ (Figure~\ref{fig:casestudy}c) reveals the ridge-valley structure: positive values (red) mark convex ridges and spurs where erosion dominates, while negative values (blue) identify concave hollows and channels where deposition occurs. The curvature field provides information beyond slope alone, as it distinguishes planar slopes from convergent and divergent landforms. Access to the full 14-curvature system enables further characterization: horizontal curvature $k_h$ identifies zones of flow convergence (concavity in the plan view) relevant to landslide initiation, while the difference curvature $E$ quantifies local flow asymmetry between principal directions. These additional curvatures are computed in the same Evans--Young derivative pass as $H$ and $K$, adding negligible overhead to the workflow.
+
+\paragraph{Landform classification.} The geomorphon algorithm \citep{jasiewicz2013}, applied with a lookup radius of 10 cells ($\sim$284\,m) and a flatness threshold of 1\textdegree, classifies the study area into three dominant landform types (Figure~\ref{fig:casestudy}d): slope (44.9\%), hollow (27.1\%), and spur (26.5\%), with minor contributions from peaks (0.9\%) and valleys (0.2\%). The near-absence of flat terrain is consistent with the high-gradient Andean environment. These proportions are sensitive to the lookup radius parameter: smaller radii detect finer-scale features (increasing the proportion of slope-class cells), while larger radii generalize the classification toward broader landform categories \citep{jasiewicz2013}. This automated classification provides a parameter-parsimonious alternative to manual terrain unit delineation.
+
+\paragraph{Hydrological analysis.} The TWI \citep{kopecky2021} identifies zones of potential soil saturation in valley bottoms (Figure~\ref{fig:casestudy}e), while HAND values \citep{nobre2011} delineate the vertical distance to the nearest drainage channel (Figure~\ref{fig:casestudy}f). The extracted stream network (blue overlay in Figure~\ref{fig:casestudy}f, $\sim$32{,}000 stream cells) follows the dendritic drainage pattern typical of this geological setting. HAND values reach 1{,}698\,m on the highest ridges, providing a continuous indicator of flood susceptibility that is increasingly used in operational flood mapping.
+
+\paragraph{Flood susceptibility mapping.} To demonstrate an applied environmental analysis, we use HAND thresholds from \citet{nobre2011} (calibrated for Amazonian floodplains; illustrative for this Andean setting) to delineate flood susceptibility zones (Figure~\ref{fig:floodzones}): high risk (HAND $< 5$\,m, 3.4\%), moderate (5--10\,m, 1.7\%), low (10--15\,m, 1.5\%), minimal (15--25\,m, 2.7\%), and negligible ($> 25$\,m, 85.9\%); the remaining $\sim$4.8\% corresponds to NoData boundary cells. The combined high-to-moderate risk zone covers 5.1\% of the study area, concentrated along valley bottoms. We note that HAND values are sensitive to the stream extraction threshold (100 cells, $\sim$0.08\,km$^2$): varying between 50--200 cells shifts the HAND distribution, though the large-scale spatial pattern is preserved. These results are presented as a workflow demonstration, not an operational flood hazard map.
+
+\paragraph{Integration.} The derived layers form a feature stack suitable for statistical modeling: slope, curvatures, and TWI are standard predictors in logistic regression or random forest models for landslide susceptibility \citep{amatulli2018}. The key practical advantage is that SurtGIS computes all required layers from a single DEM in a unified workflow, eliminating the need to chain GDAL (for basic derivatives), GRASS (for hydrology), and manual scripting to integrate outputs with potentially incompatible data formats. For instance, a multi-hazard assessment on a $10\text{K}^2$ DEM (100\,M cells) requiring slope, curvatures, TWI, and HAND would complete in under 60\,s with SurtGIS, compared to several minutes when orchestrating separate GDAL and GRASS invocations with intermediate file transfers. The unified API also ensures spatial metadata consistency across all derived layers, avoiding the CRS and extent mismatches that frequently arise when chaining heterogeneous tools. This section demonstrates SurtGIS as a workflow tool; validation of specific environmental applications (e.g., calibrated flood mapping, landslide susceptibility modeling) against field observations is deferred to domain-specific studies.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{fig5_casestudy.pdf}
+\caption{Terrain characterization of the central Chilean Andes (Copernicus 30\,m DEM, $662 \times 785$ cells). (a)~Elevation with hillshade overlay; (b)~slope in degrees; (c)~Florinsky mean curvature $H$ (red = convex, blue = concave); (d)~geomorphon landform classification; (e)~Topographic Wetness Index; (f)~Height Above Nearest Drainage with extracted stream network (blue).}
+\label{fig:casestudy}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{fig_flood_zones.pdf}
+\caption{HAND-based flood susceptibility mapping. (a)~Continuous HAND values with drainage network overlay; (b)~classified flood susceptibility zones. The high-risk zone (HAND $< 5$\,m, red) covers 3.4\% of the study area, concentrated along the valley network.}
+\label{fig:floodzones}
+\end{figure}
+
+%% ============================================================
+\section{Performance evaluation}
+\label{sec:performance}
+
+We evaluate SurtGIS performance through three experiments: (1) a scalability benchmark comparing execution time against established tools across DEM sizes; (2) a numerical accuracy validation against analytical and cross-tool references; and (3) a cross-platform comparison between native Rust, Python bindings, and single-threaded execution.
+
+All benchmarks were executed on a single machine: Intel Core i7-1270P (4 performance cores up to 4.8\,GHz + 8 efficiency cores up to 3.5\,GHz, 16 threads), \SI{38.8}{\giga\byte} DDR4 RAM, Ubuntu 24.04 LTS (kernel 6.14.0). The CPU governor was set to \texttt{powersave} (the system default, which allows the kernel to dynamically scale frequency); Intel Turbo Boost was enabled. We retained the default governor rather than \texttt{performance} because: (a)~it reflects the out-of-the-box configuration users are most likely to encounter, and (b)~all tools are benchmarked under the same conditions, so the relative speedups remain valid even if absolute times vary with governor policy. Tool versions: GDAL~3.11.4, GRASS~GIS~8.3.2, WhiteboxTools~2.4.0, SurtGIS~0.1.1 (commit \texttt{7493bc1}). The benchmark automation script (\texttt{benchmarks/run\_benchmarks.py}), the native Rust benchmark (\texttt{bench\_comparison.rs}), the WASM benchmark (\texttt{bench\_wasm.mjs}), and all raw CSV results are included as supplementary material. DEM generation uses NumPy~2.4 with a fixed random seed (\texttt{seed=42}) for full reproducibility.
+
+The exact command lines used for each tool are:
+\begin{itemize}
+    \item \textbf{SurtGIS}: \texttt{cargo run --example bench\_comparison --release -{-} -{-}size N -{-}algo slope}
+    \item \textbf{GDAL}: \texttt{gdaldem slope input.tif output.tif -of GTiff -b 1} (default Horn algorithm, \texttt{-compute\_edges} not used to match SurtGIS boundary handling)
+    \item \textbf{GRASS}: \texttt{grass --tmp-location EPSG:32719 --exec bash -c "r.in.gdal input=... output=dem; r.slope.aspect elevation=dem slope=out; r.out.gdal input=out output=..."}
+    \item \textbf{WBT}: \texttt{whitebox\_tools -r=Slope -v --dem=input.tif -o=output.tif}
+\end{itemize}
+
+\subsection{Experiment 1: Scalability}
+\label{subsec:scalability}
+
+We compared wall-clock execution time for six algorithms against GDAL~3.11, GRASS~GIS~8.3, and WhiteboxTools~2.4 on synthetic DEMs of increasing size: $1\text{K}^2$ (1\,M cells), $5\text{K}^2$ (25\,M), $10\text{K}^2$ (100\,M), and $20\text{K}^2$ (400\,M cells). Synthetic DEMs were generated using a fractal Brownian surface (Hurst exponent $= 0.7$, fixed seed for reproducibility) to ensure identical input data across all tools.
+
+The algorithms tested are: (a) slope, (b) aspect, (c) hillshade, (d) TPI, (e) Priority-Flood depression filling, and (f) D8 flow accumulation. These cover both simple moving-window operations (a--d) and graph-based algorithms with different computational complexity (e--f).
+
+Each measurement was repeated 10 times after 3 warm-up runs. We report median execution time; interquartile range (IQR) is shown in the scalability figures and reported where relevant. The coefficient of variation (CV) was below 10\% for all reported measurements. Across DEM sizes, per-algorithm median CV ranged from 0.8\% (fill at 1\,K$^2$) to 4.1\% (slope at 20\,K$^2$); the single highest individual CV was 6.4\% (slope at $20\text{K}^2$, one run). Given the sample sizes ($n=10$ for scalability experiments, $n=3$ for thread scaling), speedup differences smaller than $\sim$20\% should be interpreted with caution. Since speedup is the ratio of two medians, its uncertainty depends on the variability of both tools; with CV $<$ 5\% for most measurements, the headline speedup ratios (e.g., slope vs GDAL 1.8$\times$) are stable within $\pm$0.1--0.2$\times$ across the IQR. All tools use default thread settings on the test hardware.
+
+To ensure a fair comparison, every tool---including SurtGIS---is measured on the same end-to-end pipeline: read a GeoTIFF from disk, compute the result, and write the output GeoTIFF to disk. SurtGIS uses its native Rust GeoTIFF reader/writer (based on the \texttt{tiff} crate), with no GDAL dependency. GDAL is invoked via its \texttt{gdaldem} CLI; WhiteboxTools via its binary; GRASS~GIS via \texttt{grass --tmp-location}. All input DEMs are stored as uncompressed Float32 striped GeoTIFFs (no tiling, no compression) to eliminate codec-related variance and ensure the comparison reflects algorithmic performance rather than I/O library optimization. This is an important caveat: real-world DEMs are typically LZW- or DEFLATE-compressed, and SurtGIS's pure-Rust \texttt{tiff} crate is significantly slower than GDAL's optimized C codecs for decompression; the reported speedups should therefore be interpreted as upper bounds that may decrease in production workflows involving compressed data. We additionally report the SurtGIS compute-only time (excluding I/O) to quantify the algorithmic contribution.
+
+\subsubsection{Scalability results}
+
+Table~\ref{tab:slope_results} presents execution times for slope computation, the most commonly used terrain derivative. The ``full pipeline'' column includes GeoTIFF read/write, providing a direct comparison with other tools. Speedup factors are reported relative to SurtGIS full pipeline.
+
+\begin{table}[htbp]
+\centering
+\caption{Execution time (seconds, median of 10 runs) for slope computation. ``Compute'' = algorithmic computation only; ``Full'' = including GeoTIFF I/O. Speedup relative to SurtGIS full pipeline.}
+\label{tab:slope_results}
+\begin{tabular}{@{}rccccc@{}}
+\toprule
+DEM size & \multicolumn{2}{c}{SurtGIS} & GDAL 3.11 & GRASS 8.3 & WBT 2.4$^{b}$ \\
+\cmidrule(lr){2-3}
+ & Compute & Full & & & \\
+\midrule
+$1\text{K} \times 1\text{K}$     & 0.012 & \textbf{0.020} & 0.10 (5.1$\times$) & 0.62 (31.2$\times$) & 0.39 \\
+$5\text{K} \times 5\text{K}$     & 0.24  & \textbf{0.69}  & 1.17 (1.7$\times$) & 3.37 (4.9$\times$)  & 6.11 \\
+$10\text{K} \times 10\text{K}$   & 0.86  & \textbf{2.03}  & 3.57 (1.8$\times$) & 9.70 (4.8$\times$)  & 19.70 \\
+$20\text{K} \times 20\text{K}$   & 3.89  & \textbf{9.61}   & 17.66 (1.8$\times$) & 43.38 (4.5$\times$)  & 107.90 \\
+\bottomrule
+\end{tabular}
+\smallskip
+
+{\footnotesize $^{b}$WhiteboxTools uses a 3rd-order Taylor polynomial on a $5 \times 5$ neighborhood \citep{florinsky2016} rather than Horn's $3 \times 3$ kernel. This different derivative method (RMSE $= 6.53$\textdegree{} vs.\ Horn-based tools; Table~\ref{tab:cross_tool}) makes WBT slope times not directly comparable; speedup ratios are therefore omitted.}
+\end{table}
+
+Table~\ref{tab:all_algos} summarizes all six algorithms at two representative scales: $5\text{K}^2$ (25\,M cells), the largest size for which all four tools complete basic terrain derivatives within the 300\,s timeout, and $10\text{K}^2$ (100\,M cells), where SurtGIS completes all six algorithms but some tools exceed the timeout. The flow accumulation speedup at 10\,K$^2$ is particularly notable: 23.1$\times$ over GRASS and 7.7$\times$ over WhiteboxTools.
+
+\begin{table}[htbp]
+\centering
+\caption{Execution time (seconds, median of 10 runs) for all algorithms at $5\text{K}^2$ and $10\text{K}^2$. ``Compute'' = computation only; ``Full'' = including GeoTIFF I/O. Speedup relative to SurtGIS full. T/O: timeout (300\,s). Slope data repeated from Table~\ref{tab:slope_results} for cross-algorithm context; see that table for 1\,K$^2$ and 20\,K$^2$ results.}
+\label{tab:all_algos}
+\begin{tabular}{@{}llccccc@{}}
+\toprule
+Scale & Algorithm & \multicolumn{2}{c}{SurtGIS} & GDAL 3.11 & GRASS 8.3 & WBT 2.4 \\
+\cmidrule(lr){3-4}
+ & & Compute & Full & & & \\
+\midrule
+\multirow{6}{*}{\rotatebox{90}{$5\text{K}^2$}}
+ & Slope$^{b}$   & 0.24 & \textbf{0.69}  & 1.17 (1.7$\times$) & 3.37 (4.9$\times$) & 6.11 \\
+ & Aspect        & 0.38 & \textbf{1.06}  & 2.11 (2.0$\times$) & 3.72 (3.5$\times$) & 4.41 (4.2$\times$) \\
+ & Hillshade     & 0.42 & 0.77           & \textbf{0.67} (0.9$\times$) & 4.10 (5.3$\times$) & 3.53 (4.6$\times$) \\
+ & TPI$^{a}$     & 4.21 & 4.55           & \textbf{0.55} (0.1$\times$) & ---  & --- \\
+ & Fill (PF)     & 4.44 & \textbf{4.71}  & ---     & T/O     & 12.17 (2.6$\times$) \\
+ & D8 flow acc.  & 0.85 & \textbf{1.12}  & ---     & 23.03 (20.6$\times$) & 8.36 (7.5$\times$) \\
+\midrule
+\multirow{6}{*}{\rotatebox{90}{$10\text{K}^2$}}
+ & Slope$^{b}$   & 0.86  & \textbf{2.03}   & 3.57 (1.8$\times$) & 9.70 (4.8$\times$) & 19.70 \\
+ & Aspect        & 1.27  & \textbf{2.53}   & 4.94 (2.0$\times$) & 12.11 (4.8$\times$) & 19.89 (7.9$\times$) \\
+ & Hillshade     & 2.41  & 3.62            & \textbf{2.20} (0.6$\times$) & 14.93 (4.1$\times$) & 11.46 (3.2$\times$) \\
+ & TPI$^{a}$     & 17.45 & 18.56           & \textbf{2.09} (0.1$\times$) & T/O  & T/O \\
+ & Fill (PF)     & 27.82 & \textbf{29.0}   & ---     & T/O     & 46.33 (1.6$\times$) \\
+ & D8 flow acc.  & 3.56  & \textbf{4.68}   & ---     & 108.45 (23.1$\times$) & 36.23 (7.7$\times$) \\
+\bottomrule
+\end{tabular}
+\smallskip
+
+{\footnotesize $^{a}$GDAL computes TPI on a $3 \times 3$ neighborhood; SurtGIS uses a circular window with $r=10$ cells, a fundamentally different and more computationally intensive operation \citep{dereu2013}. These results are therefore not directly comparable. $^{b}$WBT slope speedup omitted: WBT uses a different derivative method (see Table~\ref{tab:slope_results} note and Table~\ref{tab:cross_tool}).}
+\end{table}
+
+Figure~\ref{fig:scalability} shows execution time as a function of DEM size on log--log axes for slope, aspect, and hillshade. SurtGIS exhibits consistent scaling across all sizes, with speedup factors stable or increasing at larger scales.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{fig1_scalability.pdf}
+\caption{Log--log scalability of slope, aspect, and hillshade computation across four DEM sizes. Shaded bands indicate interquartile range across 10 runs.}
+\label{fig:scalability}
+\end{figure}
+
+Figure~\ref{fig:speedup} presents the speedup heatmap across all algorithm--tool--size combinations. The highest speedups are observed for WhiteboxTools and GRASS at large DEM sizes, while GDAL exhibits more moderate overhead.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.7\textwidth]{fig2_speedup.pdf}
+\caption{Speedup heatmap showing the ratio of competitor execution time to SurtGIS for slope, aspect, and hillshade across DEM sizes.}
+\label{fig:speedup}
+\end{figure}
+
+SurtGIS achieves the fastest full-pipeline time for slope and aspect across all tested sizes. For slope, speedups over GDAL range from 1.7--5.1$\times$, stabilizing at 1.8$\times$ from 10\,K$^2$ (100\,M cells) onward. For aspect (Table~\ref{tab:all_algos}), the speedup over GDAL is 2.0$\times$ at 5\,K$^2$ and 10\,K$^2$ but decreases to 1.5$\times$ at 20\,K$^2$ (SurtGIS 14.5\,s vs.\ GDAL 22.3\,s; 20\,K$^2$ data in supplementary CSV), likely reflecting GDAL's SIMD-optimized \texttt{atan2} in its aspect computation. Against GRASS and WhiteboxTools at 5\,K$^2$--10\,K$^2$, advantages are 3.5--4.8$\times$ over GRASS and 4.2--7.9$\times$ over WhiteboxTools. The advantage is most pronounced at the 1\,K$^2$ scale, where SurtGIS's low-overhead native I/O and parallel computation dominate the fixed-cost overheads of external tools.
+
+For hillshade, GDAL is marginally faster at 5\,K$^2$ and above (0.9$\times$ at 5\,K$^2$, 0.6$\times$ at 10\,K$^2$), likely reflecting GDAL's SIMD-optimized trigonometric operations (\texttt{sin}/\texttt{cos}) in its C implementation. SurtGIS's hillshade compute time (2.41\,s at 10\,K$^2$) remains faster than GRASS (14.9\,s) and WhiteboxTools (11.5\,s).
+
+For hydrological algorithms, where computation dominates I/O, SurtGIS shows substantial advantages: 1.6--2.6$\times$ faster than WhiteboxTools for depression filling (decreasing at larger scales as the compute-bound portion dominates) and 7.5--20.6$\times$ faster for D8 flow accumulation. GRASS exceeds the 300\,s timeout for fill at 5\,K$^2$ and above.
+
+The I/O breakdown (Table~\ref{tab:all_algos}, Compute vs Full columns) reveals that file I/O accounts for 35--65\% of SurtGIS's total time for simple derivatives, compared to $<$10\% for computationally intensive algorithms such as fill and flow accumulation. SurtGIS's native Rust GeoTIFF reader/writer based on the \texttt{tiff} crate achieves competitive throughput for uncompressed data but does not implement the streaming I/O and SIMD codecs available in GDAL's C library.
+
+\paragraph{I/O architecture.} SurtGIS and WhiteboxTools load the entire raster into memory (read$\rightarrow$compute$\rightarrow$write), while GDAL and GRASS use streaming I/O that overlaps reading, computation, and writing. The ``Compute'' columns in Tables~\ref{tab:slope_results}--\ref{tab:all_algos} isolate the algorithmic contribution. The in-memory model favors repeated analyses on the same dataset (as in the case study, Section~\ref{sec:casestudy}), while streaming is preferable when dataset size approaches available RAM (Supplementary Table~S2).
+
+For TPI, GDAL computes a simple $3 \times 3$ neighborhood difference, while SurtGIS uses a circular window of radius 10 cells ($\sim$314 cells per pixel); multi-scale TPI is preferred for geomorphological analysis \citep{dereu2013, newman2018}.
+
+\subsubsection{Memory usage}
+
+Peak memory usage was measured with \texttt{/usr/bin/time -v} on Linux at $10\text{K}^2$ resolution (Supplementary Table~S2). SurtGIS's in-memory model requires 2.6\,GB peak RSS for slope (vs.\ 435\,MB for GDAL's streaming I/O), reflecting a $\sim$6.8$\times$ inflation factor over the raw 382\,MB Float32 input. This limits processable DEM size to approximately $6{,}500^2$ cells on 8\,GB systems and $9{,}200^2$ cells on 16\,GB systems. GDAL and GRASS use streaming I/O that keeps memory under 450\,MB regardless of algorithm, at the cost of not supporting repeated in-memory analyses. Streaming I/O support in SurtGIS is planned for a future release.
+
+\subsubsection{Thread scaling}
+
+Thread scaling measurements (Supplementary Table~S3, $n=3$, preliminary) show that total wall-clock time for slope at $10\text{K}^2$ decreases from 13.9\,s (1 thread) to 7.3\,s (8 threads), a 1.9$\times$ end-to-end speedup. The modest total scaling reflects Amdahl's law: sequential file I/O ($\sim$6.3\,s) dominates at high thread counts. As a rough estimate with $n=3$, the data suggest a parallel fraction $p \approx 0.55$ and an asymptotic maximum of $\sim$2.2$\times$, though these estimates should be considered qualitative given the small sample size. Isolating the compute-only portion reveals near-ideal efficiency: 7.6\,s at 1 thread to 1.0\,s at 8 threads (7.8$\times$, 98\% efficiency). Beyond 8 threads, compute time increases slightly due to the heterogeneous core topology (4 P-cores + 8 E-cores on the i7-1270P).
+
+\subsection{Experiment 2: Numerical accuracy}
+\label{subsec:accuracy}
+
+\subsubsection{Analytical validation}
+
+To validate numerical correctness, we compared SurtGIS outputs against closed-form analytical solutions on a Gaussian hill surface:
+
+\begin{equation}
+z(x,y) = A \exp\!\left(-\frac{x^2 + y^2}{2\sigma^2}\right)
+\label{eq:gaussian}
+\end{equation}
+
+\noindent with $A = 500$\,m, $\sigma = 2000$\,m, on a $1000 \times 1000$ grid with 10\,m cell spacing. The analytical slope, aspect, and curvatures were derived from the closed-form partial derivatives of Eq.~\ref{eq:gaussian}. Boundary cells (1-pixel border) were excluded from comparison. Note that this smooth, infinitely differentiable surface represents a best-case scenario for finite-difference methods; real DEMs with sensor noise and terrain discontinuities will exhibit larger discretization errors. The cross-tool validation on a real DEM (Section~\ref{subsec:accuracy}) provides a complementary assessment under realistic conditions.
+
+Table~\ref{tab:accuracy} presents the first-order results. SurtGIS achieves high numerical accuracy: slope RMSE of $5.7 \times 10^{-5}$~degrees, aspect maximum angular error of $2.2 \times 10^{-4}$~degrees, and $R^2 = 1.000000$ for both curvatures.
+
+\begin{table}[htbp]
+\centering
+\caption{SurtGIS accuracy against analytical solutions on a Gaussian hill ($1000 \times 1000$ cells). Values rounded to significant digits. $^{a}$Aspect $R^2$ is not reported because aspect is a circular variable; RMSE and MAE use angular distance.}
+\label{tab:accuracy}
+\begin{tabular}{@{}llll@{}}
+\toprule
+Derivative & RMSE & MAE & $R^2$ \\
+\midrule
+Slope         & $5.7 \times 10^{-5}$\textdegree & $4.0 \times 10^{-5}$\textdegree & 1.000000 \\
+Aspect$^{a}$  & $8.7 \times 10^{-5}$\textdegree & $6.7 \times 10^{-5}$\textdegree & --- \\
+Mean curv. $H$    & $< 10^{-6}$\,m$^{-1}$ & $< 10^{-6}$\,m$^{-1}$ & 1.000000 \\
+Gaussian curv. $K$  & $< 10^{-6}$\,m$^{-2}$ & $< 10^{-6}$\,m$^{-2}$ & 1.000000 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Validation of all 14 Florinsky curvatures on the same Gaussian hill (Supplementary Table~S4) confirms RMSE below $4 \times 10^{-9}$ for all types, with 11 of 14 yielding $R^2 = 1.000000$ (six decimal places). The three quantities that are analytically zero on radially symmetric surfaces ($k_{ve}$, $K_r$, rotor) show RMSE $< 10^{-9}$, confirming negligible absolute error. Eight Florinsky algebraic identities \citep{florinsky2025}---including $k_{\min} = H - M$, $k_{\max} = H + M$, $K = H^2 - M^2$---hold to within $1.6 \times 10^{-8}$.
+
+Because the Gaussian hill is radially symmetric, three curvatures ($k_{ve}$, $K_r$, rotor) are identically zero and thus cannot be tested for proportional accuracy. To address this limitation, we repeated the validation on an anisotropic sinusoidal ridge $z = A \sin(k_x x) \cos(k_y y)$ with $A = 500$\,m, $\lambda_x = 4000$\,m, $\lambda_y = 3000$\,m on a $2000 \times 2000$ grid (5\,m cells), where all 14 curvatures are non-trivial. Excluding the bottom 10\% of gradient magnitude---a threshold chosen because gradient-dependent curvatures ($k_h$, $k_v$, $k_{he}$, $k_{ve}$, $K_a$, $K_r$, rotor) contain $\|\nabla z\|$ in their denominators and become numerically singular as $\|\nabla z\| \to 0$; results are stable for thresholds between 5\% and 20\%---all 14 curvatures achieve $R^2 = 1.000000$ with maximum RMSE $= 5.9 \times 10^{-8}$, confirming numerical correctness of the complete Florinsky system on non-symmetric terrain.
+
+Cross-validation against SAGA~GIS (Evans method; seven overlapping curvatures; Supplementary Table~S5) revealed systematic methodological differences: the Laplacian agrees well (RMSE $= 2.5 \times 10^{-7}$\,m$^{-1}$, $R^2 = 0.9999$), confirming correct second-derivative computation, while gradient-dependent curvatures ($k_h$, rotor) diverge due to different formulations of slope-normalized terms \citep{minar2020}. These differences confirm that SurtGIS implements the Florinsky~(2025) formulation rather than the SAGA variant.
+
+\subsubsection{Cross-tool agreement}
+
+We compared slope values computed by SurtGIS, GDAL, GRASS~GIS, and WhiteboxTools on a real-world DEM (Copernicus 30\,m, Andes region, reprojected to UTM zone~19S, $662 \times 785$ cells, cell size $= 28.4$\,m). Using a projected coordinate system ensures consistent metric units across all tools. Table~\ref{tab:cross_tool} shows pairwise agreement.
+
+\begin{table}[htbp]
+\centering
+\caption{Pairwise slope agreement between tools on Andes 30\,m DEM (UTM 19S). Horn-based tools (SurtGIS, GDAL, GRASS) show near-perfect agreement.}
+\label{tab:cross_tool}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+ & RMSE (\textdegree) & $R^2$ & \% within 0.1\textdegree \\
+\midrule
+SurtGIS vs GDAL  & $1.6 \times 10^{-4}$ & 1.000 & 100\% \\
+SurtGIS vs GRASS  & $1.0 \times 10^{-6}$ & 1.000 & 100\% \\
+GDAL vs GRASS    & $1.6 \times 10^{-4}$ & 1.000 & 100\% \\
+SurtGIS vs WBT   & 6.53                  & 0.771 & 16.2\% \\
+GDAL vs WBT     & 6.53                  & 0.771 & 16.2\% \\
+GRASS vs WBT     & 6.53                  & 0.771 & 16.2\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+SurtGIS, GDAL, and GRASS~GIS implement Horn's 3rd-order finite difference method \citep{horn1981} and agree to within $1.6 \times 10^{-4}$~degrees (RMSE), with SurtGIS and GRASS achieving near-identical results (RMSE $< 10^{-6}$). WhiteboxTools uses a different derivative estimation method, resulting in larger systematic differences (RMSE $= 6.53$\textdegree). When excluding pixels adjacent to nodata boundaries, 87.6\% of cells agree within 1\textdegree{} and 98.8\% within 2\textdegree, confirming that the discrepancy is methodological rather than indicative of errors.
+
+\subsubsection{Hydrological algorithm validation}
+
+Cross-tool comparison of depression filling, D8 flow accumulation, and stream network extraction on the Andes DEM (Supplementary Table~S6, Figure~\ref{fig:hydro_validation}) confirms high agreement. Depression filling produces near-identical results across all three tools (RMSE $< 0.15$\,m, $R^2 = 1.000$). For D8 flow accumulation, SurtGIS and WhiteboxTools show excellent agreement ($R^2 = 0.949$ on log-transformed values, Pearson $r = 0.987$); the GRASS comparison shows lower correlation ($R^2 = 0.875$) because GRASS \texttt{r.watershed} accumulates upstream area (m$^2$) rather than cell counts. Stream networks exhibit high overlap: SurtGIS vs.\ GRASS F1 = 0.973, SurtGIS vs.\ WBT F1 = 0.938.
+
+\paragraph{Scope of hydrological validation.} The benchmarks focus on Priority-Flood filling and D8 flow accumulation because these are the algorithms for which direct cross-tool comparison is straightforward. Pixel-by-pixel comparison of SurtGIS D-infinity flow direction against TauDEM~5.3 \citep{tarboton1997} on the Andes DEM ($N = 508{,}918$ valid cells) yields RMSE $< 10^{-4}$\textdegree{} with 100\% of cells within 1\textdegree{}, confirming near-exact agreement with the reference implementation. The Lindsay~(2016) breach algorithm executes in 29.8\,s on the Andes DEM (0.5\,M cells, median of 5 runs) but was excluded from cross-tool comparison because WhiteboxTools's breach implementation differs in parameterization (constrained vs.\ unconstrained). TWI cross-tool comparison between SurtGIS (D8-based) and GRASS \texttt{r.topidx} (MFD-based) on the Andes DEM yields RMSE = 2.72 and Pearson $r = 0.44$, confirming the well-documented sensitivity of TWI to flow routing algorithm choice \citep{kopecky2021}; users should select the flow direction method appropriate for their application.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{fig_hydro_validation.pdf}
+\caption{Hydrological algorithm cross-tool validation. Top row: depression filling differences. Middle row: D8 flow accumulation scatter plots (log scale). Bottom row: stream network overlap (green = agreement, red/blue = tool-specific differences).}
+\label{fig:hydro_validation}
+\end{figure}
+
+\subsection{Experiment 3: Cross-platform performance}
+\label{subsec:crossplatform}
+
+We measured execution time across deployment targets for slope, aspect, and hillshade on a $5000 \times 5000$ DEM (25\,M cells): (a)~native Rust multi-threaded (Rayon, 16 threads), (b)~native Rust single-threaded, (c)~Python bindings via PyO3, and (d)~WebAssembly executed in the V8 engine (Node.js~22.19, V8~12.4). The WASM binary (564\,KB, compiled via \texttt{wasm-pack} with release optimizations) was benchmarked on the same hardware and DEM files as the native targets using Node.js's V8 engine. WASM execution is single-threaded, as SharedArrayBuffer-based multi-threading is not yet implemented. Note that browser-based WASM performance may differ from Node.js due to browser security mitigations (e.g., reduced timer resolution), garbage collection pauses, and JIT compilation differences; the Node.js measurements should be considered an upper bound on WASM performance.
+
+\begin{table}[htbp]
+\centering
+\caption{Cross-platform execution time (seconds, median of 10 runs) on a $5{,}000 \times 5{,}000$ DEM. Compute-only values may differ from Table~\ref{tab:all_algos} due to separate measurement harnesses and system load conditions.}
+\label{tab:crossplatform}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+Algorithm & Rust (MT) & Rust (ST) & Python & WASM (V8) \\
+\midrule
+Slope     & \textbf{0.19} & 0.51 (2.6$\times$) & 0.50 (2.7$\times$) & 2.33 (12.3$\times$) \\
+Aspect    & \textbf{0.16} & 0.88 (5.7$\times$) & 0.61 (3.9$\times$) & 3.07 (19.2$\times$) \\
+Hillshade & \textbf{0.28} & 2.21 (8.0$\times$) & 0.89 (3.2$\times$) & 8.88 (31.7$\times$) \\
+\bottomrule
+\end{tabular}
+\smallskip
+
+{\footnotesize Values in parentheses: slowdown relative to Rust multi-threaded.}
+\end{table}
+
+Table~\ref{tab:wasm_1k} presents additional WASM benchmarks at $1\text{K}^2$ (1\,M cells), a size representative of browser-based interactive use cases. At this scale, all six algorithms complete within seconds, demonstrating the feasibility of real-time terrain analysis in web applications.
+
+\begin{table}[htbp]
+\centering
+\caption{WASM execution time (seconds, median of 10 runs, V8 engine) on a $1{,}000 \times 1{,}000$ DEM. Comparison with native Rust compute-only time. Peak memory: 120--151\,MB.}
+\label{tab:wasm_1k}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Algorithm & Rust (MT) & WASM (V8) & Slowdown \\
+\midrule
+Slope          & 0.012 & 0.129 & 10.7$\times$ \\
+Aspect         & ---   & 0.097 & --- \\
+Hillshade      & ---   & 0.229 & --- \\
+TPI ($r{=}10$) & ---   & 2.61  & --- \\
+Fill (PF)      & ---   & 0.398 & --- \\
+D8 flow acc.   & ---   & 0.290 & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Figure~\ref{fig:crossplatform} shows the grouped comparison. Multi-threaded Rayon execution provides 2.6--8.0$\times$ speedup over single-threaded execution, with hillshade benefiting most due to its higher per-cell computational cost. Python bindings add 2.7--3.9$\times$ overhead relative to native multi-threaded Rust, which includes NumPy$\leftrightarrow$Rust data marshalling and the Python GIL. Notably, the Python binding overhead is comparable to or less than the single-threaded Rust time, indicating that the PyO3 bridge successfully leverages multi-core parallelism even from Python.
+
+WebAssembly execution on the V8 engine adds 10--32$\times$ overhead relative to multi-threaded native Rust, and 4.6--3.5$\times$ relative to single-threaded Rust for slope and aspect, respectively. The higher hillshade overhead (4.0$\times$ vs.\ single-threaded) reflects the cost of trigonometric operations (\texttt{sin}/\texttt{cos}) in WASM's software floating-point path versus native SIMD instructions. Despite this overhead, WASM enables terrain analysis directly in web browsers without server-side processing---a capability unavailable in GDAL, GRASS, or WhiteboxTools. A live web demonstration with 33 algorithms is available at the project repository.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.8\textwidth]{fig3_crossplatform.pdf}
+\caption{Cross-platform performance comparison for slope, aspect, and hillshade on a $5\text{K}^2$ DEM. Overhead ratios relative to Rust MT annotated above bars. WASM bars extend beyond the figure range for hillshade (8.88\,s).}
+\label{fig:crossplatform}
+\end{figure}
+
+%% ============================================================
+\section{Comparison with existing tools}
+\label{sec:comparison}
+
+Table~\ref{tab:comparison} compares SurtGIS with widely used geospatial analysis tools across key dimensions relevant to environmental modeling.
+
+\begin{table}[htbp]
+\centering
+\caption{Feature comparison of geospatial terrain analysis tools.}
+\label{tab:comparison}
+\begin{tabular}{@{}lccccc@{}}
+\toprule
+Feature & SurtGIS & WBT$^{d}$ & GRASS & SAGA$^{e}$ & GDAL \\
+\midrule
+Language & Rust & Rust$^{f}$ & C & C++ & C++ \\
+Open source & Full & Partial$^{a}$ & Full & Full & Full \\
+Browser (Wasm) & Yes & No & No & No & No \\
+Python bindings & Yes & Yes & Yes & Yes & Yes \\
+Florinsky 14 curv. & Yes & No & No & No & No \\
+Flow directions & 4$^{b}$ & 3 & 3 & 3 & 1 \\
+Depression handling & 3$^{c}$ & 3 & 1 & 2 & 0 \\
+Parallel execution & Rayon (auto) & Multi-thread & OpenMP$^{g}$ & OpenMP & I/O threads \\
+\bottomrule
+\end{tabular}
+\smallskip
+
+{\footnotesize $^{a}$WhiteboxTools Open Core is open source; advanced extensions require license. $^{b}$D8, MFD, D-infinity, TFGA. $^{c}$Planchon--Darboux, Priority-Flood, breach. $^{d}$\citet{lindsay2016wbt}. $^{e}$\citet{conrad2015}; excluded from timing benchmarks because SAGA's CLI startup overhead (module loading, GDAL linkage) confounds single-algorithm timings, and its Horn-based terrain derivatives would fall between the GDAL and GRASS results already reported. $^{f}$WhiteboxTools Open Core is written in Rust; earlier versions (pre-2018) were implemented in Go. $^{g}$GRASS r.watershed uses OpenMP; most other modules are single-threaded.}
+\end{table}
+
+SurtGIS's primary differentiator is the combination of comprehensive algorithms, cross-platform deployment including WebAssembly, and fully open-source availability. While WhiteboxTools offers a comparable algorithm set, its advanced extensions are proprietary and it cannot compile to WebAssembly. GRASS GIS and SAGA GIS are powerful desktop/server tools but lack browser deployment and require complex installation procedures.
+
+In terms of performance, the scalability benchmarks (Section~\ref{subsec:scalability}) demonstrate that SurtGIS is consistently faster than GDAL for slope (1.8$\times$ at 400\,M cells) and aspect (2.0$\times$ at 100\,M cells), while GDAL is faster for hillshade due to SIMD-optimized trigonometry. SurtGIS is 4.5$\times$ faster than GRASS for slope at the 400\,M cell scale, and 4.2--7.9$\times$ faster than WhiteboxTools for aspect (the WBT slope comparison is excluded due to different derivative methods; see Table~\ref{tab:cross_tool}). For hydrological algorithms, SurtGIS achieves 1.6--23.1$\times$ speedups over competitors. Importantly, all benchmarks measure the complete GeoTIFF pipeline (read, compute, write), not just in-memory computation.
+
+%% ============================================================
+\section{Discussion and conclusions}
+\label{sec:conclusions}
+
+SurtGIS provides a high-performance, cross-platform geospatial analysis library that bridges the gap between computational efficiency and deployment flexibility. The systematic benchmarks presented in this paper demonstrate consistent performance advantages on fair end-to-end GeoTIFF pipelines at operationally relevant scales ($\geq$25\,M cells): 1.7--1.8$\times$ over GDAL for slope and 1.5--2.0$\times$ for aspect, 3.5--4.9$\times$ over GRASS, and 3.2--7.9$\times$ over WhiteboxTools for aspect and hillshade (the WBT slope comparison is excluded because WBT uses a different derivative method; see Section~\ref{subsec:accuracy}). For hydrological algorithms, SurtGIS achieves 1.6--2.6$\times$ speedups for depression filling and 7.5--23.1$\times$ for D8 flow accumulation. GDAL retains an advantage for hillshade at $\geq$5\,K$^2$, likely due to SIMD-optimized trigonometry. Numerical accuracy is within $5.7 \times 10^{-5}$~degrees RMSE against analytical solutions, and the Python binding overhead of 2.7--3.9$\times$ relative to native Rust is competitive with single-threaded native execution.
+
+Several design decisions and limitations merit discussion. First, SurtGIS operates on in-memory arrays rather than streaming from disk, which limits processable DEM size to available RAM (peak RSS 1.9--2.6\,GB at $10\text{K}^2$; Supplementary Table~S2). Streaming I/O support is planned for future versions. Second, the TPI comparison highlights the importance of specifying algorithmic parameters when benchmarking: GDAL's $3 \times 3$ TPI and SurtGIS's radius-10 TPI are fundamentally different operations. Third, GDAL outperforms SurtGIS for hillshade at large DEM sizes, likely due to SIMD-optimized trigonometry; exploiting Rust's \texttt{std::arch} SIMD intrinsics is a targeted optimization opportunity.
+
+The benchmarks have several limitations that should be considered when interpreting results. All measurements were collected on a single hardware platform (Intel i7-1270P with a heterogeneous architecture: 4 performance cores and 8 efficiency cores) under the default \texttt{powersave} CPU governor with Turbo Boost enabled. Speedup ratios may differ on other architectures (e.g., AMD Ryzen, ARM64 Apple Silicon) or systems with homogeneous core configurations, where Rayon's work-stealing scheduler may exhibit different scaling behavior. The scalability experiment uses synthetic fractal Brownian motion DEMs; real-world DEMs with irregular NoData patterns, extensive flat regions, or sensor artifacts may produce different performance characteristics, particularly for depression filling and flow routing algorithms. The use of uncompressed Float32 GeoTIFFs eliminates codec-related variance but does not represent typical workflows where DEMs are LZW- or DEFLATE-compressed; SurtGIS's pure-Rust \texttt{tiff} crate decoder is significantly slower than GDAL's optimized C codecs for compressed data, which would reduce the observed speedup advantage in production settings.
+
+The open-source implementation of Florinsky's complete 14-curvature morphometric system \citep{florinsky2025} removes a barrier to adoption of these theoretically superior curvature descriptors in environmental modeling. The integrated hydrological pipeline---from depression handling through flow direction to derived indices---provides a cohesive workflow without requiring users to chain multiple tools.
+
+\paragraph{Validation coverage.} The benchmarks and cross-tool comparisons presented here cover the most commonly used algorithms: slope, aspect, hillshade, depression filling (Priority-Flood), D8 and D-infinity flow direction, and flow accumulation. The 14 Florinsky curvatures are validated analytically on two surfaces (Gaussian hill and anisotropic sinusoidal ridge) and cross-validated against SAGA for the seven overlapping types. Several algorithms listed in Supplementary Table~S1 have not been independently validated in this paper, including: MFD flow accumulation (only D8 was cross-compared), TFGA flow direction, Planchon--Darboux filling (only Priority-Flood was benchmarked), watershed delineation, and Strahler stream ordering. These algorithms pass internal unit tests (637 total across the test suite) but have not been compared against external reference implementations. Systematic cross-tool validation of these remaining algorithms is planned for future work.
+
+Within the Python hydrological ecosystem, SurtGIS occupies a complementary niche. pysheds \citep{bartos2020pysheds} provides lightweight D8/D-infinity routing with efficient memory use, and pyflwdir \citep{eilander2021pyflwdir} offers fast pure-Python flow direction methods compatible with HydroSHEDS and MERIT Hydro datasets; both are well suited for interactive notebook workflows. SurtGIS offers a broader scope (terrain morphometry, depression handling, and derived indices alongside flow routing) and significantly higher throughput for large DEMs through compiled Rust code, but currently lacks native support for standard hydrological datasets such as HydroSHEDS or MERIT Hydro; users must load these as GeoTIFF via external tools. The \texttt{surtgis-cloud} crate provides experimental STAC catalog browsing and COG reading via HTTP range requests, but cloud-native hydrological workflows (e.g., streaming watershed analysis over COG tiles) are not yet implemented and remain a development target.
+
+The cross-platform architecture enables new use cases for environmental modeling: browser-based teaching tools for terrain analysis, client-side processing of sensitive data that cannot leave the user's machine, and offline-capable field applications via Progressive Web Apps. However, the current WASM target is single-threaded, which limits practical browser-based processing to DEMs up to approximately $1\text{K}^2$--$2\text{K}^2$ cells for interactive use; a complete hydrological workflow (fill + flow direction + accumulation + TWI) on a $5\text{K}^2$ DEM would take $>$15\,s in the browser (extrapolated from Table~\ref{tab:crossplatform}). The Python bindings make SurtGIS accessible to the large scientific Python ecosystem while preserving the performance benefits of the native Rust implementation.
+
+\paragraph{Software sustainability.} SurtGIS is currently developed and maintained by a single author (v0.1.1), which raises legitimate concerns about long-term sustainability compared to established projects such as GDAL ($>$100 contributors, 20+ years of development) or GRASS GIS (active since 1982). To mitigate the single-developer risk: (a)~the project uses permissive dual licensing (MIT/Apache-2.0) to lower the barrier for external contributions; (b)~continuous integration enforces code quality across 9 automated jobs including cross-platform builds; (c)~the modular crate architecture allows contributors to work on individual components without understanding the full codebase; and (d)~the Rust API follows semantic versioning, with the 0.x series indicating that breaking changes may occur before a 1.0 stability commitment. Community adoption is in its early stages; building a contributor base and establishing governance structures are priorities for the project's next phase.
+
+Future development will focus on: (1) expanding WebAssembly support to include multi-threaded execution via SharedArrayBuffer; (2) streaming I/O for datasets exceeding available memory; (3) GPU acceleration for computationally intensive operations via WebGPU; and (4) integration with cloud-native geospatial workflows through the STAC client.
+
+%% ============================================================
+\section*{Software availability}
+
+\begin{description}
+    \item[Name of software:] SurtGIS
+    \item[Developers:] [Removed for review]
+    \item[Contact:] [Removed for review]
+    \item[Year first available:] 2026
+    \item[Hardware required:] Any x86\_64 or ARM64 system; WebAssembly target requires a modern browser
+    \item[Software required:] Rust 1.75+ (compilation); Python 3.8+ (Python bindings); Node.js 16+ (npm package)
+    \item[Program language:] Rust
+    \item[Program size:] $\sim$48\,000 lines of Rust source code (33\,K algorithms, 6\,K GUI, 3.8\,K cloud, 1.7\,K core, 1.5\,K CLI, 0.9\,K Python bindings, 0.4\,K WASM bindings, 0.4\,K parallel; plus $\sim$1\,K tests and $\sim$0.8\,K examples)
+    \item[Test suite:] 637 unit and integration tests; CI via GitHub Actions (9 jobs: check, clippy, test with/without parallel, WASM build, web demo build, Python build, format check, integration tests on real DEM, benchmark compilation)
+    \item[Availability:] Open source under MIT/Apache-2.0 dual license
+    \item[Source code:] [Removed for review]
+    \item[Rust crates:] \url{https://crates.io/crates/surtgis-core}
+    \item[Python package:] \url{https://pypi.org/project/surtgis/}
+    \item[npm package:] \url{https://www.npmjs.com/package/surtgis}
+\end{description}
+
+%% ============================================================
+\section*{CRediT authorship contribution statement}
+
+\textbf{[Removed for review]}: Conceptualization, Methodology, Software, Validation, Formal analysis, Investigation, Data curation, Writing -- original draft, Writing -- review \& editing, Visualization.
+
+%% ============================================================
+\section*{Declaration of competing interest}
+
+The author declares no known competing financial interests or personal relationships that could have appeared to influence the work reported in this paper.
+
+%% ============================================================
+\section*{Data availability}
+
+All source code, benchmark scripts, raw benchmark results (CSV), and synthetic DEM generation code are available in the project repository (URL removed for review). The Copernicus 30\,m DEM used in the case study is freely available from the Copernicus Climate Data Store.
+
+%% ============================================================
+\section*{Funding}
+
+This research did not receive any specific grant from funding agencies in the public, commercial, or not-for-profit sectors.
+
+%% ============================================================
+\section*{Declaration of generative AI and AI-assisted technologies in the writing process}
+
+During the preparation of this work, the author used Claude (Anthropic) for code scaffolding, debugging assistance, benchmark automation scripting, and manuscript drafting. All algorithm designs (Florinsky curvatures, flow direction methods, depression handling) and architectural decisions (workspace layout, \texttt{maybe\_rayon} pattern, cross-platform compilation strategy) were conceived by the author. All figures were generated programmatically using matplotlib; no generative AI was used in the production of artwork. After using this tool, the author reviewed and edited the content as needed and takes full responsibility for the content of the publication.
+
+%% ============================================================
+\section*{Acknowledgements}
+
+The author thanks the Rust geospatial community for foundational crates including \texttt{ndarray}, \texttt{geo}, and \texttt{proj}.
+
+%% ============================================================
+\bibliographystyle{elsarticle-harv}
+%% Bibliography embedded inline (Editorial Manager runs pdflatex only, no bibtex)
+\begin{thebibliography}{34}
+\expandafter\ifx\csname natexlab\endcsname\relax\def\natexlab#1{#1}\fi
+\providecommand{\url}[1]{\texttt{#1}}
+\providecommand{\href}[2]{#2}
+\providecommand{\path}[1]{#1}
+\providecommand{\DOIprefix}{doi:}
+\providecommand{\ArXivprefix}{arXiv:}
+\providecommand{\URLprefix}{URL: }
+\providecommand{\Pubmedprefix}{pmid:}
+\providecommand{\doi}[1]{\href{http://dx.doi.org/#1}{\path{#1}}}
+\providecommand{\Pubmed}[1]{\href{pmid:#1}{\path{#1}}}
+\providecommand{\bibinfo}[2]{#2}
+\ifx\xfnm\relax \def\xfnm[#1]{\unskip,\space#1}\fi
+%Type = Article
+\bibitem[{Amatulli et~al.(2018)Amatulli, Domisch, Tuanmu, Parmentier, Ranipeta,
+  Malczyk and Jetz}]{amatulli2018}
+\bibinfo{author}{Amatulli, G.}, \bibinfo{author}{Domisch, S.},
+  \bibinfo{author}{Tuanmu, M.N.}, \bibinfo{author}{Parmentier, B.},
+  \bibinfo{author}{Ranipeta, A.}, \bibinfo{author}{Malczyk, J.},
+  \bibinfo{author}{Jetz, W.}, \bibinfo{year}{2018}.
+\newblock \bibinfo{title}{A suite of global, cross-scale topographic variables
+  for environmental and biodiversity modeling}.
+\newblock \bibinfo{journal}{Scientific Data} \bibinfo{volume}{5},
+  \bibinfo{pages}{180040}.
+\newblock \DOIprefix\doi{10.1038/sdata.2018.40}.
+%Type = Misc
+\bibitem[{Barnes(2016)}]{barnes2016richdem}
+\bibinfo{author}{Barnes, R.}, \bibinfo{year}{2016}.
+\newblock \bibinfo{title}{{RichDEM}: Terrain analysis software}.
+\newblock \URLprefix \url{https://github.com/r-barnes/richdem}.
+  \bibinfo{note}{accessed: 2026-02-12}.
+%Type = Article
+\bibitem[{Barnes et~al.(2014)Barnes, Lehman and Mulla}]{barnes2014}
+\bibinfo{author}{Barnes, R.}, \bibinfo{author}{Lehman, C.},
+  \bibinfo{author}{Mulla, D.}, \bibinfo{year}{2014}.
+\newblock \bibinfo{title}{Priority-flood: An optimal depression-filling and
+  watershed-labeling algorithm for digital elevation models}.
+\newblock \bibinfo{journal}{Computers \& Geosciences} \bibinfo{volume}{62},
+  \bibinfo{pages}{117--127}.
+\newblock \DOIprefix\doi{10.1016/j.cageo.2013.04.024}.
+%Type = Misc
+\bibitem[{Bartos(2020)}]{bartos2020pysheds}
+\bibinfo{author}{Bartos, M.}, \bibinfo{year}{2020}.
+\newblock \bibinfo{title}{pysheds: Simple and fast watershed delineation in
+  python}.
+\newblock \URLprefix \url{https://github.com/mdbartos/pysheds}.
+  \bibinfo{note}{accessed: 2026-02-16}.
+%Type = Article
+\bibitem[{Blumofe and Leiserson(1999)}]{blumofe1999}
+\bibinfo{author}{Blumofe, R.D.}, \bibinfo{author}{Leiserson, C.E.},
+  \bibinfo{year}{1999}.
+\newblock \bibinfo{title}{Scheduling multithreaded computations by work
+  stealing}.
+\newblock \bibinfo{journal}{Journal of the ACM} \bibinfo{volume}{46},
+  \bibinfo{pages}{720--748}.
+\newblock \DOIprefix\doi{10.1145/324133.324234}.
+%Type = Article
+\bibitem[{Conrad et~al.(2015)Conrad, Bechtel, Bock, Dietrich, Fischer, Gerlitz,
+  Wehberg, Wichmann and B{\"o}hner}]{conrad2015}
+\bibinfo{author}{Conrad, O.}, \bibinfo{author}{Bechtel, B.},
+  \bibinfo{author}{Bock, M.}, \bibinfo{author}{Dietrich, H.},
+  \bibinfo{author}{Fischer, E.}, \bibinfo{author}{Gerlitz, L.},
+  \bibinfo{author}{Wehberg, J.}, \bibinfo{author}{Wichmann, V.},
+  \bibinfo{author}{B{\"o}hner, J.}, \bibinfo{year}{2015}.
+\newblock \bibinfo{title}{System for automated geoscientific analyses ({SAGA})
+  v. 2.1.4}.
+\newblock \bibinfo{journal}{Geoscientific Model Development}
+  \bibinfo{volume}{8}, \bibinfo{pages}{1991--2007}.
+\newblock \DOIprefix\doi{10.5194/gmd-8-1991-2015}.
+%Type = Article
+\bibitem[{De~Reu et~al.(2013)De~Reu, Bourgeois, Bats, Zwertvaegher, Gelorini,
+  De~Smedt, Chu, Antrop, De~Maeyer, Finke, Van~Meirvenne, Verniers and
+  Cromb{\'e}}]{dereu2013}
+\bibinfo{author}{De~Reu, J.}, \bibinfo{author}{Bourgeois, J.},
+  \bibinfo{author}{Bats, M.}, \bibinfo{author}{Zwertvaegher, A.},
+  \bibinfo{author}{Gelorini, V.}, \bibinfo{author}{De~Smedt, P.},
+  \bibinfo{author}{Chu, W.}, \bibinfo{author}{Antrop, M.},
+  \bibinfo{author}{De~Maeyer, P.}, \bibinfo{author}{Finke, P.},
+  \bibinfo{author}{Van~Meirvenne, M.}, \bibinfo{author}{Verniers, J.},
+  \bibinfo{author}{Cromb{\'e}, P.}, \bibinfo{year}{2013}.
+\newblock \bibinfo{title}{Application of the topographic position index to
+  heterogeneous landscapes}.
+\newblock \bibinfo{journal}{Geomorphology} \bibinfo{volume}{186},
+  \bibinfo{pages}{39--49}.
+\newblock \DOIprefix\doi{10.1016/j.geomorph.2012.12.015}.
+%Type = Misc
+\bibitem[{Eilander et~al.(2021)Eilander, van Verseveld, Winsemius and
+  Ward}]{eilander2021pyflwdir}
+\bibinfo{author}{Eilander, D.}, \bibinfo{author}{van Verseveld, W.},
+  \bibinfo{author}{Winsemius, H.}, \bibinfo{author}{Ward, P.},
+  \bibinfo{year}{2021}.
+\newblock \bibinfo{title}{pyflwdir: Fast methods to work with hydro- and
+  topography data in pure {Python}}.
+\newblock \URLprefix \url{https://github.com/Deltares/pyflwdir},
+  \DOIprefix\doi{10.5281/zenodo.6108034}.
+%Type = Incollection
+\bibitem[{Evans(1972)}]{evans1972}
+\bibinfo{author}{Evans, I.S.}, \bibinfo{year}{1972}.
+\newblock \bibinfo{title}{General geomorphometry, derivatives of altitude, and
+  descriptive statistics}, in: \bibinfo{editor}{Chorley, R.J.} (Ed.),
+  \bibinfo{booktitle}{Spatial Analysis in Geomorphology}.
+  \bibinfo{publisher}{Methuen}, \bibinfo{address}{London}, pp.
+  \bibinfo{pages}{17--90}.
+\newblock \DOIprefix\doi{10.4324/9780429273346-2}.
+%Type = Article
+\bibitem[{Farr et~al.(2007)Farr, Rosen, Caro, Crippen, Duren, Hensley, Kobrick,
+  Paller, Rodriguez, Roth, Seal, Shaffer, Shimada, Umland, Werner, Oskin,
+  Burbank and Alsdorf}]{farr2007srtm}
+\bibinfo{author}{Farr, T.G.}, \bibinfo{author}{Rosen, P.A.},
+  \bibinfo{author}{Caro, E.}, \bibinfo{author}{Crippen, R.},
+  \bibinfo{author}{Duren, R.}, \bibinfo{author}{Hensley, S.},
+  \bibinfo{author}{Kobrick, M.}, \bibinfo{author}{Paller, M.},
+  \bibinfo{author}{Rodriguez, E.}, \bibinfo{author}{Roth, L.},
+  \bibinfo{author}{Seal, D.}, \bibinfo{author}{Shaffer, S.},
+  \bibinfo{author}{Shimada, J.}, \bibinfo{author}{Umland, J.},
+  \bibinfo{author}{Werner, M.}, \bibinfo{author}{Oskin, M.},
+  \bibinfo{author}{Burbank, D.}, \bibinfo{author}{Alsdorf, D.},
+  \bibinfo{year}{2007}.
+\newblock \bibinfo{title}{The {Shuttle Radar Topography Mission}}.
+\newblock \bibinfo{journal}{Reviews of Geophysics} \bibinfo{volume}{45},
+  \bibinfo{pages}{RG2004}.
+\newblock \DOIprefix\doi{10.1029/2005RG000183}.
+%Type = Book
+\bibitem[{Florinsky(2016)}]{florinsky2016}
+\bibinfo{author}{Florinsky, I.V.}, \bibinfo{year}{2016}.
+\newblock \bibinfo{title}{Digital Terrain Analysis in Soil Science and
+  Geology}.
+\newblock \bibinfo{edition}{2nd} ed., \bibinfo{publisher}{Academic Press}.
+\newblock \DOIprefix\doi{10.1016/C2015-0-01431-6}.
+%Type = Book
+\bibitem[{Florinsky(2025)}]{florinsky2025}
+\bibinfo{author}{Florinsky, I.V.}, \bibinfo{year}{2025}.
+\newblock \bibinfo{title}{Digital Terrain Analysis}.
+\newblock \bibinfo{edition}{3rd} ed., \bibinfo{publisher}{Elsevier}.
+\newblock \DOIprefix\doi{10.1016/C2022-0-02025-4}.
+%Type = Misc
+\bibitem[{{GDAL/OGR contributors}(2024)}]{gdal2024}
+\bibinfo{author}{{GDAL/OGR contributors}}, \bibinfo{year}{2024}.
+\newblock \bibinfo{title}{{GDAL/OGR} geospatial data abstraction software
+  library}.
+\newblock \URLprefix \url{https://gdal.org},
+  \DOIprefix\doi{10.5281/zenodo.5884351}.
+%Type = Article
+\bibitem[{Gorelick et~al.(2017)Gorelick, Hancher, Dixon, Ilyushchenko, Thau and
+  Moore}]{gorelick2017gee}
+\bibinfo{author}{Gorelick, N.}, \bibinfo{author}{Hancher, M.},
+  \bibinfo{author}{Dixon, M.}, \bibinfo{author}{Ilyushchenko, S.},
+  \bibinfo{author}{Thau, D.}, \bibinfo{author}{Moore, R.},
+  \bibinfo{year}{2017}.
+\newblock \bibinfo{title}{{Google Earth Engine}: Planetary-scale geospatial
+  analysis for everyone}.
+\newblock \bibinfo{journal}{Remote Sensing of Environment}
+  \bibinfo{volume}{202}, \bibinfo{pages}{18--27}.
+\newblock \DOIprefix\doi{10.1016/j.rse.2017.06.031}.
+%Type = Inproceedings
+\bibitem[{Haas et~al.(2017)Haas, Rossberg, Schuff, Titzer, Holman, Gohman,
+  Wagner, Zakai and Bastien}]{haas2017}
+\bibinfo{author}{Haas, A.}, \bibinfo{author}{Rossberg, A.},
+  \bibinfo{author}{Schuff, D.L.}, \bibinfo{author}{Titzer, B.L.},
+  \bibinfo{author}{Holman, M.}, \bibinfo{author}{Gohman, D.},
+  \bibinfo{author}{Wagner, L.}, \bibinfo{author}{Zakai, A.},
+  \bibinfo{author}{Bastien, J.}, \bibinfo{year}{2017}.
+\newblock \bibinfo{title}{Bringing the web up to speed with {WebAssembly}}, in:
+  \bibinfo{booktitle}{Proceedings of the 38th ACM SIGPLAN Conference on
+  Programming Language Design and Implementation}, \bibinfo{publisher}{ACM}.
+  pp. \bibinfo{pages}{185--200}.
+\newblock \DOIprefix\doi{10.1145/3062341.3062363}.
+%Type = Article
+\bibitem[{Horn(1981)}]{horn1981}
+\bibinfo{author}{Horn, B.K.P.}, \bibinfo{year}{1981}.
+\newblock \bibinfo{title}{Hill shading and the reflectance map}.
+\newblock \bibinfo{journal}{Proceedings of the IEEE} \bibinfo{volume}{69},
+  \bibinfo{pages}{14--47}.
+\newblock \DOIprefix\doi{10.1109/PROC.1981.11918}.
+%Type = Article
+\bibitem[{Jasiewicz and Stepinski(2013)}]{jasiewicz2013}
+\bibinfo{author}{Jasiewicz, J.}, \bibinfo{author}{Stepinski, T.F.},
+  \bibinfo{year}{2013}.
+\newblock \bibinfo{title}{Geomorphons --- a pattern recognition approach to
+  classification and mapping of landforms}.
+\newblock \bibinfo{journal}{Geomorphology} \bibinfo{volume}{182},
+  \bibinfo{pages}{147--156}.
+\newblock \DOIprefix\doi{10.1016/j.geomorph.2012.11.005}.
+%Type = Article
+\bibitem[{Kopeck{\'y} et~al.(2021)Kopeck{\'y}, Macek and Wild}]{kopecky2021}
+\bibinfo{author}{Kopeck{\'y}, M.}, \bibinfo{author}{Macek, M.},
+  \bibinfo{author}{Wild, J.}, \bibinfo{year}{2021}.
+\newblock \bibinfo{title}{Topographic wetness index calculation guidelines
+  based on measured soil moisture and plant species composition}.
+\newblock \bibinfo{journal}{Science of The Total Environment}
+  \bibinfo{volume}{757}, \bibinfo{pages}{143785}.
+\newblock \DOIprefix\doi{10.1016/j.scitotenv.2020.143785}.
+%Type = Article
+\bibitem[{Li et~al.(2024)Li, Lai, Shi and Yang}]{li2024tfga}
+\bibinfo{author}{Li, Z.}, \bibinfo{author}{Lai, X.}, \bibinfo{author}{Shi, P.},
+  \bibinfo{author}{Yang, T.}, \bibinfo{year}{2024}.
+\newblock \bibinfo{title}{Proposal of a facet-to-facet multiple flow direction
+  algorithm based on geometrical and mathematical analysis of physical
+  dispersion over triangle facet}.
+\newblock \bibinfo{journal}{Geomorphology} \bibinfo{volume}{466},
+  \bibinfo{pages}{109440}.
+\newblock \DOIprefix\doi{10.1016/j.geomorph.2024.109440}.
+%Type = Article
+\bibitem[{Lindsay(2016a)}]{lindsay2016}
+\bibinfo{author}{Lindsay, J.B.}, \bibinfo{year}{2016}a.
+\newblock \bibinfo{title}{Efficient hybrid breaching-filling sink removal
+  methods for flow path enforcement in digital elevation models}.
+\newblock \bibinfo{journal}{Hydrological Processes} \bibinfo{volume}{30},
+  \bibinfo{pages}{846--857}.
+\newblock \DOIprefix\doi{10.1002/hyp.10648}.
+%Type = Article
+\bibitem[{Lindsay(2016b)}]{lindsay2016wbt}
+\bibinfo{author}{Lindsay, J.B.}, \bibinfo{year}{2016}b.
+\newblock \bibinfo{title}{Whitebox {GAT}: A case study in geomorphometric
+  analysis}.
+\newblock \bibinfo{journal}{Computers \& Geosciences} \bibinfo{volume}{95},
+  \bibinfo{pages}{75--84}.
+\newblock \DOIprefix\doi{10.1016/j.cageo.2016.07.003}.
+%Type = Article
+\bibitem[{Min{\'a}r et~al.(2020)Min{\'a}r, Evans and Jen{\v{c}}o}]{minar2020}
+\bibinfo{author}{Min{\'a}r, J.}, \bibinfo{author}{Evans, I.S.},
+  \bibinfo{author}{Jen{\v{c}}o, M.}, \bibinfo{year}{2020}.
+\newblock \bibinfo{title}{A comprehensive system of definitions of land surface
+  (topographic) curvatures, with implications for their application in
+  geoscience modelling and prediction}.
+\newblock \bibinfo{journal}{Earth-Science Reviews} \bibinfo{volume}{211},
+  \bibinfo{pages}{103414}.
+\newblock \DOIprefix\doi{10.1016/j.earscirev.2020.103414}.
+%Type = Article
+\bibitem[{Neteler et~al.(2012)Neteler, Bowman, Landa and Metz}]{neteler2012}
+\bibinfo{author}{Neteler, M.}, \bibinfo{author}{Bowman, M.H.},
+  \bibinfo{author}{Landa, M.}, \bibinfo{author}{Metz, M.},
+  \bibinfo{year}{2012}.
+\newblock \bibinfo{title}{{GRASS GIS}: A multi-purpose open source {GIS}}.
+\newblock \bibinfo{journal}{Environmental Modelling \& Software}
+  \bibinfo{volume}{31}, \bibinfo{pages}{124--130}.
+\newblock \DOIprefix\doi{10.1016/j.envsoft.2011.11.014}.
+%Type = Article
+\bibitem[{Newman et~al.(2018)Newman, Lindsay and Cockburn}]{newman2018}
+\bibinfo{author}{Newman, D.R.}, \bibinfo{author}{Lindsay, J.B.},
+  \bibinfo{author}{Cockburn, J.M.H.}, \bibinfo{year}{2018}.
+\newblock \bibinfo{title}{Evaluating metrics of local topographic position for
+  multiscale geomorphometric analysis}.
+\newblock \bibinfo{journal}{Geomorphology} \bibinfo{volume}{312},
+  \bibinfo{pages}{40--50}.
+\newblock \DOIprefix\doi{10.1016/j.geomorph.2018.04.003}.
+%Type = Article
+\bibitem[{Nobre et~al.(2011)Nobre, Cuartas, Hodnett, Renn{\'o}, Rodrigues,
+  Silveira, Waterloo and Saleska}]{nobre2011}
+\bibinfo{author}{Nobre, A.D.}, \bibinfo{author}{Cuartas, L.A.},
+  \bibinfo{author}{Hodnett, M.}, \bibinfo{author}{Renn{\'o}, C.D.},
+  \bibinfo{author}{Rodrigues, G.}, \bibinfo{author}{Silveira, A.},
+  \bibinfo{author}{Waterloo, M.}, \bibinfo{author}{Saleska, S.},
+  \bibinfo{year}{2011}.
+\newblock \bibinfo{title}{Height above the nearest drainage -- a hydrologically
+  relevant new terrain model}.
+\newblock \bibinfo{journal}{Journal of Hydrology} \bibinfo{volume}{404},
+  \bibinfo{pages}{13--29}.
+\newblock \DOIprefix\doi{10.1016/j.jhydrol.2011.03.051}.
+%Type = Article
+\bibitem[{O'Callaghan and Mark(1984)}]{ocallaghan1984}
+\bibinfo{author}{O'Callaghan, J.F.}, \bibinfo{author}{Mark, D.M.},
+  \bibinfo{year}{1984}.
+\newblock \bibinfo{title}{The extraction of drainage networks from digital
+  elevation data}.
+\newblock \bibinfo{journal}{Computer Vision, Graphics, and Image Processing}
+  \bibinfo{volume}{28}, \bibinfo{pages}{323--344}.
+\newblock \DOIprefix\doi{10.1016/S0734-189X(84)80011-0}.
+%Type = Article
+\bibitem[{Perkel(2020)}]{perkel2020rust}
+\bibinfo{author}{Perkel, J.M.}, \bibinfo{year}{2020}.
+\newblock \bibinfo{title}{Why scientists are turning to {Rust}}.
+\newblock \bibinfo{journal}{Nature} \bibinfo{volume}{588},
+  \bibinfo{pages}{185--186}.
+\newblock \DOIprefix\doi{10.1038/d41586-020-03382-2}.
+%Type = Article
+\bibitem[{Planchon and Darboux(2001)}]{planchon2001}
+\bibinfo{author}{Planchon, O.}, \bibinfo{author}{Darboux, F.},
+  \bibinfo{year}{2001}.
+\newblock \bibinfo{title}{A fast, simple and versatile algorithm to fill the
+  depressions of digital elevation models}.
+\newblock \bibinfo{journal}{Catena} \bibinfo{volume}{46},
+  \bibinfo{pages}{159--176}.
+\newblock \DOIprefix\doi{10.1016/S0341-8162(01)00164-3}.
+%Type = Misc
+\bibitem[{{PyO3 Project Contributors}(2024)}]{pyo3_2024}
+\bibinfo{author}{{PyO3 Project Contributors}}, \bibinfo{year}{2024}.
+\newblock \bibinfo{title}{{PyO3}: {Rust} bindings for {Python}}.
+\newblock \URLprefix \url{https://github.com/PyO3/pyo3}. \bibinfo{note}{version
+  0.22. Accessed: 2026-02-16}.
+%Type = Article
+\bibitem[{Quinn et~al.(1991)Quinn, Beven, Chevallier and Planchon}]{quinn1991}
+\bibinfo{author}{Quinn, P.}, \bibinfo{author}{Beven, K.},
+  \bibinfo{author}{Chevallier, P.}, \bibinfo{author}{Planchon, O.},
+  \bibinfo{year}{1991}.
+\newblock \bibinfo{title}{The prediction of hillslope flow paths for
+  distributed hydrological modelling using digital terrain models}.
+\newblock \bibinfo{journal}{Hydrological Processes} \bibinfo{volume}{5},
+  \bibinfo{pages}{59--79}.
+\newblock \DOIprefix\doi{10.1002/hyp.3360050106}.
+%Type = Misc
+\bibitem[{{Radiant Earth Foundation}(2021)}]{stac2021}
+\bibinfo{author}{{Radiant Earth Foundation}}, \bibinfo{year}{2021}.
+\newblock \bibinfo{title}{{SpatioTemporal Asset Catalog (STAC)} specification}.
+\newblock \URLprefix \url{https://stacspec.org}. \bibinfo{note}{version 1.0.0}.
+%Type = Article
+\bibitem[{Tarboton(1997)}]{tarboton1997}
+\bibinfo{author}{Tarboton, D.G.}, \bibinfo{year}{1997}.
+\newblock \bibinfo{title}{A new method for the determination of flow directions
+  and upslope areas in grid digital elevation models}.
+\newblock \bibinfo{journal}{Water Resources Research} \bibinfo{volume}{33},
+  \bibinfo{pages}{309--319}.
+\newblock \DOIprefix\doi{10.1029/96WR03137}.
+%Type = Misc
+\bibitem[{Tarboton(2015)}]{tarboton2015taudem}
+\bibinfo{author}{Tarboton, D.G.}, \bibinfo{year}{2015}.
+\newblock \bibinfo{title}{{TauDEM} -- {Terrain Analysis Using Digital Elevation
+  Models}}.
+\newblock \URLprefix \url{https://hydrology.usu.edu/taudem/}.
+  \bibinfo{note}{utah State University. Accessed: 2026-02-16}.
+%Type = Book
+\bibitem[{Wilson and Gallant(2000)}]{wilson2000terrain}
+\bibinfo{editor}{Wilson, J.P.}, \bibinfo{editor}{Gallant, J.C.} (Eds.),
+  \bibinfo{year}{2000}.
+\newblock \bibinfo{title}{Terrain Analysis: Principles and Applications}.
+\newblock \bibinfo{publisher}{John Wiley \& Sons}, \bibinfo{address}{New York}.
+
+\end{thebibliography}
+
+\end{document}

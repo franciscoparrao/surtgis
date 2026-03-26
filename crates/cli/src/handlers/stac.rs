@@ -700,3 +700,170 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
 
     Ok(())
 }
+
+/// Fetch and composite a single S2 band from STAC (for pipeline usage)
+///
+/// This is a simplified version of the Composite command that:
+/// - Downloads a single asset (band) from multiple scenes
+/// - Applies cloud masking if SCL asset is available
+/// - Returns the composited raster (aligned to reference grid if provided)
+/// - Does NOT write to disk
+pub fn fetch_s2_band_from_stac(
+    catalog: &str,
+    bbox: &str,
+    collection: &str,
+    asset: &str,
+    datetime: &str,
+    max_scenes: usize,
+    scl_asset: &str,
+    scl_keep: &str,
+    align_to: Option<&surtgis_core::Raster<f64>>,
+) -> Result<surtgis_core::Raster<f64>> {
+    use surtgis_core::mosaic;
+
+    let cat = StacCatalog::from_str_or_url(catalog);
+    let bb = parse_bbox(bbox)?;
+    let keep_classes = parse_scl_classes(scl_keep)?;
+
+    // Search for items
+    let search_limit = (max_scenes * 4) as u32;
+    let params = StacSearchParams::new()
+        .bbox(bb.min_x, bb.min_y, bb.max_x, bb.max_y)
+        .collections(&[collection])
+        .datetime(datetime)
+        .limit(search_limit);
+
+    let pb = spinner(&format!("Searching for {} {} scenes...", collection, asset));
+    let client_opts = StacClientOptions {
+        max_items: (max_scenes * 4) as usize,
+        ..StacClientOptions::default()
+    };
+    let client = StacClientBlocking::new(cat, client_opts)
+        .context("Failed to create STAC client")?;
+    let items = client.search_all(&params).context("STAC search failed")?;
+    pb.finish_and_clear();
+
+    if items.is_empty() {
+        anyhow::bail!("No items found for {} {} in bbox {}", collection, asset, bbox);
+    }
+
+    // Download and composite scenes
+    let mut rasters: Vec<surtgis_core::Raster<f64>> = Vec::new();
+
+    for (i, item) in items.iter().take(max_scenes).enumerate() {
+        let pb = spinner(&format!("Downloading {}/{}: {}...", i + 1, max_scenes, item.id));
+
+        // Resolve data asset
+        let data_asset = resolve_asset_key(item, asset)
+            .and_then(|(_, a)| {
+                client.sign_asset_href(&a.href, item.collection.as_deref().unwrap_or(""))
+                    .ok()
+                    .map(|h| (h, item.epsg()))
+            });
+
+        // Resolve SCL asset for cloud masking
+        let scl_href = resolve_asset_key(item, scl_asset)
+            .and_then(|(_, a)| {
+                client.sign_asset_href(&a.href, item.collection.as_deref().unwrap_or(""))
+                    .ok()
+            });
+
+        let Some((data_href, epsg)) = data_asset else {
+            pb.finish_and_clear();
+            eprintln!("  Skipping {}: missing asset {}", item.id, asset);
+            continue;
+        };
+
+        // Read data
+        let opts = CogReaderOptions::default();
+        let mut reader = match CogReaderBlocking::open(&data_href, opts) {
+            Ok(r) => r,
+            Err(e) => {
+                pb.finish_and_clear();
+                eprintln!("  Skipping {}: {}", item.id, e);
+                continue;
+            }
+        };
+
+        // Reproject bbox if needed
+        let read_bb = {
+            use surtgis_cloud::reproject;
+            if let Some(epsg) = epsg {
+                if !reproject::is_wgs84(epsg) {
+                    reproject::reproject_bbox_to_cog(&bb, epsg)
+                } else {
+                    bb
+                }
+            } else {
+                bb
+            }
+        };
+
+        let mut raster = match reader.read_bbox::<f64>(&read_bb, None) {
+            Ok(r) => r,
+            Err(e) => {
+                pb.finish_and_clear();
+                eprintln!("  Skipping {}: {}", item.id, e);
+                continue;
+            }
+        };
+
+        // Apply cloud masking if SCL available
+        if let Some(scl_href) = &scl_href {
+            let scl_opts = CogReaderOptions::default();
+            let mut scl_reader = match CogReaderBlocking::open(scl_href, scl_opts) {
+                Ok(r) => r,
+                Err(_) => {
+                    // SCL is optional, continue without masking
+                    pb.finish_and_clear();
+                    rasters.push(raster);
+                    continue;
+                }
+            };
+
+            if let Ok(scl_u8) = scl_reader.read_bbox::<u8>(&read_bb, None) {
+                // Convert SCL from u8 to f64 for cloud_mask_scl
+                let scl_f64 = surtgis_core::Raster::from_array(
+                    scl_u8.data().mapv(|v| v as f64)
+                );
+                raster = cloud_mask_scl(&raster, &scl_f64, &keep_classes)
+                    .unwrap_or(raster); // If masking fails, use original
+            }
+        }
+
+        pb.finish_and_clear();
+        rasters.push(raster);
+
+        if rasters.len() >= max_scenes {
+            break;
+        }
+    }
+
+    if rasters.is_empty() {
+        anyhow::bail!("Failed to download any {} {} scenes", collection, asset);
+    }
+
+    // Composite all scenes
+    let pb = spinner("Compositing scenes...");
+    let refs: Vec<&surtgis_core::Raster<f64>> = rasters.iter().collect();
+    let result = mosaic(&refs, None)
+        .context("Failed to mosaic scenes")?;
+    pb.finish_and_clear();
+
+    // Align to reference grid if provided
+    let final_result = if let Some(reference) = align_to {
+        let pb = spinner("Aligning to DEM grid...");
+        let aligned = surtgis_core::resample_to_grid(
+            &result,
+            reference,
+            surtgis_core::ResampleMethod::Bilinear,
+        )
+        .context("Failed to resample to DEM grid")?;
+        pb.finish_and_clear();
+        aligned
+    } else {
+        result
+    };
+
+    Ok(final_result)
+}

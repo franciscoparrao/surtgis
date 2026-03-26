@@ -1,0 +1,7 @@
+Highlights
+
+- Rust library with 127 terrain, hydrology, and imagery algorithms
+- Compiles to native, WebAssembly, and Python from one codebase
+- Open-source implementation of Florinsky's complete 14-curvature morphometric system
+- 1.8x faster than GDAL for slope; 23x faster for flow accumulation vs GRASS GIS
+- Numerical accuracy within 10^-5 degrees of analytical solutions

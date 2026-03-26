@@ -175,24 +175,35 @@ struct S2Bands {
     swir2: Raster<f64>,   // B12
 }
 
-/// Fetch a single S2 band from STAC catalog
+/// Fetch a single S2 band from STAC catalog (Planetary Computer)
 ///
-/// In production, this would:
-/// 1. Call stac::handle_stac_composite() with specific asset key
-/// 2. Return the aligned, cloud-masked raster
-///
-/// For MVP: returns error to trigger graceful fallback
+/// Delegates to stac::fetch_s2_band_from_stac() which:
+/// - Searches for Sentinel-2 L2A scenes in bbox + datetime
+/// - Downloads multiple scenes and composites (cloud-free)
+/// - Aligns to DEM grid
 fn fetch_s2_band(
-    _collection: &str,     // "sentinel-2-l2a"
-    _band: &str,           // "B04", "B08", etc.
-    _bbox: &str,
-    _datetime: &str,
-    _max_scenes: usize,
-    _align_to: &Path,
+    collection: &str,     // "sentinel-2-l2a"
+    band: &str,           // "B04", "B08", etc.
+    bbox: &str,           // "west,south,east,north"
+    datetime: &str,       // "YYYY-MM-DD/YYYY-MM-DD"
+    max_scenes: usize,
+    align_to: &Path,
 ) -> Result<Raster<f64>> {
-    anyhow::bail!(
-        "STAC integration not implemented in MVP. \
-         S2 imagery download requires surtgis-cloud STAC client setup."
+    // Load reference DEM for alignment
+    let dem_ref = surtgis_core::io::read_geotiff::<f64, _>(align_to, None)
+        .context("Failed to read DEM for grid reference")?;
+
+    // Call the STAC handler function (with cloud masking + compositing)
+    super::stac::fetch_s2_band_from_stac(
+        "pc",  // Planetary Computer catalog
+        bbox,
+        collection,
+        &format!("B{:02}", &band[1..]),  // Convert B04 -> B04
+        datetime,
+        max_scenes,
+        "SCL",                            // Scene Classification Layer for cloud masking
+        "4,5,6,11",                       // Cloud classes to keep (vegetation, water, snow, clouds)
+        Some(&dem_ref),                   // Align to DEM grid
     )
 }
 

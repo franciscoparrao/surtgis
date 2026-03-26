@@ -1,0 +1,7 @@
+Change Log
+-----------
+
+ - Copyright year updated.
+ - Support email id changed to support@elsevier.com.
+
+------------------------------------------------------------------------

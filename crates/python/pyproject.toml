@@ -1,0 +1,45 @@
+[build-system]
+requires = ["maturin>=1.4,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "surtgis"
+version = "0.1.1"
+description = "High-performance geospatial analysis library for Python, powered by Rust"
+readme = "README.md"
+license = { text = "MIT OR Apache-2.0" }
+authors = [{ name = "Francisco Parra", email = "francisco.parra.o@usach.cl" }]
+requires-python = ">=3.9"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: GIS",
+    "Topic :: Scientific/Engineering :: Image Processing",
+]
+keywords = ["gis", "geospatial", "terrain", "raster", "hydrology", "dem", "rust"]
+
+[project.urls]
+Homepage = "https://github.com/franciscoparrao/surtgis"
+Repository = "https://github.com/franciscoparrao/surtgis"
+Documentation = "https://docs.rs/surtgis"
+"Bug Tracker" = "https://github.com/franciscoparrao/surtgis/issues"
+
+[project.optional-dependencies]
+numpy = ["numpy>=1.20"]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "surtgis"

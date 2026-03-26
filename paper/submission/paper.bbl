@@ -1,0 +1,328 @@
+\begin{thebibliography}{34}
+\expandafter\ifx\csname natexlab\endcsname\relax\def\natexlab#1{#1}\fi
+\providecommand{\url}[1]{\texttt{#1}}
+\providecommand{\href}[2]{#2}
+\providecommand{\path}[1]{#1}
+\providecommand{\DOIprefix}{doi:}
+\providecommand{\ArXivprefix}{arXiv:}
+\providecommand{\URLprefix}{URL: }
+\providecommand{\Pubmedprefix}{pmid:}
+\providecommand{\doi}[1]{\href{http://dx.doi.org/#1}{\path{#1}}}
+\providecommand{\Pubmed}[1]{\href{pmid:#1}{\path{#1}}}
+\providecommand{\bibinfo}[2]{#2}
+\ifx\xfnm\relax \def\xfnm[#1]{\unskip,\space#1}\fi
+%Type = Article
+\bibitem[{Amatulli et~al.(2018)Amatulli, Domisch, Tuanmu, Parmentier, Ranipeta,
+  Malczyk and Jetz}]{amatulli2018}
+\bibinfo{author}{Amatulli, G.}, \bibinfo{author}{Domisch, S.},
+  \bibinfo{author}{Tuanmu, M.N.}, \bibinfo{author}{Parmentier, B.},
+  \bibinfo{author}{Ranipeta, A.}, \bibinfo{author}{Malczyk, J.},
+  \bibinfo{author}{Jetz, W.}, \bibinfo{year}{2018}.
+\newblock \bibinfo{title}{A suite of global, cross-scale topographic variables
+  for environmental and biodiversity modeling}.
+\newblock \bibinfo{journal}{Scientific Data} \bibinfo{volume}{5},
+  \bibinfo{pages}{180040}.
+\newblock \DOIprefix\doi{10.1038/sdata.2018.40}.
+%Type = Misc
+\bibitem[{Barnes(2016)}]{barnes2016richdem}
+\bibinfo{author}{Barnes, R.}, \bibinfo{year}{2016}.
+\newblock \bibinfo{title}{{RichDEM}: Terrain analysis software}.
+\newblock \URLprefix \url{https://github.com/r-barnes/richdem}.
+  \bibinfo{note}{accessed: 2026-02-12}.
+%Type = Article
+\bibitem[{Barnes et~al.(2014)Barnes, Lehman and Mulla}]{barnes2014}
+\bibinfo{author}{Barnes, R.}, \bibinfo{author}{Lehman, C.},
+  \bibinfo{author}{Mulla, D.}, \bibinfo{year}{2014}.
+\newblock \bibinfo{title}{Priority-flood: An optimal depression-filling and
+  watershed-labeling algorithm for digital elevation models}.
+\newblock \bibinfo{journal}{Computers \& Geosciences} \bibinfo{volume}{62},
+  \bibinfo{pages}{117--127}.
+\newblock \DOIprefix\doi{10.1016/j.cageo.2013.04.024}.
+%Type = Misc
+\bibitem[{Bartos(2020)}]{bartos2020pysheds}
+\bibinfo{author}{Bartos, M.}, \bibinfo{year}{2020}.
+\newblock \bibinfo{title}{pysheds: Simple and fast watershed delineation in
+  python}.
+\newblock \URLprefix \url{https://github.com/mdbartos/pysheds}.
+  \bibinfo{note}{accessed: 2026-02-16}.
+%Type = Article
+\bibitem[{Blumofe and Leiserson(1999)}]{blumofe1999}
+\bibinfo{author}{Blumofe, R.D.}, \bibinfo{author}{Leiserson, C.E.},
+  \bibinfo{year}{1999}.
+\newblock \bibinfo{title}{Scheduling multithreaded computations by work
+  stealing}.
+\newblock \bibinfo{journal}{Journal of the ACM} \bibinfo{volume}{46},
+  \bibinfo{pages}{720--748}.
+\newblock \DOIprefix\doi{10.1145/324133.324234}.
+%Type = Article
+\bibitem[{Conrad et~al.(2015)Conrad, Bechtel, Bock, Dietrich, Fischer, Gerlitz,
+  Wehberg, Wichmann and B{\"o}hner}]{conrad2015}
+\bibinfo{author}{Conrad, O.}, \bibinfo{author}{Bechtel, B.},
+  \bibinfo{author}{Bock, M.}, \bibinfo{author}{Dietrich, H.},
+  \bibinfo{author}{Fischer, E.}, \bibinfo{author}{Gerlitz, L.},
+  \bibinfo{author}{Wehberg, J.}, \bibinfo{author}{Wichmann, V.},
+  \bibinfo{author}{B{\"o}hner, J.}, \bibinfo{year}{2015}.
+\newblock \bibinfo{title}{System for automated geoscientific analyses ({SAGA})
+  v. 2.1.4}.
+\newblock \bibinfo{journal}{Geoscientific Model Development}
+  \bibinfo{volume}{8}, \bibinfo{pages}{1991--2007}.
+\newblock \DOIprefix\doi{10.5194/gmd-8-1991-2015}.
+%Type = Article
+\bibitem[{De~Reu et~al.(2013)De~Reu, Bourgeois, Bats, Zwertvaegher, Gelorini,
+  De~Smedt, Chu, Antrop, De~Maeyer, Finke, Van~Meirvenne, Verniers and
+  Cromb{\'e}}]{dereu2013}
+\bibinfo{author}{De~Reu, J.}, \bibinfo{author}{Bourgeois, J.},
+  \bibinfo{author}{Bats, M.}, \bibinfo{author}{Zwertvaegher, A.},
+  \bibinfo{author}{Gelorini, V.}, \bibinfo{author}{De~Smedt, P.},
+  \bibinfo{author}{Chu, W.}, \bibinfo{author}{Antrop, M.},
+  \bibinfo{author}{De~Maeyer, P.}, \bibinfo{author}{Finke, P.},
+  \bibinfo{author}{Van~Meirvenne, M.}, \bibinfo{author}{Verniers, J.},
+  \bibinfo{author}{Cromb{\'e}, P.}, \bibinfo{year}{2013}.
+\newblock \bibinfo{title}{Application of the topographic position index to
+  heterogeneous landscapes}.
+\newblock \bibinfo{journal}{Geomorphology} \bibinfo{volume}{186},
+  \bibinfo{pages}{39--49}.
+\newblock \DOIprefix\doi{10.1016/j.geomorph.2012.12.015}.
+%Type = Misc
+\bibitem[{Eilander et~al.(2021)Eilander, van Verseveld, Winsemius and
+  Ward}]{eilander2021pyflwdir}
+\bibinfo{author}{Eilander, D.}, \bibinfo{author}{van Verseveld, W.},
+  \bibinfo{author}{Winsemius, H.}, \bibinfo{author}{Ward, P.},
+  \bibinfo{year}{2021}.
+\newblock \bibinfo{title}{pyflwdir: Fast methods to work with hydro- and
+  topography data in pure {Python}}.
+\newblock \URLprefix \url{https://github.com/Deltares/pyflwdir},
+  \DOIprefix\doi{10.5281/zenodo.6108034}.
+%Type = Incollection
+\bibitem[{Evans(1972)}]{evans1972}
+\bibinfo{author}{Evans, I.S.}, \bibinfo{year}{1972}.
+\newblock \bibinfo{title}{General geomorphometry, derivatives of altitude, and
+  descriptive statistics}, in: \bibinfo{editor}{Chorley, R.J.} (Ed.),
+  \bibinfo{booktitle}{Spatial Analysis in Geomorphology}.
+  \bibinfo{publisher}{Methuen}, \bibinfo{address}{London}, pp.
+  \bibinfo{pages}{17--90}.
+\newblock \DOIprefix\doi{10.4324/9780429273346-2}.
+%Type = Article
+\bibitem[{Farr et~al.(2007)Farr, Rosen, Caro, Crippen, Duren, Hensley, Kobrick,
+  Paller, Rodriguez, Roth, Seal, Shaffer, Shimada, Umland, Werner, Oskin,
+  Burbank and Alsdorf}]{farr2007srtm}
+\bibinfo{author}{Farr, T.G.}, \bibinfo{author}{Rosen, P.A.},
+  \bibinfo{author}{Caro, E.}, \bibinfo{author}{Crippen, R.},
+  \bibinfo{author}{Duren, R.}, \bibinfo{author}{Hensley, S.},
+  \bibinfo{author}{Kobrick, M.}, \bibinfo{author}{Paller, M.},
+  \bibinfo{author}{Rodriguez, E.}, \bibinfo{author}{Roth, L.},
+  \bibinfo{author}{Seal, D.}, \bibinfo{author}{Shaffer, S.},
+  \bibinfo{author}{Shimada, J.}, \bibinfo{author}{Umland, J.},
+  \bibinfo{author}{Werner, M.}, \bibinfo{author}{Oskin, M.},
+  \bibinfo{author}{Burbank, D.}, \bibinfo{author}{Alsdorf, D.},
+  \bibinfo{year}{2007}.
+\newblock \bibinfo{title}{The {Shuttle Radar Topography Mission}}.
+\newblock \bibinfo{journal}{Reviews of Geophysics} \bibinfo{volume}{45},
+  \bibinfo{pages}{RG2004}.
+\newblock \DOIprefix\doi{10.1029/2005RG000183}.
+%Type = Book
+\bibitem[{Florinsky(2016)}]{florinsky2016}
+\bibinfo{author}{Florinsky, I.V.}, \bibinfo{year}{2016}.
+\newblock \bibinfo{title}{Digital Terrain Analysis in Soil Science and
+  Geology}.
+\newblock \bibinfo{edition}{2nd} ed., \bibinfo{publisher}{Academic Press}.
+\newblock \DOIprefix\doi{10.1016/C2015-0-01431-6}.
+%Type = Book
+\bibitem[{Florinsky(2025)}]{florinsky2025}
+\bibinfo{author}{Florinsky, I.V.}, \bibinfo{year}{2025}.
+\newblock \bibinfo{title}{Digital Terrain Analysis}.
+\newblock \bibinfo{edition}{3rd} ed., \bibinfo{publisher}{Elsevier}.
+\newblock \DOIprefix\doi{10.1016/C2022-0-02025-4}.
+%Type = Misc
+\bibitem[{{GDAL/OGR contributors}(2024)}]{gdal2024}
+\bibinfo{author}{{GDAL/OGR contributors}}, \bibinfo{year}{2024}.
+\newblock \bibinfo{title}{{GDAL/OGR} geospatial data abstraction software
+  library}.
+\newblock \URLprefix \url{https://gdal.org},
+  \DOIprefix\doi{10.5281/zenodo.5884351}.
+%Type = Article
+\bibitem[{Gorelick et~al.(2017)Gorelick, Hancher, Dixon, Ilyushchenko, Thau and
+  Moore}]{gorelick2017gee}
+\bibinfo{author}{Gorelick, N.}, \bibinfo{author}{Hancher, M.},
+  \bibinfo{author}{Dixon, M.}, \bibinfo{author}{Ilyushchenko, S.},
+  \bibinfo{author}{Thau, D.}, \bibinfo{author}{Moore, R.},
+  \bibinfo{year}{2017}.
+\newblock \bibinfo{title}{{Google Earth Engine}: Planetary-scale geospatial
+  analysis for everyone}.
+\newblock \bibinfo{journal}{Remote Sensing of Environment}
+  \bibinfo{volume}{202}, \bibinfo{pages}{18--27}.
+\newblock \DOIprefix\doi{10.1016/j.rse.2017.06.031}.
+%Type = Inproceedings
+\bibitem[{Haas et~al.(2017)Haas, Rossberg, Schuff, Titzer, Holman, Gohman,
+  Wagner, Zakai and Bastien}]{haas2017}
+\bibinfo{author}{Haas, A.}, \bibinfo{author}{Rossberg, A.},
+  \bibinfo{author}{Schuff, D.L.}, \bibinfo{author}{Titzer, B.L.},
+  \bibinfo{author}{Holman, M.}, \bibinfo{author}{Gohman, D.},
+  \bibinfo{author}{Wagner, L.}, \bibinfo{author}{Zakai, A.},
+  \bibinfo{author}{Bastien, J.}, \bibinfo{year}{2017}.
+\newblock \bibinfo{title}{Bringing the web up to speed with {WebAssembly}}, in:
+  \bibinfo{booktitle}{Proceedings of the 38th ACM SIGPLAN Conference on
+  Programming Language Design and Implementation}, \bibinfo{publisher}{ACM}.
+  pp. \bibinfo{pages}{185--200}.
+\newblock \DOIprefix\doi{10.1145/3062341.3062363}.
+%Type = Article
+\bibitem[{Horn(1981)}]{horn1981}
+\bibinfo{author}{Horn, B.K.P.}, \bibinfo{year}{1981}.
+\newblock \bibinfo{title}{Hill shading and the reflectance map}.
+\newblock \bibinfo{journal}{Proceedings of the IEEE} \bibinfo{volume}{69},
+  \bibinfo{pages}{14--47}.
+\newblock \DOIprefix\doi{10.1109/PROC.1981.11918}.
+%Type = Article
+\bibitem[{Jasiewicz and Stepinski(2013)}]{jasiewicz2013}
+\bibinfo{author}{Jasiewicz, J.}, \bibinfo{author}{Stepinski, T.F.},
+  \bibinfo{year}{2013}.
+\newblock \bibinfo{title}{Geomorphons --- a pattern recognition approach to
+  classification and mapping of landforms}.
+\newblock \bibinfo{journal}{Geomorphology} \bibinfo{volume}{182},
+  \bibinfo{pages}{147--156}.
+\newblock \DOIprefix\doi{10.1016/j.geomorph.2012.11.005}.
+%Type = Article
+\bibitem[{Kopeck{\'y} et~al.(2021)Kopeck{\'y}, Macek and Wild}]{kopecky2021}
+\bibinfo{author}{Kopeck{\'y}, M.}, \bibinfo{author}{Macek, M.},
+  \bibinfo{author}{Wild, J.}, \bibinfo{year}{2021}.
+\newblock \bibinfo{title}{Topographic wetness index calculation guidelines
+  based on measured soil moisture and plant species composition}.
+\newblock \bibinfo{journal}{Science of The Total Environment}
+  \bibinfo{volume}{757}, \bibinfo{pages}{143785}.
+\newblock \DOIprefix\doi{10.1016/j.scitotenv.2020.143785}.
+%Type = Article
+\bibitem[{Li et~al.(2024)Li, Lai, Shi and Yang}]{li2024tfga}
+\bibinfo{author}{Li, Z.}, \bibinfo{author}{Lai, X.}, \bibinfo{author}{Shi, P.},
+  \bibinfo{author}{Yang, T.}, \bibinfo{year}{2024}.
+\newblock \bibinfo{title}{Proposal of a facet-to-facet multiple flow direction
+  algorithm based on geometrical and mathematical analysis of physical
+  dispersion over triangle facet}.
+\newblock \bibinfo{journal}{Geomorphology} \bibinfo{volume}{466},
+  \bibinfo{pages}{109440}.
+\newblock \DOIprefix\doi{10.1016/j.geomorph.2024.109440}.
+%Type = Article
+\bibitem[{Lindsay(2016a)}]{lindsay2016}
+\bibinfo{author}{Lindsay, J.B.}, \bibinfo{year}{2016}a.
+\newblock \bibinfo{title}{Efficient hybrid breaching-filling sink removal
+  methods for flow path enforcement in digital elevation models}.
+\newblock \bibinfo{journal}{Hydrological Processes} \bibinfo{volume}{30},
+  \bibinfo{pages}{846--857}.
+\newblock \DOIprefix\doi{10.1002/hyp.10648}.
+%Type = Article
+\bibitem[{Lindsay(2016b)}]{lindsay2016wbt}
+\bibinfo{author}{Lindsay, J.B.}, \bibinfo{year}{2016}b.
+\newblock \bibinfo{title}{Whitebox {GAT}: A case study in geomorphometric
+  analysis}.
+\newblock \bibinfo{journal}{Computers \& Geosciences} \bibinfo{volume}{95},
+  \bibinfo{pages}{75--84}.
+\newblock \DOIprefix\doi{10.1016/j.cageo.2016.07.003}.
+%Type = Article
+\bibitem[{Min{\'a}r et~al.(2020)Min{\'a}r, Evans and Jen{\v{c}}o}]{minar2020}
+\bibinfo{author}{Min{\'a}r, J.}, \bibinfo{author}{Evans, I.S.},
+  \bibinfo{author}{Jen{\v{c}}o, M.}, \bibinfo{year}{2020}.
+\newblock \bibinfo{title}{A comprehensive system of definitions of land surface
+  (topographic) curvatures, with implications for their application in
+  geoscience modelling and prediction}.
+\newblock \bibinfo{journal}{Earth-Science Reviews} \bibinfo{volume}{211},
+  \bibinfo{pages}{103414}.
+\newblock \DOIprefix\doi{10.1016/j.earscirev.2020.103414}.
+%Type = Article
+\bibitem[{Neteler et~al.(2012)Neteler, Bowman, Landa and Metz}]{neteler2012}
+\bibinfo{author}{Neteler, M.}, \bibinfo{author}{Bowman, M.H.},
+  \bibinfo{author}{Landa, M.}, \bibinfo{author}{Metz, M.},
+  \bibinfo{year}{2012}.
+\newblock \bibinfo{title}{{GRASS GIS}: A multi-purpose open source {GIS}}.
+\newblock \bibinfo{journal}{Environmental Modelling \& Software}
+  \bibinfo{volume}{31}, \bibinfo{pages}{124--130}.
+\newblock \DOIprefix\doi{10.1016/j.envsoft.2011.11.014}.
+%Type = Article
+\bibitem[{Newman et~al.(2018)Newman, Lindsay and Cockburn}]{newman2018}
+\bibinfo{author}{Newman, D.R.}, \bibinfo{author}{Lindsay, J.B.},
+  \bibinfo{author}{Cockburn, J.M.H.}, \bibinfo{year}{2018}.
+\newblock \bibinfo{title}{Evaluating metrics of local topographic position for
+  multiscale geomorphometric analysis}.
+\newblock \bibinfo{journal}{Geomorphology} \bibinfo{volume}{312},
+  \bibinfo{pages}{40--50}.
+\newblock \DOIprefix\doi{10.1016/j.geomorph.2018.04.003}.
+%Type = Article
+\bibitem[{Nobre et~al.(2011)Nobre, Cuartas, Hodnett, Renn{\'o}, Rodrigues,
+  Silveira, Waterloo and Saleska}]{nobre2011}
+\bibinfo{author}{Nobre, A.D.}, \bibinfo{author}{Cuartas, L.A.},
+  \bibinfo{author}{Hodnett, M.}, \bibinfo{author}{Renn{\'o}, C.D.},
+  \bibinfo{author}{Rodrigues, G.}, \bibinfo{author}{Silveira, A.},
+  \bibinfo{author}{Waterloo, M.}, \bibinfo{author}{Saleska, S.},
+  \bibinfo{year}{2011}.
+\newblock \bibinfo{title}{Height above the nearest drainage -- a hydrologically
+  relevant new terrain model}.
+\newblock \bibinfo{journal}{Journal of Hydrology} \bibinfo{volume}{404},
+  \bibinfo{pages}{13--29}.
+\newblock \DOIprefix\doi{10.1016/j.jhydrol.2011.03.051}.
+%Type = Article
+\bibitem[{O'Callaghan and Mark(1984)}]{ocallaghan1984}
+\bibinfo{author}{O'Callaghan, J.F.}, \bibinfo{author}{Mark, D.M.},
+  \bibinfo{year}{1984}.
+\newblock \bibinfo{title}{The extraction of drainage networks from digital
+  elevation data}.
+\newblock \bibinfo{journal}{Computer Vision, Graphics, and Image Processing}
+  \bibinfo{volume}{28}, \bibinfo{pages}{323--344}.
+\newblock \DOIprefix\doi{10.1016/S0734-189X(84)80011-0}.
+%Type = Article
+\bibitem[{Perkel(2020)}]{perkel2020rust}
+\bibinfo{author}{Perkel, J.M.}, \bibinfo{year}{2020}.
+\newblock \bibinfo{title}{Why scientists are turning to {Rust}}.
+\newblock \bibinfo{journal}{Nature} \bibinfo{volume}{588},
+  \bibinfo{pages}{185--186}.
+\newblock \DOIprefix\doi{10.1038/d41586-020-03382-2}.
+%Type = Article
+\bibitem[{Planchon and Darboux(2001)}]{planchon2001}
+\bibinfo{author}{Planchon, O.}, \bibinfo{author}{Darboux, F.},
+  \bibinfo{year}{2001}.
+\newblock \bibinfo{title}{A fast, simple and versatile algorithm to fill the
+  depressions of digital elevation models}.
+\newblock \bibinfo{journal}{Catena} \bibinfo{volume}{46},
+  \bibinfo{pages}{159--176}.
+\newblock \DOIprefix\doi{10.1016/S0341-8162(01)00164-3}.
+%Type = Misc
+\bibitem[{{PyO3 Project Contributors}(2024)}]{pyo3_2024}
+\bibinfo{author}{{PyO3 Project Contributors}}, \bibinfo{year}{2024}.
+\newblock \bibinfo{title}{{PyO3}: {Rust} bindings for {Python}}.
+\newblock \URLprefix \url{https://github.com/PyO3/pyo3}. \bibinfo{note}{version
+  0.22. Accessed: 2026-02-16}.
+%Type = Article
+\bibitem[{Quinn et~al.(1991)Quinn, Beven, Chevallier and Planchon}]{quinn1991}
+\bibinfo{author}{Quinn, P.}, \bibinfo{author}{Beven, K.},
+  \bibinfo{author}{Chevallier, P.}, \bibinfo{author}{Planchon, O.},
+  \bibinfo{year}{1991}.
+\newblock \bibinfo{title}{The prediction of hillslope flow paths for
+  distributed hydrological modelling using digital terrain models}.
+\newblock \bibinfo{journal}{Hydrological Processes} \bibinfo{volume}{5},
+  \bibinfo{pages}{59--79}.
+\newblock \DOIprefix\doi{10.1002/hyp.3360050106}.
+%Type = Misc
+\bibitem[{{Radiant Earth Foundation}(2021)}]{stac2021}
+\bibinfo{author}{{Radiant Earth Foundation}}, \bibinfo{year}{2021}.
+\newblock \bibinfo{title}{{SpatioTemporal Asset Catalog (STAC)} specification}.
+\newblock \URLprefix \url{https://stacspec.org}. \bibinfo{note}{version 1.0.0}.
+%Type = Article
+\bibitem[{Tarboton(1997)}]{tarboton1997}
+\bibinfo{author}{Tarboton, D.G.}, \bibinfo{year}{1997}.
+\newblock \bibinfo{title}{A new method for the determination of flow directions
+  and upslope areas in grid digital elevation models}.
+\newblock \bibinfo{journal}{Water Resources Research} \bibinfo{volume}{33},
+  \bibinfo{pages}{309--319}.
+\newblock \DOIprefix\doi{10.1029/96WR03137}.
+%Type = Misc
+\bibitem[{Tarboton(2015)}]{tarboton2015taudem}
+\bibinfo{author}{Tarboton, D.G.}, \bibinfo{year}{2015}.
+\newblock \bibinfo{title}{{TauDEM} -- {Terrain Analysis Using Digital Elevation
+  Models}}.
+\newblock \URLprefix \url{https://hydrology.usu.edu/taudem/}.
+  \bibinfo{note}{utah State University. Accessed: 2026-02-16}.
+%Type = Book
+\bibitem[{Wilson and Gallant(2000)}]{wilson2000terrain}
+\bibinfo{editor}{Wilson, J.P.}, \bibinfo{editor}{Gallant, J.C.} (Eds.),
+  \bibinfo{year}{2000}.
+\newblock \bibinfo{title}{Terrain Analysis: Principles and Applications}.
+\newblock \bibinfo{publisher}{John Wiley \& Sons}, \bibinfo{address}{New York}.
+
+\end{thebibliography}

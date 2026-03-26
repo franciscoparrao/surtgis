@@ -1,0 +1,48 @@
+\documentclass[11pt]{letter}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{hyperref}
+\usepackage{url}
+
+\signature{Francisco Parra\\
+Departamento de Ingeniería Geográfica\\
+Universidad de Santiago de Chile\\
+\texttt{francisco.parra.o@usach.cl}}
+
+\address{Francisco Parra\\
+Departamento de Ingeniería Geográfica\\
+Universidad de Santiago de Chile\\
+Santiago, Chile}
+
+\date{\today}
+
+\begin{document}
+
+\begin{letter}{Editor-in-Chief\\
+Environmental Modelling \& Software\\
+Elsevier}
+
+\opening{Dear Editor,}
+
+We are pleased to submit the manuscript entitled \textbf{``SurtGIS: A High-Performance Geospatial Analysis Library in Rust with WebAssembly and Python Support''} for consideration for publication in \textit{Environmental Modelling \& Software}.
+
+This paper presents SurtGIS, an open-source geospatial library implemented in Rust that provides 127 terrain, hydrological, and remote sensing algorithms. The library compiles from a single codebase to three deployment targets: native (with automatic Rayon parallelization), WebAssembly (for browser-based applications), and Python (via PyO3 bindings). To the best of our knowledge, this is the first geospatial analysis library to provide comprehensive terrain analysis algorithms compiled to WebAssembly, enabling client-side processing in web browsers.
+
+We believe this manuscript is appropriate for \textit{Environmental Modelling \& Software} for the following reasons:
+
+\begin{enumerate}
+    \item \textbf{Performance at operational scales.} Systematic benchmarks on synthetic DEMs up to $20{,}000^2$ cells (400 million cells) demonstrate speedups of 1.7--1.8$\times$ over GDAL for slope computation, 2.0$\times$ for aspect, and 7.5--23.1$\times$ for D8 flow accumulation over WhiteboxTools and GRASS~GIS. All benchmarks measure complete GeoTIFF pipelines (read--compute--write), ensuring fair comparisons.
+
+    \item \textbf{Novel algorithmic contributions.} The library includes the first open-source implementation of Florinsky's complete 14-curvature morphometric system, validated analytically with RMSE $< 6 \times 10^{-8}$ on two distinct test surfaces and cross-validated against SAGA~GIS for overlapping curvature types.
+
+    \item \textbf{Cross-platform accessibility.} The WebAssembly compilation target enables new use cases in environmental education (browser-based teaching tools), data-sensitive applications (client-side processing), and offline-capable field deployments via Progressive Web Apps---scenarios currently unaddressed by existing tools.
+
+    \item \textbf{Reproducibility.} All source code, benchmark scripts, synthetic DEM generators, and raw results are publicly available under MIT/Apache-2.0 dual license at \url{https://github.com/franciscoparrao/surtgis}. The library is published on crates.io, PyPI, and npm.
+\end{enumerate}
+
+The manuscript has not been published elsewhere and is not under consideration by any other journal. All data and code are openly available to support reproducibility.
+
+\closing{Sincerely,}
+
+\end{letter}
+\end{document}

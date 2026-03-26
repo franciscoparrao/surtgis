@@ -1,0 +1,233 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish]{babel}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{titlesec}
+
+\hypersetup{colorlinks=true, linkcolor=blue!60!black, urlcolor=blue!60!black}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  backgroundcolor=\color{gray!10},
+  xleftmargin=0.5cm,
+  framexleftmargin=0.3cm,
+  columns=fullflexible,
+  keepspaces=true,
+}
+
+\titleformat{\section}{\large\bfseries}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection}{0.5em}{}
+
+\title{\textbf{SurtGIS: Infraestructura Computacional\\para el Postdoctorado}}
+\author{Francisco Parra\\
+\small Departamento de Ingenier\'ia Inform\'atica, Universidad de Santiago de Chile}
+\date{Marzo 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent Este documento presenta SurtGIS, una librer\'ia geoespacial de alto rendimiento en Rust con 136 algoritmos y 88 subcomandos CLI, desarrollada como preparaci\'on para el postdoctorado. SurtGIS reduce el tiempo de procesamiento geoespacial por cuenca de 2--3 d\'ias a $\sim$1 hora, permitiendo enfocar el postdoctorado en modelamiento y an\'alisis en vez de ingenier\'ia de datos. El paper describiendo la librer\'ia est\'a en revisi\'on en \textit{Environmental Modelling \& Software} (Elsevier, IF 4.9).
+\end{abstract}
+
+\section{Relevancia para la l\'inea de investigaci\'on}
+
+SurtGIS implementa patrones directamente alineados con la experticia del laboratorio en computaci\'on paralela y de alto rendimiento:
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabularx}{\textwidth}{lX}
+\toprule
+\textbf{Concepto HPC} & \textbf{Implementaci\'on en SurtGIS} \\
+\midrule
+Paralelismo de datos & Rayon work-stealing sobre grillas raster (partici\'on por filas, parallel iterators) \\
+Streaming I/O & Procesamiento strip-by-strip con memoria acotada ($\sim$200\,MB para DEMs de cualquier tama\~no) \\
+Procesamiento distribuido & STAC client nativo con HTTP range requests para lectura parcial de Cloud Optimized GeoTIFFs \\
+Pipeline paralelo & Composite streaming: por cada strip del output, lee ventanas parciales de N escenas remotas \\
+Cross-platform & Un codebase $\to$ native (Rayon), WebAssembly (browser), Python (PyO3) \\
+\bottomrule
+\end{tabularx}
+\caption{Alineamiento con l\'inea de investigaci\'on HPC.}
+\end{table}
+
+\subsection{Resultados de rendimiento}
+
+Benchmarks en pipeline completo (read GeoTIFF $\to$ compute $\to$ write GeoTIFF), DEMs sint\'eticos de 1K$^2$ a 20K$^2$ (400M celdas):
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lccc}
+\toprule
+\textbf{Algoritmo} & \textbf{vs GDAL} & \textbf{vs GRASS GIS} & \textbf{vs WhiteboxTools} \\
+\midrule
+Slope & 1.7--1.8$\times$ & 4.5--4.9$\times$ & --- \\
+Aspect & 2.0$\times$ & 3.5--4.8$\times$ & 4.2--7.9$\times$ \\
+Flow accumulation D8 & --- & 7.5--23.1$\times$ & 7.5--7.7$\times$ \\
+Depression filling & --- & --- & 1.6--2.6$\times$ \\
+\bottomrule
+\end{tabular}
+\caption{Speedup de SurtGIS sobre herramientas establecidas.}
+\end{table}
+
+\section{Capacidad actual (v0.2.0)}
+
+\subsection{136 algoritmos en 8 categor\'ias}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabularx}{\textwidth}{lcX}
+\toprule
+\textbf{Categor\'ia} & \textbf{N} & \textbf{Destacados} \\
+\midrule
+Terreno & 25 & Florinsky 14 curvaturas, MRVBF, geomorphons, LS-Factor, Valley Depth \\
+Hidrolog\'ia & 16 & Priority-Flood, D-infinity, HAND, TWI, Sediment Connectivity Index \\
+Imagery & 22 & 16 \'indices + calc con expresiones + composite + cloud-mask \\
+Landscape & 5 & Connected components, PARA, FRAC, AI, COHESION, SHDI \\
+Otros & 68 & Morfolog\'ia, clasificaci\'on, estad\'istica, interpolaci\'on, textura \\
+\bottomrule
+\end{tabularx}
+\caption{Algoritmos implementados por categor\'ia.}
+\end{table}
+
+\subsection{88 subcomandos CLI}
+
+Ejemplos representativos:
+
+\begin{lstlisting}[language=bash]
+# Todos los factores de terreno desde un DEM
+surtgis terrain all dem.tif --outdir ./factors/
+
+# Pipeline hidrologico completo
+surtgis hydrology all dem.tif --outdir ./hydro/
+
+# Composite cloud-free desde Planetary Computer
+surtgis stac composite \
+  --collection sentinel-2-l2a --asset red \
+  --datetime 2024-01-01/2024-12-31 \
+  --bbox -71.5,-28.0,-69.0,-26.0 \
+  --max-scenes 12 composite_red.tif
+
+# Indice espectral con expresion arbitraria
+surtgis imagery calc \
+  --expression "(NIR - Red) / (NIR + Red)" \
+  --band NIR=nir.tif --band Red=red.tif ndvi.tif
+\end{lstlisting}
+
+\subsection{Streaming I/O para DEMs arbitrariamente grandes}
+
+12 algoritmos de terreno procesan DEMs de cualquier tama\~no con $\sim$200\,MB de RAM:
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lcc}
+\toprule
+\textbf{DEM} & \textbf{In-memory} & \textbf{Streaming} \\
+\midrule
+10K$^2$ (100M celdas) & 800\,MB & 200\,MB \\
+20K$^2$ (400M celdas) & 3.2\,GB & 200\,MB \\
+50K$^2$ (2.5B celdas) & 20\,GB (imposible) & 200\,MB \\
+\bottomrule
+\end{tabular}
+\caption{Uso de memoria: in-memory vs streaming.}
+\end{table}
+
+\subsection{STAC Composite: diferenciador \'unico}
+
+Un solo comando ejecuta el pipeline completo de composici\'on satelital:
+\begin{enumerate}[nosep]
+\item B\'usqueda en Planetary Computer/Earth Search (paginaci\'on autom\'atica)
+\item Agrupaci\'on por fecha de adquisici\'on
+\item Mosaic espacial por fecha (une tiles de la misma pasada)
+\item Cloud-mask con SCL (resampleo autom\'atico 20m$\to$10m)
+\item Mediana temporal para composite cloud-free
+\end{enumerate}
+
+Validado en producci\'on: 150M celdas, 14 tiles, 5 fechas, 10 minutos. \textbf{Ninguna otra herramienta CLI ofrece esto sin Python.}
+
+\section{Impacto en el postdoctorado}
+
+\subsection{Sin SurtGIS (enfoque tradicional)}
+
+Para cada cuenca: instalar GDAL + GRASS + WhiteboxTools, escribir scripts Python para descargar datos, calcular factores de terreno con 3 herramientas distintas, integrar outputs con formatos/CRS incompatibles, cloud-mask manual, composite con numpy/scipy.
+
+\textbf{Tiempo estimado}: 2--3 d\'ias por cuenca $\times$ 15 cuencas = 30--45 d\'ias solo en procesamiento.
+
+\subsection{Con SurtGIS}
+
+\begin{lstlisting}[language=bash]
+# DEM: descargar y generar todos los factores
+surtgis stac fetch-mosaic --collection cop-dem-glo-30 \
+  --bbox ... dem.tif
+surtgis terrain all dem.tif --outdir factors/ --compress
+surtgis hydrology all dem.tif --outdir hydro/ --compress
+
+# Sentinel-2: composite por banda
+for band in red green blue nir swir16; do
+  surtgis stac composite --collection sentinel-2-l2a \
+    --asset $band --datetime 2024-01-01/2024-12-31 \
+    --bbox ... ${band}_composite.tif
+done
+
+# Landscape metrics
+surtgis landscape analyze landcover.tif --output-csv metrics.csv
+\end{lstlisting}
+
+\textbf{Tiempo por cuenca}: $\sim$1 hora (dominado por red, no por c\'omputo). \textbf{15 cuencas}: 2--3 d\'ias, automatizable con un loop bash.
+
+\subsection{Reducci\'on de tiempo: 10--15$\times$}
+
+El postdoctorado se enfoca en \textbf{modelamiento de susceptibilidad}, no en procesamiento de datos. SurtGIS elimina la etapa de procesamiento como bottleneck.
+
+\section{Contribuci\'on cient\'ifica dual}
+
+El postdoctorado produce dos tipos de output:
+
+\begin{enumerate}
+\item \textbf{Papers de dominio} (susceptibilidad de humedales, erosi\'on, riesgo) --- donde SurtGIS genera los datos de entrada.
+\item \textbf{Paper de software} (EMS, en revisi\'on) --- donde SurtGIS es la contribuci\'on principal.
+\end{enumerate}
+
+Los papers de dominio citan a SurtGIS, generando tracci\'on para el paper de software. El paper de software valida la herramienta con los casos de uso del postdoctorado. Ciclo virtuoso.
+
+\section{Estado de madurez}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabularx}{\textwidth}{lX}
+\toprule
+\textbf{Dimensi\'on} & \textbf{Estado} \\
+\midrule
+Paper & En revisi\'on en \textit{Environmental Modelling \& Software} (Elsevier, IF 4.9) \\
+C\'odigo & 56,000+ l\'ineas Rust, 602 tests passing \\
+Publicaci\'on & crates.io (Rust), PyPI (Python), npm (WebAssembly) \\
+CI/CD & 9 GitHub Actions jobs \\
+Seguridad & cargo-audit limpio (0 vulnerabilidades cr\'iticas) \\
+Licencia & MIT/Apache-2.0 dual license \\
+Validaci\'on & Slope RMSE $< 10^{-4}$\textdegree{} vs GDAL; curvaturas $R^2 = 1.000000$ vs anal\'itico \\
+Producci\'on & Validado: 150M celdas Sentinel-2, Planetary Computer \\
+\bottomrule
+\end{tabularx}
+\caption{Estado de madurez del proyecto.}
+\end{table}
+
+\section{Conclusi\'on}
+
+SurtGIS transforma el procesamiento geoespacial de un bottleneck de semanas en una operaci\'on de horas. Para el postdoctorado, esto significa dedicar el tiempo al modelamiento y an\'alisis ---~donde est\'a la contribuci\'on cient\'ifica~--- en vez de a la ingenier\'ia de datos que cada investigador resuelve ad-hoc con scripts fr\'agiles.
+
+La herramienta ya existe, est\'a validada, y tiene un paper en revisi\'on. El postdoctorado la usa, la extiende, y la cita.
+
+\end{document}

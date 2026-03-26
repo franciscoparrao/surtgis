@@ -1,0 +1,12 @@
+algorithm,size,tool,peak_rss_kb,peak_rss_mb
+slope,10000,surtgis,2657852,2596
+slope,10000,gdal,445264,435
+slope,10000,grass,355188,347
+slope,10000,wbt,1895824,1851
+fill,10000,surtgis,1957804,1912
+fill,10000,wbt,1880100,1836
+flow_acc,10000,surtgis,2019440,1972
+fill,10000,grass,354864,347
+flow_acc,10000,surtgis,2019440,1972
+flow_acc,10000,grass,355304,347
+flow_acc,10000,wbt,1725912,1686

@@ -1,0 +1,2 @@
+[console_scripts]
+whitebox = whitebox.cli:main

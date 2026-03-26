@@ -1,0 +1,334 @@
+%% Supplementary Table: Complete Algorithm List for SurtGIS
+%% This file is intended as supplementary material for the EMS paper.
+
+\documentclass[11pt]{article}
+\usepackage[margin=2cm]{geometry}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{hyperref}
+\usepackage{multirow}
+\usepackage{amsmath}
+\usepackage{amssymb}
+
+\title{Supplementary Material: Complete Algorithm Inventory\\SurtGIS v0.1.1}
+\author{Francisco Parra}
+\date{}
+
+\begin{document}
+\maketitle
+
+\noindent This table lists all 127 distinct algorithms implemented in SurtGIS, organized by category. Each algorithm is counted once regardless of the number of deployment targets (native, Python, WASM) or interfaces (CLI, GUI) through which it is exposed. The 14 Florinsky curvatures are counted individually as they compute mathematically distinct differential geometry properties. Utility functions (I/O, data structures, coordinate transforms) are excluded.
+
+\vspace{1em}
+
+\begin{longtable}{@{}clp{5.5cm}p{4.5cm}@{}}
+\toprule
+\# & Category & Algorithm & Reference \\
+\midrule
+\endfirsthead
+\toprule
+\# & Category & Algorithm & Reference \\
+\midrule
+\endhead
+\midrule
+\multicolumn{4}{r}{\textit{Continued on next page}} \\
+\endfoot
+\bottomrule
+\endlastfoot
+
+%% ── TERRAIN: Basic derivatives ──
+1  & Terrain & Slope (Horn's method) & Horn (1981) \\
+2  & Terrain & Aspect (0--360\textdegree) & Horn (1981) \\
+3  & Terrain & Northness ($\cos$ aspect) & --- \\
+4  & Terrain & Eastness ($\sin$ aspect) & --- \\
+5  & Terrain & Analytical hillshade & Horn (1981) \\
+6  & Terrain & Multidirectional hillshade & --- \\
+
+%% ── TERRAIN: Classical curvature ──
+7  & Terrain & General curvature & Zevenbergen \& Thorne (1987) \\
+8  & Terrain & Profile curvature & Zevenbergen \& Thorne (1987) \\
+9  & Terrain & Plan curvature & Zevenbergen \& Thorne (1987) \\
+
+%% ── TERRAIN: Florinsky 14 curvatures ──
+10 & Terrain & Mean curvature $H$ & Florinsky (2025) \\
+11 & Terrain & Gaussian curvature $K$ & Florinsky (2025) \\
+12 & Terrain & Unsphericity $M$ & Florinsky (2025) \\
+13 & Terrain & Difference curvature $E$ & Florinsky (2025) \\
+14 & Terrain & Minimal curvature $k_{\min}$ & Florinsky (2025) \\
+15 & Terrain & Maximal curvature $k_{\max}$ & Florinsky (2025) \\
+16 & Terrain & Horizontal curvature $k_h$ & Florinsky (2025) \\
+17 & Terrain & Vertical curvature $k_v$ & Florinsky (2025) \\
+18 & Terrain & Horizontal excess $k_{he}$ & Florinsky (2025) \\
+19 & Terrain & Vertical excess $k_{ve}$ & Florinsky (2025) \\
+20 & Terrain & Accumulation curvature $K_a$ & Florinsky (2025) \\
+21 & Terrain & Ring curvature $K_r$ & Florinsky (2025) \\
+22 & Terrain & Rotor & Florinsky (2025) \\
+23 & Terrain & Laplacian & Florinsky (2025) \\
+
+%% ── TERRAIN: Landform indices ──
+24 & Terrain & Topographic Position Index (TPI) & Weiss (2001) \\
+25 & Terrain & Terrain Ruggedness Index (TRI) & Riley et al. (1999) \\
+26 & Terrain & Deviation from Mean Elevation & --- \\
+27 & Terrain & Vector Ruggedness Measure (VRM) & Sappington et al. (2007) \\
+28 & Terrain & Geomorphons (10-class) & Jasiewicz \& Stepinski (2013) \\
+29 & Terrain & Multi-scale landform classification & --- \\
+30 & Terrain & Shape index & Koenderink \& van Doorn (1992) \\
+31 & Terrain & Curvedness & Koenderink \& van Doorn (1992) \\
+32 & Terrain & MRVBF / MRRTF & Gallant \& Dowling (2003) \\
+33 & Terrain & Convergence index & --- \\
+
+%% ── TERRAIN: Visibility and openness ──
+34 & Terrain & Sky View Factor (SVF) & Zakšek et al. (2011) \\
+35 & Terrain & Positive openness & Yokoyama et al. (2002) \\
+36 & Terrain & Negative openness & Yokoyama et al. (2002) \\
+37 & Terrain & Viewshed (R2) & --- \\
+38 & Terrain & Viewshed (X-Draw) & Franklin \& Ray (1994) \\
+39 & Terrain & Multi-observer viewshed & --- \\
+40 & Terrain & Probabilistic viewshed & --- \\
+
+%% ── TERRAIN: Compound indices ──
+41 & Terrain & Stream Power Index (SPI) & Moore et al. (1991) \\
+42 & Terrain & Sediment Transport Index (STI) & Moore \& Burch (1986) \\
+43 & Terrain & Wind exposure index & --- \\
+44 & Terrain & Solar radiation (daily) & --- \\
+45 & Terrain & Solar radiation (shadowed) & --- \\
+46 & Terrain & Solar radiation (annual) & --- \\
+47 & Terrain & Lineament detection & --- \\
+48 & Terrain & Cost distance (D8) & --- \\
+49 & Terrain & Contour lines & --- \\
+
+%% ── HYDROLOGY ──
+50 & Hydrology & Planchon--Darboux fill & Planchon \& Darboux (2001) \\
+51 & Hydrology & Priority-Flood fill & Barnes et al. (2014) \\
+52 & Hydrology & Breach depressions & Lindsay (2016) \\
+53 & Hydrology & D8 flow direction & O'Callaghan \& Mark (1984) \\
+54 & Hydrology & D-infinity flow direction & Tarboton (1997) \\
+55 & Hydrology & D8 flow accumulation & --- \\
+56 & Hydrology & MFD flow accumulation & Quinn et al. (1991) \\
+57 & Hydrology & Adaptive MFD accumulation & --- \\
+58 & Hydrology & TFGA flow accumulation & --- \\
+59 & Hydrology & D-infinity accumulation & Tarboton (1997) \\
+60 & Hydrology & TWI (Topographic Wetness Index) & Kopecký et al. (2021) \\
+61 & Hydrology & HAND (Height Above Nearest Drainage) & Nobre et al. (2011) \\
+62 & Hydrology & Watershed delineation & --- \\
+63 & Hydrology & Stream network extraction & --- \\
+64 & Hydrology & Strahler stream order & Strahler (1957) \\
+65 & Hydrology & Flow path length & --- \\
+66 & Hydrology & Isobasins & --- \\
+67 & Hydrology & Flood fill simulation & --- \\
+68 & Hydrology & Nested depression analysis & --- \\
+
+%% ── IMAGERY ──
+69 & Imagery & NDVI & Rouse et al. (1974) \\
+70 & Imagery & NDWI & McFeeters (1996) \\
+71 & Imagery & MNDWI & Xu (2006) \\
+72 & Imagery & NDRE & --- \\
+73 & Imagery & GNDVI & Gitelson et al. (1996) \\
+74 & Imagery & NGRDI & --- \\
+75 & Imagery & RECI & --- \\
+76 & Imagery & SAVI & Huete (1988) \\
+77 & Imagery & MSAVI & Qi et al. (1994) \\
+78 & Imagery & EVI & Huete et al. (2002) \\
+79 & Imagery & EVI2 & Jiang et al. (2008) \\
+80 & Imagery & NBR & --- \\
+81 & Imagery & NDSI & --- \\
+82 & Imagery & NDBI & Zha et al. (2003) \\
+83 & Imagery & NDMI & --- \\
+84 & Imagery & BSI (Bare Soil Index) & --- \\
+85 & Imagery & Generic normalized difference & --- \\
+86 & Imagery & Band math (binary ops) & --- \\
+87 & Imagery & Band math (expressions) & --- \\
+88 & Imagery & Reclassify & --- \\
+89 & Imagery & Raster difference / change detection & --- \\
+90 & Imagery & Change vector analysis & --- \\
+
+%% ── MORPHOLOGY ──
+91  & Morphology & Erosion & --- \\
+92  & Morphology & Dilation & --- \\
+93  & Morphology & Opening & --- \\
+94  & Morphology & Closing & --- \\
+95  & Morphology & Morphological gradient & --- \\
+96  & Morphology & Top-hat transform & --- \\
+97  & Morphology & Black-hat transform & --- \\
+
+%% ── STATISTICS ──
+98  & Statistics & Focal mean & --- \\
+99  & Statistics & Focal standard deviation & --- \\
+100 & Statistics & Focal range & --- \\
+101 & Statistics & Focal median & --- \\
+102 & Statistics & Focal minimum & --- \\
+103 & Statistics & Focal maximum & --- \\
+104 & Statistics & Focal sum & --- \\
+105 & Statistics & Focal majority (mode) & --- \\
+106 & Statistics & Zonal statistics & --- \\
+107 & Statistics & Moran's I (global) & Moran (1950) \\
+108 & Statistics & Getis-Ord $G_i^*$ (local) & Getis \& Ord (1992) \\
+
+%% ── INTERPOLATION ──
+109 & Interpolation & Inverse Distance Weighting (IDW) & Shepard (1968) \\
+110 & Interpolation & Nearest neighbor & --- \\
+111 & Interpolation & Natural neighbor & Sibson (1981) \\
+112 & Interpolation & TIN (barycentric) & --- \\
+113 & Interpolation & Thin plate spline & Duchon (1977) \\
+114 & Interpolation & Ordinary kriging & Matheron (1963) \\
+115 & Interpolation & Universal kriging & --- \\
+116 & Interpolation & Regression kriging & --- \\
+117 & Interpolation & Variogram estimation \& fitting & --- \\
+
+%% ── LANDSCAPE ECOLOGY ──
+118 & Landscape & Shannon diversity index & Shannon (1948) \\
+119 & Landscape & Simpson diversity index & Simpson (1949) \\
+120 & Landscape & Patch density & --- \\
+
+%% ── CLASSIFICATION ──
+121 & Classification & K-means clustering & --- \\
+122 & Classification & ISODATA clustering & Ball \& Hall (1965) \\
+123 & Classification & Minimum distance classifier & --- \\
+124 & Classification & Maximum likelihood classifier & --- \\
+125 & Classification & PCA (first component) & --- \\
+
+%% ── TEXTURE ──
+126 & Texture & GLCM texture features (Haralick) & Haralick et al. (1973) \\
+127 & Texture & Sobel edge detection & --- \\
+
+\end{longtable}
+
+\paragraph{Counting methodology.} Each row represents a distinct computational operation that produces a different output from the same input data. Algorithms parameterized by a single option (e.g., slope units: degrees/percent/radians) are counted once. The 14 Florinsky curvatures (\#10--23) are counted individually because they compute mathematically distinct differential geometry properties---each corresponds to a different combination of first- and second-order partial derivatives. Spectral indices (e.g., NDVI, NDWI) are counted individually because they use different band combinations and have distinct ecological interpretations. The 3 variogram-related entries (\#109 interpolation crate: estimation, model fitting, auto-selection) are counted as part of the interpolation workflow.
+
+\paragraph{Deployment coverage.} Of the 127 algorithms, 33 are exposed via WebAssembly bindings (terrain, hydrology, imagery, morphology, statistics), 56 via Python/PyO3 bindings, and all 127 via the native Rust API. The CLI exposes approximately 40 algorithms organized as subcommands. The desktop GUI (egui-based) provides access to 105+ algorithms.
+
+%% ============================================================
+\clearpage
+\section*{Supplementary Tables S2--S6: Performance and Validation Details}
+
+%% ── Table S2: Memory usage ──
+\begin{table}[htbp]
+\centering
+\caption*{Table S2: Peak memory usage (MB) at $10\text{K}^2$ resolution (100\,M cells, 382\,MB uncompressed Float32), measured with \texttt{/usr/bin/time -v} on Linux. Dash indicates the tool does not implement the algorithm.}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+Algorithm & SurtGIS & GDAL & GRASS & WBT \\
+\midrule
+Slope     & 2\,596  & 435  & 347   & 1\,851 \\
+Fill      & 1\,912  & ---  & 347   & 1\,836 \\
+Flow acc. & 1\,972  & ---  & 347   & 1\,686 \\
+\bottomrule
+\end{tabular}
+
+\medskip
+\small
+SurtGIS and WhiteboxTools operate on in-memory arrays and show 4.4--6.8$\times$ the raw DEM size in peak RSS, reflecting input, output, and intermediate buffers. For slope, SurtGIS's 2{,}596\,MB peak reflects: input Float64 (763\,MB) + derivative arrays (2$\times$763\,MB) + output (763\,MB) $\approx$ 3{,}052\,MB theoretical; the measured value is lower because output is populated incrementally as derivative tiles are freed. GDAL and GRASS use tiled/streaming I/O, keeping memory under 450\,MB regardless of algorithm.
+\end{table}
+
+%% ── Table S3: Thread scaling ──
+\begin{table}[htbp]
+\centering
+\caption*{Table S3: Thread scaling for SurtGIS slope at $10\text{K}^2$ (100\,M cells). Median of 3 runs (preliminary). Compute-only = total $-$ I/O (6.3\,s). Parallel efficiency = compute speedup / threads.}
+\begin{tabular}{@{}rrrrrr@{}}
+\toprule
+Threads & Total (s) & Compute (s) & Total speedup & Compute speedup & Efficiency \\
+\midrule
+1  & 13.90 & 7.60 & 1.0$\times$ & 1.0$\times$ & 100\% \\
+2  &  9.53 & 3.23 & 1.5$\times$ & 2.4$\times$ & 118\% \\
+4  &  9.48 & 3.18 & 1.5$\times$ & 2.4$\times$ &  60\% \\
+8  &  7.27 & 0.97 & 1.9$\times$ & 7.8$\times$ &  98\% \\
+12 &  7.42 & 1.12 & 1.9$\times$ & 6.8$\times$ &  57\% \\
+16 &  7.69 & 1.39 & 1.8$\times$ & 5.5$\times$ &  34\% \\
+\bottomrule
+\end{tabular}
+
+\medskip
+\small
+The $>$100\% efficiency at 2 threads and non-monotonic scaling are artifacts of the heterogeneous core architecture (i7-1270P: 4 P-cores at 4.8\,GHz + 8 E-cores at 3.5\,GHz). Peak compute efficiency (7.8$\times$, 98\%) occurs at 8 threads, the effective parallelism ceiling for this CPU.
+\end{table}
+
+%% ── Table S4: 14 curvatures validation ──
+\begin{table}[htbp]
+\centering
+\caption*{Table S4: SurtGIS analytical validation of 14 Florinsky curvatures on a Gaussian hill ($1000 \times 1000$ cells, $A=500$\,m, $\sigma=2000$\,m, cell size = 10\,m). $^{a}$Analytically zero/near-zero on a radially symmetric surface; $R^2$ undefined.}
+\small
+\begin{tabular}{@{}llcc@{}}
+\toprule
+Category & Curvature & RMSE & $R^2$ \\
+\midrule
+\multirow{2}{*}{Second-order}
+ & Mean $H$              & $4.0 \times 10^{-10}$\,m$^{-1}$ & 1.000000 \\
+ & Gaussian $K$          & $6.9 \times 10^{-14}$\,m$^{-2}$ & 1.000000 \\
+\midrule
+\multirow{2}{*}{Invariant}
+ & Unsphericity $M$      & $3.4 \times 10^{-10}$\,m$^{-1}$ & 1.000000 \\
+ & Laplacian $\nabla^2 z$ & $8.2 \times 10^{-10}$\,m$^{-1}$ & 1.000000 \\
+\midrule
+\multirow{4}{*}{Extremal}
+ & Minimal $k_{\min}$    & $5.5 \times 10^{-10}$\,m$^{-1}$ & 1.000000 \\
+ & Maximal $k_{\max}$    & $4.9 \times 10^{-10}$\,m$^{-1}$ & 1.000000 \\
+ & Difference $E$        & $3.4 \times 10^{-10}$\,m$^{-1}$ & 1.000000 \\
+ & Accumulation $K_a$    & $6.9 \times 10^{-14}$\,m$^{-2}$ & 1.000000 \\
+\midrule
+\multirow{4}{*}{Gradient-dep.}
+ & Horizontal $k_h$      & $4.9 \times 10^{-10}$\,m$^{-1}$ & 1.000000 \\
+ & Vertical $k_v$        & $5.5 \times 10^{-10}$\,m$^{-1}$ & 1.000000 \\
+ & Horiz.\ excess $k_{he}$ & $6.7 \times 10^{-10}$\,m$^{-1}$ & 1.000000 \\
+ & Vert.\ excess $k_{ve}$$^{a}$ & $8.8 \times 10^{-16}$\,m$^{-1}$ & --- \\
+\midrule
+\multirow{2}{*}{Third-order}
+ & Ring $K_r$$^{a}$      & $5.9 \times 10^{-20}$\,m$^{-2}$ & --- \\
+ & Rotor$^{a}$           & $4.0 \times 10^{-9}$\,m$^{-1}$ & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%% ── Table S5: SAGA cross-validation ──
+\begin{table}[htbp]
+\centering
+\caption*{Table S5: SurtGIS vs SAGA cross-validation on Gaussian hill (7 overlapping curvatures). SAGA uses Evans (1979) formulations, SurtGIS uses Florinsky (2025).}
+\small
+\begin{tabular}{@{}lcc@{}}
+\toprule
+Curvature & RMSE & $R^2$ \\
+\midrule
+Laplacian        & $2.5 \times 10^{-7}$\,m$^{-1}$ & 0.9999 \\
+Minimal $k_{\min}$ & $1.6 \times 10^{-5}$\,m$^{-1}$ & 0.409 \\
+Maximal $k_{\max}$ & $1.6 \times 10^{-5}$\,m$^{-1}$ & 0.176 \\
+Vertical $k_v$   & $1.8 \times 10^{-5}$\,m$^{-1}$ & 0.207 \\
+Gaussian $K$     & $2.9 \times 10^{-9}$\,m$^{-2}$ & $< 0$ \\
+Horizontal $k_h$ & $3.9 \times 10^{-4}$\,m$^{-1}$ & $< 0$ \\
+Rotor            & $7.6 \times 10^{-8}$\,m$^{-1}$ & 0.033 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%% ── Table S6: Hydro validation ──
+\begin{table}[htbp]
+\centering
+\caption*{Table S6: Cross-tool agreement for hydrological algorithms on the Andes 30\,m DEM. Fill: comparison of filled surfaces. Flow accumulation: log$_{10}$-transformed values. Streams: binary classification metrics (threshold = 100 cells).}
+\begin{tabular}{@{}llcccc@{}}
+\toprule
+Algorithm & Comparison & RMSE & $R^2$ & \multicolumn{2}{c}{Additional metric} \\
+\midrule
+\multirow{3}{*}{Fill}
+  & SurtGIS vs GRASS & 0.13\,m & 1.000 & \multicolumn{2}{c}{99.96\% within 0.01\,m} \\
+  & SurtGIS vs WBT   & 0.06\,m & 1.000 & \multicolumn{2}{c}{max diff: 9.9\,m} \\
+  & GRASS vs WBT     & 0.15\,m & 1.000 & & \\
+\midrule
+ & & RMSE (log$_{10}$) & $R^2$ (log$_{10}$) & \multicolumn{2}{c}{Correlation} \\
+\cmidrule(lr){3-6}
+\multirow{2}{*}{D8 flow acc.}
+  & SurtGIS vs GRASS$^{a}$ & 0.25 & 0.875 & \multicolumn{2}{c}{0.948} \\
+  & SurtGIS vs WBT   & 0.15 & 0.949 & \multicolumn{2}{c}{0.987} \\
+\midrule
+ & & F1 score & IoU & Precision & Recall \\
+\cmidrule(lr){3-6}
+\multirow{2}{*}{Streams}
+  & SurtGIS vs GRASS & 0.973 & 0.948 & 0.974 & 0.973 \\
+  & SurtGIS vs WBT   & 0.938 & 0.884 & 0.911 & 0.968 \\
+\bottomrule
+\end{tabular}
+
+\medskip
+\small
+$^{a}$GRASS \texttt{r.watershed} uses a modified D8 algorithm with internal depression handling and accumulates upstream area rather than cell counts.
+\end{table}
+
+\end{document}
