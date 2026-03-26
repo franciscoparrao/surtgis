@@ -6,7 +6,7 @@
 ## Hallazgos
 
 - [x] **[HIGH] H1**: Descomponer `main.rs` (3,752→35 líneas) en 14 módulos — commit `6368948`
-- [ ] **[HIGH] H2**: Auditar 286 bloques `unsafe get_unchecked` — evaluar migración a indexación segura
+- [x] **[HIGH] H2**: Migrar unsafe a safe indexing en 6 core algos (48 bloques, zero perf impact) — commit `6ea2ec9`. 111 restantes en algos secundarios
 - [ ] **[MEDIUM] M1**: Strip writer acumula todo en memoria por limitación de `tiff` crate (fix upstream o flate2)
 - [ ] **[MEDIUM] M2**: `fetch_stac_asset` dead code — refactorizar para que `FetchMosaic` lo use
 - [ ] **[MEDIUM] M3**: 13 variables de una letra en `terrain all` — renombrar

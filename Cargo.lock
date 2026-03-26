@@ -1171,6 +1171,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
 
 [[package]]
+name = "dbase"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b2ee10366b9a0956358110073ea66ab06d77169ee9955d32c9ba7b7b8d4e1c3"
+dependencies = [
+ "byteorder",
+ "time",
+]
+
+[[package]]
 name = "deranged"
 version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1562,6 +1572,18 @@ dependencies = [
  "event-listener",
  "pin-project-lite",
 ]
+
+[[package]]
+name = "fallible-iterator"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2acce4a10f12dc2fb14a218589d4f1f62ef011b2d0cc4b3cb1bba8e94da14649"
+
+[[package]]
+name = "fallible-streaming-iterator"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
 
 [[package]]
 name = "fastrand"
@@ -2090,6 +2112,15 @@ dependencies = [
  "allocator-api2",
  "equivalent",
  "foldhash 0.2.0",
+]
+
+[[package]]
+name = "hashlink"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ea0b22561a9c04a7cb1a302c013e0259cd3b4bb619f145b32f72b8b4bcbed230"
+dependencies = [
+ "hashbrown 0.16.1",
 ]
 
 [[package]]
@@ -2739,6 +2770,17 @@ dependencies = [
  "libc",
  "plain",
  "redox_syscall 0.7.3",
+]
+
+[[package]]
+name = "libsqlite3-sys"
+version = "0.37.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1f111c8c41e7c61a49cd34e44c7619462967221a6443b0ec299e0ac30cfb9b1"
+dependencies = [
+ "cc",
+ "pkg-config",
+ "vcpkg",
 ]
 
 [[package]]
@@ -4243,6 +4285,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
 
 [[package]]
+name = "rsqlite-vfs"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8a1f2315036ef6b1fbacd1972e8ee7688030b0a2121edfc2a6550febd41574d"
+dependencies = [
+ "hashbrown 0.16.1",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "rstar"
 version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4251,6 +4303,21 @@ dependencies = [
  "heapless",
  "num-traits",
  "smallvec",
+]
+
+[[package]]
+name = "rusqlite"
+version = "0.39.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0d2b0146dd9661bf67bb107c0bb2a55064d556eeb3fc314151b957f313bcd4e"
+dependencies = [
+ "bitflags 2.11.0",
+ "fallible-iterator",
+ "fallible-streaming-iterator",
+ "hashlink",
+ "libsqlite3-sys",
+ "smallvec",
+ "sqlite-wasm-rs",
 ]
 
 [[package]]
@@ -4487,6 +4554,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "shapefile"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c318c0e76bc2d54086b2d936ae0ca92eab5b84eb73f5704c1d14dba33be643e3"
+dependencies = [
+ "byteorder",
+ "dbase",
+ "geo-types",
+]
+
+[[package]]
 name = "sharded-slab"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4673,6 +4751,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "sqlite-wasm-rs"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f4206ed3a67690b9c29b77d728f6acc3ce78f16bf846d83c94f76400320181b"
+dependencies = [
+ "cc",
+ "js-sys",
+ "rsqlite-vfs",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "ssri"
 version = "9.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4724,7 +4814,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "surtgis"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -4741,7 +4831,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-algorithms"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "approx",
@@ -4760,7 +4850,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-cloud"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "approx",
  "byteorder",
@@ -4783,7 +4873,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-colormap"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "num-traits",
  "surtgis-core",
@@ -4791,16 +4881,20 @@ dependencies = [
 
 [[package]]
 name = "surtgis-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "approx",
  "gdal",
+ "geo",
  "geo-types",
  "ndarray",
  "num-traits",
  "ordered-float 4.6.0",
+ "rusqlite",
  "serde",
+ "serde_json",
+ "shapefile",
  "tempfile",
  "thiserror 2.0.18",
  "tiff 0.10.3",
@@ -4808,7 +4902,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-gui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -4829,7 +4923,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-parallel"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "criterion",
  "crossbeam",
@@ -4841,7 +4935,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-python"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "numpy",
  "pyo3",
@@ -4851,7 +4945,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-wasm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "js-sys",
  "serde",
@@ -5438,6 +5532,12 @@ name = "valuable"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
+
+[[package]]
+name = "vcpkg"
+version = "0.2.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "version_check"
