@@ -2,15 +2,77 @@
 
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Instant;
 
-use surtgis_algorithms::imagery::cloud_mask_scl;
+use surtgis_algorithms::imagery::{
+    CloudMaskStrategy, S2SclMask, LandsatQaMask, NoCloudMask, cloud_mask_scl,
+};
 use surtgis_cloud::blocking::{CogReaderBlocking, StacClientBlocking};
 use surtgis_cloud::{BBox, CogReaderOptions, StacCatalog, StacClientOptions, StacItem, StacSearchParams};
 
 use crate::commands::StacCommands;
 use crate::helpers::{done, parse_bbox, parse_scl_classes, spinner, write_result};
 use crate::streaming::resolve_asset_key;
+
+/// Collection-specific configuration for cloud masking and asset keys
+#[derive(Clone)]
+pub enum CollectionProfile {
+    /// Sentinel-2 L2A: SCL categorical cloud masking
+    Sentinel2L2A {
+        cloud_mask_strategy: Arc<dyn CloudMaskStrategy>,
+    },
+    /// Landsat Collection 2 L2: QA_PIXEL bitmask cloud masking
+    LandsatC2L2 {
+        cloud_mask_strategy: Arc<dyn CloudMaskStrategy>,
+    },
+    /// Sentinel-1 RTC: No cloud masking (SAR penetrates clouds)
+    Sentinel1RTC,
+}
+
+impl std::fmt::Debug for CollectionProfile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Sentinel2L2A { .. } => f.debug_struct("Sentinel2L2A").finish(),
+            Self::LandsatC2L2 { .. } => f.debug_struct("LandsatC2L2").finish(),
+            Self::Sentinel1RTC => f.debug_struct("Sentinel1RTC").finish(),
+        }
+    }
+}
+
+impl CollectionProfile {
+    /// Create profile from collection name
+    pub fn from_collection_name(name: &str) -> Result<Self> {
+        match name {
+            "sentinel-2-l2a" => Ok(Self::Sentinel2L2A {
+                cloud_mask_strategy: Arc::new(S2SclMask::new()),
+            }),
+            "landsat-c2-l2" => Ok(Self::LandsatC2L2 {
+                cloud_mask_strategy: Arc::new(LandsatQaMask::new()),
+            }),
+            "sentinel-1-rtc" => Ok(Self::Sentinel1RTC),
+            _ => anyhow::bail!("Unknown collection: {}", name),
+        }
+    }
+
+    /// Get the SCL/QA asset name for this collection (None for SAR)
+    pub fn mask_asset_name(&self) -> Option<&str> {
+        match self {
+            Self::Sentinel2L2A { .. } => Some("scl"),
+            Self::LandsatC2L2 { .. } => Some("QA_PIXEL"),
+            Self::Sentinel1RTC => None,
+        }
+    }
+
+    /// Get a description for logging
+    pub fn description(&self) -> &str {
+        match self {
+            Self::Sentinel2L2A { .. } => "Sentinel-2 L2A",
+            Self::LandsatC2L2 { .. } => "Landsat C2 L2",
+            Self::Sentinel1RTC => "Sentinel-1 RTC",
+        }
+    }
+}
 
 pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
     match action {
@@ -701,29 +763,34 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
     Ok(())
 }
 
-/// Fetch and composite a single S2 band from STAC (for pipeline usage)
+/// Fetch and composite a single band from STAC for any collection.
 ///
-/// This is a simplified version of the Composite command that:
-/// - Downloads a single asset (band) from multiple scenes
-/// - Applies cloud masking if SCL asset is available
-/// - Returns the composited raster (aligned to reference grid if provided)
+/// Supports:
+/// - Multiple collections: Sentinel-2, Landsat C2, Sentinel-1 SAR
+/// - Collection-specific cloud masking via CloudMaskStrategy
+/// - Multi-scene compositing (median stack)
+/// - Grid alignment to reference DEM
 /// - Does NOT write to disk
-pub fn fetch_s2_band_from_stac(
+pub fn fetch_stac_band(
     catalog: &str,
     bbox: &str,
     collection: &str,
     asset: &str,
     datetime: &str,
     max_scenes: usize,
-    scl_asset: &str,
-    scl_keep: &str,
     align_to: Option<&surtgis_core::Raster<f64>>,
 ) -> Result<surtgis_core::Raster<f64>> {
     use surtgis_core::mosaic;
 
+    // Get collection profile (determines cloud masking strategy)
+    let profile = CollectionProfile::from_collection_name(collection)?;
+    let mask_asset_name = profile.mask_asset_name();
+
+    // Normalize asset name for this collection
+    let normalized_asset = crate::streaming::validate_asset_key(asset, collection)?;
+
     let cat = StacCatalog::from_str_or_url(catalog);
     let bb = parse_bbox(bbox)?;
-    let keep_classes = parse_scl_classes(scl_keep)?;
 
     // Search for items
     let search_limit = (max_scenes * 4) as u32;
@@ -733,7 +800,11 @@ pub fn fetch_s2_band_from_stac(
         .datetime(datetime)
         .limit(search_limit);
 
-    let pb = spinner(&format!("Searching for {} {} scenes...", collection, asset));
+    let pb = spinner(&format!(
+        "Searching for {} ({}) scenes...",
+        profile.description(),
+        normalized_asset
+    ));
     let client_opts = StacClientOptions {
         max_items: (max_scenes * 4) as usize,
         ..StacClientOptions::default()
@@ -744,7 +815,12 @@ pub fn fetch_s2_band_from_stac(
     pb.finish_and_clear();
 
     if items.is_empty() {
-        anyhow::bail!("No items found for {} {} in bbox {}", collection, asset, bbox);
+        anyhow::bail!(
+            "No items found for {} ({}) in bbox {}",
+            profile.description(),
+            normalized_asset,
+            bbox
+        );
     }
 
     // Display info about found items
@@ -771,24 +847,29 @@ pub fn fetch_s2_band_from_stac(
             i + 1, max_scenes, item.id, cloud as u32, date
         ));
 
-        // Resolve data asset
-        let data_asset = resolve_asset_key(item, asset)
+        // Resolve data asset using normalized asset name
+        let data_asset = resolve_asset_key(item, &normalized_asset)
             .and_then(|(_, a)| {
                 client.sign_asset_href(&a.href, item.collection.as_deref().unwrap_or(""))
                     .ok()
                     .map(|h| (h, item.epsg()))
             });
 
-        // Resolve SCL asset for cloud masking
-        let scl_href = resolve_asset_key(item, scl_asset)
-            .and_then(|(_, a)| {
-                client.sign_asset_href(&a.href, item.collection.as_deref().unwrap_or(""))
-                    .ok()
-            });
+        // Resolve cloud mask asset (if applicable)
+        let mask_href = mask_asset_name.and_then(|mask_name| {
+            resolve_asset_key(item, mask_name)
+                .and_then(|(_, a)| {
+                    client.sign_asset_href(&a.href, item.collection.as_deref().unwrap_or(""))
+                        .ok()
+                })
+        });
 
         let Some((data_href, epsg)) = data_asset else {
             pb.finish_and_clear();
-            eprintln!("  ⚠️ Skipping {}: asset {} not found", item.id, asset);
+            eprintln!(
+                "  ⚠️ Skipping {}: asset {} not found",
+                item.id, normalized_asset
+            );
             continue;
         };
 
@@ -829,14 +910,21 @@ pub fn fetch_s2_band_from_stac(
         let (rrows, rcols) = raster.shape();
         pb.println(format!("  → Read {} × {} pixels", rcols, rrows));
 
-        // Apply cloud masking if SCL available
-        if let Some(scl_href) = &scl_href {
-            pb.println("  → Applying cloud mask (SCL)...".to_string());
-            let scl_opts = CogReaderOptions::default();
-            let mut scl_reader = match CogReaderBlocking::open(scl_href, scl_opts) {
+        // Apply cloud masking using collection-specific strategy
+        if let Some(mask_href) = &mask_href {
+            let strategy_desc = match &profile {
+                CollectionProfile::Sentinel2L2A { .. } => "SCL",
+                CollectionProfile::LandsatC2L2 { .. } => "QA_PIXEL",
+                CollectionProfile::Sentinel1RTC => "None",
+            };
+            pb.println(format!("  → Applying {} cloud mask...", strategy_desc));
+
+            // Read mask asset as f64
+            let mask_opts = CogReaderOptions::default();
+            let mut mask_reader = match CogReaderBlocking::open(mask_href, mask_opts) {
                 Ok(r) => r,
                 Err(_) => {
-                    // SCL is optional, continue without masking
+                    // Mask is optional, continue without masking
                     pb.finish_and_clear();
                     rasters.push(raster);
                     successful += 1;
@@ -844,12 +932,20 @@ pub fn fetch_s2_band_from_stac(
                 }
             };
 
-            if let Ok(scl_u8) = scl_reader.read_bbox::<u8>(&read_bb, None) {
-                // Convert SCL from u8 to f64 for cloud_mask_scl
-                let scl_f64 = surtgis_core::Raster::from_array(
-                    scl_u8.data().mapv(|v| v as f64)
-                );
-                raster = cloud_mask_scl(&raster, &scl_f64, &keep_classes)
+            // Read mask as f64 and apply strategy
+            if let Ok(mask_raster) = mask_reader.read_bbox::<f64>(&read_bb, None) {
+                let cloud_mask_strategy = match &profile {
+                    CollectionProfile::Sentinel2L2A {
+                        cloud_mask_strategy,
+                    } => cloud_mask_strategy.clone(),
+                    CollectionProfile::LandsatC2L2 {
+                        cloud_mask_strategy,
+                    } => cloud_mask_strategy.clone(),
+                    CollectionProfile::Sentinel1RTC => Arc::new(NoCloudMask),
+                };
+
+                raster = cloud_mask_strategy
+                    .mask(&raster, &mask_raster)
                     .unwrap_or(raster); // If masking fails, use original
             }
         }
@@ -903,4 +999,61 @@ pub fn fetch_s2_band_from_stac(
 
     eprintln!("  ✓ {} band ready for indices", asset);
     Ok(final_result)
+}
+
+/// DEPRECATED: Use fetch_stac_band() instead
+/// Backward-compatible wrapper for Sentinel-2 specific fetching
+#[deprecated(since = "0.3.0", note = "use fetch_stac_band() instead")]
+pub fn fetch_s2_band_from_stac(
+    catalog: &str,
+    bbox: &str,
+    collection: &str,
+    asset: &str,
+    datetime: &str,
+    max_scenes: usize,
+    _scl_asset: &str,
+    _scl_keep: &str,
+    align_to: Option<&surtgis_core::Raster<f64>>,
+) -> Result<surtgis_core::Raster<f64>> {
+    // Delegate to new multi-collection function
+    // (scl_asset and scl_keep are ignored, profile determines masking strategy)
+    fetch_stac_band(catalog, bbox, collection, asset, datetime, max_scenes, align_to)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_collection_profile_sentinel2() {
+        let profile = CollectionProfile::from_collection_name("sentinel-2-l2a").unwrap();
+        assert_eq!(profile.mask_asset_name(), Some("scl"));
+        assert_eq!(profile.description(), "Sentinel-2 L2A");
+    }
+
+    #[test]
+    fn test_collection_profile_landsat() {
+        let profile = CollectionProfile::from_collection_name("landsat-c2-l2").unwrap();
+        assert_eq!(profile.mask_asset_name(), Some("QA_PIXEL"));
+        assert_eq!(profile.description(), "Landsat C2 L2");
+    }
+
+    #[test]
+    fn test_collection_profile_sentinel1() {
+        let profile = CollectionProfile::from_collection_name("sentinel-1-rtc").unwrap();
+        assert_eq!(profile.mask_asset_name(), None);
+        assert_eq!(profile.description(), "Sentinel-1 RTC");
+    }
+
+    #[test]
+    fn test_collection_profile_unknown() {
+        assert!(CollectionProfile::from_collection_name("unknown-collection").is_err());
+    }
+
+    #[test]
+    fn test_collection_profile_debug() {
+        let s2_profile = CollectionProfile::from_collection_name("sentinel-2-l2a").unwrap();
+        let debug_str = format!("{:?}", s2_profile);
+        assert!(debug_str.contains("Sentinel2L2A"));
+    }
 }

@@ -30,8 +30,64 @@ pub fn read_cog_dem(url: &str, bbox: &BBox) -> Result<surtgis_core::Raster<f64>>
     Ok(raster)
 }
 
+/// Validate and normalize asset key for a given collection.
+///
+/// Resolves common names and aliases to canonical band codes.
+/// Collection-specific mapping (no STAC item lookup).
+///
+/// # Arguments
+/// * `band` - Band identifier (e.g., "B04", "red", "SR_B4", "VV")
+/// * `collection` - Collection name (e.g., "sentinel-2-l2a", "landsat-c2-l2", "sentinel-1-rtc")
+///
+/// # Returns
+/// Canonical band code for the collection
+#[cfg(feature = "cloud")]
+pub fn validate_asset_key(band: &str, collection: &str) -> Result<String> {
+    match collection {
+        "sentinel-2-l2a" => {
+            // S2 uses B02-B12, SCL
+            match band.to_uppercase().as_str() {
+                "B02" | "B03" | "B04" | "B08" | "B11" | "B12" | "SCL" => Ok(band.to_uppercase()),
+                // Common aliases
+                "BLUE" => Ok("B02".to_string()),
+                "GREEN" => Ok("B03".to_string()),
+                "RED" => Ok("B04".to_string()),
+                "NIR" | "NIR08" => Ok("B08".to_string()),
+                "SWIR1" => Ok("B11".to_string()),
+                "SWIR2" => Ok("B12".to_string()),
+                _ => anyhow::bail!("Unknown S2 band: {}", band),
+            }
+        }
+        "landsat-c2-l2" => {
+            // Landsat uses SR_B1-B7
+            match band.to_uppercase().as_str() {
+                "SR_B1" | "SR_B2" | "SR_B3" | "SR_B4" | "SR_B5" | "SR_B6" | "SR_B7" => {
+                    Ok(band.to_uppercase())
+                }
+                "BLUE" => Ok("SR_B2".to_string()),
+                "GREEN" => Ok("SR_B3".to_string()),
+                "RED" => Ok("SR_B4".to_string()),
+                "NIR" => Ok("SR_B5".to_string()),
+                "SWIR1" => Ok("SR_B6".to_string()),
+                "SWIR2" => Ok("SR_B7".to_string()),
+                "QA_PIXEL" => Ok("QA_PIXEL".to_string()),
+                _ => anyhow::bail!("Unknown Landsat band: {}", band),
+            }
+        }
+        "sentinel-1-rtc" => {
+            // Sentinel-1 uses VV, VH
+            match band.to_uppercase().as_str() {
+                "VV" | "VH" => Ok(band.to_uppercase()),
+                _ => anyhow::bail!("Unknown Sentinel-1 band: {}", band),
+            }
+        }
+        _ => anyhow::bail!("Unsupported collection: {}", collection),
+    }
+}
+
 /// Sentinel-2 band name aliases: common name -> catalog-specific keys.
 /// Tries the exact key first, then aliases.
+/// LEGACY: Use validate_asset_key() for collection-agnostic band validation.
 #[cfg(feature = "cloud")]
 pub fn resolve_asset_key<'a>(item: &'a StacItem, key: &'a str) -> Option<(&'a str, &'a surtgis_cloud::stac_models::StacAsset)> {
     // Try exact key first
@@ -79,6 +135,61 @@ pub fn resolve_asset_key<'a>(item: &'a StacItem, key: &'a str) -> Option<(&'a st
         }
     }
     None
+}
+
+#[cfg(all(test, feature = "cloud"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_s2_bands() {
+        assert_eq!(
+            validate_asset_key("B04", "sentinel-2-l2a").unwrap(),
+            "B04"
+        );
+        assert_eq!(
+            validate_asset_key("red", "sentinel-2-l2a").unwrap(),
+            "B04"
+        );
+        assert_eq!(
+            validate_asset_key("B02", "sentinel-2-l2a").unwrap(),
+            "B02"
+        );
+        assert_eq!(
+            validate_asset_key("blue", "sentinel-2-l2a").unwrap(),
+            "B02"
+        );
+        assert!(validate_asset_key("INVALID", "sentinel-2-l2a").is_err());
+    }
+
+    #[test]
+    fn test_validate_landsat_bands() {
+        assert_eq!(
+            validate_asset_key("SR_B4", "landsat-c2-l2").unwrap(),
+            "SR_B4"
+        );
+        assert_eq!(
+            validate_asset_key("red", "landsat-c2-l2").unwrap(),
+            "SR_B4"
+        );
+        assert_eq!(
+            validate_asset_key("nir", "landsat-c2-l2").unwrap(),
+            "SR_B5"
+        );
+        assert!(validate_asset_key("B04", "landsat-c2-l2").is_err());
+    }
+
+    #[test]
+    fn test_validate_sentinel1_bands() {
+        assert_eq!(validate_asset_key("VV", "sentinel-1-rtc").unwrap(), "VV");
+        assert_eq!(validate_asset_key("VH", "sentinel-1-rtc").unwrap(), "VH");
+        assert!(validate_asset_key("HH", "sentinel-1-rtc").is_err());
+    }
+
+    #[test]
+    fn test_unsupported_collection() {
+        assert!(validate_asset_key("B04", "unknown-collection").is_err());
+    }
 }
 
 /// Fetch a single asset from a STAC item as a raster.

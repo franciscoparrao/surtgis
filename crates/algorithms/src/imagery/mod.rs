@@ -20,7 +20,9 @@ pub use change_detection::{
     change_vector_analysis, raster_difference, RasterDiffParams, CHANGE_DECREASE,
     CHANGE_INCREASE, CHANGE_NO_CHANGE,
 };
-pub use cloud_mask::{cloud_mask_scl, SCL_VALID_DEFAULT};
+pub use cloud_mask::{
+    cloud_mask_scl, CloudMaskStrategy, S2SclMask, LandsatQaMask, NoCloudMask, SCL_VALID_DEFAULT,
+};
 pub use composite::median_composite;
 pub use index_builder::index_builder;
 pub use indices::{

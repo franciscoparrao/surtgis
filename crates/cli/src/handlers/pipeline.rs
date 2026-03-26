@@ -245,17 +245,15 @@ fn fetch_s2_band(
     let dem_ref = surtgis_core::io::read_geotiff::<f64, _>(align_to, None)
         .context("Failed to read DEM for grid reference")?;
 
-    // Call the STAC handler function (with cloud masking + compositing)
-    super::stac::fetch_s2_band_from_stac(
+    // Call the generic STAC handler (collection-agnostic with auto cloud masking)
+    super::stac::fetch_stac_band(
         "pc",  // Planetary Computer catalog
         bbox,
         collection,
-        &format!("B{:02}", &band[1..]),  // Convert B04 -> B04
+        &format!("B{:02}", &band[1..]),  // Band identifier (e.g., B04)
         datetime,
         max_scenes,
-        "SCL",                            // Scene Classification Layer for cloud masking
-        "4,5,6,11",                       // Cloud classes to keep (vegetation, water, snow, clouds)
-        Some(&dem_ref),                   // Align to DEM grid
+        Some(&dem_ref),  // Align to DEM grid
     )
 }
 

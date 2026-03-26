@@ -2589,3 +2589,410 @@ Implementación
  - ✅ handle_stac_composite() para descargas
  - ✅ resample_to_grid() para alineamiento
  - ✅ write_result() para outputs
+
+ Plan: Phase 1 - STAC Refactoring para Multi-Colección                                                                                                                                  
+                                                                                                                                                                                        
+ Contexto                                                                                                                                                                               
+                                                                                                                                                                                        
+ Objetivo: Refactorizar el handler STAC actual para soportar múltiples colecciones (Sentinel-2, Landsat C2, Sentinel-1 SAR) en lugar de estar hardcoded a Sentinel-2 L2A.               
+                                                                                                                                                                                        
+ Motivación:                                                                                                                                                                            
+ - Usuario: "Podríamos ampliar lo más posible el STAC catálogo, además así podríamos hacer que SurtGis acceda a otras imágenes?"                                                        
+ - Actualización explícita: El sistema S2 ya funciona con cloud masking, multi-scene compositing y grid alignment. Ahora parametrizarlo para abordar Landsat y SAR.                     
+                                                                                                                                                                                        
+ Resultado esperado:                                                                                                                                                                    
+ # Sentinel-2 (mismo que hoy)                                                                                                                                                           
+ surtgis stac composite pc \                                                                                                                                                            
+   --collection sentinel-2-l2a \                                                                                                                                                        
+   --asset B04 \                                                                                                                                                                        
+   --bbox -70.5,-33.6,-70.2,-33.3 \                                                                                                                                                     
+   --datetime 2024-06-01/2024-08-31 \                                                                                                                                                   
+   --outdir s2.tif                                                                                                                                                                      
+                                                                                                                                                                                        
+ # Landsat C2 (nuevo)                                                                                                                                                                   
+ surtgis stac composite pc \                                                                                                                                                            
+   --collection landsat-c2-l2 \                                                                                                                                                         
+   --asset SR_B1 \                                                                                                                                                                      
+   --bbox -70.5,-33.6,-70.2,-33.3 \                                                                                                                                                     
+   --datetime 2024-06-01/2024-08-31 \                                                                                                                                                   
+   --outdir landsat.tif                                                                                                                                                                 
+                                                                                                                                                                                        
+ # Sentinel-1 RTC (nuevo)                                                                                                                                                               
+ surtgis stac composite pc \                                                                                                                                                            
+   --collection sentinel-1-rtc \                                                                                                                                                        
+   --asset VV \                                                                                                                                                                         
+   --bbox -70.5,-33.6,-70.2,-33.3 \                                                                                                                                                     
+   --datetime 2024-06-01/2024-08-31 \                                                                                                                                                   
+   --outdir sar.tif                                                                                                                                                                     
+
+ ---
+ Hallazgos de Exploración
+
+ Hardcoding Sentinel-2 actual
+
+ ┌──────────────────┬─────────────────────────────────────┬───────────────────────────────────────────────────────────┐
+ │    Componente    │              Ubicación              │                        Específico                         │
+ ├──────────────────┼─────────────────────────────────────┼───────────────────────────────────────────────────────────┤
+ │ Cloud masking    │ crates/algorithms/src/cloud_mask.rs │ cloud_mask_scl() — S2-specific (SCL categorical 0-11)     │
+ ├──────────────────┼─────────────────────────────────────┼───────────────────────────────────────────────────────────┤
+ │ Asset resolution │ crates/cli/src/streaming.rs:43-69   │ resolve_asset_key() — all aliases → S2 bands B02-B12, SCL │
+ ├──────────────────┼─────────────────────────────────────┼───────────────────────────────────────────────────────────┤
+ │ CLI defaults     │ crates/cli/src/handlers/stac.rs     │ scl_asset="scl", scl_keep="4,5,6,11" (S2 classes)         │
+ ├──────────────────┼─────────────────────────────────────┼───────────────────────────────────────────────────────────┤
+ │ Function naming  │ crates/cli/src/handlers/stac.rs     │ fetch_s2_band_from_stac() — explicit S2                   │
+ └──────────────────┴─────────────────────────────────────┴───────────────────────────────────────────────────────────┘
+
+ Colecciones target
+
+ ┌────────────────┬───────────────────┬────────────┬──────────────────┬─────────────┐
+ │   Colección    │      Bandas       │    Res.    │  Cloud Masking   │ Asset Alias │
+ ├────────────────┼───────────────────┼────────────┼──────────────────┼─────────────┤
+ │ S2 L2A         │ 11 (B02-B12, SCL) │ 10-20m mix │ SCL categorical  │ B02-B12     │
+ ├────────────────┼───────────────────┼────────────┼──────────────────┼─────────────┤
+ │ Landsat C2     │ 7 optical + TIR   │ 30m        │ QA_PIXEL bitmask │ SR_B1-B7    │
+ ├────────────────┼───────────────────┼────────────┼──────────────────┼─────────────┤
+ │ Sentinel-1 RTC │ 2 (VV, VH)        │ 10m        │ None (SAR)       │ VV, VH      │
+ └────────────────┴───────────────────┴────────────┴──────────────────┴─────────────┘
+
+ Generic (todos comparten)
+
+ - STAC API search con Planetary Computer
+ - COG I/O via CogReaderBlocking
+ - Reprojection automático (non-WGS84 → GeoTIFF GeoKeyDirectory)
+ - Multi-scene mosaic via surtgis_core::mosaic()
+ - Grid alignment a DEM via resampling bilinear
+
+ ---
+ Archivos a modificar
+
+ Implementación                                                                                                                                                                         
+                                                                                                                                                                                        
+ Step 1: Trait para Cloud Masking (30 min)                                                                                                                                              
+                                                                                                                                                                                        
+ crates/algorithms/src/cloud_mask.rs                                                                                                                                                    
+                                                                                                                                                                                        
+ Crear trait que abstrae cada estrategia:                                                                                                                                               
+                                                                                                                                                                                        
+ /// Estrategia de cloud masking para diferentes colecciones                                                                                                                            
+ pub trait CloudMaskStrategy: Send + Sync {                                                                                                                                             
+     /// Aplicar máscara de nube                                                                                                                                                        
+     /// - Para S2: SCL categorical → mask pixels con nubes                                                                                                                             
+     /// - Para Landsat: QA_PIXEL bitmask → extraer bits de cloud/shadow                                                                                                                
+     /// - Para SAR: None, retornar raster original                                                                                                                                     
+     fn mask(&self, raster: &Raster<f64>) -> Result<Raster<f64>>;                                                                                                                       
+                                                                                                                                                                                        
+     /// Descripción (para logs)                                                                                                                                                        
+     fn description(&self) -> &str;                                                                                                                                                     
+ }                                                                                                                                                                                      
+                                                                                                                                                                                        
+ // S2 SCL strategy                                                                                                                                                                     
+ pub struct S2SclMask {                                                                                                                                                                 
+     keep_classes: Vec<u8>,  // e.g., [4, 5, 6, 11] = valid data                                                                                                                        
+ }                                                                                                                                                                                      
+                                                                                                                                                                                        
+ impl CloudMaskStrategy for S2SclMask {                                                                                                                                                 
+     fn mask(&self, scl: &Raster<f64>) -> Result<Raster<f64>> {                                                                                                                         
+         // Existente cloud_mask_scl() → renombrar a impl                                                                                                                               
+         let mut result = scl.clone();                                                                                                                                                  
+         for (v, scl_val) in result.data_mut().iter_mut().zip(scl.data().iter()) {                                                                                                      
+             if !self.keep_classes.contains(&(*scl_val as u8)) {                                                                                                                        
+                 *v = f64::NAN;                                                                                                                                                         
+             }                                                                                                                                                                          
+         }                                                                                                                                                                              
+         Ok(result)                                                                                                                                                                     
+     }                                                                                                                                                                                  
+     fn description(&self) -> &str { "S2 SCL" }                                                                                                                                         
+ }                               
+
+                                                                                                                                                                                        
+ // Landsat QA_PIXEL strategy                                                                                                                                                           
+ pub struct LandsatQaMask {                                                                                                                                                             
+     // QA_PIXEL bitmask: bit 1=cloud, bit 3=cloud shadow, bit 4=snow, etc.                                                                                                             
+     exclude_bits: u16,  // e.g., 0b0001010 = cloud | shadow                                                                                                                            
+ }                                                                                                                                                                                      
+                                                                                                                                                                                        
+ impl CloudMaskStrategy for LandsatQaMask {                                                                                                                                             
+     fn mask(&self, qa: &Raster<f64>) -> Result<Raster<f64>> {                                                                                                                          
+         let mut result = qa.clone();                                                                                                                                                   
+         for v in result.data_mut().iter_mut() {                                                                                                                                        
+             let qa_val = *v as u16;                                                                                                                                                    
+             if (qa_val & self.exclude_bits) != 0 {                                                                                                                                     
+                 *v = f64::NAN;                                                                                                                                                         
+             }                                                                                                                                                                          
+         }                                                                                                                                                                              
+         Ok(result)                                                                                                                                                                     
+     }                                                                                                                                                                                  
+     fn description(&self) -> &str { "Landsat QA_PIXEL" }                                                                                                                               
+ }                                                                                                                                                                                      
+                                                                                                                                                                                        
+ // SAR (no masking)                                                                                                                                                                    
+ pub struct NoCloudMask;                                                                                                                                                                
+ impl CloudMaskStrategy for NoCloudMask {                                                                                                                                               
+     fn mask(&self, raster: &Raster<f64>) -> Result<Raster<f64>> {                                                                                                                      
+         Ok(raster.clone())                                                                                                                                                             
+     }
+     fn description(&self) -> &str { "None (SAR)" }
+ }
+
+ Step 2: CollectionProfile enum (20 min)                                                                                                                                                
+                                                                                                                                                                                        
+ crates/cli/src/handlers/stac.rs (new section)                                                                                                                                          
+
+ #[derive(Debug, Clone)]
+ pub enum CollectionProfile {
+     Sentinel2L2A {
+         cloud_mask_strategy: Arc<dyn CloudMaskStrategy>,
+     },
+     LandsatC2L2 {
+         cloud_mask_strategy: Arc<dyn CloudMaskStrategy>,
+     },
+     Sentinel1RTC,  // No cloud masking needed
+ }
+
+ impl CollectionProfile {
+     pub fn from_collection_name(name: &str) -> Result<Self> {
+         match name {
+             "sentinel-2-l2a" => Ok(Self::Sentinel2L2A {
+                 cloud_mask_strategy: Arc::new(S2SclMask {
+                     keep_classes: vec![4, 5, 6, 11],
+                 }),
+             }),
+             "landsat-c2-l2" => Ok(Self::LandsatC2L2 {
+                 cloud_mask_strategy: Arc::new(LandsatQaMask {
+                     exclude_bits: 0b0000_1010,  // cloud | shadow
+                 }),
+             }),
+             "sentinel-1-rtc" => Ok(Self::Sentinel1RTC),
+             _ => Err(format!("Unknown collection: {}", name)),
+         }
+     }
+
+     pub fn scl_asset_name(&self) -> Option<&str> {
+         match self {
+             Self::Sentinel2L2A { .. } => Some("scl"),
+             Self::LandsatC2L2 { .. } => None,  // QA_PIXEL in properties, not asset
+             Self::Sentinel1RTC => None,
+         }
+     }
+ }
+
+ Step 3: Actualizar resolve_asset_key() (1h)                                                                                                                          02:22:49 [180/430]
+                                                                                                                                                                                        
+ crates/cli/src/streaming.rs:43-69                                                                                                                                                      
+                                                                                                                                                                                        
+ Parametrizar según colección:                                                                                                                                                          
+                                                                                                                                                                                        
+ pub fn resolve_asset_key(                                                                                                                                                              
+     canonical_band: &str,           // e.g., "B04", "SR_B1", "VV"                                                                                                                      
+     collection: &str,               // e.g., "sentinel-2-l2a"                                                                                                                          
+ ) -> Result<String> {                                                                                                                                                                  
+     match collection {                                                                                                                                                                 
+         "sentinel-2-l2a" => {
+             // S2 uses direct band names
+             match canonical_band {
+                 "B02" | "B03" | "B04" | "B08" | "B11" | "B12" | "scl" => Ok(canonical_band.to_string()),
+                 // Add common aliases
+                 "blue" => Ok("B02".to_string()),
+                 "green" => Ok("B03".to_string()),
+                 "red" => Ok("B04".to_string()),
+                 "nir" => Ok("B08".to_string()),
+                 "swir1" => Ok("B11".to_string()),
+                 "swir2" => Ok("B12".to_string()),
+                 _ => Err(format!("Unknown S2 band: {}", canonical_band)),
+             }
+         }
+         "landsat-c2-l2" => {
+             // Landsat uses SR_B1-B7
+             match canonical_band {
+                 "SR_B1" | "SR_B2" | "SR_B3" | "SR_B4" | "SR_B5" | "SR_B6" | "SR_B7" => {
+                     Ok(canonical_band.to_string())
+                 }
+                 "blue" => Ok("SR_B2".to_string()),
+                 "green" => Ok("SR_B3".to_string()),
+                 "red" => Ok("SR_B4".to_string()),
+                 "nir" => Ok("SR_B5".to_string()),
+                 "swir1" => Ok("SR_B6".to_string()),
+                 "swir2" => Ok("SR_B7".to_string()),
+                 _ => Err(format!("Unknown Landsat band: {}", canonical_band)),
+             }
+         }
+         "sentinel-1-rtc" => {
+             // SAR uses VV, VH
+             match canonical_band {
+                 "VV" | "VH" => Ok(canonical_band.to_string()),
+                 _ => Err(format!("Unknown Sentinel-1 band: {}", canonical_band)),
+             }
+         }
+         _ => Err(format!("Unsupported collection: {}", collection)),
+     }
+}
+
+ Step 4: Refactorizar fetch_s2_band_from_stac() → generic (1.5h)                                                                                                                        
+                                                                                                                                                                                        
+ crates/cli/src/handlers/stac.rs                                                                                                                                                        
+                                                                                                                                                                                        
+ pub async fn fetch_stac_band(                                                                                                                                                          
+     catalog: &str,                        // "pc" (Planetary Computer)
+     collection: &str,                     // "sentinel-2-l2a", "landsat-c2-l2", etc.
+     band: &str,                           // canonical: "B04", "SR_B1", "VV"
+     bbox_str: &str,
+     datetime_str: &str,
+     max_scenes: usize,
+     align_to: &Path,
+ ) -> Result<Raster<f64>> {
+     let profile = CollectionProfile::from_collection_name(collection)?;
+     let asset_key = streaming::resolve_asset_key(band, collection)?;
+
+     // STEP 1: STAC search
+     let scl_asset = profile.scl_asset_name();
+     let (items, bbox_epsg) = search_stac_items(catalog, collection, bbox_str, datetime_str)?;
+
+     // STEP 2: Download asset + cloud mask asset (if any)
+     let mut bands = Vec::new();
+     let mut cloud_masks = Vec::new();
+
+     for item in items.iter().take(max_scenes) {
+         let band_raster = download_asset_from_stac(&item, &asset_key, bbox_epsg, align_to)?;
+
+         // Cloud mask if applicable
+         if let Some(scl_key) = scl_asset {
+             if let Ok(scl_raster) = download_asset_from_stac(&item, scl_key, bbox_epsg, None) {
+                 cloud_masks.push(scl_raster); 
+             }
+         }
+
+         bands.push(band_raster);
+     }
+
+
+     // STEP 3: Apply cloud masking
+     if !cloud_masks.is_empty() {
+         let composite_mask = mosaic(&cloud_masks)?;
+         match &profile {
+             CollectionProfile::Sentinel2L2A { cloud_mask_strategy } => {
+                 for band in bands.iter_mut() {
+                     *band = cloud_mask_strategy.mask(band)?;
+                 }
+             }
+             CollectionProfile::LandsatC2L2 { cloud_mask_strategy } => {
+                 let composite_mask = composite_mask;
+                 for band in bands.iter_mut() {
+                     *band = cloud_mask_strategy.mask(&composite_mask)?;
+                 }
+             }
+             CollectionProfile::Sentinel1RTC => {
+                 // No masking
+             }
+         }
+     }
+
+     // STEP 4: Multi-scene composite
+     if bands.len() == 1 {
+         Ok(bands.into_iter().next().unwrap())
+     } else {
+         mosaic(&bands)
+     }
+ }
+ Step 5: Actualizar handle_stac_composite() (1h)                                                                                                                                        
+                                                                                                                                                                                        
+ Pasar collection parámetro y usar generic fetch:                                                                                                                                       
+                                                                                                                                                                                        
+ pub async fn handle_stac_composite(
+     catalog: &str,
+     bbox: &str,
+     collection: &str,                    // NEW: ahora required
+     asset: &str,
+     scl_asset: Option<&str>,             // DEPRECATED: ignored (profile decides)
+     scl_keep: Option<&str>,              // DEPRECATED: ignored
+     max_scenes: Option<usize>,
+     output: &Path,
+     align_to: Option<&Path>,
+     compress: bool,
+ ) -> Result<()> {
+     // Use collection to route to appropriate logic
+     let raster = if let Some(align_to) = align_to {
+         fetch_stac_band(catalog, collection, asset, bbox, "", max_scenes.unwrap_or(5), align_to).await?
+     } else {
+         // ... simple fetch without alignment
+     };
+
+     write_geotiff(&raster, output, compress)?;
+     Ok(())
+ }
+
+ ---
+ Testing
+
+ Ubicación: crates/cli/tests/integration_stac.rs (new)
+
+ #[tokio::test]
+ async fn test_fetch_sentinel2_band() {
+     let bbox = "-70.5,-33.6,-70.2,-33.3";
+     let align_to = TempFile::with_content(...).path();
+
+     let band = fetch_stac_band(
+         "pc",
+         "sentinel-2-l2a",
+         "B04",
+         bbox,
+         "2024-06-01/2024-08-31",
+         3,
+         align_to,
+     ).await.unwrap();
+
+     assert_eq!(band.rows(), /* aligned to ref dem */);
+ }
+
+ #[tokio::test]
+ async fn test_fetch_landsat_band() {
+     let band = fetch_stac_band(
+         "pc",
+         "landsat-c2-l2",
+         "SR_B4",
+         ...
+     ).await.unwrap();
+ }
+
+ #[tokio::test]
+ async fn test_fetch_sar_band() {
+     let band = fetch_stac_band(
+         "pc",
+         "sentinel-1-rtc",
+         "VV",
+         ...
+     ).await.unwrap();
+ }
+
+ ---
+
+ Timeline
+
+ ┌───────┬────────────────────────────────────┬───────┐
+ │ Step  │                Task                │ Hours │
+ ├───────┼────────────────────────────────────┼───────┤
+ │ 1     │ Cloud masking trait system         │ 0.5   │
+ ├───────┼────────────────────────────────────┼───────┤
+ │ 2     │ CollectionProfile enum             │ 0.33  │
+ ├───────┼────────────────────────────────────┼───────┤
+ │ 3     │ resolve_asset_key() parametrizable │ 1     │
+ ├───────┼────────────────────────────────────┼───────┤
+ │ 4     │ Refactor fetch_stac_band()         │ 1.5   │
+ ├───────┼────────────────────────────────────┼───────┤
+ │ 5     │ Update handle_stac_composite()     │ 1     │
+ ├───────┼────────────────────────────────────┼───────┤
+ │ 6     │ Testing + fixes                    │ 1.5   │
+ ├───────┼────────────────────────────────────┼───────┤
+ │ Total │                                    │ 5.33h │
+ └───────┴────────────────────────────────────┴───────┘
+
+ ---
+ Success Criteria
+
+ - ✅ Sentinel-2 bands descargadas con SCL cloud masking (backward compatible)
+ - ✅ Landsat C2 bands descargadas con QA_PIXEL cloud masking
+ - ✅ Sentinel-1 RTC bands descargadas (sin cloud masking)
+ - ✅ resolve_asset_key() soporta B02, SR_B1, VV aliases
+ - ✅ Multi-scene compositing funciona en todas las colecciones
+ - ✅ Grid alignment a DEM en todas las colecciones
+ - ✅ Todos los tests pasan (tests new + regression)
+
