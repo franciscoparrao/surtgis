@@ -1115,7 +1115,11 @@ pub enum StacCommands {
         output: PathBuf,
     },
     /// List all available STAC catalogs (curated + indexed)
-    ListCatalogs,
+    ListCatalogs {
+        /// Search for catalogs by keyword (e.g., "sentinel-2", "dem", "thermal")
+        #[arg(long)]
+        search: Option<String>,
+    },
     /// List collections available in a STAC catalog
     ListCollections {
         /// Catalog: "pc" (Planetary Computer), "es" (Earth Search), or full URL

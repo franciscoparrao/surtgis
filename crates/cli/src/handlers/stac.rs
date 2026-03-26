@@ -234,6 +234,25 @@ fn fetch_stac_index_catalogs() -> Result<Vec<StacIndexCatalog>> {
     }
 }
 
+/// Safely truncate a UTF-8 string to a maximum length
+fn truncate_utf8(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        return s.to_string();
+    }
+
+    // Truncate at character boundary
+    let mut truncated = String::new();
+    for c in s.chars() {
+        if truncated.len() + c.len_utf8() <= max_len {
+            truncated.push(c);
+        } else {
+            break;
+        }
+    }
+    truncated.push_str("...");
+    truncated
+}
+
 /// Get cache file path for STAC Index catalogs
 fn get_stac_index_cache_path() -> std::path::PathBuf {
     #[cfg(unix)]
@@ -1108,18 +1127,39 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             done("STAC composite", &output, elapsed);
         }
 
-        StacCommands::ListCatalogs => {
+        StacCommands::ListCatalogs { search } => {
             println!("📚 Available STAC Catalogs\n");
+
+            // Show search query if provided
+            if let Some(ref query) = search {
+                println!("🔍 Searching for: '{}'\n", query);
+            }
+
             println!("═══════════════════════════════════════════════════════════════");
             println!("CURATED CATALOGS (reliable, actively maintained):\n");
 
+            let mut curated_matches = 0;
             for catalog in get_known_catalogs() {
                 // Skip osgeo if we're showing it separately
-                if catalog.shorthand != "osgeo" {
-                    println!("{:<6} {}", catalog.shorthand, catalog.name);
-                    println!("       {}", catalog.description);
-                    println!("       URL: {}\n", catalog.url);
+                if catalog.shorthand == "osgeo" {
+                    continue;
                 }
+
+                // Check if matches search query
+                if let Some(ref q) = search {
+                    let query_lower = q.to_lowercase();
+                    let matches = catalog.name.to_lowercase().contains(&query_lower)
+                        || catalog.description.to_lowercase().contains(&query_lower)
+                        || catalog.shorthand.to_lowercase().contains(&query_lower);
+                    if !matches {
+                        continue;
+                    }
+                }
+
+                curated_matches += 1;
+                println!("{:<6} {}", catalog.shorthand, catalog.name);
+                println!("       {}", catalog.description);
+                println!("       URL: {}\n", catalog.url);
             }
 
             // Try to fetch from STAC Index API
@@ -1127,21 +1167,35 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             println!("STAC INDEX (dynamically discovered, 1000+ catalogs):\n");
 
             match fetch_stac_index_catalogs() {
-                Ok(catalogs) => {
-                    if catalogs.is_empty() {
-                        println!("  ⚠️ No catalogs found in STAC Index");
+                Ok(mut all_catalogs) => {
+                    // Filter by search query if provided
+                    if let Some(ref q) = search {
+                        let query_lower = q.to_lowercase();
+                        all_catalogs.retain(|cat| {
+                            cat.title.to_lowercase().contains(&query_lower)
+                                || cat.id.to_lowercase().contains(&query_lower)
+                                || cat.description
+                                    .as_ref()
+                                    .map(|d| d.to_lowercase().contains(&query_lower))
+                                    .unwrap_or(false)
+                        });
+                    }
+
+                    if all_catalogs.is_empty() {
+                        if search.is_some() {
+                            println!("  ⚠️ No STAC Index catalogs match your search");
+                        } else {
+                            println!("  ⚠️ No catalogs found in STAC Index");
+                        }
                     } else {
-                        let display_count = catalogs.len().min(15);
-                        println!("  Showing {} of {} available catalogs:\n", display_count, catalogs.len());
-                        for (i, catalog_info) in catalogs.iter().take(display_count).enumerate() {
+                        let total = all_catalogs.len();
+                        let display_count = all_catalogs.len().min(15);
+                        println!("  Showing {} of {} available catalogs:\n", display_count, total);
+                        for (i, catalog_info) in all_catalogs.iter().take(display_count).enumerate() {
                             let idx = i + 1;
                             println!("  [{}] {} ({})", idx, catalog_info.title, catalog_info.id);
                             if let Some(desc) = &catalog_info.description {
-                                let preview = if desc.len() > 70 {
-                                    format!("{}...", &desc[..70])
-                                } else {
-                                    desc.clone()
-                                };
+                                let preview = truncate_utf8(desc, 70);
                                 println!("      {}", preview);
                             }
                             if let Some(url) = &catalog_info.url {
@@ -1149,22 +1203,28 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                             }
                             println!();
                         }
-                        if catalogs.len() > 15 {
-                            println!("  ... and {} more catalogs in STAC Index", catalogs.len() - 15);
-                            println!("\n  💡 Use --catalog with any STAC Index URL:");
-                            println!("     surtgis stac search --catalog https://example.com/stac/v1 ...");
+                        if total > 15 {
+                            println!("  ... and {} more catalogs in STAC Index", total - 15);
                         }
                     }
                 }
                 Err(e) => {
-                    eprintln!("  ⚠️ Could not fetch STAC Index: {}", e);
+                    if search.is_some() {
+                        eprintln!("  ⚠️ Could not search STAC Index: {}", e);
+                    } else {
+                        eprintln!("  ⚠️ Could not fetch STAC Index: {}", e);
+                    }
                     eprintln!("     (This is optional - you can still use curated catalogs above)");
                 }
             }
 
             println!("\n═══════════════════════════════════════════════════════════════");
             println!("💡 You can also use any custom STAC API URL:");
-            println!("   surtgis stac search --catalog https://your-stac-api.com/v1 ...\n");
+            println!("   surtgis stac search --catalog https://your-stac-api.com/v1 ...");
+            println!("\n💡 Search for specific data types:");
+            println!("   surtgis stac list-catalogs --search sentinel-2");
+            println!("   surtgis stac list-catalogs --search dem");
+            println!("   surtgis stac list-catalogs --search thermal\n");
         }
 
         StacCommands::ListCollections { catalog } => {
