@@ -53,8 +53,18 @@ pub fn handle_susceptibility(
     std::fs::create_dir_all(&outdir.join("imagery"))
         .context("Failed to create imagery directory")?;
 
+    println!("🌍 SurtGIS Susceptibility Pipeline");
+    println!("═══════════════════════════════════════════");
+    println!("  Output: {}", outdir.display());
+    println!("  DEM: {}", dem_source);
+    if s2_source != "skip" {
+        println!("  S2: {} ({})", s2_source, _datetime_str);
+    }
+    println!();
+
     // ========== STEP 1: DEM ==========
-    let pb = helpers::spinner("Pipeline: DEM");
+    println!("📍 STEP 1: Loading DEM...");
+    let pb = helpers::spinner("Reading and validating DEM");
 
     let dem_path = if dem_source.contains('/') || dem_source.contains('\\') {
         // Local file
@@ -77,25 +87,42 @@ pub fn handle_susceptibility(
     let output_dem = outdir.join("dem.tif");
     std::fs::copy(&dem_path, &output_dem)
         .context("Failed to copy DEM to output directory")?;
+
+    // Get DEM info
+    let dem = surtgis_core::io::read_geotiff::<f64, _>(&dem_path, None)
+        .context("Failed to read DEM for info")?;
+    let (rows, cols) = dem.shape();
+    let size_mb = (rows * cols * 8) as f64 / 1_000_000.0;
+
     pb.finish_and_clear();
+    println!("  ✅ DEM loaded: {}×{} pixels ({:.1}MB)", cols, rows, size_mb);
 
     // ========== STEP 2: Terrain All ==========
-    let pb = helpers::spinner("Pipeline: Terrain (17 products)");
+    println!("\n📍 STEP 2: Terrain factors (17 products)...");
+    let pb = helpers::spinner("Computing slope, aspect, curvature, etc.");
 
     handle_terrain_all(&dem_path, &outdir.join("terrain"), compress, mem_limit_bytes)?;
 
     pb.finish_and_clear();
+    println!("  ✅ Terrain complete");
 
     // ========== STEP 3: Hydrology All ==========
-    let pb = helpers::spinner("Pipeline: Hydrology (8 products)");
+    println!("\n📍 STEP 3: Hydrology factors (8 products)...");
+    let pb = helpers::spinner("Computing flow direction, flow accumulation, streams, etc.");
 
     handle_hydrology_all(&dem_path, &outdir.join("hydrology"), compress, mem_limit_bytes)?;
 
     pb.finish_and_clear();
+    println!("  ✅ Hydrology complete");
 
     // ========== STEP 4: S2 Imagery (optional) ==========
     if s2_source != "skip" {
-        let pb = helpers::spinner("Pipeline: Sentinel-2 (6 bands)");
+        println!("\n📍 STEP 4: Sentinel-2 imagery (6 bands from STAC)...");
+        eprintln!("  Downloading from Planetary Computer:");
+        eprintln!("    Collection: {}", s2_source);
+        eprintln!("    BBox: {}", _bbox_str);
+        eprintln!("    Dates: {}", _datetime_str);
+        eprintln!("    Max scenes: {}", _max_scenes);
 
         // Download 6 S2 bands aligned to DEM grid
         let bands = download_s2_bands(
@@ -109,36 +136,61 @@ pub fn handle_susceptibility(
 
         match bands {
             Ok(s2_bands) => {
-                pb.finish_and_clear();
+                println!("  ✅ S2 bands downloaded and aligned");
 
                 // ========== STEP 5: Imagery Indices ==========
-                let pb = helpers::spinner("Pipeline: Imagery indices (10)");
+                println!("\n📍 STEP 5: Computing spectral indices (10 indices)...");
+                let pb = helpers::spinner("NDVI, NDWI, MNDWI, NBR, SAVI, EVI, BSI, NDBI, NDMI, NDSI");
 
                 compute_imagery_indices(&s2_bands, &outdir.join("imagery"), compress)?;
 
                 pb.finish_and_clear();
+                println!("  ✅ Spectral indices complete");
             }
             Err(e) => {
-                pb.finish_and_clear();
-                eprintln!("⚠️  Skipping S2 imagery: {}", e);
+                eprintln!("\n⚠️  S2 imagery skipped: {}", e);
+                eprintln!("  (Continuing with terrain + hydrology only)");
                 // Continue without S2 - not a fatal error for MVP
             }
         }
     }
 
     // ========== Output Summary ==========
-    println!("\n✅ Pipeline complete: {}", outdir.display());
-    println!("\nOutputs:");
-    println!("  📁 Terrain factors (17):");
+    println!("\n═══════════════════════════════════════════");
+    println!("✅ PIPELINE COMPLETE");
+    println!("═══════════════════════════════════════════");
+    println!("\n📂 Output directory: {}\n", outdir.display());
+
+    // Count and list files
+    let terrain_count = std::fs::read_dir(outdir.join("terrain"))
+        .map(|entries| entries.filter(|e| e.is_ok() && e.as_ref().unwrap().path().extension().map(|ext| ext == "tif").unwrap_or(false)).count())
+        .unwrap_or(0);
+    let hydrology_count = std::fs::read_dir(outdir.join("hydrology"))
+        .map(|entries| entries.filter(|e| e.is_ok() && e.as_ref().unwrap().path().extension().map(|ext| ext == "tif").unwrap_or(false)).count())
+        .unwrap_or(0);
+    let imagery_count = if s2_source != "skip" && outdir.join("imagery").exists() {
+        std::fs::read_dir(outdir.join("imagery"))
+            .map(|entries| entries.filter(|e| e.is_ok() && e.as_ref().unwrap().path().extension().map(|ext| ext == "tif").unwrap_or(false)).count())
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
+    println!("📊 Generated products:");
+    println!("   🏔️ Terrain factors:   {} files", terrain_count);
     println!("     {}/terrain/*.tif", outdir.display());
-    println!("  📁 Hydrology factors (8):");
+    println!("   💧 Hydrology factors: {} files", hydrology_count);
     println!("     {}/hydrology/*.tif", outdir.display());
-    if s2_source != "skip" && outdir.join("imagery/ndvi.tif").exists() {
-        println!("  📁 Imagery indices (10):");
+    if imagery_count > 0 {
+        println!("   🛰️ Spectral indices:  {} files", imagery_count);
         println!("     {}/imagery/*.tif", outdir.display());
     }
-    println!("  📁 Original DEM:");
+    println!("   📍 Input DEM:");
     println!("     {}/dem.tif", outdir.display());
+
+    let total_files = terrain_count + hydrology_count + imagery_count + 1;
+    println!("\n📈 Total: {} files", total_files);
+    println!("\n✨ Ready for susceptibility analysis!");
 
     Ok(())
 }

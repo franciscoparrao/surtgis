@@ -747,11 +747,29 @@ pub fn fetch_s2_band_from_stac(
         anyhow::bail!("No items found for {} {} in bbox {}", collection, asset, bbox);
     }
 
+    // Display info about found items
+    for (idx, item) in items.iter().take(max_scenes).enumerate() {
+        let date = item.properties.datetime.as_deref().unwrap_or("-");
+        let cloud_cover = item.properties.eo_cloud_cover.unwrap_or(0.0);
+        if idx < 3 {
+            eprintln!("  Scene {}: {} [{}% cloud]", idx + 1, date, cloud_cover as u32);
+        }
+    }
+    if items.len() > 3 {
+        eprintln!("  ... and {} more scenes", items.len() - 3);
+    }
+
     // Download and composite scenes
     let mut rasters: Vec<surtgis_core::Raster<f64>> = Vec::new();
+    let mut successful = 0;
 
     for (i, item) in items.iter().take(max_scenes).enumerate() {
-        let pb = spinner(&format!("Downloading {}/{}: {}...", i + 1, max_scenes, item.id));
+        let date = item.properties.datetime.as_deref().unwrap_or("-");
+        let cloud = item.properties.eo_cloud_cover.unwrap_or(0.0);
+        let pb = spinner(&format!(
+            "Downloading {}/{}: {} [{}% cloud, {}]...",
+            i + 1, max_scenes, item.id, cloud as u32, date
+        ));
 
         // Resolve data asset
         let data_asset = resolve_asset_key(item, asset)
@@ -770,7 +788,7 @@ pub fn fetch_s2_band_from_stac(
 
         let Some((data_href, epsg)) = data_asset else {
             pb.finish_and_clear();
-            eprintln!("  Skipping {}: missing asset {}", item.id, asset);
+            eprintln!("  ⚠️ Skipping {}: asset {} not found", item.id, asset);
             continue;
         };
 
@@ -780,7 +798,7 @@ pub fn fetch_s2_band_from_stac(
             Ok(r) => r,
             Err(e) => {
                 pb.finish_and_clear();
-                eprintln!("  Skipping {}: {}", item.id, e);
+                eprintln!("  ⚠️ Skipping {}: failed to open COG: {}", item.id, e);
                 continue;
             }
         };
@@ -803,13 +821,17 @@ pub fn fetch_s2_band_from_stac(
             Ok(r) => r,
             Err(e) => {
                 pb.finish_and_clear();
-                eprintln!("  Skipping {}: {}", item.id, e);
+                eprintln!("  ⚠️ Skipping {}: failed to read bbox: {}", item.id, e);
                 continue;
             }
         };
 
+        let (rrows, rcols) = raster.shape();
+        pb.println(format!("  → Read {} × {} pixels", rcols, rrows));
+
         // Apply cloud masking if SCL available
         if let Some(scl_href) = &scl_href {
+            pb.println("  → Applying cloud mask (SCL)...".to_string());
             let scl_opts = CogReaderOptions::default();
             let mut scl_reader = match CogReaderBlocking::open(scl_href, scl_opts) {
                 Ok(r) => r,
@@ -817,6 +839,7 @@ pub fn fetch_s2_band_from_stac(
                     // SCL is optional, continue without masking
                     pb.finish_and_clear();
                     rasters.push(raster);
+                    successful += 1;
                     continue;
                 }
             };
@@ -832,6 +855,7 @@ pub fn fetch_s2_band_from_stac(
         }
 
         pb.finish_and_clear();
+        successful += 1;
         rasters.push(raster);
 
         if rasters.len() >= max_scenes {
@@ -840,30 +864,43 @@ pub fn fetch_s2_band_from_stac(
     }
 
     if rasters.is_empty() {
-        anyhow::bail!("Failed to download any {} {} scenes", collection, asset);
+        anyhow::bail!(
+            "Failed to download any {} {} scenes (0/{} successful)",
+            collection, asset, items.len()
+        );
     }
 
+    eprintln!("  ✅ Successfully loaded {} scenes", successful);
+
     // Composite all scenes
-    let pb = spinner("Compositing scenes...");
+    let pb = spinner(&format!(
+        "Compositing {} scenes (median stack)...",
+        rasters.len()
+    ));
     let refs: Vec<&surtgis_core::Raster<f64>> = rasters.iter().collect();
     let result = mosaic(&refs, None)
         .context("Failed to mosaic scenes")?;
+    let (comp_rows, comp_cols) = result.shape();
     pb.finish_and_clear();
+    eprintln!("  ✓ Composite: {} × {} pixels", comp_cols, comp_rows);
 
     // Align to reference grid if provided
     let final_result = if let Some(reference) = align_to {
-        let pb = spinner("Aligning to DEM grid...");
+        let pb = spinner("Aligning to DEM grid (bilinear resample)...");
         let aligned = surtgis_core::resample_to_grid(
             &result,
             reference,
             surtgis_core::ResampleMethod::Bilinear,
         )
         .context("Failed to resample to DEM grid")?;
+        let (out_rows, out_cols) = aligned.shape();
         pb.finish_and_clear();
+        eprintln!("  ✓ Aligned: {} × {} pixels", out_cols, out_rows);
         aligned
     } else {
         result
     };
 
+    eprintln!("  ✓ {} band ready for indices", asset);
     Ok(final_result)
 }
