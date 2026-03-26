@@ -1114,6 +1114,14 @@ pub enum StacCommands {
         /// Output GeoTIFF file
         output: PathBuf,
     },
+    /// List all available STAC catalogs (curated + indexed)
+    ListCatalogs,
+    /// List collections available in a STAC catalog
+    ListCollections {
+        /// Catalog: "pc" (Planetary Computer), "es" (Earth Search), or full URL
+        #[arg(long, default_value = "pc")]
+        catalog: String,
+    },
 }
 
 // ─── Pipeline workflows ─────────────────────────────────────────────────

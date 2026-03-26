@@ -98,6 +98,63 @@ pub fn create_cloud_mask_strategy(mask_type: &CloudMaskType) -> Arc<dyn CloudMas
     }
 }
 
+/// Known STAC catalogs (curated + indexed)
+#[derive(Clone, Debug)]
+pub struct StacCatalogInfo {
+    pub shorthand: &'static str,
+    pub name: &'static str,
+    pub url: &'static str,
+    pub description: &'static str,
+}
+
+pub fn get_known_catalogs() -> Vec<StacCatalogInfo> {
+    vec![
+        StacCatalogInfo {
+            shorthand: "pc",
+            name: "Planetary Computer",
+            url: "https://planetarycomputer.microsoft.com/api/stac/v1",
+            description: "Microsoft's STAC hosting S2, Landsat, Sentinel-1, Copernicus DEM, etc.",
+        },
+        StacCatalogInfo {
+            shorthand: "es",
+            name: "Earth Search (AWS)",
+            url: "https://earth-search.aws.element84.com/v1",
+            description: "Element 84's STAC on AWS with S2, Landsat, and other collections",
+        },
+    ]
+}
+
+pub fn resolve_catalog_url(catalog: &str) -> String {
+    for known in get_known_catalogs() {
+        if catalog == known.shorthand {
+            return known.url.to_string();
+        }
+    }
+    // If not a shorthand, treat as full URL
+    catalog.to_string()
+}
+
+/// Collections available in each STAC catalog
+pub fn get_catalog_collections(catalog: &str) -> Vec<(&'static str, &'static str)> {
+    match catalog {
+        "pc" => vec![
+            ("sentinel-2-l2a", "Sentinel-2 Level 2A (optical, 10-60m, 2016-present)"),
+            ("landsat-c2-l2", "Landsat Collection 2 Level 2 (optical, 30m, 1980-present)"),
+            ("sentinel-1-rtc", "Sentinel-1 RTC (SAR, 10m, 2015-present)"),
+            ("cop-dem-glo-30", "Copernicus DEM 30m (elevation, global)"),
+            ("nasadem", "NASADEM (elevation, 30m, global)"),
+        ],
+        "es" => vec![
+            ("sentinel-2-l2a", "Sentinel-2 Level 2A (optical, 10-60m)"),
+            ("landsat-c2-l2", "Landsat Collection 2 Level 2 (optical, 30m)"),
+            ("sentinel-1-rtc", "Sentinel-1 RTC (SAR, 10m)"),
+        ],
+        _ => vec![
+            ("(unknown)", "Use 'surtgis stac search --catalog <url> ...' to discover collections"),
+        ],
+    }
+}
+
 pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
     match action {
         StacCommands::Search {
@@ -800,6 +857,38 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                 (out_cols * out_rows) as f64 / 1e6,
             );
             done("STAC composite", &output, elapsed);
+        }
+
+        StacCommands::ListCatalogs => {
+            println!("📚 Available STAC Catalogs (Curated)\n");
+
+            for catalog in get_known_catalogs() {
+                println!("{:<6} {}", catalog.shorthand, catalog.name);
+                println!("       {}", catalog.description);
+                println!("       URL: {}\n", catalog.url);
+            }
+
+            println!("💡 You can also use a custom STAC URL:");
+            println!("   surtgis stac search --catalog https://your-stac-api.com/v1 ...\n");
+        }
+
+        StacCommands::ListCollections { catalog } => {
+            println!("📍 Catalog: {}\n", catalog);
+
+            let collections = get_catalog_collections(&catalog);
+            println!("📊 Available Collections:\n");
+
+            let is_unknown = collections.len() == 1 && collections[0].0 == "(unknown)";
+            if is_unknown {
+                println!("  {}", collections[0].1);
+            } else {
+                for (id, desc) in &collections {
+                    println!("  • {} - {}", id, desc);
+                }
+                println!("\n✨ Total: {} collections", collections.len());
+            }
+
+            println!("\n💡 Usage: surtgis stac composite --catalog {} --collection <id> --asset <band> ...", catalog);
         }
     }
 
