@@ -1,6 +1,7 @@
 //! Handler for STAC catalog subcommands.
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -193,7 +194,7 @@ pub fn get_catalog_collections(catalog: &str) -> Vec<(&'static str, &'static str
 }
 
 /// Catalog info from STAC Index API
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct StacIndexCatalog {
     pub id: String,
     pub title: String,
@@ -206,62 +207,201 @@ struct StacIndexCatalog {
 /// Returns a list of catalog summaries with ID, title, description, and URL.
 /// This is optional - if it fails, users can still use curated catalogs.
 fn fetch_stac_index_catalogs() -> Result<Vec<StacIndexCatalog>> {
-    // Try to fetch from STAC Index API
-    // Note: Full async integration with HTTP will be in a future update
-    // For now, we'll provide a framework and informational message
+    // Try cache first
+    let cache_path = get_stac_index_cache_path();
+    let cache_ttl_secs = 24 * 60 * 60; // 24 hours
 
-    eprintln!("  Discovering catalogs from STAC Index API...");
+    if let Ok(cached_catalogs) = load_from_cache(&cache_path, cache_ttl_secs) {
+        eprintln!("  📦 Using cached catalog list ({} catalogs)", cached_catalogs.len());
+        return Ok(cached_catalogs);
+    }
 
-    // Return sample catalogs that demonstrate what STAC Index provides
-    // In the future, this will fetch real data from https://stacindex.org/api/v1
-    let sample_catalogs = vec![
-        StacIndexCatalog {
-            id: "planet".to_string(),
-            title: "Planet Labs STAC API".to_string(),
-            description: Some("High-resolution multispectral imagery (3m-4m)".to_string()),
-            url: Some("https://api.planet.com/stac/v1".to_string()),
-        },
-        StacIndexCatalog {
-            id: "modis".to_string(),
-            title: "MODIS STAC Catalog".to_string(),
-            description: Some("Daily global 250m-1km thermal & optical data".to_string()),
-            url: Some("https://modis-stac.example.com".to_string()),
-        },
-        StacIndexCatalog {
-            id: "gebco".to_string(),
-            title: "GEBCO Bathymetry".to_string(),
-            description: Some("Global seafloor topography 15 arc-seconds".to_string()),
-            url: Some("https://www.gebco.net/stac".to_string()),
-        },
-        StacIndexCatalog {
-            id: "nasadem".to_string(),
-            title: "NASADEM Global DEM".to_string(),
-            description: Some("30m global elevation with gaps filled".to_string()),
-            url: Some("https://lpdaac.usgs.gov/stac".to_string()),
-        },
-        StacIndexCatalog {
-            id: "geospacial".to_string(),
-            title: "Geospatial Data Commons".to_string(),
-            description: Some("Open data portal with 50+ collections".to_string()),
-            url: Some("https://catalog.geospatialdata.org/stac".to_string()),
-        },
-        StacIndexCatalog {
-            id: "nsidc".to_string(),
-            title: "NSIDC STAC API (Cryosphere)".to_string(),
-            description: Some("Snow, ice, permafrost, and glacier data".to_string()),
-            url: Some("https://nsidc-stac.example.com".to_string()),
-        },
-        StacIndexCatalog {
-            id: "noaa".to_string(),
-            title: "NOAA STAC Catalog".to_string(),
-            description: Some("Weather, ocean, and climate data".to_string()),
-            url: Some("https://www.ncei.noaa.gov/stac".to_string()),
-        },
-    ];
+    // Try real HTTP fetch
+    eprintln!("  🌐 Discovering catalogs from STAC Index API...");
+    match fetch_stac_index_http() {
+        Ok(catalogs) => {
+            // Save to cache for next time
+            let _ = save_to_cache(&cache_path, &catalogs);
+            eprintln!("  ✅ Found {} catalogs (cached)", catalogs.len());
+            Ok(catalogs)
+        }
+        Err(e) => {
+            eprintln!("  ℹ️  STAC Index API unavailable: {}", e);
+            eprintln!("     Using curated catalogs instead");
+            // Return empty - caller will show curated list
+            Ok(Vec::new())
+        }
+    }
+}
 
-    // Return sample data for now
-    // TODO: Implement real HTTP fetch from stacindex.org/api/v1 when async is integrated
-    Ok(sample_catalogs)
+/// Get cache file path for STAC Index catalogs
+fn get_stac_index_cache_path() -> std::path::PathBuf {
+    #[cfg(unix)]
+    {
+        let cache_dir = std::env::var("XDG_CACHE_HOME")
+            .unwrap_or_else(|_| format!("{}/.cache", std::env::var("HOME").unwrap_or_else(|_| ".".to_string())));
+        std::path::PathBuf::from(cache_dir).join("surtgis").join("stac_index_catalogs.json")
+    }
+    #[cfg(windows)]
+    {
+        let cache_dir = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".to_string());
+        std::path::PathBuf::from(cache_dir).join("surtgis-cache").join("stac_index_catalogs.json")
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        std::path::PathBuf::from(".cache/stac_index_catalogs.json")
+    }
+}
+
+/// Load catalogs from cache if valid
+fn load_from_cache(path: &std::path::PathBuf, ttl_secs: u64) -> Result<Vec<StacIndexCatalog>> {
+    use std::fs;
+    use std::time::SystemTime;
+
+    // Check if file exists and is fresh
+    let metadata = fs::metadata(path).context("Cache file not found")?;
+    let modified = metadata.modified().context("Could not get modification time")?;
+    let elapsed = SystemTime::now()
+        .duration_since(modified)
+        .context("Could not calculate cache age")?;
+
+    if elapsed.as_secs() > ttl_secs {
+        anyhow::bail!("Cache expired");
+    }
+
+    // Read and parse cache
+    let content = fs::read_to_string(path).context("Could not read cache file")?;
+    let catalogs: Vec<StacIndexCatalog> = serde_json::from_str(&content)
+        .context("Could not parse cache file")?;
+
+    Ok(catalogs)
+}
+
+/// Save catalogs to cache
+fn save_to_cache(path: &std::path::PathBuf, catalogs: &[StacIndexCatalog]) -> Result<()> {
+    use std::fs;
+
+    // Create parent directories if needed
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).ok();
+    }
+
+    // Serialize and write
+    let json = serde_json::to_string_pretty(catalogs)
+        .context("Could not serialize catalogs")?;
+    fs::write(path, json).context("Could not write cache file")?;
+
+    Ok(())
+}
+
+/// Fetch catalogs from STAC Index API via HTTP
+/// Uses tokio runtime to handle async reqwest calls from sync context
+fn fetch_stac_index_http() -> Result<Vec<StacIndexCatalog>> {
+    // Use tokio to run async code from sync context
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("Failed to create async runtime")?;
+
+    rt.block_on(async {
+        fetch_stac_index_async().await
+    })
+}
+
+/// Async function to fetch from STAC Index API
+async fn fetch_stac_index_async() -> Result<Vec<StacIndexCatalog>> {
+    use std::time::Duration;
+
+    let url = "https://stacindex.org/api/catalogs";
+
+    // Create HTTP client
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .context("Failed to create HTTP client")?;
+
+    // Fetch catalogs
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .context("Failed to fetch from STAC Index API")?;
+
+    if !response.status().is_success() {
+        anyhow::bail!("HTTP {}: {}", response.status(), url);
+    }
+
+    // Parse JSON response
+    let json: serde_json::Value = response
+        .json()
+        .await
+        .context("Failed to parse STAC Index response")?;
+
+    // Extract catalogs from response
+    let catalogs = parse_stac_index_response(&json)
+        .context("Failed to parse catalog data")?;
+
+    Ok(catalogs)
+}
+
+/// Parse STAC Index API JSON response and extract catalogs
+fn parse_stac_index_response(json: &serde_json::Value) -> Result<Vec<StacIndexCatalog>> {
+    let mut catalogs = Vec::new();
+
+    // STAC Index API returns catalogs as root-level array
+    let catalog_list = if let Some(arr) = json.as_array() {
+        arr.clone()
+    } else {
+        anyhow::bail!("Expected array response from STAC Index API");
+    };
+
+    // Parse each catalog entry
+    for item in catalog_list {
+        // Extract fields from catalog object
+        // STAC Index API schema:
+        // id (numeric), slug (string), title, url, summary, isApi (bool), etc.
+
+        let slug = item
+            .get("slug")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        if slug.is_empty() {
+            continue; // Skip entries without slug
+        }
+
+        let title = item
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or(slug)
+            .to_string();
+
+        // Use "summary" field from STAC Index if available, otherwise omit
+        let description = item
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .map(|s| {
+                // Truncate at first newline or make more concise
+                s.lines().next().unwrap_or(s).to_string()
+            });
+
+        let url = item
+            .get("url")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        catalogs.push(StacIndexCatalog {
+            id: slug.to_string(),
+            title,
+            description,
+            url,
+        });
+    }
+
+    // Sort by title for consistent display
+    catalogs.sort_by(|a, b| a.title.cmp(&b.title));
+
+    Ok(catalogs)
 }
 
 pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
