@@ -113,13 +113,31 @@ pub fn get_known_catalogs() -> Vec<StacCatalogInfo> {
             shorthand: "pc",
             name: "Planetary Computer",
             url: "https://planetarycomputer.microsoft.com/api/stac/v1",
-            description: "Microsoft's STAC hosting S2, Landsat, Sentinel-1, Copernicus DEM, etc.",
+            description: "Microsoft's STAC: S2, Landsat, Sentinel-1, Copernicus DEM, GEBCO, etc.",
         },
         StacCatalogInfo {
             shorthand: "es",
             name: "Earth Search (AWS)",
             url: "https://earth-search.aws.element84.com/v1",
-            description: "Element 84's STAC on AWS with S2, Landsat, and other collections",
+            description: "Element 84 on AWS: S2, Landsat, Sentinel-1, DEM collections",
+        },
+        StacCatalogInfo {
+            shorthand: "cdse",
+            name: "Copernicus Data Space (CDSE)",
+            url: "https://catalogue.dataspace.copernicus.eu/odata/v1",
+            description: "EU's Copernicus: S1, S2, S3, S5P, DEM (free, Europe-focused)",
+        },
+        StacCatalogInfo {
+            shorthand: "usgs",
+            name: "USGS 3DEP / OpenTopography",
+            url: "https://cloud.sdsc.edu/v1/AUTH_opentopography/Raster/SRTM_GL30/SRTM_GL30_srtm",
+            description: "USGS elevation data: SRTM, ASTER GDEM, HydroSHEDS",
+        },
+        StacCatalogInfo {
+            shorthand: "osgeo",
+            name: "OGC STAC Index API",
+            url: "https://stacindex.org/api/v1",
+            description: "STAC Index: Registry of all public STAC catalogs worldwide",
         },
     ]
 }
@@ -143,11 +161,30 @@ pub fn get_catalog_collections(catalog: &str) -> Vec<(&'static str, &'static str
             ("sentinel-1-rtc", "Sentinel-1 RTC (SAR, 10m, 2015-present)"),
             ("cop-dem-glo-30", "Copernicus DEM 30m (elevation, global)"),
             ("nasadem", "NASADEM (elevation, 30m, global)"),
+            ("gebco", "GEBCO bathymetry (ocean, 15 arc-seconds)"),
         ],
         "es" => vec![
             ("sentinel-2-l2a", "Sentinel-2 Level 2A (optical, 10-60m)"),
             ("landsat-c2-l2", "Landsat Collection 2 Level 2 (optical, 30m)"),
             ("sentinel-1-rtc", "Sentinel-1 RTC (SAR, 10m)"),
+        ],
+        "cdse" => vec![
+            ("sentinel-1-grd", "Sentinel-1 GRD (SAR, 10m, ground range detected)"),
+            ("sentinel-1-slc", "Sentinel-1 SLC (SAR, 10m, single look complex)"),
+            ("sentinel-2-l1c", "Sentinel-2 L1C (optical, 10-60m, L1 processing)"),
+            ("sentinel-2-l2a", "Sentinel-2 L2A (optical, 10-60m, atmospherically corrected)"),
+            ("sentinel-3-olci", "Sentinel-3 OLCI (optical, 300-1000m, ocean/land)"),
+            ("sentinel-5p", "Sentinel-5P (atmospheric, daily global coverage)"),
+        ],
+        "usgs" => vec![
+            ("srtm-30m", "SRTM 30m DEM (90m for polar regions, 2000 data)"),
+            ("aster-gdem", "ASTER GDEM (30m elevation, global, 2011 release)"),
+            ("nasadem", "NASADEM (30m, merged SRTM+ASTER, improved voids)"),
+            ("hydrosheds", "HydroSHEDS (hydrological datasets, 15 arc-seconds)"),
+        ],
+        "osgeo" => vec![
+            ("(registry)", "STAC Index: Search all public STAC catalogs worldwide"),
+            ("(api)", "Use API to discover 1000+ STAC catalogs globally"),
         ],
         _ => vec![
             ("(unknown)", "Use 'surtgis stac search --catalog <url> ...' to discover collections"),
