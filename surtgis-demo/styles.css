@@ -1,0 +1,94 @@
+/* Custom styles for SurtGIS Demo */
+
+body {
+    margin: 0;
+    padding: 0;
+    font-family: system-ui, -apple-system, sans-serif;
+}
+
+#map {
+    position: relative;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.mapboxgl-ctrl {
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.mapboxgl-ctrl-group button {
+    border-radius: 4px;
+}
+
+/* Sidebar scrollbar */
+.w-80 {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+}
+
+.w-80::-webkit-scrollbar {
+    width: 6px;
+}
+
+.w-80::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.w-80::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 3px;
+}
+
+.w-80::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.3);
+}
+
+/* Input styling */
+input[type="file"],
+input[type="number"],
+select {
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+input[type="file"]:hover,
+input[type="number"]:hover,
+select:hover {
+    border-color: #3b82f6;
+}
+
+input[type="number"]:focus,
+select:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+/* Button styling */
+button:active:not(:disabled) {
+    transform: scale(0.98);
+}
+
+/* Loading animation */
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+.animate-spin {
+    animation: spin 1s linear infinite;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .flex {
+        flex-direction: column-reverse;
+    }
+
+    .w-80 {
+        width: 100%;
+        max-height: 40vh;
+    }
+
+    #map {
+        height: 60vh;
+    }
+}

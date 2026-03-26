@@ -1,0 +1,30 @@
+{
+  "name": "surtgis-wasm",
+  "type": "module",
+  "collaborators": [
+    "Francisco Parra"
+  ],
+  "description": "WebAssembly bindings for SurtGis geospatial algorithms",
+  "version": "0.3.0",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/franciscoparrao/surtgis"
+  },
+  "files": [
+    "surtgis_wasm_bg.wasm",
+    "surtgis_wasm.js",
+    "surtgis_wasm.d.ts"
+  ],
+  "main": "surtgis_wasm.js",
+  "types": "surtgis_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ],
+  "keywords": [
+    "gis",
+    "wasm",
+    "webassembly",
+    "geospatial"
+  ]
+}

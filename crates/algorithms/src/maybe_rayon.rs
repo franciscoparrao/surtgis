@@ -43,6 +43,21 @@ mod sequential {
             self.iter_mut()
         }
     }
+
+    /// Sequential stand-in for rayon's ParallelSliceMut
+    pub trait ParallelSliceMut<T: Send> {
+        fn par_chunks_mut(&mut self, chunk_size: usize) -> std::slice::ChunksMut<T>;
+        fn par_rchunks_mut(&mut self, chunk_size: usize) -> std::slice::RChunksMut<T>;
+    }
+
+    impl<T: Send> ParallelSliceMut<T> for [T] {
+        fn par_chunks_mut(&mut self, chunk_size: usize) -> std::slice::ChunksMut<T> {
+            self.chunks_mut(chunk_size)
+        }
+        fn par_rchunks_mut(&mut self, chunk_size: usize) -> std::slice::RChunksMut<T> {
+            self.rchunks_mut(chunk_size)
+        }
+    }
 }
 
 #[cfg(not(feature = "parallel"))]

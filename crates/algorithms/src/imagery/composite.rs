@@ -7,6 +7,9 @@ use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
+
 /// Per-pixel median composite across multiple rasters.
 ///
 /// For each pixel position, collects all finite (non-NaN) values across the

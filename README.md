@@ -5,6 +5,8 @@
 136 algorithms, 90 CLI subcommands, streaming I/O for arbitrarily large DEMs, and an end-to-end satellite composite pipeline — all from a single binary with no external dependencies.
 
 > **Quickstart**: [Análisis de terreno de los Andes en 5 minutos](https://territorio-digital.cl/blog/surtgis-quickstart-analisis-terreno)
+>
+> **🌐 Try it now**: [SurtGIS Web Demo](surtgis-demo/) — No installation, run in your browser!
 
 ## Quick example
 
