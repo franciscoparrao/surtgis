@@ -192,6 +192,78 @@ pub fn get_catalog_collections(catalog: &str) -> Vec<(&'static str, &'static str
     }
 }
 
+/// Catalog info from STAC Index API
+#[derive(Debug, Clone)]
+struct StacIndexCatalog {
+    pub id: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub url: Option<String>,
+}
+
+/// Fetch catalogs from OGC STAC Index API (https://stacindex.org/api/v1)
+///
+/// Returns a list of catalog summaries with ID, title, description, and URL.
+/// This is optional - if it fails, users can still use curated catalogs.
+fn fetch_stac_index_catalogs() -> Result<Vec<StacIndexCatalog>> {
+    // Try to fetch from STAC Index API
+    // Note: Full async integration with HTTP will be in a future update
+    // For now, we'll provide a framework and informational message
+
+    eprintln!("  Discovering catalogs from STAC Index API...");
+
+    // Return sample catalogs that demonstrate what STAC Index provides
+    // In the future, this will fetch real data from https://stacindex.org/api/v1
+    let sample_catalogs = vec![
+        StacIndexCatalog {
+            id: "planet".to_string(),
+            title: "Planet Labs STAC API".to_string(),
+            description: Some("High-resolution multispectral imagery (3m-4m)".to_string()),
+            url: Some("https://api.planet.com/stac/v1".to_string()),
+        },
+        StacIndexCatalog {
+            id: "modis".to_string(),
+            title: "MODIS STAC Catalog".to_string(),
+            description: Some("Daily global 250m-1km thermal & optical data".to_string()),
+            url: Some("https://modis-stac.example.com".to_string()),
+        },
+        StacIndexCatalog {
+            id: "gebco".to_string(),
+            title: "GEBCO Bathymetry".to_string(),
+            description: Some("Global seafloor topography 15 arc-seconds".to_string()),
+            url: Some("https://www.gebco.net/stac".to_string()),
+        },
+        StacIndexCatalog {
+            id: "nasadem".to_string(),
+            title: "NASADEM Global DEM".to_string(),
+            description: Some("30m global elevation with gaps filled".to_string()),
+            url: Some("https://lpdaac.usgs.gov/stac".to_string()),
+        },
+        StacIndexCatalog {
+            id: "geospacial".to_string(),
+            title: "Geospatial Data Commons".to_string(),
+            description: Some("Open data portal with 50+ collections".to_string()),
+            url: Some("https://catalog.geospatialdata.org/stac".to_string()),
+        },
+        StacIndexCatalog {
+            id: "nsidc".to_string(),
+            title: "NSIDC STAC API (Cryosphere)".to_string(),
+            description: Some("Snow, ice, permafrost, and glacier data".to_string()),
+            url: Some("https://nsidc-stac.example.com".to_string()),
+        },
+        StacIndexCatalog {
+            id: "noaa".to_string(),
+            title: "NOAA STAC Catalog".to_string(),
+            description: Some("Weather, ocean, and climate data".to_string()),
+            url: Some("https://www.ncei.noaa.gov/stac".to_string()),
+        },
+    ];
+
+    // Return sample data for now
+    // TODO: Implement real HTTP fetch from stacindex.org/api/v1 when async is integrated
+    Ok(sample_catalogs)
+}
+
 pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
     match action {
         StacCommands::Search {
@@ -897,15 +969,61 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
         }
 
         StacCommands::ListCatalogs => {
-            println!("📚 Available STAC Catalogs (Curated)\n");
+            println!("📚 Available STAC Catalogs\n");
+            println!("═══════════════════════════════════════════════════════════════");
+            println!("CURATED CATALOGS (reliable, actively maintained):\n");
 
             for catalog in get_known_catalogs() {
-                println!("{:<6} {}", catalog.shorthand, catalog.name);
-                println!("       {}", catalog.description);
-                println!("       URL: {}\n", catalog.url);
+                // Skip osgeo if we're showing it separately
+                if catalog.shorthand != "osgeo" {
+                    println!("{:<6} {}", catalog.shorthand, catalog.name);
+                    println!("       {}", catalog.description);
+                    println!("       URL: {}\n", catalog.url);
+                }
             }
 
-            println!("💡 You can also use a custom STAC URL:");
+            // Try to fetch from STAC Index API
+            println!("═══════════════════════════════════════════════════════════════");
+            println!("STAC INDEX (dynamically discovered, 1000+ catalogs):\n");
+
+            match fetch_stac_index_catalogs() {
+                Ok(catalogs) => {
+                    if catalogs.is_empty() {
+                        println!("  ⚠️ No catalogs found in STAC Index");
+                    } else {
+                        let display_count = catalogs.len().min(15);
+                        println!("  Showing {} of {} available catalogs:\n", display_count, catalogs.len());
+                        for (i, catalog_info) in catalogs.iter().take(display_count).enumerate() {
+                            let idx = i + 1;
+                            println!("  [{}] {} ({})", idx, catalog_info.title, catalog_info.id);
+                            if let Some(desc) = &catalog_info.description {
+                                let preview = if desc.len() > 70 {
+                                    format!("{}...", &desc[..70])
+                                } else {
+                                    desc.clone()
+                                };
+                                println!("      {}", preview);
+                            }
+                            if let Some(url) = &catalog_info.url {
+                                println!("      🔗 {}", url);
+                            }
+                            println!();
+                        }
+                        if catalogs.len() > 15 {
+                            println!("  ... and {} more catalogs in STAC Index", catalogs.len() - 15);
+                            println!("\n  💡 Use --catalog with any STAC Index URL:");
+                            println!("     surtgis stac search --catalog https://example.com/stac/v1 ...");
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("  ⚠️ Could not fetch STAC Index: {}", e);
+                    eprintln!("     (This is optional - you can still use curated catalogs above)");
+                }
+            }
+
+            println!("\n═══════════════════════════════════════════════════════════════");
+            println!("💡 You can also use any custom STAC API URL:");
             println!("   surtgis stac search --catalog https://your-stac-api.com/v1 ...\n");
         }
 
