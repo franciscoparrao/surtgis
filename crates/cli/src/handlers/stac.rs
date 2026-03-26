@@ -11,6 +11,7 @@ use surtgis_cloud::{BBox, CogReaderOptions, StacCatalog, StacClientOptions, Stac
 
 use crate::commands::StacCommands;
 use crate::helpers::{done, parse_bbox, spinner, write_result};
+use crate::stac_introspect::{CloudMaskType, StacCollectionSchema};
 use crate::streaming::resolve_asset_key;
 
 /// Collection-specific configuration for cloud masking and asset keys
@@ -69,6 +70,31 @@ impl CollectionProfile {
             Self::LandsatC2L2 { .. } => "Landsat C2 L2",
             Self::Sentinel1RTC => "Sentinel-1 RTC",
         }
+    }
+}
+
+/// Factory: create CloudMaskStrategy from auto-detected CloudMaskType
+///
+/// Supports:
+/// - Categorical (e.g., Sentinel-2 SCL) → S2SclMask
+/// - Bitmask (e.g., Landsat QA_PIXEL) → LandsatQaMask
+/// - None (e.g., SAR) → NoCloudMask
+pub fn create_cloud_mask_strategy(mask_type: &CloudMaskType) -> Arc<dyn CloudMaskStrategy> {
+    match mask_type {
+        CloudMaskType::Categorical {
+            asset: _,
+            num_classes: _,
+        } => {
+            // For now, assume all categorical masks are S2-like (SCL)
+            // Can be extended to support other categorical formats
+            Arc::new(S2SclMask::new())
+        }
+        CloudMaskType::Bitmask { asset: _, bits: _ } => {
+            // For now, assume all bitmask masks are Landsat-like (QA_PIXEL)
+            // Can be extended to support other bitmask formats
+            Arc::new(LandsatQaMask::new())
+        }
+        CloudMaskType::None => Arc::new(NoCloudMask),
     }
 }
 
@@ -780,14 +806,16 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
     Ok(())
 }
 
-/// Fetch and composite a single band from STAC for any collection.
+/// Fetch and composite a single band from ANY STAC collection.
 ///
-/// Supports:
-/// - Multiple collections: Sentinel-2, Landsat C2, Sentinel-1 SAR
-/// - Collection-specific cloud masking via CloudMaskStrategy
-/// - Multi-scene compositing (median stack)
-/// - Grid alignment to reference DEM
-/// - Does NOT write to disk
+/// Features:
+/// - **Catalog-agnostic**: Works with any STAC API (not just Planetary Computer)
+/// - **Auto-detects**: Available bands, cloud masking strategy, CRS, resolution
+/// - **Cloud masking**: Automatically selected (SCL, QA_PIXEL, or none for SAR)
+/// - **Band matching**: Fuzzy matching on band names (B04 ≈ red ≈ banda_roja)
+/// - **Multi-scene compositing**: Median stack across scenes
+/// - **Grid alignment**: Optional resampling to reference DEM
+/// - **No disk writes**: Returns raster in memory
 pub fn fetch_stac_band(
     catalog: &str,
     bbox: &str,
@@ -798,13 +826,6 @@ pub fn fetch_stac_band(
     align_to: Option<&surtgis_core::Raster<f64>>,
 ) -> Result<surtgis_core::Raster<f64>> {
     use surtgis_core::mosaic;
-
-    // Get collection profile (determines cloud masking strategy)
-    let profile = CollectionProfile::from_collection_name(collection)?;
-    let mask_asset_name = profile.mask_asset_name();
-
-    // Normalize asset name for this collection
-    let normalized_asset = crate::streaming::validate_asset_key(asset, collection)?;
 
     let cat = StacCatalog::from_str_or_url(catalog);
     let bb = parse_bbox(bbox)?;
@@ -818,9 +839,8 @@ pub fn fetch_stac_band(
         .limit(search_limit);
 
     let pb = spinner(&format!(
-        "Searching for {} ({}) scenes...",
-        profile.description(),
-        normalized_asset
+        "Searching for {} scenes...",
+        collection
     ));
     let client_opts = StacClientOptions {
         max_items: (max_scenes * 4) as usize,
@@ -833,12 +853,36 @@ pub fn fetch_stac_band(
 
     if items.is_empty() {
         anyhow::bail!(
-            "No items found for {} ({}) in bbox {}",
-            profile.description(),
-            normalized_asset,
+            "No items found for {} in bbox {}",
+            collection,
             bbox
         );
     }
+
+    // Introspect first item to auto-detect collection schema
+    let pb = spinner("Introspecting collection schema...");
+    let schema = StacCollectionSchema::from_stac_item(collection, &items[0])
+        .context("Failed to introspect STAC collection")?;
+    pb.finish_and_clear();
+
+    eprintln!("📊 Collection: {}", schema.collection_name);
+    eprintln!("   Available bands: {}", schema.format_bands());
+    eprintln!("   Cloud masking: {}", match &schema.cloud_mask_type {
+        CloudMaskType::Categorical { asset, num_classes } => format!("Categorical {} ({} classes)", asset, num_classes),
+        CloudMaskType::Bitmask { asset, bits } => format!("Bitmask {} ({} bits)", asset, bits.len()),
+        CloudMaskType::None => "None (SAR)".to_string(),
+    });
+
+    // Find best matching band
+    let band_info = schema.find_band_by_name(asset)
+        .context(format!(
+            "Band '{}' not found. Available: {}",
+            asset, schema.format_bands()
+        ))?;
+    eprintln!("   Band matched: {} → {}", asset, band_info.asset_key);
+
+    // Create cloud masking strategy based on auto-detected type
+    let cloud_mask_strategy = create_cloud_mask_strategy(&schema.cloud_mask_type);
 
     // Display info about found items
     for (idx, item) in items.iter().take(max_scenes).enumerate() {
@@ -864,8 +908,8 @@ pub fn fetch_stac_band(
             i + 1, max_scenes, item.id, cloud as u32, date
         ));
 
-        // Resolve data asset using normalized asset name
-        let data_asset = resolve_asset_key(item, &normalized_asset)
+        // Resolve data asset
+        let data_asset = resolve_asset_key(item, &band_info.asset_key)
             .and_then(|(_, a)| {
                 client.sign_asset_href(&a.href, item.collection.as_deref().unwrap_or(""))
                     .ok()
@@ -873,7 +917,7 @@ pub fn fetch_stac_band(
             });
 
         // Resolve cloud mask asset (if applicable)
-        let mask_href = mask_asset_name.and_then(|mask_name| {
+        let mask_href = schema.cloud_mask_asset.as_ref().and_then(|mask_name| {
             resolve_asset_key(item, mask_name)
                 .and_then(|(_, a)| {
                     client.sign_asset_href(&a.href, item.collection.as_deref().unwrap_or(""))
@@ -885,7 +929,7 @@ pub fn fetch_stac_band(
             pb.finish_and_clear();
             eprintln!(
                 "  ⚠️ Skipping {}: asset {} not found",
-                item.id, normalized_asset
+                item.id, band_info.asset_key
             );
             continue;
         };
@@ -927,14 +971,14 @@ pub fn fetch_stac_band(
         let (rrows, rcols) = raster.shape();
         pb.println(format!("  → Read {} × {} pixels", rcols, rrows));
 
-        // Apply cloud masking using collection-specific strategy
+        // Apply cloud masking using auto-detected strategy
         if let Some(mask_href) = &mask_href {
-            let strategy_desc = match &profile {
-                CollectionProfile::Sentinel2L2A { .. } => "SCL",
-                CollectionProfile::LandsatC2L2 { .. } => "QA_PIXEL",
-                CollectionProfile::Sentinel1RTC => "None",
+            let mask_desc = match &schema.cloud_mask_type {
+                CloudMaskType::Categorical { asset, .. } => asset.clone(),
+                CloudMaskType::Bitmask { asset, .. } => asset.clone(),
+                CloudMaskType::None => "None".to_string(),
             };
-            pb.println(format!("  → Applying {} cloud mask...", strategy_desc));
+            pb.println(format!("  → Applying {} cloud mask...", mask_desc));
 
             // Read mask asset as f64
             let mask_opts = CogReaderOptions::default();
@@ -951,16 +995,6 @@ pub fn fetch_stac_band(
 
             // Read mask as f64 and apply strategy
             if let Ok(mask_raster) = mask_reader.read_bbox::<f64>(&read_bb, None) {
-                let cloud_mask_strategy = match &profile {
-                    CollectionProfile::Sentinel2L2A {
-                        cloud_mask_strategy,
-                    } => cloud_mask_strategy.clone(),
-                    CollectionProfile::LandsatC2L2 {
-                        cloud_mask_strategy,
-                    } => cloud_mask_strategy.clone(),
-                    CollectionProfile::Sentinel1RTC => Arc::new(NoCloudMask),
-                };
-
                 raster = cloud_mask_strategy
                     .mask(&raster, &mask_raster)
                     .unwrap_or(raster); // If masking fails, use original

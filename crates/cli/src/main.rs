@@ -4,6 +4,7 @@ mod commands;
 mod handlers;
 mod helpers;
 mod memory;
+mod stac_introspect;
 mod streaming;
 
 use anyhow::Result;
