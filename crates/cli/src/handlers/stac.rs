@@ -5,14 +5,12 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use surtgis_algorithms::imagery::{
-    CloudMaskStrategy, S2SclMask, LandsatQaMask, NoCloudMask, cloud_mask_scl,
-};
+use surtgis_algorithms::imagery::{CloudMaskStrategy, S2SclMask, LandsatQaMask, NoCloudMask};
 use surtgis_cloud::blocking::{CogReaderBlocking, StacClientBlocking};
 use surtgis_cloud::{BBox, CogReaderOptions, StacCatalog, StacClientOptions, StacItem, StacSearchParams};
 
 use crate::commands::StacCommands;
-use crate::helpers::{done, parse_bbox, parse_scl_classes, spinner, write_result};
+use crate::helpers::{done, parse_bbox, spinner, write_result};
 use crate::streaming::resolve_asset_key;
 
 /// Collection-specific configuration for cloud masking and asset keys
@@ -438,14 +436,19 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             asset,
             datetime,
             max_scenes,
-            scl_asset,
-            scl_keep,
+            scl_asset: _scl_asset,  // DEPRECATED: ignored (profile determines masking)
+            scl_keep: _scl_keep,    // DEPRECATED: ignored (profile determines masking)
             align_to,
             output,
         } => {
+            // Get collection profile (determines cloud masking strategy)
+            let profile = CollectionProfile::from_collection_name(&collection)?;
+            let mask_asset_name = profile.mask_asset_name();
+
+            eprintln!("📷 Collection: {}", profile.description());
+
             let cat = StacCatalog::from_str_or_url(&catalog);
             let bb = parse_bbox(&bbox)?;
-            let keep_classes = parse_scl_classes(&scl_keep)?;
 
             // Search with high limit to find enough items across dates
             let search_limit = (max_scenes * 4) as u32;
@@ -522,13 +525,17 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                                 item.collection.as_deref().unwrap_or(""),
                             ).ok().map(|h| (h, item.epsg()))
                         });
-                    // Resolve and sign SCL asset
-                    let scl_result = resolve_asset_key(item, &scl_asset)
-                        .and_then(|(_, a)| {
-                            client.sign_asset_href(
-                                &a.href,
-                                item.collection.as_deref().unwrap_or(""),
-                            ).ok()
+
+                    // Resolve and sign cloud mask asset (if applicable for this collection)
+                    let scl_result = mask_asset_name
+                        .and_then(|mask_name| {
+                            resolve_asset_key(item, mask_name)
+                                .and_then(|(_, a)| {
+                                    client.sign_asset_href(
+                                        &a.href,
+                                        item.collection.as_deref().unwrap_or(""),
+                                    ).ok()
+                                })
                         });
 
                     if let (Some((dh, epsg)), Some(sh)) = (data_result, scl_result) {
@@ -603,7 +610,17 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             };
 
             let scenes_ref = &scenes;
-            let keep_ref = &keep_classes;
+            // Get cloud masking strategy from collection profile
+            let cloud_mask_strategy = match &profile {
+                CollectionProfile::Sentinel2L2A {
+                    cloud_mask_strategy,
+                } => cloud_mask_strategy.clone(),
+                CollectionProfile::LandsatC2L2 {
+                    cloud_mask_strategy,
+                } => cloud_mask_strategy.clone(),
+                CollectionProfile::Sentinel1RTC => Arc::new(NoCloudMask),
+            };
+            let mask_ref = &cloud_mask_strategy;
             let mut strip_idx_counter = 0usize;
 
             surtgis_core::io::write_geotiff_streaming(
@@ -679,8 +696,8 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                             }
                         };
 
-                        // Cloud mask
-                        if let Ok(clean) = cloud_mask_scl(&data_m, &scl_m, keep_ref) {
+                        // Cloud mask using collection-specific strategy
+                        if let Ok(clean) = mask_ref.mask(&data_m, &scl_m) {
                             scene_strips.push(clean.data().to_owned());
                         }
                     }
