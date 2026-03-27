@@ -63,6 +63,44 @@ function initMap() {
 
 initMap();
 
+// Load demo DEM button
+document.getElementById('loadDemoBtn').addEventListener('click', async () => {
+    try {
+        updateStatus('Loading demo DEM...');
+        const response = await fetch('./data/demo_dem.tif');
+        if (!response.ok) throw new Error('Failed to fetch demo DEM');
+        const buffer = await response.arrayBuffer();
+        currentDem = new Uint8Array(buffer);
+
+        // Parse metadata
+        try {
+            const tiff = await GeoTIFF.fromArrayBuffer(buffer);
+            const image = await tiff.getImage();
+            const bbox = image.getBoundingBox();
+            const [width, height] = image.getSize();
+
+            currentExtent = {
+                bbox: bbox,
+                width: width,
+                height: height,
+                data: null
+            };
+
+            updateStatus(`✓ Demo DEM loaded: ${width}×${height}px (Andes, Chile)`);
+            fileStatus.textContent = `${width}×${height}px, ${(buffer.byteLength / 1024).toFixed(0)}KB`;
+
+            // Center map
+            const [minX, minY, maxX, maxY] = bbox;
+            map.fitBounds([[minX, minY], [maxX, maxY]], { padding: 20 });
+        } catch (geoErr) {
+            updateStatus('✓ Demo DEM loaded (metadata unavailable)');
+            fileStatus.textContent = `${(buffer.byteLength / 1024).toFixed(0)}KB`;
+        }
+    } catch (err) {
+        updateStatus(`✗ Error loading demo: ${err.message}`);
+    }
+});
+
 // File upload handler
 demFile.addEventListener('change', async (e) => {
     const file = e.target.files[0];

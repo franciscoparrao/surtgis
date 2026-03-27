@@ -14,13 +14,31 @@ Interactive browser-based geospatial analysis powered by **136+ Rust algorithms 
 
 ## Quick Start
 
-1. **Open** `index.html` in a web browser (or visit the live demo link above)
-2. **Upload** a GeoTIFF DEM file (e.g., Copernicus 30m, Landsat DEM, SRTM)
+### Option A: Use Demo DEM (Fastest)
+
+1. **Open** `index.html` in a web browser
+2. **Click** "📂 Load Demo DEM (Andes 512×512)" button
+3. **Select** an algorithm (e.g., "Slope")
+4. **Click** "Compute" → result appears on map in <1 second
+5. **Download** the result as GeoTIFF
+
+### Option B: Upload Your Own Data
+
+1. **Open** `index.html` in a web browser
+2. **Upload** your GeoTIFF DEM (Copernicus 30m, USGS 3DEP, SRTM, etc.)
    - Recommended: 512×512 pixels for fast results
    - Max: 100 MB (browser limit)
 3. **Select** an algorithm from the dropdown
 4. **Click** "Compute"
 5. **Download** the result as GeoTIFF
+
+### Demo DEM Details
+
+- **Size**: 512×512 pixels (~445 KB)
+- **Location**: Andes Mountains, Chile (-70.5°E, -33.5°S)
+- **Elevation**: 357m - 1643m
+- **CRS**: WGS84 (EPSG:4326)
+- **Ready to use**: No download needed, included in repo
 
 ## Algorithms Included
 
