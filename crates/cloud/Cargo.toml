@@ -17,7 +17,7 @@ native = ["dep:tokio", "reqwest/rustls-tls"]
 wasm = ["dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:js-sys"]
 
 [dependencies]
-surtgis-core = { version = "0.3.0", path = "../core", default-features = false }
+surtgis-core = { version = "0.4.0", path = "../core", default-features = false }
 thiserror.workspace = true
 serde.workspace = true
 ndarray.workspace = true

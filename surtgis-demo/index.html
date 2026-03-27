@@ -4,125 +4,240 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SurtGIS Demo - Geospatial Analysis in Your Browser</title>
-    <script src='https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js'></script>
-    <link href='https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css' rel='stylesheet' />
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/geotiff/2.1.3/geotiff.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+    <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/geotiff@2.1.3/dist-browser/geotiff.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.2/proj4.min.js"></script>
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
 </head>
-<body class="bg-gray-100">
+<body class="bg-gray-900">
     <div class="flex h-screen">
-        <!-- Map Container -->
+        <!-- Map -->
         <div id="map" class="flex-1"></div>
 
         <!-- Sidebar -->
-        <div class="w-80 bg-white shadow-lg overflow-y-auto">
-            <div class="p-6">
-                <!-- Header -->
-                <div class="mb-6">
-                    <h1 class="text-2xl font-bold text-gray-900">SurtGIS</h1>
-                    <p class="text-sm text-gray-600 mt-1">Geospatial Analysis in the Browser</p>
-                    <p class="text-xs text-gray-500 mt-2">v0.3.0 - 136+ algorithms, powered by Rust + WASM</p>
-                </div>
+        <div id="sidebar" class="w-96 bg-white shadow-lg flex flex-col">
+            <!-- Tabs -->
+            <div class="flex border-b">
+                <button id="tabLocal" class="flex-1 py-2 text-xs font-medium text-blue-600 border-b-2 border-blue-600">Local</button>
+                <button id="tabStac" class="flex-1 py-2 text-xs font-medium text-gray-500 hover:text-gray-700">STAC</button>
+                <button id="tabLayers" class="flex-1 py-2 text-xs font-medium text-gray-500 hover:text-gray-700">Layers</button>
+            </div>
 
-                <!-- File Upload -->
-                <div class="mb-6">
-                    <label class="block text-sm font-medium text-gray-700 mb-2">Upload GeoTIFF DEM</label>
-                    <input type="file" id="demFile" accept=".tif,.tiff" class="w-full px-3 py-2 border border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50">
-                    <p class="text-xs text-gray-500 mt-1">Max 100MB. Use 512x512 for fast results</p>
+            <!-- Tab Content -->
+            <div class="flex-1 overflow-y-auto">
 
-                    <!-- Load Demo DEM -->
-                    <button id="loadDemoBtn" class="mt-2 w-full bg-purple-600 hover:bg-purple-700 text-white font-medium py-2 px-4 rounded-lg transition text-sm">
-                        📂 Load Demo DEM (Andes 512×512)
-                    </button>
+                <!-- ═══ LOCAL TAB ═══ -->
+                <div id="panelLocal" class="p-4">
+                    <div class="mb-4">
+                        <label class="block text-xs font-medium text-gray-700 mb-1">GeoTIFF DEM</label>
+                        <input type="file" id="demFile" accept=".tif,.tiff" class="w-full px-2 py-1 border border-gray-300 rounded text-xs">
+                        <button id="loadDemoBtn" class="mt-1 w-full bg-purple-600 hover:bg-purple-700 text-white font-medium py-1.5 px-3 rounded transition text-xs">
+                            Load Demo DEM (Andes 512x512)
+                        </button>
+                        <div id="fileStatus" class="text-xs text-gray-500 mt-1"></div>
+                    </div>
 
-                    <div id="fileStatus" class="text-sm text-gray-600 mt-2"></div>
-                </div>
+                    <div class="mb-3">
+                        <label class="block text-xs font-medium text-gray-700 mb-1">Algorithm</label>
+                        <select id="algorithm" class="w-full px-2 py-1.5 border border-gray-300 rounded text-xs">
+                            <optgroup label="Terrain">
+                                <option value="slope">Slope (degrees)</option>
+                                <option value="aspect">Aspect (0-360)</option>
+                                <option value="hillshade">Hillshade</option>
+                                <option value="multidirectional_hillshade">Multi-Hillshade</option>
+                                <option value="tpi">TPI</option>
+                                <option value="tri">TRI</option>
+                                <option value="northness">Northness</option>
+                                <option value="eastness">Eastness</option>
+                                <option value="curvature_general">Curvature (general)</option>
+                                <option value="curvature_profile">Curvature (profile)</option>
+                                <option value="curvature_plan">Curvature (plan)</option>
+                                <option value="dev">DEV</option>
+                                <option value="geomorphons">Geomorphons</option>
+                                <option value="shape_index">Shape Index</option>
+                                <option value="curvedness">Curvedness</option>
+                            </optgroup>
+                            <optgroup label="Hydrology">
+                                <option value="fill">Fill Depressions</option>
+                                <option value="priority_flood">Priority Flood</option>
+                                <option value="flow_direction">Flow Direction</option>
+                                <option value="flow_accumulation">Flow Accumulation</option>
+                                <option value="twi">TWI</option>
+                                <option value="hand">HAND</option>
+                            </optgroup>
+                            <optgroup label="Morphology">
+                                <option value="erode">Erosion</option>
+                                <option value="dilate">Dilation</option>
+                                <option value="opening">Opening</option>
+                                <option value="closing">Closing</option>
+                            </optgroup>
+                            <optgroup label="Statistics">
+                                <option value="focal_mean">Focal Mean</option>
+                                <option value="focal_std">Focal Std Dev</option>
+                                <option value="focal_range">Focal Range</option>
+                            </optgroup>
+                        </select>
+                    </div>
 
-                <!-- Algorithm Selector -->
-                <div class="mb-6">
-                    <label class="block text-sm font-medium text-gray-700 mb-2">Algorithm</label>
-                    <select id="algorithm" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
-                        <optgroup label="Terrain">
-                            <option value="slope">Slope (degrees)</option>
-                            <option value="aspect">Aspect (0-360°)</option>
-                            <option value="hillshade">Hillshade (3D effect)</option>
-                            <option value="tpi">TPI (Topographic Position)</option>
-                            <option value="tri">TRI (Terrain Ruggedness)</option>
-                        </optgroup>
-                        <optgroup label="Hydrology">
-                            <option value="fill">Fill Depressions</option>
-                            <option value="flow_direction">Flow Direction (D8)</option>
-                            <option value="flow_accumulation">Flow Accumulation</option>
-                        </optgroup>
-                        <optgroup label="Morphology">
-                            <option value="erode">Morphological Erosion (radius=2)</option>
-                            <option value="dilate">Morphological Dilation (radius=2)</option>
-                        </optgroup>
-                        <optgroup label="Statistics">
-                            <option value="focal_mean">Focal Mean (radius=3)</option>
-                        </optgroup>
-                    </select>
-                </div>
-
-                <!-- Parameters -->
-                <div class="mb-6">
-                    <label class="block text-sm font-medium text-gray-700 mb-2">Parameters</label>
-                    <div class="space-y-2">
+                    <div class="mb-3 grid grid-cols-2 gap-2">
                         <div>
-                            <label class="text-xs text-gray-600">Radius (for TPI/focal stats):</label>
-                            <input type="number" id="radius" min="1" max="50" value="3" class="w-full px-2 py-1 border border-gray-300 rounded text-sm">
+                            <label class="text-xs text-gray-600">Radius:</label>
+                            <input type="number" id="radius" min="1" max="50" value="3" class="w-full px-2 py-1 border border-gray-300 rounded text-xs">
                         </div>
                         <div>
-                            <label class="text-xs text-gray-600">Azimuth (for hillshade):</label>
-                            <input type="number" id="azimuth" min="0" max="360" value="315" class="w-full px-2 py-1 border border-gray-300 rounded text-sm">
+                            <label class="text-xs text-gray-600">Azimuth:</label>
+                            <input type="number" id="azimuth" min="0" max="360" value="315" class="w-full px-2 py-1 border border-gray-300 rounded text-xs">
                         </div>
+                    </div>
+
+                    <div class="mb-3 grid grid-cols-2 gap-2">
+                        <div>
+                            <label class="text-xs text-gray-600">Colormap:</label>
+                            <select id="colormap" class="w-full px-2 py-1 border border-gray-300 rounded text-xs">
+                                <option value="auto">Auto</option>
+                                <option value="viridis">Viridis</option>
+                                <option value="plasma">Plasma</option>
+                                <option value="terrain">Terrain</option>
+                                <option value="gray">Grayscale</option>
+                                <option value="seismic">Seismic</option>
+                                <option value="hsv">HSV</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="text-xs text-gray-600">Opacity: <span id="opacityVal">90%</span></label>
+                            <input type="range" id="opacity" min="0" max="100" value="90" class="w-full">
+                        </div>
+                    </div>
+
+                    <div class="flex gap-2 mb-3">
+                        <button id="computeBtn" disabled class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-3 rounded transition text-xs disabled:opacity-50 disabled:cursor-not-allowed">Compute</button>
+                        <button id="downloadBtn" disabled class="flex-1 bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-3 rounded transition text-xs disabled:opacity-50 disabled:cursor-not-allowed">Download</button>
                     </div>
                 </div>
 
-                <!-- Buttons -->
-                <div class="flex gap-2 mb-6">
-                    <button id="computeBtn" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed">
-                        Compute
-                    </button>
-                    <button id="downloadBtn" class="flex-1 bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed">
-                        Download
-                    </button>
-                </div>
-
-                <!-- Status -->
-                <div class="mb-4 p-3 bg-gray-100 rounded-lg">
-                    <p id="status" class="text-sm text-gray-700">Ready. Upload a GeoTIFF to get started.</p>
-                    <div id="progress" class="mt-2 hidden">
-                        <div class="w-full bg-gray-300 rounded-full h-2">
-                            <div id="progressBar" class="bg-blue-600 h-2 rounded-full transition-all" style="width: 0%"></div>
+                <!-- ═══ STAC TAB ═══ -->
+                <div id="panelStac" class="p-4 hidden">
+                    <!-- Step 1: Catalog -->
+                    <div class="mb-4">
+                        <label class="block text-xs font-medium text-gray-700 mb-1">1. Catalog</label>
+                        <div class="flex gap-1 mb-1">
+                            <input type="text" id="stacSearch" placeholder="Search catalogs..." class="flex-1 px-2 py-1 border border-gray-300 rounded text-xs">
+                            <button id="stacSearchBtn" class="bg-blue-600 text-white px-2 py-1 rounded text-xs hover:bg-blue-700">Search</button>
                         </div>
-                        <p id="progressText" class="text-xs text-gray-600 mt-1">Processing...</p>
+                        <!-- Quick catalogs -->
+                        <div class="space-y-0.5 mb-1">
+                            <button data-stac-url="https://planetarycomputer.microsoft.com/api/stac/v1" class="stac-quick w-full text-left px-2 py-1 bg-blue-50 hover:bg-blue-100 rounded text-xs truncate">Planetary Computer</button>
+                            <button data-stac-url="https://earth-search.aws.element84.com/v1" class="stac-quick w-full text-left px-2 py-1 bg-blue-50 hover:bg-blue-100 rounded text-xs truncate">Earth Search (AWS)</button>
+                            <button data-stac-url="https://planetarycomputer.microsoft.com/api/stac/v1" data-collection="cop-dem-glo-30" class="stac-quick w-full text-left px-2 py-1 bg-green-50 hover:bg-green-100 rounded text-xs truncate">Copernicus DEM 30m (quick)</button>
+                            <button data-stac-url="https://planetarycomputer.microsoft.com/api/stac/v1" data-collection="sentinel-2-l2a" class="stac-quick w-full text-left px-2 py-1 bg-green-50 hover:bg-green-100 rounded text-xs truncate">Sentinel-2 L2A (quick)</button>
+                            <button data-stac-url="https://planetarycomputer.microsoft.com/api/stac/v1" data-collection="landsat-c2-l2" class="stac-quick w-full text-left px-2 py-1 bg-green-50 hover:bg-green-100 rounded text-xs truncate">Landsat C2 L2 (quick)</button>
+                        </div>
+                        <div id="stacCatalogResults" class="max-h-32 overflow-y-auto border border-gray-200 rounded text-xs hidden"></div>
+                        <div id="stacCatalogStatus" class="text-xs text-gray-500 mt-1"></div>
+                    </div>
+
+                    <!-- Step 2: Collection -->
+                    <div class="mb-4">
+                        <label class="block text-xs font-medium text-gray-700 mb-1">2. Collection</label>
+                        <select id="stacCollection" class="w-full px-2 py-1 border border-gray-300 rounded text-xs" disabled>
+                            <option value="">-- select catalog first --</option>
+                        </select>
+                        <div id="stacCollectionInfo" class="text-xs text-gray-500 mt-1"></div>
+                    </div>
+
+                    <!-- Step 3: Search area -->
+                    <div class="mb-4">
+                        <label class="block text-xs font-medium text-gray-700 mb-1">3. Search Area</label>
+                        <button id="drawBboxBtn" class="w-full bg-yellow-500 hover:bg-yellow-600 text-white font-medium py-1.5 px-3 rounded transition text-xs mb-1">
+                            Draw bbox on map
+                        </button>
+                        <div id="bboxDisplay" class="text-xs text-gray-500 font-mono"></div>
+                        <div class="grid grid-cols-2 gap-1 mt-1">
+                            <div>
+                                <label class="text-xs text-gray-600">From:</label>
+                                <input type="date" id="stacDateFrom" value="2024-06-01" class="w-full px-1 py-0.5 border border-gray-300 rounded text-xs">
+                            </div>
+                            <div>
+                                <label class="text-xs text-gray-600">To:</label>
+                                <input type="date" id="stacDateTo" value="2024-08-31" class="w-full px-1 py-0.5 border border-gray-300 rounded text-xs">
+                            </div>
+                        </div>
+                        <input type="number" id="stacMaxItems" value="5" min="1" max="20" class="w-full px-2 py-0.5 border border-gray-300 rounded text-xs mt-1" placeholder="Max items">
+                    </div>
+
+                    <!-- Step 4: Search -->
+                    <div class="mb-4">
+                        <button id="stacSearchItems" disabled class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-3 rounded transition text-xs disabled:opacity-50 disabled:cursor-not-allowed">
+                            Search Items
+                        </button>
+                        <div id="stacItemsStatus" class="text-xs text-gray-500 mt-1"></div>
+                    </div>
+
+                    <!-- Step 5: Results -->
+                    <div class="mb-4">
+                        <label class="block text-xs font-medium text-gray-700 mb-1">4. Results</label>
+                        <div id="stacResults" class="max-h-40 overflow-y-auto border border-gray-200 rounded text-xs bg-gray-50 p-1">
+                            <p class="text-gray-400 p-2">No results yet</p>
+                        </div>
+                    </div>
+
+                    <!-- Step 6: Asset -->
+                    <div class="mb-4">
+                        <label class="block text-xs font-medium text-gray-700 mb-1">5. Asset</label>
+                        <select id="stacAsset" class="w-full px-2 py-1 border border-gray-300 rounded text-xs" disabled>
+                            <option value="">-- search items first --</option>
+                        </select>
+                        <button id="stacDownloadBtn" disabled class="mt-1 w-full bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-3 rounded transition text-xs disabled:opacity-50 disabled:cursor-not-allowed">
+                            Download &amp; Load to Map
+                        </button>
+                        <div id="stacDownloadStatus" class="text-xs text-gray-500 mt-1"></div>
                     </div>
                 </div>
 
-                <!-- Demo Instructions -->
-                <div class="mb-4 p-3 bg-blue-50 rounded-lg border border-blue-200">
-                    <p class="text-xs text-gray-700"><strong>Quick Start:</strong></p>
-                    <ol class="text-xs text-gray-600 list-decimal list-inside mt-1 space-y-1">
-                        <li>Upload a small GeoTIFF (512x512)</li>
-                        <li>Select an algorithm</li>
-                        <li>Click Compute</li>
-                        <li>Download result</li>
-                    </ol>
+                <!-- ═══ LAYERS TAB ═══ -->
+                <div id="panelLayers" class="p-4 hidden">
+                    <div class="flex items-center justify-between mb-2">
+                        <label class="text-xs font-medium text-gray-700">Layers</label>
+                        <button id="clearLayersBtn" class="text-xs text-red-500 hover:text-red-700">Clear all</button>
+                    </div>
+                    <div id="layerPanel" class="border border-gray-200 rounded p-2 text-xs bg-gray-50 max-h-64 overflow-y-auto">
+                        <div class="flex items-center gap-2 py-0.5">
+                            <input type="checkbox" id="layerGrid" checked>
+                            <label for="layerGrid" class="text-gray-700 flex-1">Graticule</label>
+                        </div>
+                        <div class="flex items-center gap-2 py-0.5">
+                            <input type="checkbox" id="layerBase" checked>
+                            <label for="layerBase" class="text-gray-700 flex-1">Base map</label>
+                        </div>
+                        <div id="rasterLayers"></div>
+                        <div class="mt-2 pt-1 border-t border-gray-200">
+                            <label class="text-xs text-gray-600">Base map:</label>
+                            <select id="basemapSelect" class="w-full px-1 py-0.5 border border-gray-300 rounded text-xs mt-0.5">
+                                <option value="osm">OpenStreetMap</option>
+                                <option value="satellite">Satellite (ESRI)</option>
+                                <option value="topo">Topographic</option>
+                                <option value="dark">Dark (CartoDB)</option>
+                            </select>
+                        </div>
+                    </div>
                 </div>
+            </div>
 
-                <!-- Info -->
-                <div class="text-xs text-gray-600 space-y-1 border-t pt-4">
-                    <p><strong>Algorithms:</strong> 136+ functions</p>
-                    <p><strong>Performance:</strong> 512x512 DEM in &lt;2s</p>
-                    <p><strong>Browser:</strong> Chrome, Firefox, Safari (2021+)</p>
-                    <p class="mt-2"><a href="https://github.com/franciscoparrao/surtgis" target="_blank" class="text-blue-600 hover:underline">GitHub</a> | <a href="https://github.com/franciscoparrao/surtgis/wiki" target="_blank" class="text-blue-600 hover:underline">Docs</a></p>
-                </div>
+            <!-- Status bar -->
+            <div class="p-2 border-t bg-gray-50 text-xs text-gray-500 flex justify-between">
+                <span id="coords">Lat: --, Lon: --</span>
+                <span id="pixelValue">Value: --</span>
+            </div>
+            <div class="px-2 py-1 border-t">
+                <p id="status" class="text-xs text-gray-600">Loading WASM...</p>
             </div>
         </div>
     </div>
 
-    <script type="module" src="app.js"></script>
+    <script type="module" src="app.js?v=4"></script>
 </body>
 </html>

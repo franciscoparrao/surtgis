@@ -14,7 +14,7 @@ default = ["parallel"]
 parallel = ["dep:rayon", "dep:crossbeam", "surtgis-core/parallel"]
 
 [dependencies]
-surtgis-core = { version = "0.3.0", path = "../core", default-features = false }
+surtgis-core = { version = "0.4.0", path = "../core", default-features = false }
 rayon = { workspace = true, optional = true }
 crossbeam = { workspace = true, optional = true }
 ndarray.workspace = true
