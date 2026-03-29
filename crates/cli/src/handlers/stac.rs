@@ -1027,13 +1027,21 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                         }
 
                         // Mosaic spatial tiles for this date's strip
+                        // Use relaxed CRS check to handle tiles across UTM zones
+                        let mosaic_opts = surtgis_core::MosaicOptions {
+                            require_same_crs: false,
+                            ..Default::default()
+                        };
                         let data_m = if data_tiles.len() == 1 {
                             data_tiles.into_iter().next().unwrap()
                         } else {
                             let refs: Vec<&surtgis_core::Raster<f64>> = data_tiles.iter().collect();
-                            match surtgis_core::mosaic(&refs, None) {
+                            match surtgis_core::mosaic(&refs, Some(mosaic_opts.clone())) {
                                 Ok(m) => m,
-                                Err(_) => continue,
+                                Err(e) => {
+                                    eprintln!("  ⚠ Mosaic failed for date (data): {}", e);
+                                    continue;
+                                }
                             }
                         };
 
@@ -1041,15 +1049,21 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                             scl_tiles.into_iter().next().unwrap()
                         } else {
                             let refs: Vec<&surtgis_core::Raster<f64>> = scl_tiles.iter().collect();
-                            match surtgis_core::mosaic(&refs, None) {
+                            match surtgis_core::mosaic(&refs, Some(mosaic_opts.clone())) {
                                 Ok(m) => m,
-                                Err(_) => continue,
+                                Err(e) => {
+                                    eprintln!("  ⚠ Mosaic failed for date (SCL): {}", e);
+                                    continue;
+                                }
                             }
                         };
 
                         // Cloud mask using collection-specific strategy
-                        if let Ok(clean) = mask_ref.mask(&data_m, &scl_m) {
-                            scene_strips.push(clean.data().to_owned());
+                        match mask_ref.mask(&data_m, &scl_m) {
+                            Ok(clean) => scene_strips.push(clean.data().to_owned()),
+                            Err(e) => {
+                                eprintln!("  ⚠ Cloud masking failed for date: {}", e);
+                            }
                         }
                     }
 
@@ -1119,10 +1133,14 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             }
 
             let elapsed = start.elapsed();
+            let total_items: usize = scenes.iter().map(|s| s.data_hrefs.len()).sum();
             println!(
-                "Composite: {} scenes -> {} x {} ({:.1}M cells)",
-                scenes.len(), out_cols, out_rows,
+                "Composite: {} dates ({} tiles) -> {} x {} ({:.1}M cells)",
+                scenes.len(), total_items, out_cols, out_rows,
                 (out_cols * out_rows) as f64 / 1e6,
+            );
+            eprintln!(
+                "  ℹ If fewer dates than expected were used, check ⚠ warnings above.\n    Common causes: CRS mismatch across UTM zones, cloud mask failures."
             );
             done("STAC composite", &output, elapsed);
         }
