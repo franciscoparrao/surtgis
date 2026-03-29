@@ -1026,17 +1026,33 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                             continue;
                         }
 
+                        // Unify CRS: reproject tiles to the CRS of the first tile
+                        // This handles multi-UTM-zone regions (e.g., EPSG:32719 + EPSG:32720)
+                        fn unify_crs(tiles: &mut Vec<surtgis_core::Raster<f64>>) {
+                            if tiles.len() <= 1 { return; }
+                            let target_epsg = tiles[0].crs().and_then(|c| c.epsg());
+                            if let Some(target) = target_epsg {
+                                for i in 1..tiles.len() {
+                                    if let Some(src_epsg) = tiles[i].crs().and_then(|c| c.epsg()) {
+                                        if src_epsg != target {
+                                            if let Some(reprojected) = surtgis_cloud::reproject::reproject_raster_utm(&tiles[i], src_epsg, target) {
+                                                tiles[i] = reprojected;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        unify_crs(&mut data_tiles);
+                        unify_crs(&mut scl_tiles);
+
                         // Mosaic spatial tiles for this date's strip
-                        // Use relaxed CRS check to handle tiles across UTM zones
-                        let mosaic_opts = surtgis_core::MosaicOptions {
-                            require_same_crs: false,
-                            ..Default::default()
-                        };
                         let data_m = if data_tiles.len() == 1 {
                             data_tiles.into_iter().next().unwrap()
                         } else {
                             let refs: Vec<&surtgis_core::Raster<f64>> = data_tiles.iter().collect();
-                            match surtgis_core::mosaic(&refs, Some(mosaic_opts.clone())) {
+                            match surtgis_core::mosaic(&refs, None) {
                                 Ok(m) => m,
                                 Err(e) => {
                                     eprintln!("  ⚠ Mosaic failed for date (data): {}", e);
@@ -1049,7 +1065,7 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                             scl_tiles.into_iter().next().unwrap()
                         } else {
                             let refs: Vec<&surtgis_core::Raster<f64>> = scl_tiles.iter().collect();
-                            match surtgis_core::mosaic(&refs, Some(mosaic_opts.clone())) {
+                            match surtgis_core::mosaic(&refs, None) {
                                 Ok(m) => m,
                                 Err(e) => {
                                     eprintln!("  ⚠ Mosaic failed for date (SCL): {}", e);

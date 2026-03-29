@@ -86,7 +86,7 @@ pub fn parse_utm_epsg(epsg: u32) -> Option<(u32, bool)> {
 
 /// Convert WGS84 (longitude, latitude) in degrees to UTM (easting, northing)
 /// in metres for the given zone and hemisphere.
-fn wgs84_to_utm(lon_deg: f64, lat_deg: f64, zone: u32, north: bool) -> (f64, f64) {
+pub fn wgs84_to_utm(lon_deg: f64, lat_deg: f64, zone: u32, north: bool) -> (f64, f64) {
     let lat = lat_deg.to_radians();
     let lon = lon_deg.to_radians();
 
@@ -137,6 +137,66 @@ fn wgs84_to_utm(lon_deg: f64, lat_deg: f64, zone: u32, north: bool) -> (f64, f64
     (easting, northing)
 }
 
+/// Convert UTM (easting, northing) to WGS84 (longitude, latitude) in degrees.
+/// Snyder 1987, inverse formulas.
+pub fn utm_to_wgs84(easting: f64, northing: f64, zone: u32, north: bool) -> (f64, f64) {
+    let x = easting - FALSE_EASTING;
+    let y = if north { northing } else { northing - FALSE_NORTHING_SOUTH };
+
+    let m = y / K0;
+    let mu = m / (A * (1.0 - E2 / 4.0 - 3.0 * E2 * E2 / 64.0 - 5.0 * E2 * E2 * E2 / 256.0));
+
+    let e1 = (1.0 - (1.0 - E2).sqrt()) / (1.0 + (1.0 - E2).sqrt());
+
+    let phi1 = mu
+        + (3.0 * e1 / 2.0 - 27.0 * e1 * e1 * e1 / 32.0) * (2.0 * mu).sin()
+        + (21.0 * e1 * e1 / 16.0 - 55.0 * e1 * e1 * e1 * e1 / 32.0) * (4.0 * mu).sin()
+        + (151.0 * e1 * e1 * e1 / 96.0) * (6.0 * mu).sin();
+
+    let sin_phi1 = phi1.sin();
+    let cos_phi1 = phi1.cos();
+    let tan_phi1 = phi1.tan();
+
+    let n1 = A / (1.0 - E2 * sin_phi1 * sin_phi1).sqrt();
+    let t1 = tan_phi1 * tan_phi1;
+    let c1 = E_PRIME2 * cos_phi1 * cos_phi1;
+    let r1 = A * (1.0 - E2) / (1.0 - E2 * sin_phi1 * sin_phi1).powf(1.5);
+    let d = x / (n1 * K0);
+    let d2 = d * d;
+    let d4 = d2 * d2;
+    let d6 = d4 * d2;
+
+    let lat = phi1
+        - (n1 * tan_phi1 / r1)
+            * (d2 / 2.0
+                - (5.0 + 3.0 * t1 + 10.0 * c1 - 4.0 * c1 * c1 - 9.0 * E_PRIME2) * d4 / 24.0
+                + (61.0 + 90.0 * t1 + 298.0 * c1 + 45.0 * t1 * t1 - 252.0 * E_PRIME2 - 3.0 * c1 * c1)
+                    * d6
+                    / 720.0);
+
+    let lon0 = ((zone as f64 - 1.0) * 6.0 - 180.0 + 3.0).to_radians();
+    let lon = lon0
+        + (d - (1.0 + 2.0 * t1 + c1) * d2 * d / 6.0
+            + (5.0 - 2.0 * c1 + 28.0 * t1 - 3.0 * c1 * c1 + 8.0 * E_PRIME2 + 24.0 * t1 * t1)
+                * d4
+                * d
+                / 120.0)
+        / cos_phi1;
+
+    (lon.to_degrees(), lat.to_degrees())
+}
+
+/// Reproject a single point from one UTM zone to another.
+/// Returns (easting, northing) in the target zone.
+pub fn reproject_utm_to_utm(
+    easting: f64, northing: f64,
+    src_zone: u32, src_north: bool,
+    dst_zone: u32, dst_north: bool,
+) -> (f64, f64) {
+    let (lon, lat) = utm_to_wgs84(easting, northing, src_zone, src_north);
+    wgs84_to_utm(lon, lat, dst_zone, dst_north)
+}
+
 /// Meridional arc from equator to latitude `lat` (radians).
 /// Snyder eq. 3-21.
 fn meridional_arc(lat: f64) -> f64 {
@@ -148,6 +208,120 @@ fn meridional_arc(lat: f64) -> f64 {
         - (3.0 * e2 / 8.0 + 3.0 * e4 / 32.0 + 45.0 * e6 / 1024.0) * (2.0 * lat).sin()
         + (15.0 * e4 / 256.0 + 45.0 * e6 / 1024.0) * (4.0 * lat).sin()
         - (35.0 * e6 / 3072.0) * (6.0 * lat).sin())
+}
+
+// ── Raster reprojection between UTM zones ────────────────────────────────
+
+use surtgis_core::raster::GeoTransform;
+use surtgis_core::crs::CRS;
+use surtgis_core::Raster;
+
+/// Reproject a raster from one UTM zone to another using bilinear interpolation.
+///
+/// The output raster has the same pixel size as the source but is georeferenced
+/// in the target CRS. This is used to unify tiles across UTM zone boundaries
+/// before mosaicking.
+pub fn reproject_raster_utm(
+    src: &Raster<f64>,
+    src_epsg: u32,
+    dst_epsg: u32,
+) -> Option<Raster<f64>> {
+    if src_epsg == dst_epsg {
+        return Some(src.clone());
+    }
+
+    let (src_zone, src_north) = parse_utm_epsg(src_epsg)?;
+    let (dst_zone, dst_north) = parse_utm_epsg(dst_epsg)?;
+
+    let gt = src.transform();
+    let (rows, cols) = src.shape();
+
+    // Reproject the four corners to find the output extent
+    let corners_src = [
+        (gt.origin_x, gt.origin_y),
+        (gt.origin_x + cols as f64 * gt.pixel_width, gt.origin_y),
+        (gt.origin_x, gt.origin_y + rows as f64 * gt.pixel_height),
+        (gt.origin_x + cols as f64 * gt.pixel_width, gt.origin_y + rows as f64 * gt.pixel_height),
+    ];
+
+    let mut min_e = f64::MAX;
+    let mut min_n = f64::MAX;
+    let mut max_e = f64::MIN;
+    let mut max_n = f64::MIN;
+
+    for &(e, n) in &corners_src {
+        let (re, rn) = reproject_utm_to_utm(e, n, src_zone, src_north, dst_zone, dst_north);
+        min_e = min_e.min(re);
+        min_n = min_n.min(rn);
+        max_e = max_e.max(re);
+        max_n = max_n.max(rn);
+    }
+
+    let px_w = gt.pixel_width.abs();
+    let px_h = gt.pixel_height.abs();
+
+    let out_cols = ((max_e - min_e) / px_w).ceil() as usize;
+    let out_rows = ((max_n - min_n) / px_h).ceil() as usize;
+
+    if out_cols == 0 || out_rows == 0 || out_cols > 100_000 || out_rows > 100_000 {
+        return None;
+    }
+
+    let out_gt = GeoTransform::new(min_e, max_n, px_w, -px_h);
+
+    let mut out = Raster::new(out_rows, out_cols);
+    out.set_transform(out_gt);
+    if let Some(nodata) = src.nodata() {
+        out.set_nodata(Some(nodata));
+    }
+    out.set_crs(Some(CRS::from_epsg(dst_epsg)));
+
+    // Fill with NaN
+    for r in 0..out_rows {
+        for c in 0..out_cols {
+            out.set(r, c, f64::NAN);
+        }
+    }
+
+    let src_data = src.data();
+    let src_gt = src.transform();
+
+    // For each output pixel, find corresponding source pixel via reprojection
+    for out_r in 0..out_rows {
+        for out_c in 0..out_cols {
+            let dst_e = min_e + (out_c as f64 + 0.5) * px_w;
+            let dst_n = max_n - (out_r as f64 + 0.5) * px_h;
+
+            let (src_e, src_n) = reproject_utm_to_utm(dst_e, dst_n, dst_zone, dst_north, src_zone, src_north);
+
+            let src_col_f = (src_e - src_gt.origin_x) / src_gt.pixel_width - 0.5;
+            let src_row_f = (src_n - src_gt.origin_y) / src_gt.pixel_height - 0.5;
+
+            let c0 = src_col_f.floor() as isize;
+            let r0 = src_row_f.floor() as isize;
+            let fc = src_col_f - c0 as f64;
+            let fr = src_row_f - r0 as f64;
+
+            if c0 >= 0 && r0 >= 0 && (c0 + 1) < cols as isize && (r0 + 1) < rows as isize {
+                let r0u = r0 as usize;
+                let c0u = c0 as usize;
+                let v00 = src_data[[r0u, c0u]];
+                let v01 = src_data[[r0u, c0u + 1]];
+                let v10 = src_data[[r0u + 1, c0u]];
+                let v11 = src_data[[r0u + 1, c0u + 1]];
+
+                if v00.is_finite() && v01.is_finite() && v10.is_finite() && v11.is_finite() {
+                    let val = v00 * (1.0 - fc) * (1.0 - fr)
+                        + v01 * fc * (1.0 - fr)
+                        + v10 * (1.0 - fc) * fr
+                        + v11 * fc * fr;
+                    out.set(out_r, out_c, val);
+                }
+            }
+        }
+    }
+
+    Some(out)
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────
