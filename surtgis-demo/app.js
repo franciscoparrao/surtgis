@@ -8,7 +8,8 @@ import init, {
     shape_index, curvedness, curvature_compute,
 } from './wasm/surtgis_wasm.js';
 
-import { searchCatalogs, fetchCollections, searchItems, extractAssets, downloadCOG, checkFileSize } from './stac.js';
+import { searchCatalogs, fetchCollections, searchItems, extractAssets, downloadCOG, downloadCOGPreview, checkFileSize } from './stac.js';
+import { ndvi as compute_ndvi } from './wasm/surtgis_wasm.js';
 
 // ── State ────────────────────────────────────────────────
 let wasmReady = false;
@@ -95,19 +96,17 @@ map.on('mousemove',(e)=>{
 
 // ── Tabs ─────────────────────────────────────────────────
 function switchTab(name) {
-    ['Local','Stac','Layers'].forEach(t => {
+    ['Local','Stac','Vector','Layers'].forEach(t => {
         $('tab'+t).classList.toggle('text-blue-600', t===name);
         $('tab'+t).classList.toggle('border-b-2', t===name);
         $('tab'+t).classList.toggle('border-blue-600', t===name);
         $('tab'+t).classList.toggle('text-gray-500', t!==name);
         $('panel'+t).classList.toggle('hidden', t!==name);
     });
-    if (name === 'Stac' && !map.hasLayer(drawControl)) {
-        // Show draw hint
-    }
 }
 $('tabLocal').addEventListener('click', ()=>switchTab('Local'));
 $('tabStac').addEventListener('click', ()=>switchTab('Stac'));
+$('tabVector').addEventListener('click', ()=>switchTab('Vector'));
 $('tabLayers').addEventListener('click', ()=>switchTab('Layers'));
 
 // ── Layer toggles ────────────────────────────────────────
@@ -138,7 +137,7 @@ $('clearLayersBtn').addEventListener('click',()=>{layerStack.forEach(l=>map.remo
 // ── Init WASM ────────────────────────────────────────────
 (async()=>{try{await init();wasmReady=true;setStatus('WASM loaded. Ready.')}catch(e){setStatus('WASM init failed: '+e.message)}})();
 function setStatus(m){$('status').textContent=m}
-function enableCompute(){$('computeBtn').disabled=!(wasmReady&&currentDem)}
+function enableCompute(){$('computeBtn').disabled=!(wasmReady&&currentDem);$('featureStackBtn').disabled=!(wasmReady&&currentDem)}
 
 // ── CRS ──────────────────────────────────────────────────
 function detectEPSG(image){const gk=image.getGeoKeys?image.getGeoKeys():{};if(gk.ProjectedCSTypeGeoKey&&gk.ProjectedCSTypeGeoKey!==32767)return gk.ProjectedCSTypeGeoKey;if(gk.GeographicTypeGeoKey&&gk.GeographicTypeGeoKey!==32767)return gk.GeographicTypeGeoKey;const bb=image.getBoundingBox();if(bb&&Math.abs(bb[0])<=360&&Math.abs(bb[2])<=360&&Math.abs(bb[1])<=90&&Math.abs(bb[3])<=90)return 4326;return null}
@@ -224,6 +223,60 @@ async function showResultOnMap(tiffBytes, name, cmapName) {
 }
 
 $('downloadBtn').addEventListener('click',()=>{if(!currentResult)return;const b=new Blob([currentResult],{type:'application/octet-stream'});const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='surtgis_'+$('algorithm').value+'.tif';a.click();URL.revokeObjectURL(a.href)});
+
+// ── Feature Stack (batch compute all terrain features) ───
+$('featureStackBtn').addEventListener('click', () => {
+    if (!wasmReady || !currentDem) return;
+    $('featureStackBtn').disabled = true;
+
+    const featureList = [
+        { algo: 'slope', fn: () => slope(currentDem, 'degrees'), cmap: 'viridis' },
+        { algo: 'aspect', fn: () => aspect_degrees(currentDem), cmap: 'hsv' },
+        { algo: 'hillshade', fn: () => hillshade_compute(currentDem, 315, 45), cmap: 'gray' },
+        { algo: 'northness', fn: () => northness_compute(currentDem), cmap: 'seismic' },
+        { algo: 'eastness', fn: () => eastness_compute(currentDem), cmap: 'seismic' },
+        { algo: 'curvature', fn: () => curvature_compute(currentDem, 'general'), cmap: 'seismic' },
+        { algo: 'tpi', fn: () => tpi_compute(currentDem, 3), cmap: 'seismic' },
+        { algo: 'tri', fn: () => tri_compute(currentDem), cmap: 'viridis' },
+        { algo: 'dev', fn: () => dev_compute(currentDem, 10), cmap: 'seismic' },
+        { algo: 'geomorphons', fn: () => geomorphons_compute(currentDem, 1.0, 10), cmap: 'hsv' },
+        { algo: 'shape_index', fn: () => shape_index(currentDem), cmap: 'viridis' },
+        { algo: 'curvedness', fn: () => curvedness(currentDem), cmap: 'viridis' },
+        { algo: 'fill', fn: () => fill_depressions(currentDem), cmap: 'terrain' },
+        { algo: 'twi', fn: () => twi_compute(currentDem), cmap: 'viridis' },
+    ];
+
+    let idx = 0;
+    const total = featureList.length;
+
+    function computeNext() {
+        if (idx >= total) {
+            $('featureStackProgress').textContent = `Done! ${total} features generated`;
+            setStatus(`Feature stack: ${total} layers generated`);
+            $('featureStackBtn').disabled = false;
+            enableCompute();
+            return;
+        }
+        const f = featureList[idx];
+        $('featureStackProgress').textContent = `${idx + 1}/${total}: ${f.algo}...`;
+        setStatus(`Feature stack: ${f.algo} (${idx + 1}/${total})`);
+
+        setTimeout(async () => {
+            try {
+                const result = f.fn();
+                await showResultOnMap(result, f.algo, f.cmap);
+            } catch (e) {
+                console.warn(`Feature ${f.algo} failed:`, e.message);
+                $('featureStackProgress').textContent += ` (skipped: ${e.message})`;
+            }
+            idx++;
+            // Use setTimeout to let UI breathe between computations
+            setTimeout(computeNext, 30);
+        }, 30);
+    }
+
+    computeNext();
+});
 
 // ════════════════════════════════════════════════════════
 // STAC PANEL
@@ -371,16 +424,100 @@ $('stacSearchItems').addEventListener('click', async () => {
 function selectStacItem(item) {
     stacSelectedItem = item;
     const assets = extractAssets(item);
-    const sel = $('stacAsset');
-    sel.innerHTML = assets.map(a =>
-        `<option value="${a.href}" title="${a.type}">${a.key} - ${a.title}</option>`
+    const opts = assets.map(a =>
+        `<option value="${a.href}" data-key="${a.key}">${a.key} - ${a.title}</option>`
     ).join('');
+
+    // Single band
+    const sel = $('stacAsset');
+    sel.innerHTML = opts;
     sel.disabled = assets.length === 0;
     $('stacDownloadBtn').disabled = assets.length === 0;
+    $('stacPreviewBtn').disabled = assets.length === 0;
+
+    // RGB dropdowns
+    ['rgbR','rgbG','rgbB','ndviNir','ndviRed'].forEach(id => {
+        const s = $(id); s.innerHTML = opts; s.disabled = assets.length === 0;
+    });
+
+    // Auto-select common band assignments
+    autoSelectBands(assets);
+
+    $('rgbBtn').disabled = assets.length < 3;
+    $('ndviBtn').disabled = assets.length < 2;
 }
 
-// Download COG
-const MAX_DOWNLOAD_MB = 100;
+function autoSelectBands(assets) {
+    const keys = assets.map(a => a.key.toLowerCase());
+    const find = (patterns) => {
+        for (const p of patterns) {
+            const idx = keys.findIndex(k => k === p || k.startsWith(p));
+            if (idx >= 0) return idx;
+        }
+        return -1;
+    };
+
+    // Sentinel-2: B04=red, B03=green, B02=blue, B08=NIR
+    // Landsat: SR_B4=red, SR_B3=green, SR_B2=blue, SR_B5=NIR
+    const red  = find(['b04','red','sr_b4']);
+    const green= find(['b03','green','sr_b3']);
+    const blue = find(['b02','blue','sr_b2']);
+    const nir  = find(['b08','nir','sr_b5','b8a']);
+
+    if (red >= 0)   $('rgbR').selectedIndex = red;
+    if (green >= 0) $('rgbG').selectedIndex = green;
+    if (blue >= 0)  $('rgbB').selectedIndex = blue;
+    if (nir >= 0)   $('ndviNir').selectedIndex = nir;
+    if (red >= 0)   $('ndviRed').selectedIndex = red;
+}
+
+// ── Preview COG (overview only, fast) ────────────────────
+$('stacPreviewBtn').addEventListener('click', async () => {
+    const href = $('stacAsset').value;
+    if (!href) return;
+
+    $('stacPreviewBtn').disabled = true;
+    $('stacDownloadStatus').textContent = 'Loading preview (range requests)...';
+    setStatus('Reading COG overview...');
+
+    try {
+        const result = await downloadCOGPreview(href, 512);
+
+        const assetName = $('stacAsset').selectedOptions[0]?.dataset.key || 'preview';
+        let bbox = result.bbox;
+        let epsg = result.epsg;
+
+        // Fallback to STAC item bbox
+        if (!bbox && stacSelectedItem?.bbox) { bbox = stacSelectedItem.bbox; epsg = 4326; }
+
+        if (bbox) {
+            const bounds = bboxToLeafletBounds(bbox, epsg);
+            if (bounds) {
+                const cmap = $('colormap').value === 'auto' ? 'terrain' : $('colormap').value;
+                const dataUrl = rasterToDataURL(result.data, result.width, result.height, cmap);
+                addRasterLayer(
+                    `${assetName} (preview ${result.width}x${result.height})`,
+                    dataUrl, bounds, null,
+                    { data: result.data, width: result.width, height: result.height, bbox, epsg }
+                );
+                showLegend(assetName, result.data, cmap);
+            }
+        }
+
+        const info = `Preview: ${result.width}x${result.height} (full: ${result.fullWidth}x${result.fullHeight}, ${result.overviewCount} levels)`;
+        $('stacDownloadStatus').textContent = info;
+        setStatus(info);
+    } catch (e) {
+        $('stacDownloadStatus').textContent = 'Preview error: ' + e.message;
+        setStatus('Preview error: ' + e.message);
+        console.error(e);
+    } finally {
+        $('stacPreviewBtn').disabled = false;
+    }
+});
+
+// Download COG (full)
+const MAX_DOWNLOAD_MB = 500;
 
 $('stacDownloadBtn').addEventListener('click', async () => {
     const href = $('stacAsset').value;
@@ -431,6 +568,707 @@ $('stacDownloadBtn').addEventListener('click', async () => {
         $('stacDownloadBtn').disabled = false;
     }
 });
+
+// ── RGB Composite ────────────────────────────────────────
+$('rgbBtn').addEventListener('click', async () => {
+    const hrefR = $('rgbR').value, hrefG = $('rgbG').value, hrefB = $('rgbB').value;
+    if (!hrefR || !hrefG || !hrefB) return;
+    const keyR = $('rgbR').selectedOptions[0]?.dataset.key || 'R';
+    const keyG = $('rgbG').selectedOptions[0]?.dataset.key || 'G';
+    const keyB = $('rgbB').selectedOptions[0]?.dataset.key || 'B';
+
+    $('rgbBtn').disabled = true;
+    $('multibandStatus').textContent = 'Downloading 3 bands...';
+    setStatus('Downloading RGB bands...');
+
+    try {
+        // Download all 3 in parallel
+        const [bufR, bufG, bufB] = await Promise.all([
+            downloadCOG(hrefR),
+            downloadCOG(hrefG),
+            downloadCOG(hrefB),
+        ]);
+        $('multibandStatus').textContent = 'Composing RGB...';
+
+        // Parse each band
+        const [dataR, infoR] = await parseBand(bufR);
+        const [dataG, infoG] = await parseBand(bufG);
+        const [dataB, infoB] = await parseBand(bufB);
+
+        // Use R band for geometry
+        const w = infoR.width, h = infoR.height;
+
+        // Create RGB canvas
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        const img = ctx.createImageData(w, h);
+        const px = img.data;
+
+        // Compute percentile stretch (2%-98%) for each band
+        const stretchR = percentileStretch(dataR);
+        const stretchG = percentileStretch(dataG);
+        const stretchB = percentileStretch(dataB);
+
+        for (let i = 0; i < w * h; i++) {
+            const r = stretchByte(dataR[i], stretchR);
+            const g = stretchByte(dataG[i], stretchG);
+            const b = stretchByte(dataB[i], stretchB);
+            const valid = Number.isFinite(dataR[i]) && Number.isFinite(dataG[i]) && Number.isFinite(dataB[i]);
+            px[i*4]   = r;
+            px[i*4+1] = g;
+            px[i*4+2] = b;
+            px[i*4+3] = valid ? 255 : 0;
+        }
+        ctx.putImageData(img, 0, 0);
+        const dataUrl = canvas.toDataURL();
+
+        // Get bounds from STAC item or GeoTIFF
+        const bounds = getBoundsForInfo(infoR);
+        if (bounds) {
+            addRasterLayer(`RGB (${keyR}/${keyG}/${keyB})`, dataUrl, bounds, null,
+                { data: dataR, width: w, height: h, bbox: infoR.bbox, epsg: infoR.epsg });
+        }
+
+        $('multibandStatus').textContent = `RGB composite loaded (${keyR}/${keyG}/${keyB})`;
+        setStatus('RGB composite displayed!');
+    } catch (e) {
+        $('multibandStatus').textContent = 'Error: ' + e.message;
+        setStatus('RGB error: ' + e.message);
+        console.error(e);
+    } finally {
+        $('rgbBtn').disabled = false;
+    }
+});
+
+// ── NDVI Computation ─────────────────────────────────────
+$('ndviBtn').addEventListener('click', async () => {
+    const hrefNir = $('ndviNir').value, hrefRed = $('ndviRed').value;
+    if (!hrefNir || !hrefRed) return;
+
+    $('ndviBtn').disabled = true;
+    $('multibandStatus').textContent = 'Downloading NIR + Red...';
+    setStatus('Downloading bands for NDVI...');
+
+    try {
+        const [bufNir, bufRed] = await Promise.all([
+            downloadCOG(hrefNir),
+            downloadCOG(hrefRed),
+        ]);
+        $('multibandStatus').textContent = 'Computing NDVI in WASM...';
+
+        // Compute NDVI via WASM
+        const nirBytes = new Uint8Array(bufNir);
+        const redBytes = new Uint8Array(bufRed);
+        const ndviResult = compute_ndvi(nirBytes, redBytes);
+
+        // Parse result and show
+        const tiff = await GeoTIFF.fromArrayBuffer(ndviResult.buffer);
+        const image = await tiff.getImage();
+        const w = image.getWidth(), h = image.getHeight();
+        const data = (await image.readRasters())[0];
+
+        let bbox = null, epsg = null;
+        try { bbox = image.getBoundingBox(); epsg = detectEPSG(image); } catch(_) {}
+        if (!bbox && stacSelectedItem?.bbox) { bbox = stacSelectedItem.bbox; epsg = 4326; }
+
+        if (bbox) {
+            const bounds = bboxToLeafletBounds(bbox, epsg);
+            if (bounds) {
+                // NDVI colormap: red-yellow-green (-1 to 1)
+                const ndviCmap = buildNDVIColormap();
+                const dataUrl = rasterToDataURLCustom(data, w, h, ndviCmap, -0.2, 0.8);
+                addRasterLayer('NDVI', dataUrl, bounds, ndviResult,
+                    { data, width: w, height: h, bbox, epsg });
+                showLegendCustom('NDVI', -0.2, 0.8, ndviCmap);
+            }
+        }
+
+        // Set as current for download
+        currentResult = ndviResult;
+        currentDem = nirBytes; // NIR as base DEM for further analysis
+        enableCompute();
+        $('downloadBtn').disabled = false;
+
+        $('multibandStatus').textContent = 'NDVI computed!';
+        setStatus('NDVI displayed! Download or switch to Local for more analysis.');
+    } catch (e) {
+        $('multibandStatus').textContent = 'Error: ' + e.message;
+        setStatus('NDVI error: ' + e.message);
+        console.error(e);
+    } finally {
+        $('ndviBtn').disabled = false;
+    }
+});
+
+// ── Multi-band helpers ───────────────────────────────────
+async function parseBand(buffer) {
+    const tiff = await GeoTIFF.fromArrayBuffer(buffer);
+    const image = await tiff.getImage();
+    const w = image.getWidth(), h = image.getHeight();
+    const data = (await image.readRasters())[0];
+    let bbox = null, epsg = null;
+    try { bbox = image.getBoundingBox(); epsg = detectEPSG(image); } catch(_) {}
+    if (!bbox && stacSelectedItem?.bbox) { bbox = stacSelectedItem.bbox; epsg = 4326; }
+    return [data, { width: w, height: h, bbox, epsg }];
+}
+
+function getBoundsForInfo(info) {
+    if (!info.bbox) return null;
+    return bboxToLeafletBounds(info.bbox, info.epsg);
+}
+
+function percentileStretch(data, lo=2, hi=98) {
+    const sorted = [];
+    for (let i = 0; i < data.length; i++) {
+        if (Number.isFinite(data[i])) sorted.push(data[i]);
+    }
+    sorted.sort((a, b) => a - b);
+    const n = sorted.length;
+    return {
+        min: sorted[Math.floor(n * lo / 100)] || 0,
+        max: sorted[Math.floor(n * hi / 100)] || 1,
+    };
+}
+
+function stretchByte(val, stretch) {
+    if (!Number.isFinite(val)) return 0;
+    const t = (val - stretch.min) / (stretch.max - stretch.min);
+    return Math.max(0, Math.min(255, Math.round(t * 255)));
+}
+
+function buildNDVIColormap() {
+    // Brown → Yellow → Green
+    return interp([
+        [0.00, 139, 90, 43],   // brown (bare soil)
+        [0.25, 204, 170, 80],  // tan
+        [0.40, 255, 255, 100], // yellow
+        [0.60, 120, 200, 50],  // light green
+        [0.80, 34, 139, 34],   // forest green
+        [1.00, 0, 80, 0],      // dark green
+    ]);
+}
+
+function rasterToDataURLCustom(data, w, h, colors, fixedMin, fixedMax) {
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    const img = ctx.createImageData(w, h);
+    const px = img.data;
+    const range = fixedMax - fixedMin;
+    for (let i = 0; i < data.length; i++) {
+        const v = data[i];
+        let t = 0, alpha = 255;
+        if (Number.isFinite(v)) { t = (v - fixedMin) / range; t = t < 0 ? 0 : t > 1 ? 1 : t; }
+        else { alpha = 0; }
+        const idx = Math.min(Math.floor(t * 255), 255);
+        const c = colors[idx];
+        px[i*4]=c[0]; px[i*4+1]=c[1]; px[i*4+2]=c[2]; px[i*4+3]=alpha;
+    }
+    ctx.putImageData(img, 0, 0);
+    return canvas.toDataURL();
+}
+
+function showLegendCustom(name, min, max, colors) {
+    let o=$('legend');if(o)o.remove();
+    const bar=document.createElement('canvas');bar.width=200;bar.height=12;
+    const bctx=bar.getContext('2d');
+    for(let x=0;x<200;x++){const idx=Math.floor((x/199)*255);const c=colors[idx];bctx.fillStyle=`rgb(${c[0]},${c[1]},${c[2]})`;bctx.fillRect(x,0,1,12)}
+    const div=document.createElement('div');div.id='legend';
+    div.style.cssText='position:absolute;bottom:24px;left:50px;background:rgba(255,255,255,0.92);padding:8px 12px;border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,.2);font:11px system-ui;z-index:1000;';
+    div.innerHTML=`<div style="font-weight:600;margin-bottom:3px">${name}</div>`;
+    div.appendChild(bar);
+    div.innerHTML+=`<div style="display:flex;justify-content:space-between;font-size:10px;margin-top:2px"><span>${min.toFixed(2)}</span><span>${max.toFixed(2)}</span></div>`;
+    $('map').appendChild(div);
+}
+
+// ════════════════════════════════════════════════════════
+// VECTOR
+// ════════════════════════════════════════════════════════
+
+let vectorGeoJSON = null;   // parsed GeoJSON FeatureCollection
+let vectorLeaflet = null;   // L.geoJSON layer on map
+
+// ── Load vector file ─────────────────────────────────────
+$('vectorFile').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    $('vectorStatus').textContent = 'Loading...';
+
+    try {
+        const text = await file.text();
+        let geojson;
+
+        if (file.name.endsWith('.kml')) {
+            geojson = kmlToGeoJSON(text);
+        } else if (file.name.endsWith('.gpx')) {
+            geojson = gpxToGeoJSON(text);
+        } else {
+            geojson = JSON.parse(text);
+        }
+
+        // Normalize to FeatureCollection
+        if (geojson.type === 'Feature') {
+            geojson = { type: 'FeatureCollection', features: [geojson] };
+        } else if (geojson.type !== 'FeatureCollection') {
+            geojson = { type: 'FeatureCollection', features: [{ type: 'Feature', geometry: geojson, properties: {} }] };
+        }
+
+        vectorGeoJSON = geojson;
+        showVectorOnMap();
+        showFeatureList();
+
+        $('vectorStatus').textContent = `${geojson.features.length} features loaded`;
+        $('zonalStatsBtn').disabled = false;
+        $('clipRasterBtn').disabled = false;
+        setStatus(`Vector loaded: ${geojson.features.length} features`);
+    } catch (err) {
+        $('vectorStatus').textContent = 'Error: ' + err.message;
+    }
+});
+
+function showVectorOnMap() {
+    if (vectorLeaflet) map.removeLayer(vectorLeaflet);
+    const color = $('vecColor').value;
+    const weight = parseInt($('vecWeight').value) || 2;
+    const fillOpacity = parseInt($('vecFillOpacity').value) / 100;
+
+    vectorLeaflet = L.geoJSON(vectorGeoJSON, {
+        style: { color, weight, fillColor: color, fillOpacity },
+        pointToLayer: (f, latlng) => L.circleMarker(latlng, { radius: 5, color, fillColor: color, fillOpacity }),
+        onEachFeature: (feature, layer) => {
+            const props = feature.properties || {};
+            const entries = Object.entries(props).slice(0, 8);
+            if (entries.length > 0) {
+                const html = entries.map(([k, v]) => `<b>${k}:</b> ${v}`).join('<br>');
+                layer.bindPopup(`<div style="font-size:11px">${html}</div>`);
+            }
+        }
+    }).addTo(map);
+
+    map.fitBounds(vectorLeaflet.getBounds());
+}
+
+// Re-style on changes
+['vecColor', 'vecWeight', 'vecFillOpacity'].forEach(id => {
+    $(id).addEventListener('input', () => { if (vectorGeoJSON) showVectorOnMap(); });
+});
+
+function showFeatureList() {
+    const container = $('vectorFeatures');
+    const features = vectorGeoJSON.features;
+    container.innerHTML = features.slice(0, 50).map((f, i) => {
+        const geomType = f.geometry?.type || '?';
+        const name = f.properties?.name || f.properties?.NAME || f.properties?.id || `Feature ${i + 1}`;
+        return `<div class="py-0.5 border-b border-gray-100 truncate" title="${geomType}">${geomType.charAt(0)} ${name}</div>`;
+    }).join('');
+    if (features.length > 50) container.innerHTML += `<div class="text-gray-400 py-1">... +${features.length - 50} more</div>`;
+}
+
+// ── Zonal Statistics ─────────────────────────────────────
+$('zonalStatsBtn').addEventListener('click', () => {
+    if (!vectorGeoJSON || layerStack.length === 0) {
+        $('zonalResults').innerHTML = '<p class="text-gray-400">Need vector + raster layer</p>';
+        return;
+    }
+
+    // Find topmost visible raster with data
+    let rasterLayer = null;
+    for (let i = layerStack.length - 1; i >= 0; i--) {
+        if (layerStack[i].visible && layerStack[i].rasterInfo) {
+            rasterLayer = layerStack[i];
+            break;
+        }
+    }
+    if (!rasterLayer) {
+        $('zonalResults').innerHTML = '<p class="text-gray-400">No visible raster layer</p>';
+        return;
+    }
+
+    const ri = rasterLayer.rasterInfo;
+    const results = [];
+
+    for (let fi = 0; fi < vectorGeoJSON.features.length; fi++) {
+        const feature = vectorGeoJSON.features[fi];
+        const geom = feature.geometry;
+        if (!geom || !['Polygon', 'MultiPolygon'].includes(geom.type)) continue;
+
+        const name = feature.properties?.name || feature.properties?.NAME || `Polygon ${fi + 1}`;
+        const stats = computeZonalStats(ri, geom);
+        results.push({ name, ...stats });
+    }
+
+    if (results.length === 0) {
+        $('zonalResults').innerHTML = '<p class="text-gray-400">No polygons found in vector</p>';
+        return;
+    }
+
+    $('zonalResults').innerHTML = `
+        <table class="w-full text-xs border-collapse">
+            <thead><tr class="bg-gray-200"><th class="p-1 text-left">Zone</th><th class="p-1">Min</th><th class="p-1">Max</th><th class="p-1">Mean</th><th class="p-1">Std</th><th class="p-1">N</th></tr></thead>
+            <tbody>${results.map(r => `
+                <tr class="border-t border-gray-100">
+                    <td class="p-1 truncate" style="max-width:80px" title="${r.name}">${r.name}</td>
+                    <td class="p-1 text-right">${r.min.toFixed(1)}</td>
+                    <td class="p-1 text-right">${r.max.toFixed(1)}</td>
+                    <td class="p-1 text-right">${r.mean.toFixed(2)}</td>
+                    <td class="p-1 text-right">${r.std.toFixed(2)}</td>
+                    <td class="p-1 text-right">${r.count}</td>
+                </tr>`).join('')}
+            </tbody>
+        </table>`;
+    setStatus(`Zonal stats: ${results.length} polygons analyzed`);
+});
+
+function computeZonalStats(ri, geom) {
+    const [minX, minY, maxX, maxY] = ri.bbox;
+    const w = ri.width, h = ri.height;
+    const pxW = (maxX - minX) / w, pxH = (maxY - minY) / h;
+
+    // Collect values inside polygon
+    const values = [];
+    // Get polygon coords in source CRS
+    const polygons = geom.type === 'MultiPolygon' ? geom.coordinates : [geom.coordinates];
+
+    for (let py = 0; py < h; py++) {
+        const y = maxY - (py + 0.5) * pxH; // center of pixel
+        for (let px = 0; px < w; px++) {
+            const x = minX + (px + 0.5) * pxW;
+
+            // Convert pixel to lat/lon if needed
+            let lon = x, lat = y;
+            if (ri.epsg && ri.epsg !== 4326) {
+                try {
+                    const src = getProj4Def(ri.epsg);
+                    if (src) { const pt = proj4(src, 'EPSG:4326', [x, y]); lon = pt[0]; lat = pt[1]; }
+                } catch (_) { continue; }
+            }
+
+            // Point-in-polygon test
+            if (pointInPolygons(lon, lat, polygons)) {
+                const val = ri.data[py * w + px];
+                if (Number.isFinite(val)) values.push(val);
+            }
+        }
+    }
+
+    if (values.length === 0) return { min: NaN, max: NaN, mean: NaN, std: NaN, count: 0 };
+
+    const count = values.length;
+    let min = Infinity, max = -Infinity, sum = 0;
+    for (const v of values) { if (v < min) min = v; if (v > max) max = v; sum += v; }
+    const mean = sum / count;
+    let sumSq = 0;
+    for (const v of values) sumSq += (v - mean) * (v - mean);
+    const std = Math.sqrt(sumSq / count);
+
+    return { min, max, mean, std, count };
+}
+
+function pointInPolygons(x, y, polygons) {
+    for (const polygon of polygons) {
+        if (pointInRings(x, y, polygon)) return true;
+    }
+    return false;
+}
+
+function pointInRings(x, y, rings) {
+    // Outer ring must contain, holes must not
+    if (!pointInRing(x, y, rings[0])) return false;
+    for (let i = 1; i < rings.length; i++) {
+        if (pointInRing(x, y, rings[i])) return false; // hole
+    }
+    return true;
+}
+
+function pointInRing(x, y, ring) {
+    // Ray casting
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const xi = ring[i][0], yi = ring[i][1];
+        const xj = ring[j][0], yj = ring[j][1];
+        if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
+            inside = !inside;
+        }
+    }
+    return inside;
+}
+
+// ── Clip Raster by Polygons ──────────────────────────────
+$('clipRasterBtn').addEventListener('click', async () => {
+    if (!vectorGeoJSON || layerStack.length === 0) return;
+
+    let rasterLayer = null;
+    for (let i = layerStack.length - 1; i >= 0; i--) {
+        if (layerStack[i].visible && layerStack[i].rasterInfo) { rasterLayer = layerStack[i]; break; }
+    }
+    if (!rasterLayer) { setStatus('No visible raster to clip'); return; }
+
+    setStatus('Clipping raster...');
+    const ri = rasterLayer.rasterInfo;
+    const w = ri.width, h = ri.height;
+    const [minX, minY, maxX, maxY] = ri.bbox;
+    const pxW = (maxX - minX) / w, pxH = (maxY - minY) / h;
+
+    // Create clipped data (NaN outside polygons)
+    const clipped = new Float64Array(w * h);
+    const polygons = [];
+    for (const f of vectorGeoJSON.features) {
+        if (f.geometry && ['Polygon', 'MultiPolygon'].includes(f.geometry.type)) {
+            const polys = f.geometry.type === 'MultiPolygon' ? f.geometry.coordinates : [f.geometry.coordinates];
+            polygons.push(...polys);
+        }
+    }
+
+    for (let py = 0; py < h; py++) {
+        const y = maxY - (py + 0.5) * pxH;
+        for (let px = 0; px < w; px++) {
+            const x = minX + (px + 0.5) * pxW;
+            let lon = x, lat = y;
+            if (ri.epsg && ri.epsg !== 4326) {
+                try { const src = getProj4Def(ri.epsg); if (src) { const pt = proj4(src, 'EPSG:4326', [x, y]); lon = pt[0]; lat = pt[1]; } } catch(_) {}
+            }
+
+            const idx = py * w + px;
+            if (pointInPolygons(lon, lat, polygons)) {
+                clipped[idx] = ri.data[idx];
+            } else {
+                clipped[idx] = NaN;
+            }
+        }
+    }
+
+    // Show clipped as new layer
+    const cmap = $('colormap').value === 'auto' ? 'viridis' : $('colormap').value;
+    const dataUrl = rasterToDataURL(clipped, w, h, cmap);
+    const bounds = bboxToLeafletBounds(ri.bbox, ri.epsg);
+    if (bounds) {
+        addRasterLayer(`${rasterLayer.name} (clipped)`, dataUrl, bounds, null,
+            { data: clipped, width: w, height: h, bbox: ri.bbox, epsg: ri.epsg });
+    }
+    showLegend(rasterLayer.name + ' (clipped)', clipped, cmap);
+    setStatus('Raster clipped to polygons');
+});
+
+// ── Simple KML/GPX parsers ───────────────────────────────
+function kmlToGeoJSON(kmlText) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(kmlText, 'text/xml');
+    const features = [];
+    doc.querySelectorAll('Placemark').forEach(pm => {
+        const name = pm.querySelector('name')?.textContent || '';
+        const coords = pm.querySelector('coordinates')?.textContent;
+        if (!coords) return;
+        const points = coords.trim().split(/\s+/).map(c => { const [lon,lat,alt] = c.split(',').map(Number); return [lon,lat]; });
+        const geom = points.length === 1 ? { type: 'Point', coordinates: points[0] } :
+            { type: points[0][0]===points[points.length-1][0]&&points[0][1]===points[points.length-1][1] ? 'Polygon' : 'LineString',
+              coordinates: points[0][0]===points[points.length-1][0]&&points[0][1]===points[points.length-1][1] ? [points] : points };
+        features.push({ type: 'Feature', properties: { name }, geometry: geom });
+    });
+    return { type: 'FeatureCollection', features };
+}
+
+function gpxToGeoJSON(gpxText) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(gpxText, 'text/xml');
+    const features = [];
+    doc.querySelectorAll('trk').forEach(trk => {
+        const name = trk.querySelector('name')?.textContent || 'Track';
+        const points = [];
+        trk.querySelectorAll('trkpt').forEach(pt => {
+            points.push([parseFloat(pt.getAttribute('lon')), parseFloat(pt.getAttribute('lat'))]);
+        });
+        if (points.length > 0) {
+            features.push({ type: 'Feature', properties: { name }, geometry: { type: 'LineString', coordinates: points } });
+        }
+    });
+    doc.querySelectorAll('wpt').forEach(wpt => {
+        const name = wpt.querySelector('name')?.textContent || 'Waypoint';
+        features.push({ type: 'Feature', properties: { name }, geometry: { type: 'Point', coordinates: [parseFloat(wpt.getAttribute('lon')), parseFloat(wpt.getAttribute('lat'))] } });
+    });
+    return { type: 'FeatureCollection', features };
+}
+
+// ════════════════════════════════════════════════════════
+// WORKSPACE SAVE / LOAD
+// ════════════════════════════════════════════════════════
+
+$('saveWorkspaceBtn').addEventListener('click', () => {
+    setStatus('Saving workspace...');
+    try {
+        const workspace = {
+            version: '0.4.0',
+            timestamp: new Date().toISOString(),
+            // Map state
+            map: {
+                center: [map.getCenter().lat, map.getCenter().lng],
+                zoom: map.getZoom(),
+                basemap: $('basemapSelect').value,
+                graticule: $('layerGrid').checked,
+                opacity: parseInt($('opacity').value),
+                colormap: $('colormap').value,
+            },
+            // Raster layers (with data as base64)
+            layers: layerStack.map(l => ({
+                name: l.name,
+                visible: l.visible,
+                hasData: !!l.rasterInfo,
+                raster: l.rasterInfo ? {
+                    width: l.rasterInfo.width,
+                    height: l.rasterInfo.height,
+                    bbox: l.rasterInfo.bbox,
+                    epsg: l.rasterInfo.epsg,
+                    data: float64ToBase64(l.rasterInfo.data),
+                } : null,
+            })),
+            // Vector
+            vector: vectorGeoJSON ? {
+                geojson: vectorGeoJSON,
+                color: $('vecColor').value,
+                weight: parseInt($('vecWeight').value),
+                fillOpacity: parseInt($('vecFillOpacity').value),
+            } : null,
+            // Drawn bbox
+            bbox: drawnBbox,
+        };
+
+        const json = JSON.stringify(workspace);
+        const blob = new Blob([json], { type: 'application/json' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `surtgis_workspace_${new Date().toISOString().slice(0,10)}.surtgis`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+
+        const sizeMB = (json.length / 1024 / 1024).toFixed(1);
+        setStatus(`Workspace saved (${sizeMB} MB, ${workspace.layers.length} layers)`);
+    } catch (e) {
+        setStatus('Save error: ' + e.message);
+        console.error(e);
+    }
+});
+
+$('loadWorkspaceBtn').addEventListener('click', () => {
+    $('workspaceFileInput').click();
+});
+
+$('workspaceFileInput').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setStatus('Loading workspace...');
+
+    try {
+        const text = await file.text();
+        const ws = JSON.parse(text);
+
+        if (!ws.version) throw new Error('Invalid workspace file');
+
+        // Clear current state
+        layerStack.forEach(l => map.removeLayer(l.overlay));
+        layerStack = [];
+        if (vectorLeaflet) { map.removeLayer(vectorLeaflet); vectorLeaflet = null; }
+        vectorGeoJSON = null;
+
+        // Restore map view
+        if (ws.map) {
+            map.setView(ws.map.center, ws.map.zoom);
+            if (ws.map.basemap) {
+                $('basemapSelect').value = ws.map.basemap;
+                $('basemapSelect').dispatchEvent(new Event('change'));
+            }
+            $('layerGrid').checked = ws.map.graticule !== false;
+            if (!ws.map.graticule) map.removeLayer(graticuleLayer);
+            else if (!map.hasLayer(graticuleLayer)) graticuleLayer.addTo(map);
+
+            if (ws.map.opacity != null) {
+                $('opacity').value = ws.map.opacity;
+                $('opacityVal').textContent = ws.map.opacity + '%';
+            }
+            if (ws.map.colormap) $('colormap').value = ws.map.colormap;
+        }
+
+        // Restore layers
+        let restoredCount = 0;
+        if (ws.layers) {
+            for (const l of ws.layers) {
+                if (!l.raster) continue;
+                const data = base64ToFloat64(l.raster.data);
+                const w = l.raster.width, h = l.raster.height;
+                const bbox = l.raster.bbox, epsg = l.raster.epsg;
+                const bounds = bboxToLeafletBounds(bbox, epsg);
+                if (!bounds) continue;
+
+                const cmap = ws.map?.colormap === 'auto' ? 'viridis' : (ws.map?.colormap || 'viridis');
+                const dataUrl = rasterToDataURL(data, w, h, cmap);
+                const entry = addRasterLayer(l.name, dataUrl, bounds, null, { data, width: w, height: h, bbox, epsg });
+
+                if (!l.visible) {
+                    entry.visible = false;
+                    map.removeLayer(entry.overlay);
+                }
+                restoredCount++;
+            }
+            // Set last layer data as currentDem for algorithms
+            if (ws.layers.length > 0) {
+                const last = ws.layers[ws.layers.length - 1];
+                if (last.raster) {
+                    // Reconstruct a minimal GeoTIFF-like buffer isn't practical,
+                    // but we can enable compute on the raw data
+                    currentDem = null; // Need original TIFF bytes for WASM
+                }
+            }
+        }
+
+        // Restore vector
+        if (ws.vector && ws.vector.geojson) {
+            vectorGeoJSON = ws.vector.geojson;
+            if (ws.vector.color) $('vecColor').value = ws.vector.color;
+            if (ws.vector.weight) $('vecWeight').value = ws.vector.weight;
+            if (ws.vector.fillOpacity != null) $('vecFillOpacity').value = ws.vector.fillOpacity;
+            showVectorOnMap();
+            showFeatureList();
+            $('zonalStatsBtn').disabled = false;
+            $('clipRasterBtn').disabled = false;
+        }
+
+        // Restore bbox
+        if (ws.bbox) {
+            drawnBbox = ws.bbox;
+            $('bboxDisplay').textContent = drawnBbox.map(v => v.toFixed(4)).join(', ');
+            drawnItems.clearLayers();
+            const rect = L.rectangle([[ws.bbox[1], ws.bbox[0]], [ws.bbox[3], ws.bbox[2]]],
+                { color: '#f59e0b', weight: 2, fillOpacity: 0.1 });
+            drawnItems.addLayer(rect);
+        }
+
+        renderLayerPanel();
+        syncZOrder();
+        setStatus(`Workspace loaded: ${restoredCount} layers, ${ws.vector ? 'vector' : 'no vector'}`);
+    } catch (e) {
+        setStatus('Load error: ' + e.message);
+        console.error(e);
+    }
+});
+
+// ── Base64 <-> Float64Array encoding ─────────────────────
+function float64ToBase64(float64Array) {
+    const bytes = new Uint8Array(float64Array.buffer, float64Array.byteOffset, float64Array.byteLength);
+    let binary = '';
+    const chunk = 8192;
+    for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+    }
+    return btoa(binary);
+}
+
+function base64ToFloat64(base64) {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+    }
+    return new Float64Array(bytes.buffer);
+}
 
 // ════════════════════════════════════════════════════════
 // RENDERING

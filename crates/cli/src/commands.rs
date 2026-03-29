@@ -1162,4 +1162,23 @@ pub enum PipelineCommands {
         #[arg(long, default_value = "4,5,6,11")]
         scl_keep: String,
     },
+
+    /// Generate geomorphometric feature stack from DEM
+    #[command(about = "Generate geomorphometric feature stack from DEM")]
+    Features {
+        /// Input DEM file
+        input: PathBuf,
+        /// Output directory
+        #[arg(short, long)]
+        outdir: PathBuf,
+        /// Skip hydrology features (faster)
+        #[arg(long)]
+        skip_hydrology: bool,
+        /// Include extra features (valley depth, surface area ratio, landform, wind exposure, accumulation zones)
+        #[arg(long)]
+        extras: bool,
+        /// Compress output (DEFLATE)
+        #[arg(long)]
+        compress: Option<bool>,
+    },
 }

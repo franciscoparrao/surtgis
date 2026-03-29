@@ -24,6 +24,7 @@
             <div class="flex border-b">
                 <button id="tabLocal" class="flex-1 py-2 text-xs font-medium text-blue-600 border-b-2 border-blue-600">Local</button>
                 <button id="tabStac" class="flex-1 py-2 text-xs font-medium text-gray-500 hover:text-gray-700">STAC</button>
+                <button id="tabVector" class="flex-1 py-2 text-xs font-medium text-gray-500 hover:text-gray-700">Vector</button>
                 <button id="tabLayers" class="flex-1 py-2 text-xs font-medium text-gray-500 hover:text-gray-700">Layers</button>
             </div>
 
@@ -117,6 +118,15 @@
                         <button id="computeBtn" disabled class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-3 rounded transition text-xs disabled:opacity-50 disabled:cursor-not-allowed">Compute</button>
                         <button id="downloadBtn" disabled class="flex-1 bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-3 rounded transition text-xs disabled:opacity-50 disabled:cursor-not-allowed">Download</button>
                     </div>
+
+                    <!-- Feature Stack -->
+                    <div class="mb-3 border-t border-gray-200 pt-3">
+                        <button id="featureStackBtn" disabled class="w-full bg-orange-500 hover:bg-orange-600 text-white font-medium py-2 px-3 rounded transition text-xs disabled:opacity-50 disabled:cursor-not-allowed">
+                            Generate Feature Stack (14 layers)
+                        </button>
+                        <p class="text-xs text-gray-400 mt-1">Computes all terrain features at once for ML</p>
+                        <div id="featureStackProgress" class="mt-1 text-xs text-gray-500"></div>
+                    </div>
                 </div>
 
                 <!-- ═══ STAC TAB ═══ -->
@@ -185,16 +195,124 @@
                         </div>
                     </div>
 
-                    <!-- Step 6: Asset -->
+                    <!-- Step 6: Single Asset -->
                     <div class="mb-4">
-                        <label class="block text-xs font-medium text-gray-700 mb-1">5. Asset</label>
+                        <label class="block text-xs font-medium text-gray-700 mb-1">5a. Single Band</label>
                         <select id="stacAsset" class="w-full px-2 py-1 border border-gray-300 rounded text-xs" disabled>
                             <option value="">-- search items first --</option>
                         </select>
-                        <button id="stacDownloadBtn" disabled class="mt-1 w-full bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-3 rounded transition text-xs disabled:opacity-50 disabled:cursor-not-allowed">
-                            Download &amp; Load to Map
-                        </button>
+                        <div class="flex gap-1 mt-1">
+                            <button id="stacPreviewBtn" disabled class="flex-1 bg-indigo-500 hover:bg-indigo-600 text-white font-medium py-1.5 px-2 rounded transition text-xs disabled:opacity-50 disabled:cursor-not-allowed">
+                                Preview (fast)
+                            </button>
+                            <button id="stacDownloadBtn" disabled class="flex-1 bg-green-600 hover:bg-green-700 text-white font-medium py-1.5 px-2 rounded transition text-xs disabled:opacity-50 disabled:cursor-not-allowed">
+                                Full Download
+                            </button>
+                        </div>
                         <div id="stacDownloadStatus" class="text-xs text-gray-500 mt-1"></div>
+                    </div>
+
+                    <!-- Step 7: Multi-band -->
+                    <div class="mb-4 border-t border-gray-200 pt-3">
+                        <label class="block text-xs font-medium text-gray-700 mb-1">5b. Multi-band</label>
+                        <div class="space-y-1">
+                            <!-- RGB Composite -->
+                            <div class="p-2 bg-red-50 rounded border border-red-100">
+                                <p class="text-xs font-medium text-gray-700 mb-1">RGB Composite</p>
+                                <div class="grid grid-cols-3 gap-1">
+                                    <div>
+                                        <label class="text-xs text-red-600">R:</label>
+                                        <select id="rgbR" class="w-full px-1 py-0.5 border rounded text-xs" disabled></select>
+                                    </div>
+                                    <div>
+                                        <label class="text-xs text-green-600">G:</label>
+                                        <select id="rgbG" class="w-full px-1 py-0.5 border rounded text-xs" disabled></select>
+                                    </div>
+                                    <div>
+                                        <label class="text-xs text-blue-600">B:</label>
+                                        <select id="rgbB" class="w-full px-1 py-0.5 border rounded text-xs" disabled></select>
+                                    </div>
+                                </div>
+                                <button id="rgbBtn" disabled class="mt-1 w-full bg-red-600 hover:bg-red-700 text-white font-medium py-1.5 rounded transition text-xs disabled:opacity-50 disabled:cursor-not-allowed">
+                                    Download RGB Composite
+                                </button>
+                            </div>
+                            <!-- NDVI -->
+                            <div class="p-2 bg-green-50 rounded border border-green-100">
+                                <p class="text-xs font-medium text-gray-700 mb-1">NDVI (vegetation)</p>
+                                <div class="grid grid-cols-2 gap-1">
+                                    <div>
+                                        <label class="text-xs text-gray-600">NIR:</label>
+                                        <select id="ndviNir" class="w-full px-1 py-0.5 border rounded text-xs" disabled></select>
+                                    </div>
+                                    <div>
+                                        <label class="text-xs text-gray-600">Red:</label>
+                                        <select id="ndviRed" class="w-full px-1 py-0.5 border rounded text-xs" disabled></select>
+                                    </div>
+                                </div>
+                                <button id="ndviBtn" disabled class="mt-1 w-full bg-green-600 hover:bg-green-700 text-white font-medium py-1.5 rounded transition text-xs disabled:opacity-50 disabled:cursor-not-allowed">
+                                    Compute NDVI
+                                </button>
+                            </div>
+                        </div>
+                        <div id="multibandStatus" class="text-xs text-gray-500 mt-1"></div>
+                    </div>
+                </div>
+
+                <!-- ═══ VECTOR TAB ═══ -->
+                <div id="panelVector" class="p-4 hidden">
+                    <!-- Upload -->
+                    <div class="mb-4">
+                        <label class="block text-xs font-medium text-gray-700 mb-1">Load Vector</label>
+                        <input type="file" id="vectorFile" accept=".geojson,.json,.kml,.gpx" class="w-full px-2 py-1 border border-gray-300 rounded text-xs">
+                        <p class="text-xs text-gray-400 mt-0.5">GeoJSON, KML, GPX</p>
+                        <div id="vectorStatus" class="text-xs text-gray-500 mt-1"></div>
+                    </div>
+
+                    <!-- Style -->
+                    <div class="mb-4">
+                        <label class="block text-xs font-medium text-gray-700 mb-1">Style</label>
+                        <div class="grid grid-cols-3 gap-1">
+                            <div>
+                                <label class="text-xs text-gray-600">Color:</label>
+                                <input type="color" id="vecColor" value="#e74c3c" class="w-full h-6 rounded cursor-pointer">
+                            </div>
+                            <div>
+                                <label class="text-xs text-gray-600">Weight:</label>
+                                <input type="number" id="vecWeight" min="1" max="10" value="2" class="w-full px-1 py-0.5 border rounded text-xs">
+                            </div>
+                            <div>
+                                <label class="text-xs text-gray-600">Fill:</label>
+                                <input type="range" id="vecFillOpacity" min="0" max="100" value="20" class="w-full">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Features info -->
+                    <div class="mb-4">
+                        <label class="block text-xs font-medium text-gray-700 mb-1">Features</label>
+                        <div id="vectorFeatures" class="max-h-32 overflow-y-auto border border-gray-200 rounded text-xs bg-gray-50 p-1">
+                            <p class="text-gray-400 p-2">No vector loaded</p>
+                        </div>
+                    </div>
+
+                    <!-- Zonal Stats -->
+                    <div class="mb-4 border-t border-gray-200 pt-3">
+                        <label class="block text-xs font-medium text-gray-700 mb-1">Zonal Statistics</label>
+                        <p class="text-xs text-gray-400 mb-1">Compute stats of topmost raster inside each polygon</p>
+                        <button id="zonalStatsBtn" disabled class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-1.5 rounded transition text-xs disabled:opacity-50 disabled:cursor-not-allowed">
+                            Compute Zonal Stats
+                        </button>
+                        <div id="zonalResults" class="mt-2 max-h-40 overflow-y-auto text-xs"></div>
+                    </div>
+
+                    <!-- Clip -->
+                    <div class="mb-4 border-t border-gray-200 pt-3">
+                        <label class="block text-xs font-medium text-gray-700 mb-1">Clip Raster</label>
+                        <p class="text-xs text-gray-400 mb-1">Mask topmost raster to polygon boundaries</p>
+                        <button id="clipRasterBtn" disabled class="w-full bg-yellow-600 hover:bg-yellow-700 text-white font-medium py-1.5 rounded transition text-xs disabled:opacity-50 disabled:cursor-not-allowed">
+                            Clip Raster by Polygons
+                        </button>
                     </div>
                 </div>
 
@@ -203,6 +321,17 @@
                     <div class="flex items-center justify-between mb-2">
                         <label class="text-xs font-medium text-gray-700">Layers</label>
                         <button id="clearLayersBtn" class="text-xs text-red-500 hover:text-red-700">Clear all</button>
+                    </div>
+
+                    <!-- Workspace Save/Load -->
+                    <div class="flex gap-1 mb-3">
+                        <button id="saveWorkspaceBtn" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-medium py-1.5 rounded transition text-xs">
+                            Save Workspace
+                        </button>
+                        <button id="loadWorkspaceBtn" class="flex-1 bg-gray-600 hover:bg-gray-700 text-white font-medium py-1.5 rounded transition text-xs">
+                            Load Workspace
+                        </button>
+                        <input type="file" id="workspaceFileInput" accept=".surtgis,.json" class="hidden">
                     </div>
                     <div id="layerPanel" class="border border-gray-200 rounded p-2 text-xs bg-gray-50 max-h-64 overflow-y-auto">
                         <div class="flex items-center gap-2 py-0.5">

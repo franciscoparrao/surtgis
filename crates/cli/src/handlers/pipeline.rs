@@ -3,9 +3,14 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Instant;
 
 use surtgis_algorithms::imagery::{
     bsi, evi, EviParams, mndwi, nbr, ndbi, ndmi, ndsi, ndvi, ndwi, savi, SaviParams,
+};
+use surtgis_algorithms::terrain::{
+    accumulation_zones, landform_classification, surface_area_ratio, valley_depth, wind_exposure,
+    LandformParams, SarParams, WindExposureParams,
 };
 use surtgis_core::Raster;
 
@@ -30,6 +35,23 @@ pub fn handle(
             &dem, &s2, &bbox, &datetime, &outdir, max_scenes, &scl_keep, compress,
             mem_limit_bytes,
         ),
+        PipelineCommands::Features {
+            input,
+            outdir,
+            skip_hydrology,
+            extras,
+            compress: compress_opt,
+        } => {
+            let effective_compress = compress_opt.unwrap_or(compress);
+            handle_features_generate(
+                &input,
+                &outdir,
+                skip_hydrology,
+                extras,
+                effective_compress,
+                mem_limit_bytes,
+            )
+        }
     }
 }
 
@@ -379,4 +401,307 @@ fn compute_imagery_indices(bands: &S2Bands, outdir: &Path, compress: bool) -> Re
 
     println!("  10 spectral indices computed");
     Ok(())
+}
+
+// ─── Feature stack pipeline ─────────────────────────────────────────────
+
+/// Generate a geomorphometric feature stack from a DEM.
+///
+/// Produces terrain features (slope, aspect, curvature, etc.), optional
+/// hydrology features (flow direction, TWI, HAND, etc.), and optional
+/// extra features (valley depth, surface area ratio, wind exposure, etc.).
+/// Writes a `features.json` metadata file listing all generated bands.
+pub fn handle_features_generate(
+    input: &Path,
+    outdir: &Path,
+    skip_hydrology: bool,
+    extras: bool,
+    compress: bool,
+    mem_limit_bytes: Option<u64>,
+) -> Result<()> {
+    let total_start = Instant::now();
+
+    // Create output directory structure
+    std::fs::create_dir_all(outdir).context("Failed to create output directory")?;
+    let terrain_dir = outdir.join("terrain");
+    let hydro_dir = outdir.join("hydrology");
+
+    println!("SurtGIS Feature Stack Generator");
+    println!("=========================================");
+    println!("  Input:  {}", input.display());
+    println!("  Output: {}", outdir.display());
+    println!(
+        "  Mode:   terrain{}{}",
+        if !skip_hydrology { " + hydrology" } else { "" },
+        if extras { " + extras" } else { "" }
+    );
+    println!();
+
+    // ========== STEP 1: Terrain All ==========
+    println!("STEP 1: Computing terrain features (17 products)...");
+    let step_start = Instant::now();
+
+    super::terrain::handle_terrain_all(input, &terrain_dir, compress)
+        .context("Failed to compute terrain features")?;
+
+    println!(
+        "  Terrain complete ({:.1}s)",
+        step_start.elapsed().as_secs_f64()
+    );
+
+    // Track all features for metadata
+    let mut features: Vec<FeatureEntry> = vec![
+        FeatureEntry::new(1, "slope", "terrain/slope.tif", "degrees"),
+        FeatureEntry::new(2, "aspect", "terrain/aspect.tif", "degrees"),
+        FeatureEntry::new(3, "hillshade", "terrain/hillshade.tif", "unitless"),
+        FeatureEntry::new(4, "northness", "terrain/northness.tif", "unitless"),
+        FeatureEntry::new(5, "eastness", "terrain/eastness.tif", "unitless"),
+        FeatureEntry::new(6, "curvature", "terrain/curvature.tif", "1/m"),
+        FeatureEntry::new(7, "tpi", "terrain/tpi.tif", "meters"),
+        FeatureEntry::new(8, "tri", "terrain/tri.tif", "meters"),
+        FeatureEntry::new(9, "geomorphons", "terrain/geomorphons.tif", "class"),
+        FeatureEntry::new(10, "dev", "terrain/dev.tif", "meters"),
+        FeatureEntry::new(11, "vrm", "terrain/vrm.tif", "unitless"),
+        FeatureEntry::new(12, "convergence", "terrain/convergence.tif", "unitless"),
+        FeatureEntry::new(
+            13,
+            "openness_positive",
+            "terrain/openness_positive.tif",
+            "degrees",
+        ),
+        FeatureEntry::new(
+            14,
+            "openness_negative",
+            "terrain/openness_negative.tif",
+            "degrees",
+        ),
+        FeatureEntry::new(15, "svf", "terrain/svf.tif", "unitless"),
+        FeatureEntry::new(16, "mrvbf", "terrain/mrvbf.tif", "unitless"),
+        FeatureEntry::new(17, "mrrtf", "terrain/mrrtf.tif", "unitless"),
+    ];
+
+    // ========== STEP 2: Extras (optional) ==========
+    if extras {
+        println!("\nSTEP 2: Computing extra terrain features...");
+        let step_start = Instant::now();
+
+        let dem = helpers::read_dem(&input.to_path_buf())
+            .context("Failed to read DEM for extras")?;
+
+        let vd = valley_depth(&dem).context("Failed to compute valley depth")?;
+        helpers::write_result(&vd, &terrain_dir.join("valley_depth.tif"), compress)
+            .context("Failed to write valley depth")?;
+        println!("  valley_depth.tif");
+
+        let sar = surface_area_ratio(&dem, SarParams::default())
+            .context("Failed to compute surface area ratio")?;
+        helpers::write_result(&sar, &terrain_dir.join("surface_area_ratio.tif"), compress)
+            .context("Failed to write surface area ratio")?;
+        println!("  surface_area_ratio.tif");
+
+        let lf = landform_classification(&dem, LandformParams::default())
+            .context("Failed to compute landform classification")?;
+        helpers::write_result(&lf, &terrain_dir.join("landform.tif"), compress)
+            .context("Failed to write landform classification")?;
+        println!("  landform.tif");
+
+        let we = wind_exposure(&dem, WindExposureParams::default())
+            .context("Failed to compute wind exposure")?;
+        helpers::write_result(&we, &terrain_dir.join("wind_exposure.tif"), compress)
+            .context("Failed to write wind exposure")?;
+        println!("  wind_exposure.tif");
+
+        let az = accumulation_zones(&dem)
+            .context("Failed to compute accumulation zones")?;
+        helpers::write_result(&az, &terrain_dir.join("accumulation_zones.tif"), compress)
+            .context("Failed to write accumulation zones")?;
+        println!("  accumulation_zones.tif");
+
+        let next_band = features.len() + 1;
+        features.push(FeatureEntry::new(
+            next_band,
+            "valley_depth",
+            "terrain/valley_depth.tif",
+            "meters",
+        ));
+        features.push(FeatureEntry::new(
+            next_band + 1,
+            "surface_area_ratio",
+            "terrain/surface_area_ratio.tif",
+            "ratio",
+        ));
+        features.push(FeatureEntry::new(
+            next_band + 2,
+            "landform",
+            "terrain/landform.tif",
+            "class",
+        ));
+        features.push(FeatureEntry::new(
+            next_band + 3,
+            "wind_exposure",
+            "terrain/wind_exposure.tif",
+            "unitless",
+        ));
+        features.push(FeatureEntry::new(
+            next_band + 4,
+            "accumulation_zones",
+            "terrain/accumulation_zones.tif",
+            "class",
+        ));
+
+        println!(
+            "  Extras complete ({:.1}s)",
+            step_start.elapsed().as_secs_f64()
+        );
+    }
+
+    // ========== STEP 3: Hydrology (optional) ==========
+    if !skip_hydrology {
+        let step_label = if extras { "STEP 3" } else { "STEP 2" };
+        println!("\n{}: Computing hydrology features (8 products)...", step_label);
+        let step_start = Instant::now();
+
+        super::hydrology::handle_hydrology_all(input, &hydro_dir, compress, mem_limit_bytes)
+            .context("Failed to compute hydrology features")?;
+
+        let next_band = features.len() + 1;
+        features.push(FeatureEntry::new(
+            next_band,
+            "filled",
+            "hydrology/filled.tif",
+            "meters",
+        ));
+        features.push(FeatureEntry::new(
+            next_band + 1,
+            "flow_direction_d8",
+            "hydrology/flow_direction_d8.tif",
+            "D8 code",
+        ));
+        features.push(FeatureEntry::new(
+            next_band + 2,
+            "flow_direction_dinf",
+            "hydrology/flow_direction_dinf.tif",
+            "radians",
+        ));
+        features.push(FeatureEntry::new(
+            next_band + 3,
+            "flow_accumulation",
+            "hydrology/flow_accumulation.tif",
+            "cells",
+        ));
+        features.push(FeatureEntry::new(
+            next_band + 4,
+            "flow_accumulation_mfd",
+            "hydrology/flow_accumulation_mfd.tif",
+            "cells",
+        ));
+        features.push(FeatureEntry::new(
+            next_band + 5,
+            "twi",
+            "hydrology/twi.tif",
+            "unitless",
+        ));
+        features.push(FeatureEntry::new(
+            next_band + 6,
+            "stream_network",
+            "hydrology/stream_network.tif",
+            "binary",
+        ));
+        features.push(FeatureEntry::new(
+            next_band + 7,
+            "hand",
+            "hydrology/hand.tif",
+            "meters",
+        ));
+
+        println!(
+            "  Hydrology complete ({:.1}s)",
+            step_start.elapsed().as_secs_f64()
+        );
+    }
+
+    // ========== Write features.json ==========
+    write_features_metadata(outdir, &features)?;
+
+    // ========== Summary ==========
+    let total_elapsed = total_start.elapsed();
+    let terrain_count = count_tif_files(&terrain_dir);
+    let hydro_count = if !skip_hydrology {
+        count_tif_files(&hydro_dir)
+    } else {
+        0
+    };
+
+    println!();
+    println!("=========================================");
+    println!("FEATURE STACK COMPLETE");
+    println!("=========================================");
+    println!();
+    println!("Generated products:");
+    println!("  Terrain features:  {} files", terrain_count);
+    if !skip_hydrology {
+        println!("  Hydrology features: {} files", hydro_count);
+    }
+    println!("  Total features:    {}", features.len());
+    println!("  Metadata:          {}/features.json", outdir.display());
+    println!();
+    println!("Total time: {:.1}s", total_elapsed.as_secs_f64());
+
+    Ok(())
+}
+
+/// A single feature entry for the metadata JSON.
+#[derive(serde::Serialize)]
+struct FeatureEntry {
+    band: usize,
+    name: String,
+    file: String,
+    unit: String,
+}
+
+impl FeatureEntry {
+    fn new(band: usize, name: &str, file: &str, unit: &str) -> Self {
+        Self {
+            band,
+            name: name.to_string(),
+            file: file.to_string(),
+            unit: unit.to_string(),
+        }
+    }
+}
+
+/// Write `features.json` metadata listing all generated feature bands.
+fn write_features_metadata(outdir: &Path, features: &[FeatureEntry]) -> Result<()> {
+    let metadata = serde_json::json!({
+        "version": "0.4.0",
+        "features": features,
+        "total_features": features.len(),
+    });
+
+    let json_path = outdir.join("features.json");
+    let json_str =
+        serde_json::to_string_pretty(&metadata).context("Failed to serialize features.json")?;
+    std::fs::write(&json_path, json_str).context("Failed to write features.json")?;
+    println!("\nMetadata written to: {}", json_path.display());
+
+    Ok(())
+}
+
+/// Count .tif files in a directory.
+fn count_tif_files(dir: &Path) -> usize {
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .filter(|e| {
+                    e.is_ok()
+                        && e.as_ref()
+                            .unwrap()
+                            .path()
+                            .extension()
+                            .map(|ext| ext == "tif")
+                            .unwrap_or(false)
+                })
+                .count()
+        })
+        .unwrap_or(0)
 }
