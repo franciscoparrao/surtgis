@@ -852,32 +852,37 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             // -- Phase 1: Resolve asset URLs for all items (no data download) --
             // For each date, collect (data_href, scl_href, epsg) tuples
             #[allow(dead_code)]
+            /// Per-tile info including its native EPSG for bbox reprojection
+            struct TileRef {
+                data_href: String,
+                scl_href: String,
+                epsg: Option<u32>,
+            }
+
             struct SceneInfo {
                 date: String,
-                data_hrefs: Vec<String>,
-                scl_hrefs: Vec<String>,
-                epsg: Option<u32>,
+                tiles: Vec<TileRef>,
+                epsg: Option<u32>, // EPSG of the first tile (for output grid)
             }
 
             let mut scenes: Vec<SceneInfo> = Vec::new();
 
             for date in &dates {
                 let group = &by_date[date];
-                let mut data_hrefs = Vec::new();
-                let mut scl_hrefs = Vec::new();
+                let mut tiles = Vec::new();
                 let mut scene_epsg = None;
 
                 for item in group {
-                    // Resolve and sign data asset
+                    let tile_epsg = item.epsg();
+
                     let data_result = resolve_asset_key(item, &asset)
                         .and_then(|(_, a)| {
                             client.sign_asset_href(
                                 &a.href,
                                 item.collection.as_deref().unwrap_or(""),
-                            ).ok().map(|h| (h, item.epsg()))
+                            ).ok()
                         });
 
-                    // Resolve and sign cloud mask asset (if applicable for this collection)
                     let scl_result = mask_asset_name
                         .and_then(|mask_name| {
                             resolve_asset_key(item, mask_name)
@@ -889,20 +894,22 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                                 })
                         });
 
-                    if let (Some((dh, epsg)), Some(sh)) = (data_result, scl_result) {
-                        data_hrefs.push(dh);
-                        scl_hrefs.push(sh);
+                    if let (Some(dh), Some(sh)) = (data_result, scl_result) {
                         if scene_epsg.is_none() {
-                            scene_epsg = epsg;
+                            scene_epsg = tile_epsg;
                         }
+                        tiles.push(TileRef {
+                            data_href: dh,
+                            scl_href: sh,
+                            epsg: tile_epsg,
+                        });
                     }
                 }
 
-                if !data_hrefs.is_empty() {
+                if !tiles.is_empty() {
                     scenes.push(SceneInfo {
                         date: date.clone(),
-                        data_hrefs,
-                        scl_hrefs,
+                        tiles,
                         epsg: scene_epsg,
                     });
                 }
@@ -913,7 +920,7 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             }
 
             // -- Phase 2: Determine output grid from first scene's metadata --
-            let first_href = &scenes[0].data_hrefs[0];
+            let first_href = &scenes[0].tiles[0].data_href;
             let opts = CogReaderOptions::default();
             let probe_reader = CogReaderBlocking::open(first_href, opts)
                 .context("Failed to probe first COG")?;
@@ -1005,25 +1012,55 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                         let mut data_tiles: Vec<surtgis_core::Raster<f64>> = Vec::new();
                         let mut scl_tiles: Vec<surtgis_core::Raster<f64>> = Vec::new();
 
-                        for (dh, sh) in scene.data_hrefs.iter().zip(scene.scl_hrefs.iter()) {
+                        let out_epsg = scenes_ref.first().and_then(|s| s.epsg);
+
+                        for tile in &scene.tiles {
+                            // Reproject strip_bb to tile's native CRS if different from output
+                            let tile_bb = if tile.epsg != out_epsg && tile.epsg.is_some() && out_epsg.is_some() {
+                                use surtgis_cloud::reproject;
+                                let src_epsg = out_epsg.unwrap();
+                                let dst_epsg = tile.epsg.unwrap();
+                                if let (Some((sz, sn)), Some((dz, dn))) =
+                                    (reproject::parse_utm_epsg(src_epsg), reproject::parse_utm_epsg(dst_epsg))
+                                {
+                                    let (e1, n1) = reproject::reproject_utm_to_utm(
+                                        strip_bb.min_x, strip_bb.min_y, sz, sn, dz, dn);
+                                    let (e2, n2) = reproject::reproject_utm_to_utm(
+                                        strip_bb.max_x, strip_bb.max_y, sz, sn, dz, dn);
+                                    BBox::new(e1.min(e2), n1.min(n2), e1.max(e2), n1.max(n2))
+                                } else {
+                                    strip_bb
+                                }
+                            } else {
+                                strip_bb
+                            };
+
                             let opts = CogReaderOptions::default();
-                            // Read data window
-                            if let Ok(mut dr) = CogReaderBlocking::open(dh, opts) {
-                                if let Ok(r) = dr.read_bbox::<f64>(&strip_bb, None) {
+                            if let Ok(mut dr) = CogReaderBlocking::open(&tile.data_href, opts) {
+                                if let Ok(r) = dr.read_bbox::<f64>(&tile_bb, None) {
                                     data_tiles.push(r);
                                 }
                             }
                             let opts2 = CogReaderOptions::default();
-                            // Read SCL window
-                            if let Ok(mut sr) = CogReaderBlocking::open(sh, opts2) {
-                                if let Ok(r) = sr.read_bbox::<f64>(&strip_bb, None) {
+                            if let Ok(mut sr) = CogReaderBlocking::open(&tile.scl_href, opts2) {
+                                if let Ok(r) = sr.read_bbox::<f64>(&tile_bb, None) {
                                     scl_tiles.push(r);
                                 }
                             }
                         }
 
                         if data_tiles.is_empty() || scl_tiles.is_empty() {
+                            if current_strip == 0 {
+                                eprintln!("  ⚠ {}: 0/{} tiles readable for strip", scene.date, scene.tiles.len());
+                            }
                             continue;
+                        }
+
+                        if current_strip == 0 {
+                            let n_reproj = scene.tiles.iter().filter(|t| t.epsg != out_epsg && t.epsg.is_some()).count();
+                            if n_reproj > 0 {
+                                eprint!("  ℹ {}: {}/{} tiles, {} reprojected", scene.date, data_tiles.len(), scene.tiles.len(), n_reproj);
+                            }
                         }
 
                         // Unify CRS: reproject tiles to the CRS of the first tile
@@ -1076,9 +1113,23 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
 
                         // Cloud mask using collection-specific strategy
                         match mask_ref.mask(&data_m, &scl_m) {
-                            Ok(clean) => scene_strips.push(clean.data().to_owned()),
+                            Ok(clean) => {
+                                let valid = clean.data().iter().filter(|v| v.is_finite()).count();
+                                let total = clean.data().len();
+                                if current_strip == 0 {
+                                    let pct = if total > 0 { valid as f64 / total as f64 * 100.0 } else { 0.0 };
+                                    eprintln!(", mosaic OK, {:.0}% clear ✓", pct);
+                                }
+                                if valid > 0 {
+                                    scene_strips.push(clean.data().to_owned());
+                                } else if current_strip == 0 {
+                                    eprintln!("  ⚠ {}: 100% cloudy, skipped", scene.date);
+                                }
+                            }
                             Err(e) => {
-                                eprintln!("  ⚠ Cloud masking failed for date: {}", e);
+                                if current_strip == 0 {
+                                    eprintln!("  ⚠ {}: cloud mask failed: {}", scene.date, e);
+                                }
                             }
                         }
                     }
@@ -1149,7 +1200,7 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             }
 
             let elapsed = start.elapsed();
-            let total_items: usize = scenes.iter().map(|s| s.data_hrefs.len()).sum();
+            let total_items: usize = scenes.iter().map(|s| s.tiles.len()).sum();
             println!(
                 "Composite: {} dates ({} tiles) -> {} x {} ({:.1}M cells)",
                 scenes.len(), total_items, out_cols, out_rows,
