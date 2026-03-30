@@ -12,3 +12,6 @@ pub mod pipeline;
 pub mod cog;
 #[cfg(feature = "cloud")]
 pub mod stac;
+
+#[cfg(feature = "ml")]
+pub mod ml;

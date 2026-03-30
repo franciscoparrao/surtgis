@@ -83,6 +83,10 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 shapefile = { version = "0.7", features = ["geo-types"] }
 rusqlite = { version = "0.39", features = ["bundled"] }
 
+# ML
+smelt-ml = { path = "/home/franciscoparrao/proyectos/smelt" }
+csv = "1"
+
 # Testing & Benchmarks
 criterion = { version = "0.5", features = ["html_reports"] }
 approx = "0.5"

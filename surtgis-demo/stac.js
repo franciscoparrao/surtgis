@@ -135,7 +135,77 @@ export async function checkFileSize(href) {
     }
 }
 
-// ── Download a COG asset ─────────────────────────────────
+// ── Download COG preview (overview only, fast) ───────────
+export async function downloadCOGPreview(href, maxDim = 512) {
+    let url = href;
+    if (url.startsWith('s3://')) {
+        const s3path = url.slice(5);
+        url = `https://${s3path.split('/')[0]}.s3.amazonaws.com/${s3path.split('/').slice(1).join('/')}`;
+    }
+    // Sign Planetary Computer URLs
+    if (url.includes('blob.core.windows.net') && !url.includes('?')) {
+        try {
+            const signResp = await stacFetch(
+                `https://planetarycomputer.microsoft.com/api/sas/v1/sign?href=${encodeURIComponent(href)}`
+            );
+            if (signResp.href) url = signResp.href;
+        } catch (_) {}
+    }
+
+    // Try direct fromUrl (CORS-enabled servers)
+    let tiff;
+    try {
+        tiff = await GeoTIFF.fromUrl(url);
+    } catch (_) {
+        // Fallback: use proxy with range support
+        const proxyUrl = window.location.origin + PROXY + encodeURIComponent(url);
+        tiff = await GeoTIFF.fromUrl(proxyUrl);
+    }
+
+    // Find best overview: pick the smallest image that's >= maxDim
+    const count = await tiff.getImageCount();
+    let bestIdx = 0;
+    let bestImage = await tiff.getImage(0);
+    const fullW = bestImage.getWidth(), fullH = bestImage.getHeight();
+
+    if (count > 1) {
+        // Overviews are index 1, 2, 3... (progressively smaller)
+        for (let i = count - 1; i >= 1; i--) {
+            const img = await tiff.getImage(i);
+            const w = img.getWidth(), h = img.getHeight();
+            if (w >= maxDim || h >= maxDim) {
+                bestIdx = i;
+                bestImage = img;
+                break;
+            }
+        }
+        // If all overviews are too small, use the largest overview
+        if (bestIdx === 0 && count > 1) {
+            bestImage = await tiff.getImage(1);
+            bestIdx = 1;
+        }
+    }
+
+    const w = bestImage.getWidth(), h = bestImage.getHeight();
+    const data = (await bestImage.readRasters())[0];
+    let bbox = null;
+    try { bbox = bestImage.getBoundingBox(); } catch(_) {}
+
+    let epsg = null;
+    try {
+        const gk = bestImage.getGeoKeys ? bestImage.getGeoKeys() : {};
+        if (gk.ProjectedCSTypeGeoKey && gk.ProjectedCSTypeGeoKey !== 32767) epsg = gk.ProjectedCSTypeGeoKey;
+        else if (gk.GeographicTypeGeoKey && gk.GeographicTypeGeoKey !== 32767) epsg = gk.GeographicTypeGeoKey;
+    } catch(_) {}
+
+    return {
+        data, width: w, height: h, bbox, epsg,
+        fullWidth: fullW, fullHeight: fullH,
+        overviewIndex: bestIdx, overviewCount: count,
+    };
+}
+
+// ── Download a COG asset (full resolution) ───────────────
 export async function downloadCOG(href) {
     // Convert s3:// URLs to HTTPS
     let url = href;

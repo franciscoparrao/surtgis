@@ -42,6 +42,8 @@ fn main() -> Result<()> {
         #[cfg(feature = "cloud")]
         Commands::Stac { action } => handlers::stac::handle(action, compress)?,
         Commands::Pipeline { action } => handlers::pipeline::handle(action, compress, mem_limit_bytes)?,
+        #[cfg(feature = "ml")]
+        Commands::Ml { action } => handlers::ml::handle(action, compress)?,
     }
 
     Ok(())

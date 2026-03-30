@@ -123,6 +123,12 @@ pub enum Commands {
         #[command(subcommand)]
         action: PipelineCommands,
     },
+    /// Machine learning: train, predict, and benchmark classifiers on geospatial features
+    #[cfg(feature = "ml")]
+    Ml {
+        #[command(subcommand)]
+        action: MlCommands,
+    },
 }
 
 // ─── Terrain subcommands ────────────────────────────────────────────────
@@ -1180,5 +1186,73 @@ pub enum PipelineCommands {
         /// Compress output (DEFLATE)
         #[arg(long)]
         compress: Option<bool>,
+    },
+}
+
+// ─── ML subcommands ────────────────────────────────────────────────────
+
+#[cfg(feature = "ml")]
+#[derive(Subcommand)]
+pub enum MlCommands {
+    /// Extract training samples from feature rasters at point locations
+    ExtractSamples {
+        /// Directory with features.json and feature rasters (from `pipeline features`)
+        #[arg(long)]
+        features_dir: PathBuf,
+        /// Vector file with labeled points (.geojson, .shp, .gpkg)
+        #[arg(long)]
+        points: PathBuf,
+        /// Property name containing the target label/class
+        #[arg(long)]
+        target: String,
+        /// Output CSV file with extracted samples
+        output: PathBuf,
+    },
+    /// Train a classifier or regressor on a CSV dataset
+    Train {
+        /// Input CSV file (from extract-samples or external)
+        input: PathBuf,
+        /// Target column name
+        #[arg(long)]
+        target: String,
+        /// Model type: rf (random-forest), default: rf
+        #[arg(long, default_value = "rf")]
+        model: String,
+        /// Number of estimators (trees)
+        #[arg(long, default_value = "100")]
+        n_estimators: usize,
+        /// Number of cross-validation folds
+        #[arg(long, default_value = "5")]
+        folds: usize,
+        /// Task type: classification or regression
+        #[arg(long, default_value = "classification")]
+        task: String,
+        /// Output model file (.json)
+        output: PathBuf,
+    },
+    /// Predict on rasters using a trained model
+    Predict {
+        /// Trained model file (.json)
+        #[arg(long)]
+        model: PathBuf,
+        /// Directory with features.json and feature rasters
+        #[arg(long)]
+        features_dir: PathBuf,
+        /// Output prediction raster (.tif)
+        output: PathBuf,
+    },
+    /// Benchmark multiple learners on a dataset
+    Benchmark {
+        /// Input CSV file
+        input: PathBuf,
+        /// Target column name
+        #[arg(long)]
+        target: String,
+        /// Number of cross-validation folds
+        #[arg(long, default_value = "5")]
+        folds: usize,
+        /// Task type: classification or regression
+        #[arg(long, default_value = "classification")]
+        task: String,
     },
 }

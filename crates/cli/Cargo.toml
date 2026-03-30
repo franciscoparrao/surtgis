@@ -17,6 +17,7 @@ path = "src/main.rs"
 default = ["cloud"]
 gdal = ["surtgis-core/gdal"]
 cloud = ["dep:surtgis-cloud"]
+ml = ["dep:smelt-ml", "dep:csv"]
 
 [dependencies]
 surtgis-core = { version = "0.4.0", path = "../core", features = ["shapefile", "geopackage"] }
@@ -33,3 +34,6 @@ serde = { workspace = true, features = ["derive"] }
 reqwest = { workspace = true, features = ["json"] }
 tokio = { workspace = true, features = ["rt", "macros"] }
 ndarray.workspace = true
+smelt-ml = { workspace = true, optional = true }
+csv = { workspace = true, optional = true }
+geo.workspace = true
