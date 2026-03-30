@@ -313,33 +313,63 @@ impl StacClient {
             href
         );
 
-        let resp = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| CloudError::Auth(format!("PC sign request failed: {e}")))?;
+        let max_retries = self.options.max_retries.max(3); // at least 3 retries for signing
+        let mut last_err = None;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(CloudError::Auth(format!(
-                "PC sign returned HTTP {}: {}",
-                status,
-                body.chars().take(300).collect::<String>()
-            )));
+        for attempt in 0..=max_retries {
+            if attempt > 0 {
+                // Exponential backoff: 1s, 2s, 4s — PC rate-limits ~100 req/min
+                #[cfg(feature = "native")]
+                {
+                    let delay = Duration::from_millis(1000 * (1 << (attempt - 1)));
+                    tokio::time::sleep(delay).await;
+                }
+            }
+
+            let resp = match self.client.get(&url).send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    last_err = Some(CloudError::Auth(format!("PC sign request failed: {e}")));
+                    continue;
+                }
+            };
+
+            if resp.status().as_u16() == 429 || resp.status().is_server_error() {
+                // Rate limited or server error — retry
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                last_err = Some(CloudError::Auth(format!(
+                    "PC sign HTTP {} (attempt {}/{}): {}",
+                    status, attempt + 1, max_retries + 1,
+                    body.chars().take(200).collect::<String>()
+                )));
+                continue;
+            }
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                return Err(CloudError::Auth(format!(
+                    "PC sign returned HTTP {}: {}",
+                    status,
+                    body.chars().take(300).collect::<String>()
+                )));
+            }
+
+            let body: serde_json::Value = resp
+                .json()
+                .await
+                .map_err(|e| CloudError::Auth(format!("parsing PC sign response: {e}")))?;
+
+            return body["href"]
+                .as_str()
+                .map(|s| s.to_string())
+                .ok_or_else(|| CloudError::Auth("PC sign response missing 'href'".into()));
         }
 
-        let body: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| CloudError::Auth(format!("parsing PC sign response: {e}")))?;
-
-        body["href"]
-            .as_str()
-            .map(|s| s.to_string())
-            .ok_or_else(|| CloudError::Auth("PC sign response missing 'href' field".into()))
+        Err(last_err.unwrap_or_else(|| CloudError::Auth("PC sign: all retries exhausted".into())))
     }
+
 }
 
 // ---------------------------------------------------------------------------
