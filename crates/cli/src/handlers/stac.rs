@@ -872,27 +872,34 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                 let mut tiles = Vec::new();
                 let mut scene_epsg = None;
 
+                let mut sign_failures = 0usize;
+                let mut asset_missing = 0usize;
+
                 for item in group {
                     let tile_epsg = item.epsg();
+                    let _item_id = item.id.as_str();
 
-                    let data_result = resolve_asset_key(item, &asset)
-                        .and_then(|(_, a)| {
-                            client.sign_asset_href(
-                                &a.href,
-                                item.collection.as_deref().unwrap_or(""),
-                            ).ok()
-                        });
+                    let data_result = match resolve_asset_key(item, &asset) {
+                        Some((_, a)) => {
+                            match client.sign_asset_href(&a.href, item.collection.as_deref().unwrap_or("")) {
+                                Ok(h) => Some(h),
+                                Err(_) => { sign_failures += 1; None }
+                            }
+                        }
+                        None => { asset_missing += 1; None }
+                    };
 
-                    let scl_result = mask_asset_name
-                        .and_then(|mask_name| {
-                            resolve_asset_key(item, mask_name)
-                                .and_then(|(_, a)| {
-                                    client.sign_asset_href(
-                                        &a.href,
-                                        item.collection.as_deref().unwrap_or(""),
-                                    ).ok()
-                                })
-                        });
+                    let scl_result = mask_asset_name.and_then(|mask_name| {
+                        match resolve_asset_key(item, mask_name) {
+                            Some((_, a)) => {
+                                match client.sign_asset_href(&a.href, item.collection.as_deref().unwrap_or("")) {
+                                    Ok(h) => Some(h),
+                                    Err(_) => { sign_failures += 1; None }
+                                }
+                            }
+                            None => { asset_missing += 1; None }
+                        }
+                    });
 
                     if let (Some(dh), Some(sh)) = (data_result, scl_result) {
                         if scene_epsg.is_none() {
@@ -904,6 +911,11 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                             epsg: tile_epsg,
                         });
                     }
+                }
+
+                if tiles.is_empty() {
+                    eprintln!("  ⚠ {}: 0 tiles resolved (items={}, sign_fail={}, asset_missing={})",
+                        date, group.len(), sign_failures, asset_missing);
                 }
 
                 if !tiles.is_empty() {
@@ -1013,54 +1025,99 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                         let mut scl_tiles: Vec<surtgis_core::Raster<f64>> = Vec::new();
 
                         let out_epsg = scenes_ref.first().and_then(|s| s.epsg);
+                        let is_first_strip = current_strip == 0;
+
+                        let mut data_ok = 0usize;
+                        let mut data_fail = 0usize;
+                        let mut scl_ok = 0usize;
+                        let mut scl_fail = 0usize;
+                        let mut reproj_count = 0usize;
 
                         for tile in &scene.tiles {
                             // Reproject strip_bb to tile's native CRS if different from output
-                            let tile_bb = if tile.epsg != out_epsg && tile.epsg.is_some() && out_epsg.is_some() {
+                            let needs_reproj = tile.epsg != out_epsg && tile.epsg.is_some() && out_epsg.is_some();
+                            let tile_bb = if needs_reproj {
                                 use surtgis_cloud::reproject;
                                 let src_epsg = out_epsg.unwrap();
                                 let dst_epsg = tile.epsg.unwrap();
                                 if let (Some((sz, sn)), Some((dz, dn))) =
                                     (reproject::parse_utm_epsg(src_epsg), reproject::parse_utm_epsg(dst_epsg))
                                 {
+                                    reproj_count += 1;
                                     let (e1, n1) = reproject::reproject_utm_to_utm(
                                         strip_bb.min_x, strip_bb.min_y, sz, sn, dz, dn);
                                     let (e2, n2) = reproject::reproject_utm_to_utm(
                                         strip_bb.max_x, strip_bb.max_y, sz, sn, dz, dn);
                                     BBox::new(e1.min(e2), n1.min(n2), e1.max(e2), n1.max(n2))
                                 } else {
+                                    if is_first_strip {
+                                        eprintln!("  ⚠ {}: cannot parse UTM for EPSG {:?} → {:?}",
+                                            scene.date, out_epsg, tile.epsg);
+                                    }
                                     strip_bb
                                 }
                             } else {
                                 strip_bb
                             };
 
-                            let opts = CogReaderOptions::default();
-                            if let Ok(mut dr) = CogReaderBlocking::open(&tile.data_href, opts) {
-                                if let Ok(r) = dr.read_bbox::<f64>(&tile_bb, None) {
-                                    data_tiles.push(r);
+                            // Read data tile
+                            match CogReaderBlocking::open(&tile.data_href, CogReaderOptions::default()) {
+                                Ok(mut dr) => {
+                                    match dr.read_bbox::<f64>(&tile_bb, None) {
+                                        Ok(r) => { data_tiles.push(r); data_ok += 1; }
+                                        Err(e) => {
+                                            data_fail += 1;
+                                            if is_first_strip {
+                                                eprintln!("  ⚠ {}: data read_bbox failed (EPSG {:?}): {}",
+                                                    scene.date, tile.epsg, e);
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    data_fail += 1;
+                                    if is_first_strip {
+                                        eprintln!("  ⚠ {}: COG open failed: {}", scene.date, e);
+                                    }
                                 }
                             }
-                            let opts2 = CogReaderOptions::default();
-                            if let Ok(mut sr) = CogReaderBlocking::open(&tile.scl_href, opts2) {
-                                if let Ok(r) = sr.read_bbox::<f64>(&tile_bb, None) {
-                                    scl_tiles.push(r);
+
+                            // Read SCL tile
+                            match CogReaderBlocking::open(&tile.scl_href, CogReaderOptions::default()) {
+                                Ok(mut sr) => {
+                                    match sr.read_bbox::<f64>(&tile_bb, None) {
+                                        Ok(r) => { scl_tiles.push(r); scl_ok += 1; }
+                                        Err(e) => {
+                                            scl_fail += 1;
+                                            if is_first_strip {
+                                                eprintln!("  ⚠ {}: SCL read_bbox failed (EPSG {:?}): {}",
+                                                    scene.date, tile.epsg, e);
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    scl_fail += 1;
+                                    if is_first_strip {
+                                        eprintln!("  ⚠ {}: SCL COG open failed: {}", scene.date, e);
+                                    }
                                 }
                             }
+                        }
+
+                        if is_first_strip {
+                            eprintln!("  ℹ {}: {} tiles, data={}/{} scl={}/{} reproj={}",
+                                scene.date, scene.tiles.len(),
+                                data_ok, data_ok + data_fail,
+                                scl_ok, scl_ok + scl_fail,
+                                reproj_count);
                         }
 
                         if data_tiles.is_empty() || scl_tiles.is_empty() {
-                            if current_strip == 0 {
-                                eprintln!("  ⚠ {}: 0/{} tiles readable for strip", scene.date, scene.tiles.len());
+                            if is_first_strip {
+                                eprintln!("  ⚠ {}: SKIPPED (data={}, scl={})", scene.date, data_tiles.len(), scl_tiles.len());
                             }
                             continue;
-                        }
-
-                        if current_strip == 0 {
-                            let n_reproj = scene.tiles.iter().filter(|t| t.epsg != out_epsg && t.epsg.is_some()).count();
-                            if n_reproj > 0 {
-                                eprint!("  ℹ {}: {}/{} tiles, {} reprojected", scene.date, data_tiles.len(), scene.tiles.len(), n_reproj);
-                            }
                         }
 
                         // Unify CRS: reproject tiles to the CRS of the first tile

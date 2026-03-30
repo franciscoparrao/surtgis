@@ -91,6 +91,8 @@ pub fn bytes_to_typed<T: RasterElement>(
     match (bps, sf) {
         (8, sample_format::UNSIGNED_INT) => cast_slice::<u8, T>(raw),
         (8, sample_format::SIGNED_INT) => cast_from_bytes::<i8, T>(raw),
+        // 15-bit unsigned (Sentinel-2 L2A on Planetary Computer) — stored as u16
+        (15, sample_format::UNSIGNED_INT) => cast_from_le::<u16, T>(raw),
         (16, sample_format::UNSIGNED_INT) => cast_from_le::<u16, T>(raw),
         (16, sample_format::SIGNED_INT) => cast_from_le::<i16, T>(raw),
         (32, sample_format::UNSIGNED_INT) => cast_from_le::<u32, T>(raw),
