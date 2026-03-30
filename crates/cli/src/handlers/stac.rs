@@ -878,6 +878,9 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                 for item in group {
                     let tile_epsg = item.epsg();
                     let _item_id = item.id.as_str();
+                    // Log EPSG detection for first date
+                    if scenes.is_empty() && tiles.is_empty() {
+                    }
 
                     let data_result = match resolve_asset_key(item, &asset) {
                         Some((_, a)) => {
@@ -1033,9 +1036,11 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                         let mut scl_fail = 0usize;
                         let mut reproj_count = 0usize;
 
-                        for tile in &scene.tiles {
+                        for (tile_idx, tile) in scene.tiles.iter().enumerate() {
                             // Reproject strip_bb to tile's native CRS if different from output
                             let needs_reproj = tile.epsg != out_epsg && tile.epsg.is_some() && out_epsg.is_some();
+                            if is_first_strip && tile_idx == 0 && scene.date == scenes_ref[0].date {
+                            }
                             let tile_bb = if needs_reproj {
                                 use surtgis_cloud::reproject;
                                 let src_epsg = out_epsg.unwrap();
