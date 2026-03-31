@@ -967,6 +967,10 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                 (out_cols * out_rows) as f64 / 1e6,
                 scenes.len()
             );
+            eprintln!("  Grid config: cols={} rows={} px_w={:.1} px_h={:.1}",
+                out_cols, out_rows, pixel_width, pixel_height);
+            eprintln!("  Grid bbox: x=[{:.1}, {:.1}] y=[{:.1}, {:.1}]",
+                cog_bb.min_x, cog_bb.max_x, cog_bb.min_y, cog_bb.max_y);
 
             // -- Phase 3: Strip-by-strip processing --
             let strip_rows = 512usize; // rows per output strip
@@ -1229,9 +1233,23 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                         }
                     }
 
+                    if current_strip == 0 {
+                        let valid_count = output.iter().filter(|v| v.is_finite()).count();
+                        let total = output.len();
+                        eprintln!("  Strip 0 output: {}x{}, {}/{} valid ({:.0}%)",
+                            output.nrows(), output.ncols(), valid_count, total,
+                            if total > 0 { valid_count as f64 / total as f64 * 100.0 } else { 0.0 });
+                        eprintln!("  scene_strips collected: {} (from {} dates)", scene_strips.len(), n_scenes);
+                    }
                     Ok(output)
                 },
             ).context("Failed to write streaming composite")?;
+
+            // Verify written file
+            let file_size = std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
+            let expected_size = (out_rows * out_cols * 4) as u64; // f32
+            eprintln!("  File written: {} bytes ({:.1} MB), expected ~{:.1} MB",
+                file_size, file_size as f64 / 1e6, expected_size as f64 / 1e6);
 
             println!(); // newline after \r progress
 
@@ -1244,6 +1262,23 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                     surtgis_core::io::read_geotiff(align_path, None)
                         .context("Failed to read alignment reference raster")?;
 
+                // Debug: log extents to diagnose alignment
+                let cgt = composite.transform();
+                let (cr, cc) = composite.shape();
+                let rgt = reference.transform();
+                let (rr, rc) = reference.shape();
+                eprintln!("  Composite transform: origin=({:.1},{:.1}) px=({:.1},{:.1}) shape={}x{}",
+                    cgt.origin_x, cgt.origin_y, cgt.pixel_width, cgt.pixel_height, cr, cc);
+                eprintln!("  Reference transform: origin=({:.1},{:.1}) px=({:.1},{:.1}) shape={}x{}",
+                    rgt.origin_x, rgt.origin_y, rgt.pixel_width, rgt.pixel_height, rr, rc);
+                // Check sample pixel mapping
+                let sample_x = rgt.origin_x + 0.5 * rgt.pixel_width;
+                let sample_y = rgt.origin_y + 0.5 * rgt.pixel_height;
+                let src_col_f = (sample_x - cgt.origin_x) / cgt.pixel_width - 0.5;
+                let src_row_f = (sample_y - cgt.origin_y) / cgt.pixel_height - 0.5;
+                eprintln!("  Pixel(0,0) ref→comp: geo=({:.1},{:.1}) → src_pix=({:.1},{:.1}) bounds=(0..{},0..{})",
+                    sample_x, sample_y, src_col_f, src_row_f, cc, cr);
+
                 let pb = spinner("Aligning to reference grid...");
                 let aligned = surtgis_core::resample_to_grid(
                     &composite,
@@ -1254,6 +1289,17 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                 pb.finish_and_clear();
 
                 let (ar, ac) = aligned.shape();
+                let valid_aligned = aligned.data().iter().filter(|v| v.is_finite()).count();
+                let total_aligned = ar * ac;
+                let pct_aligned = if total_aligned > 0 { valid_aligned as f64 / total_aligned as f64 * 100.0 } else { 0.0 };
+                eprintln!("  Aligned result: {}x{}, {}/{} valid ({:.1}%)",
+                    ac, ar, valid_aligned, total_aligned, pct_aligned);
+                if valid_aligned == 0 {
+                    eprintln!("  ⚠ WARNING: Aligned raster has 0% valid pixels!");
+                    eprintln!("    Composite CRS may differ from reference DEM CRS.");
+                    eprintln!("    Composite origin: ({:.1}, {:.1}), Reference origin: ({:.1}, {:.1})",
+                        cgt.origin_x, cgt.origin_y, rgt.origin_x, rgt.origin_y);
+                }
                 write_result(&aligned, &output, compress)?;
                 println!(
                     "Aligned to reference: {} x {} -> {} x {}",
