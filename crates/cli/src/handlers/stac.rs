@@ -1378,6 +1378,47 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                     eprintln!("    Composite origin: ({:.1}, {:.1}), Reference origin: ({:.1}, {:.1})",
                         cgt.origin_x, cgt.origin_y, rgt.origin_x, rgt.origin_y);
                 }
+
+                // Post-align spatial gap-fill (3x3 iterative mean)
+                // The resample may introduce NaN at edges where bilinear hits NaN neighbors
+                let nan_post = aligned.data().iter().filter(|v| !v.is_finite()).count();
+                let mut aligned = aligned;
+                if nan_post > 0 && nan_post < total_aligned {
+                    let (ar, ac) = aligned.shape();
+                    let max_passes = 30;
+                    for _pass in 0..max_passes {
+                        let prev = aligned.data().clone();
+                        let mut filled = 0usize;
+                        for r in 0..ar {
+                            for c in 0..ac {
+                                if prev[[r, c]].is_finite() { continue; }
+                                let mut sum = 0.0;
+                                let mut cnt = 0u32;
+                                for dr in -1i32..=1 {
+                                    for dc in -1i32..=1 {
+                                        let nr = r as i32 + dr;
+                                        let nc = c as i32 + dc;
+                                        if nr >= 0 && nr < ar as i32 && nc >= 0 && nc < ac as i32 {
+                                            let v = prev[[nr as usize, nc as usize]];
+                                            if v.is_finite() { sum += v; cnt += 1; }
+                                        }
+                                    }
+                                }
+                                if cnt >= 2 {
+                                    aligned.set(r, c, sum / cnt as f64);
+                                    filled += 1;
+                                }
+                            }
+                        }
+                        if filled == 0 { break; }
+                        let remaining = aligned.data().iter().filter(|v| !v.is_finite()).count();
+                        if remaining == 0 { break; }
+                    }
+                    let final_valid = aligned.data().iter().filter(|v| v.is_finite()).count();
+                    eprintln!("  Post-align gap-fill: {:.1}% → {:.1}%",
+                        pct_aligned, final_valid as f64 / total_aligned as f64 * 100.0);
+                }
+
                 write_result(&aligned, &output, compress)?;
                 println!(
                     "Aligned to reference: {} x {} -> {} x {}",
