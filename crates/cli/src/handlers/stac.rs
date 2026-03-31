@@ -1200,15 +1200,25 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                         }
                     }
 
-                    // Compute per-pixel median across scenes for this strip
+                    // Compute per-pixel median across scenes for this strip,
+                    // then fill remaining NaN with temporal nearest (most recent valid value).
                     let mut output = ndarray::Array2::<f64>::from_elem(
                         (actual_rows, out_cols), f64::NAN,
                     );
 
                     if !scene_strips.is_empty() {
-                        // All strips should cover roughly the same area but may differ
-                        // in exact dimensions. Use the output grid as reference.
                         let n = scene_strips.len();
+
+                        // Sort scene_strips by coverage (most pixels first) for greedy coverage
+                        let mut coverage: Vec<(usize, usize)> = scene_strips.iter().enumerate()
+                            .map(|(i, s)| {
+                                let valid = s.iter().filter(|v| v.is_finite()).count();
+                                (i, valid)
+                            })
+                            .collect();
+                        coverage.sort_by(|a, b| b.1.cmp(&a.1));
+
+                        // Phase 1: Median composite (all scenes)
                         for r in 0..actual_rows {
                             for c in 0..out_cols {
                                 let mut values: Vec<f64> = Vec::with_capacity(n);
@@ -1229,6 +1239,74 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                                         values[mid]
                                     };
                                 }
+                            }
+                        }
+
+                        // Phase 2: Fill remaining NaN with temporal nearest
+                        // (use the scene with highest coverage first, greedy)
+                        let nan_before = output.iter().filter(|v| !v.is_finite()).count();
+                        if nan_before > 0 {
+                            for &(scene_idx, _) in &coverage {
+                                let strip = &scene_strips[scene_idx];
+                                let mut filled = 0usize;
+                                for r in 0..actual_rows {
+                                    for c in 0..out_cols {
+                                        if !output[[r, c]].is_finite()
+                                            && r < strip.nrows() && c < strip.ncols()
+                                        {
+                                            let v = strip[[r, c]];
+                                            if v.is_finite() {
+                                                output[[r, c]] = v;
+                                                filled += 1;
+                                            }
+                                        }
+                                    }
+                                }
+                                if filled == 0 { continue; }
+                                // Check if all filled
+                                let nan_remaining = output.iter().filter(|v| !v.is_finite()).count();
+                                if nan_remaining == 0 { break; }
+                            }
+                        }
+
+                        // Phase 3: Spatial fill for any remaining NaN
+                        // (simple 3x3 mean of valid neighbors, iterate until stable)
+                        let mut nan_remaining = output.iter().filter(|v| !v.is_finite()).count();
+                        if nan_remaining > 0 && nan_remaining < output.len() {
+                            let max_passes = 20;
+                            for _pass in 0..max_passes {
+                                let prev = output.clone();
+                                let mut filled_this_pass = 0usize;
+                                for r in 0..actual_rows {
+                                    for c in 0..out_cols {
+                                        if prev[[r, c]].is_finite() { continue; }
+                                        // Collect valid neighbors in 3x3 window
+                                        let mut sum = 0.0;
+                                        let mut cnt = 0u32;
+                                        for dr in -1i32..=1 {
+                                            for dc in -1i32..=1 {
+                                                let nr = r as i32 + dr;
+                                                let nc = c as i32 + dc;
+                                                if nr >= 0 && nr < actual_rows as i32
+                                                    && nc >= 0 && nc < out_cols as i32
+                                                {
+                                                    let v = prev[[nr as usize, nc as usize]];
+                                                    if v.is_finite() {
+                                                        sum += v;
+                                                        cnt += 1;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if cnt >= 2 {
+                                            output[[r, c]] = sum / cnt as f64;
+                                            filled_this_pass += 1;
+                                        }
+                                    }
+                                }
+                                if filled_this_pass == 0 { break; }
+                                nan_remaining = output.iter().filter(|v| !v.is_finite()).count();
+                                if nan_remaining == 0 { break; }
                             }
                         }
                     }
