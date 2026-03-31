@@ -941,25 +941,56 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                 .context("Failed to probe first COG")?;
             let probe_meta = probe_reader.metadata();
 
-            // Reproject user bbox to COG CRS if needed
-            let cog_bb = {
-                use surtgis_cloud::reproject;
-                if let Some(epsg) = scenes[0].epsg {
-                    if !reproject::is_wgs84(epsg) {
-                        reproject::reproject_bbox_to_cog(&bb, epsg)
+            // Determine output grid:
+            // If --align-to is present, use the DEM reference grid directly
+            // (avoids the unreliable post-composite resample step).
+            // Otherwise, use the COG native grid.
+            let (out_cols, out_rows, out_transform, out_crs, cog_bb);
+
+            if let Some(ref align_path) = align_to {
+                // Use reference DEM grid
+                let reference: surtgis_core::Raster<f64> =
+                    surtgis_core::io::read_geotiff(align_path, None)
+                        .context("Failed to read alignment reference raster")?;
+                let rgt = reference.transform();
+                let (rr, rc) = reference.shape();
+
+                out_rows = rr;
+                out_cols = rc;
+                out_transform = *rgt;
+                out_crs = reference.crs().cloned();
+
+                // Compute bbox from reference grid (in its CRS)
+                let min_x = rgt.origin_x;
+                let max_y = rgt.origin_y;
+                let max_x = min_x + rc as f64 * rgt.pixel_width;
+                let min_y = max_y + rr as f64 * rgt.pixel_height; // pixel_height is negative
+                cog_bb = BBox::new(min_x, min_y, max_x, max_y);
+
+                eprintln!("  Using reference grid from --align-to: {}x{} px=({:.1},{:.1})",
+                    rc, rr, rgt.pixel_width, rgt.pixel_height);
+            } else {
+                // Use COG native grid
+                let cog_bb_computed = {
+                    use surtgis_cloud::reproject;
+                    if let Some(epsg) = scenes[0].epsg {
+                        if !reproject::is_wgs84(epsg) {
+                            reproject::reproject_bbox_to_cog(&bb, epsg)
+                        } else { bb }
                     } else { bb }
-                } else { bb }
-            };
+                };
+                cog_bb = cog_bb_computed;
 
-            let pixel_width = probe_meta.geo_transform.pixel_width.abs();
-            let pixel_height = probe_meta.geo_transform.pixel_height.abs();
-            let out_cols = ((cog_bb.max_x - cog_bb.min_x) / pixel_width).round() as usize;
-            let out_rows = ((cog_bb.max_y - cog_bb.min_y) / pixel_height).round() as usize;
+                let pixel_width = probe_meta.geo_transform.pixel_width.abs();
+                let pixel_height = probe_meta.geo_transform.pixel_height.abs();
+                out_cols = ((cog_bb.max_x - cog_bb.min_x) / pixel_width).round() as usize;
+                out_rows = ((cog_bb.max_y - cog_bb.min_y) / pixel_height).round() as usize;
 
-            let out_transform = surtgis_core::GeoTransform::new(
-                cog_bb.min_x, cog_bb.max_y, pixel_width, -pixel_height,
-            );
-            let out_crs = scenes[0].epsg.map(surtgis_core::CRS::from_epsg);
+                out_transform = surtgis_core::GeoTransform::new(
+                    cog_bb.min_x, cog_bb.max_y, pixel_width, -pixel_height,
+                );
+                out_crs = scenes[0].epsg.map(surtgis_core::CRS::from_epsg);
+            }
 
             println!(
                 "Output grid: {} x {} ({:.1}M cells), {} dates",
@@ -967,8 +998,8 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                 (out_cols * out_rows) as f64 / 1e6,
                 scenes.len()
             );
-            eprintln!("  Grid config: cols={} rows={} px_w={:.1} px_h={:.1}",
-                out_cols, out_rows, pixel_width, pixel_height);
+            eprintln!("  Grid config: cols={} rows={} px=({:.1},{:.1})",
+                out_cols, out_rows, out_transform.pixel_width, out_transform.pixel_height);
             eprintln!("  Grid bbox: x=[{:.1}, {:.1}] y=[{:.1}, {:.1}]",
                 cog_bb.min_x, cog_bb.max_x, cog_bb.min_y, cog_bb.max_y);
 
@@ -1012,8 +1043,9 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                     let actual_rows = row_end - row_start;
 
                     // Geographic bbox for this strip
-                    let strip_min_y = cog_bb.max_y - (row_end as f64 * pixel_height);
-                    let strip_max_y = cog_bb.max_y - (row_start as f64 * pixel_height);
+                    let ph = out_transform.pixel_height.abs();
+                    let strip_min_y = cog_bb.max_y - (row_end as f64 * ph);
+                    let strip_max_y = cog_bb.max_y - (row_start as f64 * ph);
                     let strip_bb = BBox::new(
                         cog_bb.min_x, strip_min_y, cog_bb.max_x, strip_max_y,
                     );
@@ -1331,8 +1363,11 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
 
             println!(); // newline after \r progress
 
-            // If --align-to is specified, resample the output to match the reference grid
-            if let Some(ref align_path) = align_to {
+            // If --align-to is specified AND we didn't already use the reference grid,
+            // resample the output to match. (When align_to is present, we now write
+            // directly to the reference grid, so this step is skipped.)
+            if false && align_to.is_some() {
+                let align_path = align_to.as_ref().unwrap();
                 let composite: surtgis_core::Raster<f64> =
                     surtgis_core::io::read_geotiff(&output, None)
                         .context("Failed to re-read composite for alignment")?;
