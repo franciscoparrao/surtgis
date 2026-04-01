@@ -801,8 +801,10 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             let cat = StacCatalog::from_str_or_url(&catalog);
             let bb = parse_bbox(&bbox)?;
 
-            // Search with high limit to find enough items across dates
-            let search_limit = (max_scenes * 4) as u32;
+            // Search with high limit to find ALL tiles across dates.
+            // A large basin can have 6-10 MGRS tiles × 50+ dates = 500+ items.
+            // We need to fetch all items to ensure every date has all its tiles.
+            let search_limit = (max_scenes * 20).max(500) as u32;
             let params = StacSearchParams::new()
                 .bbox(bb.min_x, bb.min_y, bb.max_x, bb.max_y)
                 .collections(&[collection.as_str()])
@@ -811,7 +813,7 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
 
             let pb = spinner("Searching STAC catalog...");
             let client_opts = StacClientOptions {
-                max_items: (max_scenes * 4) as usize,
+                max_items: (max_scenes * 20).max(500) as usize,
                 ..StacClientOptions::default()
             };
             let client = StacClientBlocking::new(cat, client_opts)
@@ -840,11 +842,19 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             let dates: Vec<String> =
                 by_date.keys().take(max_scenes).cloned().collect();
 
+            // Log tiles per date to verify all tiles are included
+            let tiles_per_date: Vec<usize> = dates.iter()
+                .map(|d| by_date.get(d).map(|g| g.len()).unwrap_or(0))
+                .collect();
+            let min_tiles = tiles_per_date.iter().min().copied().unwrap_or(0);
+            let max_tiles = tiles_per_date.iter().max().copied().unwrap_or(0);
+
             println!(
-                "Found {} items across {} dates (using {} dates)",
+                "Found {} items across {} dates (using {} dates, {}-{} tiles/date)",
                 items.len(),
                 by_date.len(),
-                dates.len()
+                dates.len(),
+                min_tiles, max_tiles,
             );
 
             let start = Instant::now();
@@ -1050,6 +1060,8 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                         cog_bb.min_x, strip_min_y, cog_bb.max_x, strip_max_y,
                     );
 
+                    eprintln!("  Strip {}/{}: bbox y=[{:.0}, {:.0}]",
+                        current_strip + 1, num_strips, strip_min_y, strip_max_y);
                     print!(
                         "\r  Strip {}/{} (rows {}-{})...",
                         current_strip + 1, num_strips, row_start, row_end
@@ -1104,13 +1116,21 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                             // Read data tile
                             match CogReaderBlocking::open(&tile.data_href, CogReaderOptions::default()) {
                                 Ok(mut dr) => {
+                                    // Log tile extent on failure for debugging
+                                    let tile_meta = dr.metadata();
                                     match dr.read_bbox::<f64>(&tile_bb, None) {
                                         Ok(r) => { data_tiles.push(r); data_ok += 1; }
                                         Err(e) => {
                                             data_fail += 1;
-                                            if is_first_strip {
-                                                eprintln!("  ⚠ {}: data read_bbox failed (EPSG {:?}): {}",
-                                                    scene.date, tile.epsg, e);
+                                            if data_fail <= 2 {
+                                                let tgt = &tile_meta.geo_transform;
+                                                let tw = tile_meta.width as f64 * tgt.pixel_width.abs();
+                                                let th = tile_meta.height as f64 * tgt.pixel_height.abs();
+                                                eprintln!("  ⚠ {}: read_bbox fail: strip_y=[{:.0},{:.0}] tile_y=[{:.0},{:.0}] err={}",
+                                                    scene.date,
+                                                    tile_bb.min_y, tile_bb.max_y,
+                                                    tgt.origin_y - th, tgt.origin_y,
+                                                    e);
                                             }
                                         }
                                     }
@@ -1343,13 +1363,14 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                         }
                     }
 
-                    if current_strip == 0 {
-                        let valid_count = output.iter().filter(|v| v.is_finite()).count();
-                        let total = output.len();
-                        eprintln!("  Strip 0 output: {}x{}, {}/{} valid ({:.0}%)",
-                            output.nrows(), output.ncols(), valid_count, total,
-                            if total > 0 { valid_count as f64 / total as f64 * 100.0 } else { 0.0 });
-                        eprintln!("  scene_strips collected: {} (from {} dates)", scene_strips.len(), n_scenes);
+                    let valid_count = output.iter().filter(|v| v.is_finite()).count();
+                    let total = output.len();
+                    let pct = if total > 0 { valid_count as f64 / total as f64 * 100.0 } else { 0.0 };
+                    if current_strip == 0 || current_strip == num_strips - 1 || scene_strips.is_empty() {
+                        eprintln!("  Strip {}/{}: {}x{}, scenes={}, {:.0}% valid",
+                            current_strip + 1, num_strips,
+                            output.nrows(), output.ncols(),
+                            scene_strips.len(), pct);
                     }
                     Ok(output)
                 },
