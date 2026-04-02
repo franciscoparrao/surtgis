@@ -1116,10 +1116,27 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                             // Read data tile
                             match CogReaderBlocking::open(&tile.data_href, CogReaderOptions::default()) {
                                 Ok(mut dr) => {
-                                    // Log tile extent on failure for debugging
                                     let tile_meta = dr.metadata();
+                                    if is_first_strip && tile_idx == 0 {
+                                        eprintln!("    COG meta: {}x{} bps={} sf={} compression={} nodata={:?}",
+                                            tile_meta.width, tile_meta.height,
+                                            tile_meta.bits_per_sample, tile_meta.sample_format,
+                                            tile_meta.compression, tile_meta.nodata);
+                                    }
                                     match dr.read_bbox::<f64>(&tile_bb, None) {
-                                        Ok(r) => { data_tiles.push(r); data_ok += 1; }
+                                        Ok(mut r) => {
+                                            // Filter S2 L2A nodata markers:
+                                            // 0 = nodata, 65535 = saturated/nodata
+                                            // Values outside [1, 12000] are suspect for L2A reflectance
+                                            let nodata_val = tile_meta.nodata.unwrap_or(0.0);
+                                            for val in r.data_mut().iter_mut() {
+                                                if *val == nodata_val || *val == 0.0 || *val >= 65535.0 {
+                                                    *val = f64::NAN;
+                                                }
+                                            }
+                                            data_tiles.push(r);
+                                            data_ok += 1;
+                                        }
                                         Err(e) => {
                                             data_fail += 1;
                                             if data_fail <= 2 {
@@ -1261,6 +1278,22 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                     if !scene_strips.is_empty() {
                         let n = scene_strips.len();
 
+                        // Diagnostic: check value ranges of individual scene strips
+                        if current_strip == 0 {
+                            for (si, strip) in scene_strips.iter().enumerate() {
+                                let vals: Vec<f64> = strip.iter().filter(|v| v.is_finite()).copied().collect();
+                                if !vals.is_empty() {
+                                    let min = vals.iter().cloned().fold(f64::INFINITY, f64::min);
+                                    let max = vals.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                                    let over = vals.iter().filter(|&&v| v > 10000.0).count();
+                                    if si < 3 || over > 0 {
+                                        eprintln!("    scene_strip[{}]: n={} range=[{:.0},{:.0}] >10k={}",
+                                            si, vals.len(), min, max, over);
+                                    }
+                                }
+                            }
+                        }
+
                         // Sort scene_strips by coverage (most pixels first) for greedy coverage
                         let mut coverage: Vec<(usize, usize)> = scene_strips.iter().enumerate()
                             .map(|(i, s)| {
@@ -1367,10 +1400,18 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                     let total = output.len();
                     let pct = if total > 0 { valid_count as f64 / total as f64 * 100.0 } else { 0.0 };
                     if current_strip == 0 || current_strip == num_strips - 1 || scene_strips.is_empty() {
-                        eprintln!("  Strip {}/{}: {}x{}, scenes={}, {:.0}% valid",
+                        // Value range diagnostic
+                        let valid_vals: Vec<f64> = output.iter().filter(|v| v.is_finite()).copied().collect();
+                        let (vmin, vmax, vmean) = if !valid_vals.is_empty() {
+                            let min = valid_vals.iter().cloned().fold(f64::INFINITY, f64::min);
+                            let max = valid_vals.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                            let mean = valid_vals.iter().sum::<f64>() / valid_vals.len() as f64;
+                            (min, max, mean)
+                        } else { (0.0, 0.0, 0.0) };
+                        let over_10k = valid_vals.iter().filter(|&&v| v > 10000.0).count();
+                        eprintln!("  Strip {}/{}: scenes={}, {:.0}% valid, range=[{:.0},{:.0}] mean={:.0} >10k={}",
                             current_strip + 1, num_strips,
-                            output.nrows(), output.ncols(),
-                            scene_strips.len(), pct);
+                            scene_strips.len(), pct, vmin, vmax, vmean, over_10k);
                     }
                     Ok(output)
                 },
