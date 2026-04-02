@@ -1110,7 +1110,15 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                                             tile_meta.compression,
                                             tile_meta.geo_transform.pixel_width.abs());
                                     }
-                                    match dr.read_bbox::<f64>(&tile_bb, None) {
+                                    // Use overview level 1 (20m) instead of native (10m) to avoid
+                                    // internal tile alignment artifacts. Overview 1 = 2× downsampled,
+                                    // already assembled by the COG encoder without gaps.
+                                    let ovr = if tile_meta.geo_transform.pixel_width.abs() < out_transform.pixel_width.abs() {
+                                        Some(1) // Use first overview (20m for 10m bands, 40m for 20m bands)
+                                    } else {
+                                        None // Already at or below output resolution
+                                    };
+                                    match dr.read_bbox::<f64>(&tile_bb, ovr) {
                                         Ok(mut r) => {
                                             // S2 L2A value correction
                                             let nodata_val = tile_meta.nodata.unwrap_or(0.0);
@@ -1143,10 +1151,14 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                                 }
                             }
 
-                            // Read SCL tile at native resolution
+                            // Read SCL tile (use overview if available for consistency)
                             match CogReaderBlocking::open(&tile.scl_href, CogReaderOptions::default()) {
                                 Ok(mut sr) => {
-                                    match sr.read_bbox::<f64>(&tile_bb, None) {
+                                    let scl_meta = sr.metadata();
+                                    let scl_ovr = if scl_meta.geo_transform.pixel_width.abs() < out_transform.pixel_width.abs() {
+                                        Some(1)
+                                    } else { None };
+                                    match sr.read_bbox::<f64>(&tile_bb, scl_ovr) {
                                         Ok(r) => { scl_tiles.push(r); scl_ok += 1; }
                                         Err(e) => {
                                             scl_fail += 1;
@@ -1231,9 +1243,21 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                             Ok(clean) => {
                                 // Resample from native resolution to output grid
                                 let (clean_r, clean_c) = clean.shape();
+
+                                // Debug: log transforms before resample
+                                if current_strip == 0 && scene.date == scenes_ref[0].date {
+                                    let cgt = clean.transform();
+                                    let rgt = strip_ref.transform();
+                                    eprintln!("    Resample: src origin=({:.1},{:.1}) px=({:.1},{:.1}) {}x{}",
+                                        cgt.origin_x, cgt.origin_y, cgt.pixel_width, cgt.pixel_height, clean_c, clean_r);
+                                    eprintln!("    Resample: dst origin=({:.1},{:.1}) px=({:.1},{:.1}) {}x{}",
+                                        rgt.origin_x, rgt.origin_y, rgt.pixel_width, rgt.pixel_height,
+                                        strip_ref.shape().1, strip_ref.shape().0);
+                                }
+
                                 let resampled = surtgis_core::resample_to_grid(
                                     &clean, &strip_ref,
-                                    surtgis_core::ResampleMethod::NearestNeighbor,
+                                    surtgis_core::ResampleMethod::Bilinear,
                                 ).unwrap_or(clean);
 
                                 let valid = resampled.data().iter().filter(|v| v.is_finite()).count();
