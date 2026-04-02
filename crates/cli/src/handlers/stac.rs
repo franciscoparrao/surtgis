@@ -1067,11 +1067,23 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                         current_strip + 1, num_strips, row_start, row_end
                     );
 
-                    // Collect masked strips from each scene
+                    // Collect masked strips from each scene.
+                    // Strategy: read COG tiles at NATIVE resolution, mosaic+mask at native,
+                    // then resample the clean result to the output grid resolution.
+                    // This avoids tile alignment artifacts when COG res != output res.
                     let mut scene_strips: Vec<ndarray::Array2<f64>> = Vec::with_capacity(n_scenes);
 
+                    // Reference raster for resampling scene results to output grid
+                    let strip_ref = {
+                        let mut r = surtgis_core::Raster::<f64>::new(actual_rows, out_cols);
+                        r.set_transform(surtgis_core::GeoTransform::new(
+                            strip_bb.min_x, strip_bb.max_y,
+                            out_transform.pixel_width, out_transform.pixel_height,
+                        ));
+                        r
+                    };
+
                     for scene in scenes_ref {
-                        // Read data tiles for this strip bbox
                         let mut data_tiles: Vec<surtgis_core::Raster<f64>> = Vec::new();
                         let mut scl_tiles: Vec<surtgis_core::Raster<f64>> = Vec::new();
 
@@ -1082,81 +1094,31 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                         let mut data_fail = 0usize;
                         let mut scl_ok = 0usize;
                         let mut scl_fail = 0usize;
-                        let mut reproj_count = 0usize;
 
                         for (tile_idx, tile) in scene.tiles.iter().enumerate() {
-                            // Reproject strip_bb to tile's native CRS if different from output
-                            let needs_reproj = tile.epsg != out_epsg && tile.epsg.is_some() && out_epsg.is_some();
-                            if is_first_strip && tile_idx == 0 && scene.date == scenes_ref[0].date {
-                            }
-                            let tile_bb = if needs_reproj {
-                                use surtgis_cloud::reproject;
-                                let src_epsg = out_epsg.unwrap();
-                                let dst_epsg = tile.epsg.unwrap();
-                                if let (Some((sz, sn)), Some((dz, dn))) =
-                                    (reproject::parse_utm_epsg(src_epsg), reproject::parse_utm_epsg(dst_epsg))
-                                {
-                                    reproj_count += 1;
-                                    let (e1, n1) = reproject::reproject_utm_to_utm(
-                                        strip_bb.min_x, strip_bb.min_y, sz, sn, dz, dn);
-                                    let (e2, n2) = reproject::reproject_utm_to_utm(
-                                        strip_bb.max_x, strip_bb.max_y, sz, sn, dz, dn);
-                                    BBox::new(e1.min(e2), n1.min(n2), e1.max(e2), n1.max(n2))
-                                } else {
-                                    if is_first_strip {
-                                        eprintln!("  ⚠ {}: cannot parse UTM for EPSG {:?} → {:?}",
-                                            scene.date, out_epsg, tile.epsg);
-                                    }
-                                    strip_bb
-                                }
-                            } else {
-                                strip_bb
-                            };
+                            // Use strip_bb directly — it's in the same CRS as the COG
+                            let tile_bb = strip_bb;
 
-                            // Read data tile
+                            // Read data tile at native resolution
                             match CogReaderBlocking::open(&tile.data_href, CogReaderOptions::default()) {
                                 Ok(mut dr) => {
                                     let tile_meta = dr.metadata();
                                     if is_first_strip && tile_idx == 0 {
-                                        eprintln!("    COG meta: {}x{} bps={} sf={} compression={} nodata={:?}",
+                                        eprintln!("    COG meta: {}x{} bps={} sf={} compression={} px={:.0}m",
                                             tile_meta.width, tile_meta.height,
                                             tile_meta.bits_per_sample, tile_meta.sample_format,
-                                            tile_meta.compression, tile_meta.nodata);
+                                            tile_meta.compression,
+                                            tile_meta.geo_transform.pixel_width.abs());
                                     }
-                                    // Read at native resolution, then resample to output grid.
-                                    // Reading with bbox at different resolution causes tile
-                                    // alignment artifacts (50-col bands at 30m from 512px tiles at 10m).
-                                    let read_result = dr.read_bbox::<f64>(&tile_bb, None);
-                                    match read_result {
+                                    match dr.read_bbox::<f64>(&tile_bb, None) {
                                         Ok(mut r) => {
-                                            // If COG resolution differs from output grid, resample
-                                            let cog_pw = tile_meta.geo_transform.pixel_width.abs();
-                                            let out_pw = out_transform.pixel_width.abs();
-                                            if (cog_pw - out_pw).abs() > 0.01 {
-                                                // Resample: create a raster at output resolution
-                                                // covering the tile_bb extent
-                                                let tb_w = ((tile_bb.max_x - tile_bb.min_x) / out_pw).round() as usize;
-                                                let tb_h = ((tile_bb.max_y - tile_bb.min_y) / out_pw).round() as usize;
-                                                if tb_w > 0 && tb_h > 0 {
-                                                    let mut ref_raster = surtgis_core::Raster::<f64>::new(tb_h, tb_w);
-                                                    ref_raster.set_transform(surtgis_core::GeoTransform::new(
-                                                        tile_bb.min_x, tile_bb.max_y, out_pw, -out_pw,
-                                                    ));
-                                                    match surtgis_core::resample_to_grid(&r, &ref_raster, surtgis_core::ResampleMethod::NearestNeighbor) {
-                                                        Ok(resampled) => r = resampled,
-                                                        Err(_) => {} // keep original if resample fails
-                                                    }
-                                                }
-                                            }
-
                                             // S2 L2A value correction
                                             let nodata_val = tile_meta.nodata.unwrap_or(0.0);
                                             for val in r.data_mut().iter_mut() {
                                                 if *val == nodata_val || *val == 0.0 {
                                                     *val = f64::NAN;
                                                 } else {
-                                                    // Apply BOA_ADD_OFFSET (-1000) for S2 L2A >= 2022
-                                                    *val -= 1000.0;
+                                                    *val -= 1000.0; // BOA_ADD_OFFSET
                                                     if *val <= 0.0 || *val > 12000.0 {
                                                         *val = f64::NAN;
                                                     }
@@ -1167,15 +1129,8 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                                         }
                                         Err(e) => {
                                             data_fail += 1;
-                                            if data_fail <= 2 {
-                                                let tgt = &tile_meta.geo_transform;
-                                                let tw = tile_meta.width as f64 * tgt.pixel_width.abs();
-                                                let th = tile_meta.height as f64 * tgt.pixel_height.abs();
-                                                eprintln!("  ⚠ {}: read_bbox fail: strip_y=[{:.0},{:.0}] tile_y=[{:.0},{:.0}] err={}",
-                                                    scene.date,
-                                                    tile_bb.min_y, tile_bb.max_y,
-                                                    tgt.origin_y - th, tgt.origin_y,
-                                                    e);
+                                            if data_fail <= 2 && is_first_strip {
+                                                eprintln!("  ⚠ {}: data read fail: {}", scene.date, e);
                                             }
                                         }
                                     }
@@ -1188,37 +1143,15 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                                 }
                             }
 
-                            // Read SCL tile
+                            // Read SCL tile at native resolution
                             match CogReaderBlocking::open(&tile.scl_href, CogReaderOptions::default()) {
                                 Ok(mut sr) => {
-                                    let scl_meta = sr.metadata();
                                     match sr.read_bbox::<f64>(&tile_bb, None) {
-                                        Ok(mut r) => {
-                                            // Resample SCL if resolution differs
-                                            let cog_pw = scl_meta.geo_transform.pixel_width.abs();
-                                            let out_pw = out_transform.pixel_width.abs();
-                                            if (cog_pw - out_pw).abs() > 0.01 {
-                                                let tb_w = ((tile_bb.max_x - tile_bb.min_x) / out_pw).round() as usize;
-                                                let tb_h = ((tile_bb.max_y - tile_bb.min_y) / out_pw).round() as usize;
-                                                if tb_w > 0 && tb_h > 0 {
-                                                    let mut ref_raster = surtgis_core::Raster::<f64>::new(tb_h, tb_w);
-                                                    ref_raster.set_transform(surtgis_core::GeoTransform::new(
-                                                        tile_bb.min_x, tile_bb.max_y, out_pw, -out_pw,
-                                                    ));
-                                                    // Use NearestNeighbor for SCL (categorical data)
-                                                    if let Ok(resampled) = surtgis_core::resample_to_grid(&r, &ref_raster, surtgis_core::ResampleMethod::NearestNeighbor) {
-                                                        r = resampled;
-                                                    }
-                                                }
-                                            }
-                                            scl_tiles.push(r);
-                                            scl_ok += 1;
-                                        }
+                                        Ok(r) => { scl_tiles.push(r); scl_ok += 1; }
                                         Err(e) => {
                                             scl_fail += 1;
-                                            if is_first_strip {
-                                                eprintln!("  ⚠ {}: SCL read_bbox failed (EPSG {:?}): {}",
-                                                    scene.date, tile.epsg, e);
+                                            if is_first_strip && scl_fail <= 2 {
+                                                eprintln!("  ⚠ {}: SCL read fail: {}", scene.date, e);
                                             }
                                         }
                                     }
@@ -1226,18 +1159,16 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                                 Err(e) => {
                                     scl_fail += 1;
                                     if is_first_strip {
-                                        eprintln!("  ⚠ {}: SCL COG open failed: {}", scene.date, e);
+                                        eprintln!("  ⚠ {}: SCL open failed: {}", scene.date, e);
                                     }
                                 }
                             }
                         }
 
                         if is_first_strip {
-                            eprintln!("  ℹ {}: {} tiles, data={}/{} scl={}/{} reproj={}",
+                            eprintln!("  ℹ {}: {} tiles, data={}/{} scl={}",
                                 scene.date, scene.tiles.len(),
-                                data_ok, data_ok + data_fail,
-                                scl_ok, scl_ok + scl_fail,
-                                reproj_count);
+                                data_ok, data_ok + data_fail, scl_ok);
                         }
 
                         if data_tiles.is_empty() || scl_tiles.is_empty() {
@@ -1298,14 +1229,23 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                         // Cloud mask using collection-specific strategy
                         match mask_ref.mask(&data_m, &scl_m) {
                             Ok(clean) => {
-                                let valid = clean.data().iter().filter(|v| v.is_finite()).count();
-                                let total = clean.data().len();
+                                // Resample from native resolution to output grid
+                                let (clean_r, clean_c) = clean.shape();
+                                let resampled = surtgis_core::resample_to_grid(
+                                    &clean, &strip_ref,
+                                    surtgis_core::ResampleMethod::NearestNeighbor,
+                                ).unwrap_or(clean);
+
+                                let valid = resampled.data().iter().filter(|v| v.is_finite()).count();
+                                let total = resampled.data().len();
                                 if current_strip == 0 {
                                     let pct = if total > 0 { valid as f64 / total as f64 * 100.0 } else { 0.0 };
-                                    eprintln!(", mosaic OK, {:.0}% clear ✓", pct);
+                                    eprintln!(", mosaic OK, resample {}x{}→{}x{}, {:.0}% clear ✓",
+                                        clean_c, clean_r,
+                                        resampled.shape().1, resampled.shape().0, pct);
                                 }
                                 if valid > 0 {
-                                    scene_strips.push(clean.data().to_owned());
+                                    scene_strips.push(resampled.data().to_owned());
                                 } else if current_strip == 0 {
                                     eprintln!("  ⚠ {}: 100% cloudy, skipped", scene.date);
                                 }
