@@ -1125,13 +1125,27 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                                     }
                                     match dr.read_bbox::<f64>(&tile_bb, None) {
                                         Ok(mut r) => {
-                                            // Filter S2 L2A nodata markers:
-                                            // 0 = nodata, 65535 = saturated/nodata
-                                            // Values outside [1, 12000] are suspect for L2A reflectance
+                                            // S2 L2A handling:
+                                            // - nodata: 0 (and sometimes 65535 for saturated)
+                                            // - Since Processing Baseline 04.00 (2022+):
+                                            //   reflectance = (DN + BOA_ADD_OFFSET) / QUANTIFICATION_VALUE
+                                            //   where BOA_ADD_OFFSET = -1000, QUANTIFICATION_VALUE = 10000
+                                            //   So DN=1000 → refl=0.0, DN=11000 → refl=1.0
+                                            // - We convert to scaled reflectance (0-10000 range)
+                                            //   by applying: output = DN - 1000 (so 0 = refl 0.0)
                                             let nodata_val = tile_meta.nodata.unwrap_or(0.0);
                                             for val in r.data_mut().iter_mut() {
-                                                if *val == nodata_val || *val == 0.0 || *val >= 65535.0 {
+                                                if *val == nodata_val || *val == 0.0 {
                                                     *val = f64::NAN;
+                                                } else {
+                                                    // Apply BOA_ADD_OFFSET for S2 L2A
+                                                    *val -= 1000.0;
+                                                    // After offset: valid range is ~0 to ~10000
+                                                    // Negative values (DN < 1000) → dark/shadow, keep as-is
+                                                    // Values > 10000 after offset → saturated, mark as NaN
+                                                    if *val > 12000.0 {
+                                                        *val = f64::NAN;
+                                                    }
                                                 }
                                             }
                                             data_tiles.push(r);
