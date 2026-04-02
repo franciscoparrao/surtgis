@@ -313,15 +313,22 @@ impl StacClient {
             href
         );
 
-        let max_retries = self.options.max_retries.max(3); // at least 3 retries for signing
+        let max_retries = self.options.max_retries.max(5); // more retries for large batches
         let mut last_err = None;
+
+        // Throttle: small delay before each sign request to avoid rate-limiting.
+        // PC allows ~100 req/min. With 200+ assets, we need to pace requests.
+        #[cfg(feature = "native")]
+        {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
 
         for attempt in 0..=max_retries {
             if attempt > 0 {
-                // Exponential backoff: 1s, 2s, 4s — PC rate-limits ~100 req/min
+                // Exponential backoff: 2s, 4s, 8s, 16s, 32s
                 #[cfg(feature = "native")]
                 {
-                    let delay = Duration::from_millis(1000 * (1 << (attempt - 1)));
+                    let delay = Duration::from_millis(2000 * (1 << (attempt - 1)));
                     tokio::time::sleep(delay).await;
                 }
             }
