@@ -1123,27 +1123,41 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                                             tile_meta.bits_per_sample, tile_meta.sample_format,
                                             tile_meta.compression, tile_meta.nodata);
                                     }
-                                    match dr.read_bbox::<f64>(&tile_bb, None) {
+                                    // Read at native resolution, then resample to output grid.
+                                    // Reading with bbox at different resolution causes tile
+                                    // alignment artifacts (50-col bands at 30m from 512px tiles at 10m).
+                                    let read_result = dr.read_bbox::<f64>(&tile_bb, None);
+                                    match read_result {
                                         Ok(mut r) => {
-                                            // S2 L2A handling:
-                                            // - nodata: 0 (and sometimes 65535 for saturated)
-                                            // - Since Processing Baseline 04.00 (2022+):
-                                            //   reflectance = (DN + BOA_ADD_OFFSET) / QUANTIFICATION_VALUE
-                                            //   where BOA_ADD_OFFSET = -1000, QUANTIFICATION_VALUE = 10000
-                                            //   So DN=1000 → refl=0.0, DN=11000 → refl=1.0
-                                            // - We convert to scaled reflectance (0-10000 range)
-                                            //   by applying: output = DN - 1000 (so 0 = refl 0.0)
+                                            // If COG resolution differs from output grid, resample
+                                            let cog_pw = tile_meta.geo_transform.pixel_width.abs();
+                                            let out_pw = out_transform.pixel_width.abs();
+                                            if (cog_pw - out_pw).abs() > 0.01 {
+                                                // Resample: create a raster at output resolution
+                                                // covering the tile_bb extent
+                                                let tb_w = ((tile_bb.max_x - tile_bb.min_x) / out_pw).round() as usize;
+                                                let tb_h = ((tile_bb.max_y - tile_bb.min_y) / out_pw).round() as usize;
+                                                if tb_w > 0 && tb_h > 0 {
+                                                    let mut ref_raster = surtgis_core::Raster::<f64>::new(tb_h, tb_w);
+                                                    ref_raster.set_transform(surtgis_core::GeoTransform::new(
+                                                        tile_bb.min_x, tile_bb.max_y, out_pw, -out_pw,
+                                                    ));
+                                                    match surtgis_core::resample_to_grid(&r, &ref_raster, surtgis_core::ResampleMethod::NearestNeighbor) {
+                                                        Ok(resampled) => r = resampled,
+                                                        Err(_) => {} // keep original if resample fails
+                                                    }
+                                                }
+                                            }
+
+                                            // S2 L2A value correction
                                             let nodata_val = tile_meta.nodata.unwrap_or(0.0);
                                             for val in r.data_mut().iter_mut() {
                                                 if *val == nodata_val || *val == 0.0 {
                                                     *val = f64::NAN;
                                                 } else {
-                                                    // Apply BOA_ADD_OFFSET for S2 L2A
+                                                    // Apply BOA_ADD_OFFSET (-1000) for S2 L2A >= 2022
                                                     *val -= 1000.0;
-                                                    // After offset: valid range is ~0 to ~10000
-                                                    // Negative values (DN < 1000) → dark/shadow, keep as-is
-                                                    // Values > 10000 after offset → saturated, mark as NaN
-                                                    if *val > 12000.0 {
+                                                    if *val <= 0.0 || *val > 12000.0 {
                                                         *val = f64::NAN;
                                                     }
                                                 }
@@ -1177,8 +1191,29 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                             // Read SCL tile
                             match CogReaderBlocking::open(&tile.scl_href, CogReaderOptions::default()) {
                                 Ok(mut sr) => {
+                                    let scl_meta = sr.metadata();
                                     match sr.read_bbox::<f64>(&tile_bb, None) {
-                                        Ok(r) => { scl_tiles.push(r); scl_ok += 1; }
+                                        Ok(mut r) => {
+                                            // Resample SCL if resolution differs
+                                            let cog_pw = scl_meta.geo_transform.pixel_width.abs();
+                                            let out_pw = out_transform.pixel_width.abs();
+                                            if (cog_pw - out_pw).abs() > 0.01 {
+                                                let tb_w = ((tile_bb.max_x - tile_bb.min_x) / out_pw).round() as usize;
+                                                let tb_h = ((tile_bb.max_y - tile_bb.min_y) / out_pw).round() as usize;
+                                                if tb_w > 0 && tb_h > 0 {
+                                                    let mut ref_raster = surtgis_core::Raster::<f64>::new(tb_h, tb_w);
+                                                    ref_raster.set_transform(surtgis_core::GeoTransform::new(
+                                                        tile_bb.min_x, tile_bb.max_y, out_pw, -out_pw,
+                                                    ));
+                                                    // Use NearestNeighbor for SCL (categorical data)
+                                                    if let Ok(resampled) = surtgis_core::resample_to_grid(&r, &ref_raster, surtgis_core::ResampleMethod::NearestNeighbor) {
+                                                        r = resampled;
+                                                    }
+                                                }
+                                            }
+                                            scl_tiles.push(r);
+                                            scl_ok += 1;
+                                        }
                                         Err(e) => {
                                             scl_fail += 1;
                                             if is_first_strip {
