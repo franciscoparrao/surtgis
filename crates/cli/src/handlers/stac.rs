@@ -957,6 +957,7 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             // Otherwise, use the COG native grid.
             let (out_cols, out_rows, out_transform, out_crs, cog_bb);
 
+            eprintln!("  align_to = {:?}", align_to.as_ref().map(|p| p.display().to_string()));
             if let Some(ref align_path) = align_to {
                 // Use reference DEM grid
                 let reference: surtgis_core::Raster<f64> =
@@ -1096,8 +1097,15 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                         let mut scl_fail = 0usize;
 
                         for (tile_idx, tile) in scene.tiles.iter().enumerate() {
-                            // Use strip_bb directly — it's in the same CRS as the COG
-                            let tile_bb = strip_bb;
+                            // Expand strip_bb slightly to ensure it covers COG tiles
+                            // that may be offset from the DEM grid by a few pixels.
+                            let pad = 100.0; // 100m padding (covers 10 pixels at 10m)
+                            let tile_bb = BBox::new(
+                                strip_bb.min_x - pad,
+                                strip_bb.min_y - pad,
+                                strip_bb.max_x + pad,
+                                strip_bb.max_y + pad,
+                            );
 
                             // Read data tile at native resolution
                             match CogReaderBlocking::open(&tile.data_href, CogReaderOptions::default()) {
@@ -1212,6 +1220,10 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                         unify_crs(&mut scl_tiles);
 
                         // Mosaic spatial tiles for this date's strip
+                        if is_first_strip {
+                            eprintln!("  ℹ {}: mosaic input: data={} scl={} tiles",
+                                scene.date, data_tiles.len(), scl_tiles.len());
+                        }
                         let data_m = if data_tiles.len() == 1 {
                             data_tiles.into_iter().next().unwrap()
                         } else {
