@@ -1118,15 +1118,9 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                                             tile_meta.compression,
                                             tile_meta.geo_transform.pixel_width.abs());
                                     }
-                                    // Use overview level 1 (20m) instead of native (10m) to avoid
-                                    // internal tile alignment artifacts. Overview 1 = 2× downsampled,
-                                    // already assembled by the COG encoder without gaps.
-                                    let ovr = if tile_meta.geo_transform.pixel_width.abs() < out_transform.pixel_width.abs() {
-                                        Some(1) // Use first overview (20m for 10m bands, 40m for 20m bands)
-                                    } else {
-                                        None // Already at or below output resolution
-                                    };
-                                    match dr.read_bbox::<f64>(&tile_bb, ovr) {
+                                    // Read at native resolution. Resample to output grid happens
+                                    // after mosaic + cloud mask to avoid tile alignment artifacts.
+                                    match dr.read_bbox::<f64>(&tile_bb, None) {
                                         Ok(mut r) => {
                                             // S2 L2A value correction
                                             let nodata_val = tile_meta.nodata.unwrap_or(0.0);
@@ -1159,14 +1153,10 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                                 }
                             }
 
-                            // Read SCL tile (use overview if available for consistency)
+                            // Read SCL tile at native resolution
                             match CogReaderBlocking::open(&tile.scl_href, CogReaderOptions::default()) {
                                 Ok(mut sr) => {
-                                    let scl_meta = sr.metadata();
-                                    let scl_ovr = if scl_meta.geo_transform.pixel_width.abs() < out_transform.pixel_width.abs() {
-                                        Some(1)
-                                    } else { None };
-                                    match sr.read_bbox::<f64>(&tile_bb, scl_ovr) {
+                                    match sr.read_bbox::<f64>(&tile_bb, None) {
                                         Ok(r) => { scl_tiles.push(r); scl_ok += 1; }
                                         Err(e) => {
                                             scl_fail += 1;
