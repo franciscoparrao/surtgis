@@ -92,22 +92,27 @@ pub fn resample_to_grid(
                     let v10 = src_data[[r1, c0]];
                     let v11 = src_data[[r1, c1]];
 
-                    // If any neighbor is nodata, fall back to nearest
-                    if is_nodata(v00, nodata)
-                        || is_nodata(v01, nodata)
-                        || is_nodata(v10, nodata)
-                        || is_nodata(v11, nodata)
-                    {
-                        // Nearest neighbor fallback
-                        let r = src_row_f.round().max(0.0) as usize;
-                        let c = src_col_f.round().max(0.0) as usize;
-                        let v = src_data[[r.min(src_rows - 1), c.min(src_cols - 1)]];
-                        if is_nodata(v, nodata) { f64::NAN } else { v }
+                    // Weighted average of valid neighbors (NaN-tolerant bilinear).
+                    // This prevents NaN borders at internal COG tile edges from
+                    // producing stripe artifacts during resampling.
+                    let neighbors = [
+                        (v00, (1.0 - dc) * (1.0 - dr)),
+                        (v01, dc * (1.0 - dr)),
+                        (v10, (1.0 - dc) * dr),
+                        (v11, dc * dr),
+                    ];
+                    let mut wsum = 0.0;
+                    let mut wtotal = 0.0;
+                    for &(v, w) in &neighbors {
+                        if !is_nodata(v, nodata) && v.is_finite() {
+                            wsum += v * w;
+                            wtotal += w;
+                        }
+                    }
+                    if wtotal > 0.0 {
+                        wsum / wtotal
                     } else {
-                        // Bilinear interpolation
-                        let top = v00 * (1.0 - dc) + v01 * dc;
-                        let bot = v10 * (1.0 - dc) + v11 * dc;
-                        top * (1.0 - dr) + bot * dr
+                        f64::NAN
                     }
                 }
             };
