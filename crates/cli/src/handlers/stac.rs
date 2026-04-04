@@ -1123,19 +1123,22 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                                     match dr.read_bbox::<f64>(&tile_bb, None) {
                                         Ok(mut r) => {
                                             // S2 L2A value correction:
-                                            // DN=0 is nodata. All other values are valid.
-                                            // Apply BOA_ADD_OFFSET=-1000: reflectance = (DN-1000)/10000
-                                            // Keep raw DN (no offset) for now — cloud mask handles quality.
-                                            // Only filter true nodata (DN=0).
+                                            // DN=0 is nodata. Apply BOA_ADD_OFFSET=-1000 to normalize
+                                            // values across processing baselines.
+                                            // After offset: reflectance = val / 10000
+                                            // Valid range: ~-200 to ~10000 (negative = very dark, OK)
                                             let nodata_val = tile_meta.nodata.unwrap_or(0.0);
                                             for val in r.data_mut().iter_mut() {
                                                 if *val == nodata_val || *val == 0.0 {
                                                     *val = f64::NAN;
+                                                } else {
+                                                    *val -= 1000.0; // BOA_ADD_OFFSET
+                                                    // Keep ALL values after offset, including negative
+                                                    // (dark pixels). Only discard extreme outliers.
+                                                    if *val > 15000.0 {
+                                                        *val = f64::NAN; // saturated/corrupt
+                                                    }
                                                 }
-                                                // Note: BOA_ADD_OFFSET not applied here.
-                                                // Values are raw DN (1-65534). The cloud mask (SCL)
-                                                // handles quality filtering. Offset can be applied
-                                                // post-composite if needed for reflectance values.
                                             }
                                             data_tiles.push(r);
                                             data_ok += 1;
