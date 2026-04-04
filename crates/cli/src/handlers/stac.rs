@@ -1263,6 +1263,20 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                                 if scl_total > 0 { scl_valid as f64 / scl_total as f64 * 100.0 } else { 0.0 });
                         }
 
+                        // Debug: check SCL value distribution before cloud mask
+                        if is_first_strip {
+                            let mut scl_hist = [0usize; 16];
+                            for v in scl_m.data().iter() {
+                                let vi = *v as usize;
+                                if vi < 16 { scl_hist[vi] += 1; }
+                            }
+                            let scl_nonzero: Vec<String> = scl_hist.iter().enumerate()
+                                .filter(|(_, c)| **c > 0)
+                                .map(|(i, c)| format!("{}:{}", i, c))
+                                .collect();
+                            eprintln!("    [scl] histogram: {}", scl_nonzero.join(" "));
+                        }
+
                         // Cloud mask using collection-specific strategy
                         match mask_ref.mask(&data_m, &scl_m) {
                             Ok(clean) => {

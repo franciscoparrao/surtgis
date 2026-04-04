@@ -225,7 +225,9 @@ pub fn cloud_mask_scl(
             for col in 0..cols {
                 let scl_col = ((col as f64 * col_scale).floor() as usize).min(sc - 1);
                 let scl_val = scl_arr[[scl_row, scl_col]] as u8;
-                if valid_classes.contains(&scl_val) {
+                // SCL=0 means no classification data available.
+                // Pass the pixel through (assume clear) rather than discard.
+                if scl_val == 0 || valid_classes.contains(&scl_val) {
                     out_row[col] = data_arr[[row, col]];
                 }
             }
