@@ -312,11 +312,12 @@ impl CogReader {
                     &fetched[j], compression, raw_tile_size,
                 )?;
                 // Apply predictor undo if needed (tag 317, predictor=2 = horizontal differencing)
-                // DISABLED: S2 COGs from PC have Predictor=1 (none). The undo was corrupting data.
-                // TODO: re-enable when predictor tag reading is verified correct.
-                // if ifd.predictor == 2 {
-                //     decompress::undo_horizontal_differencing(&mut raw, tw, bytes_per_pixel);
-                // }
+                // Apply predictor undo: Predictor=2 = horizontal differencing.
+                // S2 COGs on Planetary Computer use DEFLATE + Predictor=2.
+                // The tile bytes are differences that need accumulation per row.
+                if ifd.predictor == 2 {
+                    decompress::undo_horizontal_differencing(&mut raw, tw, bytes_per_pixel);
+                }
                 let key = TileKey {
                     ifd_idx,
                     tile_idx: tr.tile_idx,
@@ -339,8 +340,20 @@ impl CogReader {
 
             let raw = match self.cache.get(&key) {
                 Some(data) => { tiles_written += 1; data.clone() },
-                None => { tiles_skipped += 1; continue; } // empty tile (byte_count == 0)
+                None => { tiles_skipped += 1; continue; }
             };
+
+            // Debug: log first tile's raw bytes and interpreted values
+            if tiles_written == 1 && raw.len() >= 10 {
+                let first_bytes: Vec<String> = raw[..10].iter().map(|b| format!("{:02x}", b)).collect();
+                let first_u16 = u16::from_le_bytes([raw[0], raw[1]]);
+                let second_u16 = u16::from_le_bytes([raw[2], raw[3]]);
+                eprintln!("    [cog] tile({},{}) idx={} raw[0..10]: {} → u16 LE: [{}, {}, ...]",
+                    tr.tile_col, tr.tile_row, tr.tile_idx,
+                    first_bytes.join(" "), first_u16, second_u16);
+                eprintln!("    [cog] pred={} comp={} bps={} sf={} raw_len={} expected={}",
+                    ifd.predictor, compression, bps, sf, raw.len(), tw * th * bytes_per_pixel);
+            }
 
             let typed: Vec<T> = decompress::bytes_to_typed(&raw, bps, sf)?;
 
