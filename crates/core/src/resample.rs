@@ -64,7 +64,18 @@ pub fn resample_to_grid(
                 || src_col_f >= src_cols as f64 - 0.5
                 || src_row_f >= src_rows as f64 - 0.5
             {
+                // Log first few out-of-bounds pixels for debugging
+                if out_row == 0 && out_col < 5 {
+                    eprintln!("    [resample] out({},{}) geo=({:.1},{:.1}) src=({:.1},{:.1}) OOB (src_bounds=0..{},0..{})",
+                        out_row, out_col, geo_x, geo_y, src_col_f, src_row_f, src_cols, src_rows);
+                }
                 continue; // NaN (outside source extent)
+            }
+
+            // Log first few valid pixels
+            if out_row == 0 && (out_col < 3 || out_col == 42 || out_col == 84) {
+                eprintln!("    [resample] out({},{}) geo=({:.1},{:.1}) src=({:.1},{:.1}) VALID",
+                    out_row, out_col, geo_x, geo_y, src_col_f, src_row_f);
             }
 
             output[[out_row, out_col]] = match method {

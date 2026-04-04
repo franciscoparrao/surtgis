@@ -321,6 +321,9 @@ impl CogReader {
 
         // Assemble output array from cached tiles.
         let mut output = Array2::<T>::from_elem((out_rows, out_cols), T::default_nodata());
+        let mut tiles_written = 0usize;
+        let mut tiles_skipped = 0usize;
+        let mut tiles_fetched = mapping.tiles.len();
 
         for tr in &mapping.tiles {
             let key = TileKey {
@@ -329,11 +332,21 @@ impl CogReader {
             };
 
             let raw = match self.cache.get(&key) {
-                Some(data) => data.clone(),
-                None => continue, // empty tile (byte_count == 0)
+                Some(data) => { tiles_written += 1; data.clone() },
+                None => { tiles_skipped += 1; continue; } // empty tile (byte_count == 0)
             };
 
             let typed: Vec<T> = decompress::bytes_to_typed(&raw, bps, sf)?;
+
+            // Check if decompressed tile has expected size
+            let expected_pixels = tw * th;
+            if typed.len() != expected_pixels {
+                if tiles_written <= 3 {
+                    eprintln!("    [cog] tile({},{}) idx={} expected {} px, got {} (raw={} bytes, bps={} tw={} th={})",
+                        tr.tile_col, tr.tile_row, tr.tile_idx,
+                        expected_pixels, typed.len(), raw.len(), bps, tw, th);
+                }
+            }
 
             // Pixel bounds of this tile in full-image coordinates.
             let tile_px_col = tr.tile_col * tw;
@@ -361,6 +374,13 @@ impl CogReader {
                 }
             }
         }
+
+        // Always log tile assembly stats
+        let valid_pixels = output.iter().filter(|v| !v.is_nodata(None)).count();
+        eprintln!("    [cog] assembled: {} tiles ({}+{} skip), output={}x{}, tw={} th={}, valid={}/{} ({:.0}%)",
+            tiles_fetched, tiles_written, tiles_skipped, out_cols, out_rows, tw, th,
+            valid_pixels, out_rows * out_cols,
+            if out_rows * out_cols > 0 { valid_pixels as f64 / (out_rows * out_cols) as f64 * 100.0 } else { 0.0 });
 
         // Build Raster with correct geo metadata.
         let mut raster = Raster::from_array(output);

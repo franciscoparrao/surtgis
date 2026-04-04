@@ -1122,17 +1122,20 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                                     // after mosaic + cloud mask to avoid tile alignment artifacts.
                                     match dr.read_bbox::<f64>(&tile_bb, None) {
                                         Ok(mut r) => {
-                                            // S2 L2A value correction
+                                            // S2 L2A value correction:
+                                            // DN=0 is nodata. All other values are valid.
+                                            // Apply BOA_ADD_OFFSET=-1000: reflectance = (DN-1000)/10000
+                                            // Keep raw DN (no offset) for now — cloud mask handles quality.
+                                            // Only filter true nodata (DN=0).
                                             let nodata_val = tile_meta.nodata.unwrap_or(0.0);
                                             for val in r.data_mut().iter_mut() {
                                                 if *val == nodata_val || *val == 0.0 {
                                                     *val = f64::NAN;
-                                                } else {
-                                                    *val -= 1000.0; // BOA_ADD_OFFSET
-                                                    if *val <= 0.0 || *val > 12000.0 {
-                                                        *val = f64::NAN;
-                                                    }
                                                 }
+                                                // Note: BOA_ADD_OFFSET not applied here.
+                                                // Values are raw DN (1-65534). The cloud mask (SCL)
+                                                // handles quality filtering. Offset can be applied
+                                                // post-composite if needed for reflectance values.
                                             }
                                             data_tiles.push(r);
                                             data_ok += 1;
@@ -1240,16 +1243,41 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                             }
                         };
 
+                        // Diagnose between each step
+                        if is_first_strip {
+                            let dgt = data_m.transform();
+                            let data_valid = data_m.data().iter().filter(|v| v.is_finite() && **v > 0.0).count();
+                            let data_total = data_m.data().len();
+                            eprintln!("    [mosaic] data_m: {}x{} px=({:.1},{:.1}) valid={}/{} ({:.0}%)",
+                                data_m.shape().1, data_m.shape().0,
+                                dgt.pixel_width, dgt.pixel_height,
+                                data_valid, data_total,
+                                if data_total > 0 { data_valid as f64 / data_total as f64 * 100.0 } else { 0.0 });
+
+                            let scl_valid = scl_m.data().iter().filter(|v| v.is_finite()).count();
+                            let scl_total = scl_m.data().len();
+                            eprintln!("    [mosaic] scl_m: {}x{} px=({:.1},{:.1}) valid={}/{} ({:.0}%)",
+                                scl_m.shape().1, scl_m.shape().0,
+                                scl_m.transform().pixel_width, scl_m.transform().pixel_height,
+                                scl_valid, scl_total,
+                                if scl_total > 0 { scl_valid as f64 / scl_total as f64 * 100.0 } else { 0.0 });
+                        }
+
                         // Cloud mask using collection-specific strategy
                         match mask_ref.mask(&data_m, &scl_m) {
                             Ok(clean) => {
                                 // Resample from native resolution to output grid
                                 let (clean_r, clean_c) = clean.shape();
 
-                                // Debug: log transforms before resample
-                                if current_strip == 0 && scene.date == scenes_ref[0].date {
+                                if current_strip == 0 {
+                                    let clean_valid = clean.data().iter().filter(|v| v.is_finite() && **v > 0.0).count();
+                                    let clean_total = clean.data().len();
                                     let cgt = clean.transform();
                                     let rgt = strip_ref.transform();
+                                    eprintln!("    [cloud] clean: {}x{} px=({:.1},{:.1}) valid={}/{} ({:.0}%)",
+                                        clean_c, clean_r, cgt.pixel_width, cgt.pixel_height,
+                                        clean_valid, clean_total,
+                                        if clean_total > 0 { clean_valid as f64 / clean_total as f64 * 100.0 } else { 0.0 });
                                     eprintln!("    Resample: src origin=({:.1},{:.1}) px=({:.1},{:.1}) {}x{}",
                                         cgt.origin_x, cgt.origin_y, cgt.pixel_width, cgt.pixel_height, clean_c, clean_r);
                                     eprintln!("    Resample: dst origin=({:.1},{:.1}) px=({:.1},{:.1}) {}x{}",
