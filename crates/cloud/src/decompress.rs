@@ -78,13 +78,9 @@ pub fn decompress_tile(
 
 /// Undo horizontal differencing predictor (TIFF Predictor=2).
 ///
-/// TIFF Predictor=2 stores the first sample of each row as-is, and
-/// subsequent samples as the difference from the previous sample.
-/// The differencing operates on individual bytes within each sample,
-/// NOT on whole sample values. Each byte lane is independent.
-///
-/// For uint16 (2 bytes per sample), byte 0 of sample N = byte 0 of
-/// sample N + byte 0 of sample N-1, and same for byte 1.
+/// For each row, the first sample is stored as-is. Subsequent samples
+/// store the difference from the previous sample as a WHOLE SAMPLE
+/// (not individual bytes). For uint16, accumulate as u16 with wrapping.
 pub fn undo_horizontal_differencing(
     data: &mut [u8],
     tile_width: usize,
@@ -95,10 +91,41 @@ pub fn undo_horizontal_differencing(
     for row_start in (0..data.len()).step_by(row_bytes) {
         let row_end = (row_start + row_bytes).min(data.len());
         let row = &mut data[row_start..row_end];
-        // Each byte lane accumulates independently.
-        // For bps=2: bytes [0,2,4,6,...] accumulate, bytes [1,3,5,7,...] accumulate
-        for i in bytes_per_sample..row.len() {
-            row[i] = row[i].wrapping_add(row[i - bytes_per_sample]);
+        match bytes_per_sample {
+            1 => {
+                for i in 1..row.len() {
+                    row[i] = row[i].wrapping_add(row[i - 1]);
+                }
+            }
+            2 => {
+                // Accumulate as u16 to propagate carry between bytes
+                let samples = row.len() / 2;
+                for i in 1..samples {
+                    let prev = u16::from_le_bytes([row[(i-1)*2], row[(i-1)*2+1]]);
+                    let diff = u16::from_le_bytes([row[i*2], row[i*2+1]]);
+                    let val = prev.wrapping_add(diff);
+                    let bytes = val.to_le_bytes();
+                    row[i*2] = bytes[0];
+                    row[i*2+1] = bytes[1];
+                }
+            }
+            4 => {
+                let samples = row.len() / 4;
+                for i in 1..samples {
+                    let off = i * 4;
+                    let prev = u32::from_le_bytes([row[off-4], row[off-3], row[off-2], row[off-1]]);
+                    let diff = u32::from_le_bytes([row[off], row[off+1], row[off+2], row[off+3]]);
+                    let val = prev.wrapping_add(diff);
+                    let bytes = val.to_le_bytes();
+                    row[off..off+4].copy_from_slice(&bytes);
+                }
+            }
+            _ => {
+                // Fallback: byte-level accumulation (may not be correct for >1 bps)
+                for i in bytes_per_sample..row.len() {
+                    row[i] = row[i].wrapping_add(row[i - bytes_per_sample]);
+                }
+            }
         }
     }
 }
