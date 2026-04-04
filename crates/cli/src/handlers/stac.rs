@@ -1122,23 +1122,14 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                                     // after mosaic + cloud mask to avoid tile alignment artifacts.
                                     match dr.read_bbox::<f64>(&tile_bb, None) {
                                         Ok(mut r) => {
-                                            // S2 L2A value correction:
-                                            // DN=0 is nodata. Apply BOA_ADD_OFFSET=-1000 to normalize
-                                            // values across processing baselines.
-                                            // After offset: reflectance = val / 10000
-                                            // Valid range: ~-200 to ~10000 (negative = very dark, OK)
+                                            // S2 L2A on Planetary Computer:
+                                            // Values are already surface reflectance × 10000.
+                                            // BOA_ADD_OFFSET is pre-applied by PC. Do NOT subtract 1000.
+                                            // DN=0 is nodata. Valid range: 1-10000 (reflectance 0.0001-1.0).
                                             let nodata_val = tile_meta.nodata.unwrap_or(0.0);
                                             for val in r.data_mut().iter_mut() {
                                                 if *val == nodata_val || *val == 0.0 {
                                                     *val = f64::NAN;
-                                                } else {
-                                                    *val -= 1000.0; // BOA_ADD_OFFSET
-                                                    // After offset: valid reflectance is 0 to ~10000
-                                                    // Negative = DN was <1000 = nodata/dark artifact
-                                                    // >15000 = saturated/corrupt
-                                                    if *val < 0.0 || *val > 15000.0 {
-                                                        *val = f64::NAN;
-                                                    }
                                                 }
                                             }
                                             data_tiles.push(r);
