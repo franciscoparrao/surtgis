@@ -302,6 +302,7 @@ impl CogReader {
         let auth = self.options.auth.as_ref();
         let batch_size = self.options.max_concurrent_fetches;
 
+        let mut fetch_count = 0usize;
         for chunk in to_fetch.chunks(batch_size) {
             let ranges: Vec<(u64, u64)> = chunk.iter().map(|&(_, o, l)| (o, l)).collect();
             let fetched = self.client.fetch_ranges(&self.url, &ranges, auth).await?;
@@ -311,13 +312,21 @@ impl CogReader {
                 let mut raw = decompress::decompress_tile(
                     &fetched[j], compression, raw_tile_size,
                 )?;
-                // Apply predictor undo if needed (tag 317, predictor=2 = horizontal differencing)
-                // Apply predictor undo: Predictor=2 = horizontal differencing.
-                // S2 COGs on Planetary Computer use DEFLATE + Predictor=2.
-                // The tile bytes are differences that need accumulation per row.
+                // Apply predictor undo: Predictor=2 = horizontal differencing
                 if ifd.predictor == 2 {
-                    decompress::undo_horizontal_differencing(&mut raw, tw, bytes_per_pixel);
+                    if fetch_count == 0 {
+                        let before_u16 = if raw.len() >= 4 { u16::from_le_bytes([raw[0], raw[1]]) } else { 0 };
+                        decompress::undo_horizontal_differencing(&mut raw, tw, bytes_per_pixel);
+                        let after_u16 = if raw.len() >= 4 { u16::from_le_bytes([raw[0], raw[1]]) } else { 0 };
+                        eprintln!("    [pred] undo: bps={} tw={} len={} pixel[0] {} → {}",
+                            bytes_per_pixel, tw, raw.len(), before_u16, after_u16);
+                    } else {
+                        decompress::undo_horizontal_differencing(&mut raw, tw, bytes_per_pixel);
+                    }
+                } else if fetch_count == 0 {
+                    eprintln!("    [pred] SKIP: predictor={}", ifd.predictor);
                 }
+                fetch_count += 1;
                 let key = TileKey {
                     ifd_idx,
                     tile_idx: tr.tile_idx,

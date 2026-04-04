@@ -17,11 +17,11 @@ default = ["cloud"]
 cloud = ["dep:surtgis-cloud"]
 
 [dependencies]
-surtgis-core = { version = "0.4.0", path = "../core", default-features = false }
-surtgis-algorithms = { version = "0.4.0", path = "../algorithms" }
-surtgis-parallel = { version = "0.4.0", path = "../parallel" }
-surtgis-colormap = { version = "0.4.0", path = "../colormap" }
-surtgis-cloud = { version = "0.4.0", path = "../cloud", optional = true, features = ["native"] }
+surtgis-core = { version = "0.5.0", path = "../core", default-features = false }
+surtgis-algorithms = { version = "0.5.0", path = "../algorithms" }
+surtgis-parallel = { version = "0.5.0", path = "../parallel" }
+surtgis-colormap = { version = "0.5.0", path = "../colormap" }
+surtgis-cloud = { version = "0.5.0", path = "../cloud", optional = true, features = ["native"] }
 
 eframe.workspace = true
 egui.workspace = true
