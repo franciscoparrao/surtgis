@@ -1133,10 +1133,11 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                                                     *val = f64::NAN;
                                                 } else {
                                                     *val -= 1000.0; // BOA_ADD_OFFSET
-                                                    // Keep ALL values after offset, including negative
-                                                    // (dark pixels). Only discard extreme outliers.
-                                                    if *val > 15000.0 {
-                                                        *val = f64::NAN; // saturated/corrupt
+                                                    // After offset: valid reflectance is 0 to ~10000
+                                                    // Negative = DN was <1000 = nodata/dark artifact
+                                                    // >15000 = saturated/corrupt
+                                                    if *val < 0.0 || *val > 15000.0 {
+                                                        *val = f64::NAN;
                                                     }
                                                 }
                                             }
