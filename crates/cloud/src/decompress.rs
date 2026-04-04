@@ -78,9 +78,13 @@ pub fn decompress_tile(
 
 /// Undo horizontal differencing predictor (TIFF Predictor=2).
 ///
-/// For each row of `tile_width` pixels, the first sample is stored as-is,
-/// and subsequent samples store the difference from the previous sample.
-/// This function reconstructs the original values by accumulating.
+/// TIFF Predictor=2 stores the first sample of each row as-is, and
+/// subsequent samples as the difference from the previous sample.
+/// The differencing operates on individual bytes within each sample,
+/// NOT on whole sample values. Each byte lane is independent.
+///
+/// For uint16 (2 bytes per sample), byte 0 of sample N = byte 0 of
+/// sample N + byte 0 of sample N-1, and same for byte 1.
 pub fn undo_horizontal_differencing(
     data: &mut [u8],
     tile_width: usize,
@@ -91,28 +95,10 @@ pub fn undo_horizontal_differencing(
     for row_start in (0..data.len()).step_by(row_bytes) {
         let row_end = (row_start + row_bytes).min(data.len());
         let row = &mut data[row_start..row_end];
-        match bytes_per_sample {
-            1 => {
-                for i in 1..row.len() {
-                    row[i] = row[i].wrapping_add(row[i - 1]);
-                }
-            }
-            2 => {
-                // Differencing is per-byte, not per-sample for TIFF predictor 2
-                for i in 2..row.len() {
-                    row[i] = row[i].wrapping_add(row[i - 2]);
-                }
-            }
-            4 => {
-                for i in 4..row.len() {
-                    row[i] = row[i].wrapping_add(row[i - 4]);
-                }
-            }
-            _ => {
-                for i in bytes_per_sample..row.len() {
-                    row[i] = row[i].wrapping_add(row[i - bytes_per_sample]);
-                }
-            }
+        // Each byte lane accumulates independently.
+        // For bps=2: bytes [0,2,4,6,...] accumulate, bytes [1,3,5,7,...] accumulate
+        for i in bytes_per_sample..row.len() {
+            row[i] = row[i].wrapping_add(row[i - bytes_per_sample]);
         }
     }
 }
