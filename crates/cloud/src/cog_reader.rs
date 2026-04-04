@@ -308,9 +308,13 @@ impl CogReader {
 
             for (j, &(tile_list_idx, _, _)) in chunk.iter().enumerate() {
                 let tr = &mapping.tiles[tile_list_idx];
-                let raw = decompress::decompress_tile(
+                let mut raw = decompress::decompress_tile(
                     &fetched[j], compression, raw_tile_size,
                 )?;
+                // Apply predictor undo if needed (tag 317, predictor=2 = horizontal differencing)
+                if ifd.predictor == 2 {
+                    decompress::undo_horizontal_differencing(&mut raw, tw, bytes_per_pixel);
+                }
                 let key = TileKey {
                     ifd_idx,
                     tile_idx: tr.tile_idx,
@@ -499,6 +503,7 @@ async fn resolve_ifd(
     let samples_per_pixel = get_tag_u16(byte_order, entries, &resolved, tags::SAMPLES_PER_PIXEL).unwrap_or(1);
     let planar_config = get_tag_u16(byte_order, entries, &resolved, tags::PLANAR_CONFIG).unwrap_or(1);
     let sample_format = get_tag_u16(byte_order, entries, &resolved, tags::SAMPLE_FORMAT).unwrap_or(1);
+    let predictor = get_tag_u16(byte_order, entries, &resolved, 317).unwrap_or(1); // Tag 317 = Predictor
 
     // Tile offsets & byte counts (arrays).
     let tile_offsets = get_tag_u64_array(byte_order, entries, &resolved, tags::TILE_OFFSETS);
@@ -516,6 +521,7 @@ async fn resolve_ifd(
         compression,
         samples_per_pixel,
         planar_config,
+        predictor,
         raw_entries: entries.to_vec(),
     })
 }

@@ -98,6 +98,8 @@ pub struct IfdInfo {
     pub compression: u16,
     pub samples_per_pixel: u16,
     pub planar_config: u16,
+    /// TIFF Predictor tag (317): 1=none, 2=horizontal differencing
+    pub predictor: u16,
     /// Raw IFD entries for GeoTIFF key extraction.
     pub raw_entries: Vec<RawTagEntry>,
 }
