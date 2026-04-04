@@ -312,9 +312,11 @@ impl CogReader {
                     &fetched[j], compression, raw_tile_size,
                 )?;
                 // Apply predictor undo if needed (tag 317, predictor=2 = horizontal differencing)
-                if ifd.predictor == 2 {
-                    decompress::undo_horizontal_differencing(&mut raw, tw, bytes_per_pixel);
-                }
+                // DISABLED: S2 COGs from PC have Predictor=1 (none). The undo was corrupting data.
+                // TODO: re-enable when predictor tag reading is verified correct.
+                // if ifd.predictor == 2 {
+                //     decompress::undo_horizontal_differencing(&mut raw, tw, bytes_per_pixel);
+                // }
                 let key = TileKey {
                     ifd_idx,
                     tile_idx: tr.tile_idx,
