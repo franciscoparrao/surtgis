@@ -836,10 +836,26 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             let cat = StacCatalog::from_str_or_url(&catalog);
             let bb = parse_bbox(&bbox)?;
 
-            // Search with high limit to find ALL tiles across dates.
-            // A large basin can have 6-10 MGRS tiles × 50+ dates = 500+ items.
-            // We need to fetch all items to ensure every date has all its tiles.
-            let search_limit = (max_scenes * 20).max(500) as u32;
+            // Estimate spatial tile count based on bbox size.
+            // S2 MGRS tiles: ~110 km, Landsat WRS: ~185 km.
+            // Use 60 km effective spacing (tiles overlap significantly).
+            // At equator, 1° ≈ 111 km. At 30° lat, 1° lon ≈ 96 km.
+            let bbox_width_deg = (bb.max_x - bb.min_x).abs();
+            let bbox_height_deg = (bb.max_y - bb.min_y).abs();
+            let bbox_width_km = bbox_width_deg * 111.0;
+            let bbox_height_km = bbox_height_deg * 111.0;
+            // Tile count: ~60 km effective spacing (S2 MGRS overlap ~50%)
+            let tiles_x = ((bbox_width_km / 60.0).ceil() as usize).max(1);
+            let tiles_y = ((bbox_height_km / 60.0).ceil() as usize).max(1);
+            let estimated_spatial_tiles = tiles_x * tiles_y;
+            // S2 has ~73 dates/year, Landsat ~25. Use 5x safety margin.
+            // Need: spatial_tiles × max_scenes × 5 items minimum (floor 1000).
+            let search_limit = ((estimated_spatial_tiles * max_scenes * 5).max(1000)) as u32;
+            let search_limit = search_limit.min(10000); // Cap at 10k
+
+            eprintln!("  bbox: {:.1}×{:.1} km, ~{} spatial tiles, search_limit={}",
+                bbox_width_km, bbox_height_km, estimated_spatial_tiles, search_limit);
+
             let params = StacSearchParams::new()
                 .bbox(bb.min_x, bb.min_y, bb.max_x, bb.max_y)
                 .collections(&[collection.as_str()])
@@ -848,7 +864,7 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
 
             let pb = spinner("Searching STAC catalog...");
             let client_opts = StacClientOptions {
-                max_items: (max_scenes * 20).max(500) as usize,
+                max_items: search_limit as usize,
                 ..StacClientOptions::default()
             };
             let client = StacClientBlocking::new(cat, client_opts)
@@ -884,6 +900,20 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             let min_tiles = tiles_per_date.iter().min().copied().unwrap_or(0);
             let max_tiles = tiles_per_date.iter().max().copied().unwrap_or(0);
 
+            // Check spatial coverage: do we have items covering the full bbox?
+            let mut item_south = f64::INFINITY;
+            let mut item_north = f64::NEG_INFINITY;
+            for item in &items {
+                if let Some(bbox_arr) = &item.bbox {
+                    if bbox_arr.len() >= 4 {
+                        item_south = item_south.min(bbox_arr[1]);
+                        item_north = item_north.max(bbox_arr[3]);
+                    }
+                }
+            }
+            let coverage_south = item_south <= bb.min_y + 0.1; // within 0.1° of bbox south
+            let coverage_north = item_north >= bb.max_y - 0.1;
+
             println!(
                 "Found {} items across {} dates (using {} dates, {}-{} tiles/date)",
                 items.len(),
@@ -891,6 +921,15 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                 dates.len(),
                 min_tiles, max_tiles,
             );
+
+            if !coverage_south || !coverage_north {
+                eprintln!("  ⚠ SPATIAL COVERAGE WARNING: items cover lat [{:.2}, {:.2}] but bbox needs [{:.2}, {:.2}]",
+                    item_south, item_north, bb.min_y, bb.max_y);
+                if items.len() >= search_limit as usize {
+                    eprintln!("  ⚠ Search hit limit ({}) — may need more items for full coverage. Consider reducing date range.",
+                        search_limit);
+                }
+            }
 
             let start = Instant::now();
 
@@ -1808,8 +1847,13 @@ pub fn fetch_stac_band(
     let cat = StacCatalog::from_str_or_url(catalog);
     let bb = parse_bbox(bbox)?;
 
-    // Search for items
-    let search_limit = (max_scenes * 4) as u32;
+    // Estimate spatial tile count from bbox size (same logic as composite)
+    let bbox_w_km = (bb.max_x - bb.min_x).abs() * 111.0;
+    let bbox_h_km = (bb.max_y - bb.min_y).abs() * 111.0;
+    let tiles_est = (((bbox_w_km / 60.0).ceil() as usize).max(1))
+        * (((bbox_h_km / 60.0).ceil() as usize).max(1));
+    let search_limit = ((tiles_est * max_scenes * 5).max(1000)).min(10000) as u32;
+
     let params = StacSearchParams::new()
         .bbox(bb.min_x, bb.min_y, bb.max_x, bb.max_y)
         .collections(&[collection])
@@ -1817,11 +1861,11 @@ pub fn fetch_stac_band(
         .limit(search_limit);
 
     let pb = spinner(&format!(
-        "Searching for {} scenes...",
-        collection
+        "Searching for {} scenes (limit={})...",
+        collection, search_limit
     ));
     let client_opts = StacClientOptions {
-        max_items: (max_scenes * 4) as usize,
+        max_items: search_limit as usize,
         ..StacClientOptions::default()
     };
     let client = StacClientBlocking::new(cat, client_opts)
