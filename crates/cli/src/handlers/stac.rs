@@ -10,6 +10,8 @@ use surtgis_algorithms::imagery::{CloudMaskStrategy, S2SclMask, LandsatQaMask, N
 use surtgis_cloud::blocking::{CogReaderBlocking, StacClientBlocking};
 use surtgis_cloud::{BBox, CogReaderOptions, StacCatalog, StacClientOptions, StacItem, StacSearchParams};
 
+use tracing::debug;
+
 use crate::commands::StacCommands;
 use crate::helpers::{done, parse_bbox, spinner, write_result};
 use crate::stac_introspect::{CloudMaskType, StacCollectionSchema};
@@ -918,37 +920,57 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                 let mut sign_failures = 0usize;
                 let mut asset_missing = 0usize;
 
+                let mut mask_missing = 0usize;
+                let is_verbose = tracing::enabled!(tracing::Level::DEBUG);
+
                 for item in group {
                     let tile_epsg = item.epsg();
-                    let _item_id = item.id.as_str();
-                    // Log EPSG detection for first date
-                    if scenes.is_empty() && tiles.is_empty() {
-                    }
+                    let item_id = item.id.as_str();
 
                     let data_result = match resolve_asset_key(item, &asset) {
-                        Some((_, a)) => {
+                        Some((resolved_key, a)) => {
+                            debug!("item={} asset='{}' → '{}' ✓", item_id, asset, resolved_key);
                             match client.sign_asset_href(&a.href, item.collection.as_deref().unwrap_or("")) {
                                 Ok(h) => Some(h),
-                                Err(_) => { sign_failures += 1; None }
+                                Err(e) => {
+                                    sign_failures += 1;
+                                    debug!("item={} asset='{}' sign FAILED: {}", item_id, asset, e);
+                                    None
+                                }
                             }
                         }
-                        None => { asset_missing += 1; None }
+                        None => {
+                            asset_missing += 1;
+                            if is_verbose || (scenes.is_empty() && tiles.is_empty()) {
+                                let available: Vec<&str> = item.assets.keys().map(|k| k.as_str()).collect();
+                                eprintln!("    [resolve] item={} data asset '{}' NOT FOUND. Available: {}",
+                                    item_id, asset, available.join(", "));
+                            }
+                            None
+                        }
                     };
 
                     let scl_result = mask_asset_name.and_then(|mask_name| {
                         match resolve_asset_key(item, mask_name) {
-                            Some((_, a)) => {
+                            Some((resolved_key, a)) => {
+                                debug!("item={} mask='{}' → '{}' ✓", item_id, mask_name, resolved_key);
                                 match client.sign_asset_href(&a.href, item.collection.as_deref().unwrap_or("")) {
                                     Ok(h) => Some(h),
                                     Err(_) => { sign_failures += 1; None }
                                 }
                             }
-                            None => None // Mask asset not found — proceed without masking
+                            None => {
+                                mask_missing += 1;
+                                if is_verbose && mask_missing <= 2 {
+                                    eprintln!("    [resolve] item={} mask '{}' not found → no cloud masking",
+                                        item_id, mask_name);
+                                }
+                                None
+                            }
                         }
                     });
 
                     // Data asset is required; mask asset is optional.
-                    // If mask is unavailable, proceed without cloud masking.
                     if let Some(dh) = data_result {
                         if scene_epsg.is_none() {
                             scene_epsg = tile_epsg;
@@ -958,14 +980,15 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                             scl_href: scl_result.unwrap_or_default(),
                             epsg: tile_epsg,
                         });
-                    } else {
-                        asset_missing += 1;
                     }
                 }
 
                 if tiles.is_empty() {
-                    eprintln!("  ⚠ {}: 0 tiles resolved (items={}, sign_fail={}, asset_missing={})",
-                        date, group.len(), sign_failures, asset_missing);
+                    eprintln!("  ⚠ {}: 0 tiles resolved (items={}, sign_fail={}, data_missing={}, mask_missing={})",
+                        date, group.len(), sign_failures, asset_missing, mask_missing);
+                } else if mask_missing > 0 && scenes.is_empty() {
+                    eprintln!("  ℹ {}: {} tiles (mask unavailable for {} items → no cloud masking)",
+                        date, tiles.len(), mask_missing);
                 }
 
                 if !tiles.is_empty() {
@@ -2075,44 +2098,81 @@ fn handle_time_series(
     std::fs::create_dir_all(outdir)?;
     let start = Instant::now();
 
-    let mut success = 0;
-    let mut metadata: Vec<serde_json::Value> = Vec::new();
+    // Prepare interval tasks
+    let tasks: Vec<(usize, SimpleDate, SimpleDate, String, String)> = intervals.iter().enumerate()
+        .map(|(i, (win_start, win_end))| {
+            let win_dt = format!("{}/{}", format_date(win_start), format_date(win_end));
+            let label = format_date(win_start);
+            (i, *win_start, *win_end, win_dt, label)
+        })
+        .collect();
 
-    for (i, (win_start, win_end)) in intervals.iter().enumerate() {
-        let win_dt = format!("{}/{}", format_date(win_start), format_date(win_end));
-        let label = format_date(win_start);
+    // Process intervals in parallel batches (3 concurrent to avoid API overload)
+    let max_concurrent = 3usize.min(tasks.len());
+    let mut success = 0usize;
+    let mut metadata: Vec<serde_json::Value> = vec![serde_json::Value::Null; tasks.len()];
 
-        println!("[{}/{}] {} → {}", i + 1, intervals.len(), format_date(win_start), format_date(win_end));
+    for chunk_start in (0..tasks.len()).step_by(max_concurrent) {
+        let chunk_end = (chunk_start + max_concurrent).min(tasks.len());
+        let chunk = &tasks[chunk_start..chunk_end];
 
-        match fetch_stac_band(
-            catalog, bbox, collection, asset, &win_dt,
-            max_scenes, reference.as_ref(),
-        ) {
-            Ok(raster) => {
-                let (rows, cols) = raster.shape();
-                let valid = raster.data().iter().filter(|v| v.is_finite()).count();
-                let total = rows * cols;
-                let pct = if total > 0 { valid as f64 / total as f64 * 100.0 } else { 0.0 };
-
-                let filename = format!("{}_{}.tif", asset, label);
-                let path = outdir.join(&filename);
-                write_result(&raster, &path, compress)?;
-
-                println!("  → {} ({}x{}, {:.1}% valid)", filename, cols, rows, pct);
-
-                metadata.push(serde_json::json!({
-                    "index": i,
-                    "date_start": format_date(win_start),
-                    "date_end": format_date(win_end),
-                    "file": filename,
-                    "rows": rows,
-                    "cols": cols,
-                    "valid_pct": (pct * 10.0).round() / 10.0,
+        // Download this batch in parallel
+        let results: Vec<(usize, std::result::Result<surtgis_core::Raster<f64>, String>)> = {
+            let mut handles = Vec::with_capacity(chunk.len());
+            for &(i, win_start, win_end, ref win_dt, ref _label) in chunk {
+                let cat = catalog.to_string();
+                let bb = bbox.to_string();
+                let col = collection.to_string();
+                let ast = asset.to_string();
+                let dt = win_dt.clone();
+                let ms = max_scenes;
+                println!("[{}/{}] {} → {}", i + 1, tasks.len(), format_date(&win_start), format_date(&win_end));
+                handles.push(std::thread::spawn(move || {
+                    let r = fetch_stac_band(&cat, &bb, &col, &ast, &dt, ms, None);
+                    (i, r.map_err(|e| e.to_string()))
                 }));
-                success += 1;
             }
-            Err(e) => {
-                eprintln!("  ⚠️ No data for this interval: {}", e);
+            handles.into_iter().filter_map(|h| h.join().ok()).collect()
+        };
+
+        // Write results and optionally align
+        for (i, result) in results {
+            let (_, win_start, win_end, _, ref label) = tasks[i];
+            match result {
+                Ok(raster) => {
+                    // Align to reference if provided
+                    let final_raster = if let Some(ref refr) = reference {
+                        surtgis_core::resample_to_grid(&raster, refr, surtgis_core::ResampleMethod::Bilinear)
+                            .unwrap_or(raster)
+                    } else {
+                        raster
+                    };
+
+                    let (rows, cols) = final_raster.shape();
+                    let valid = final_raster.data().iter().filter(|v| v.is_finite()).count();
+                    let total = rows * cols;
+                    let pct = if total > 0 { valid as f64 / total as f64 * 100.0 } else { 0.0 };
+
+                    let filename = format!("{}_{}.tif", asset, label);
+                    let path = outdir.join(&filename);
+                    write_result(&final_raster, &path, compress)?;
+
+                    println!("  [{}/{}] → {} ({}x{}, {:.1}% valid)", i + 1, tasks.len(), filename, cols, rows, pct);
+
+                    metadata[i] = serde_json::json!({
+                        "index": i,
+                        "date_start": format_date(&win_start),
+                        "date_end": format_date(&win_end),
+                        "file": filename,
+                        "rows": rows,
+                        "cols": cols,
+                        "valid_pct": (pct * 10.0).round() / 10.0,
+                    });
+                    success += 1;
+                }
+                Err(e) => {
+                    eprintln!("  ⚠️ [{}/{}] No data for {}: {}", i + 1, tasks.len(), label, e);
+                }
             }
         }
     }
@@ -2128,7 +2188,7 @@ fn handle_time_series(
         "interval": interval,
         "total_intervals": intervals.len(),
         "successful": success,
-        "rasters": metadata,
+        "rasters": metadata.into_iter().filter(|v| !v.is_null()).collect::<Vec<_>>(),
     });
     std::fs::write(&meta_path, serde_json::to_string_pretty(&meta_json)?)?;
     println!("\nMetadata → {}", meta_path.display());
