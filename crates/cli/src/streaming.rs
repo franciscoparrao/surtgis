@@ -85,9 +85,8 @@ pub fn validate_asset_key(band: &str, collection: &str) -> Result<String> {
     }
 }
 
-/// Sentinel-2 band name aliases: common name -> catalog-specific keys.
-/// Tries the exact key first, then aliases.
-/// LEGACY: Use validate_asset_key() for collection-agnostic band validation.
+/// Multi-collection band name aliases: common name -> catalog-specific keys.
+/// Tries the exact key first (case-insensitive), then aliases.
 #[cfg(feature = "cloud")]
 pub fn resolve_asset_key<'a>(item: &'a StacItem, key: &'a str) -> Option<(&'a str, &'a surtgis_cloud::stac_models::StacAsset)> {
     // Try exact key first
@@ -95,23 +94,32 @@ pub fn resolve_asset_key<'a>(item: &'a StacItem, key: &'a str) -> Option<(&'a st
         return Some((key, asset));
     }
 
-    // Alias table: common name <-> Sentinel-2 band codes
+    // Try case-insensitive exact match (handles QA_PIXEL vs qa_pixel)
+    let key_lower = key.to_lowercase();
+    for (asset_key, asset) in &item.assets {
+        if asset_key.to_lowercase() == key_lower {
+            return Some((asset_key.as_str(), asset));
+        }
+    }
+
+    // Alias table: common name <-> collection-specific band codes
     let aliases: &[(&str, &[&str])] = &[
-        ("red",     &["B04", "b04", "Red"]),
-        ("green",   &["B03", "b03", "Green"]),
-        ("blue",    &["B02", "b02", "Blue"]),
-        ("nir",     &["B08", "b08", "nir08", "Nir"]),
-        ("nir08",   &["B08", "b08", "nir"]),
+        // === Sentinel-2 ===
+        ("red",     &["B04", "b04", "Red", "SR_B4"]),
+        ("green",   &["B03", "b03", "Green", "SR_B3"]),
+        ("blue",    &["B02", "b02", "Blue", "SR_B2"]),
+        ("nir",     &["B08", "b08", "nir08", "Nir", "SR_B5"]),
+        ("nir08",   &["B08", "b08", "nir", "SR_B5"]),
         ("nir09",   &["B09", "b09"]),
         ("rededge1",&["B05", "b05"]),
         ("rededge2",&["B06", "b06"]),
         ("rededge3",&["B07", "b07"]),
-        ("swir16",  &["B11", "b11", "swir1", "SWIR1"]),
-        ("swir22",  &["B12", "b12", "swir2", "SWIR2"]),
+        ("swir16",  &["B11", "b11", "swir1", "SWIR1", "SR_B6"]),
+        ("swir22",  &["B12", "b12", "swir2", "SWIR2", "SR_B7"]),
         ("scl",     &["SCL"]),
-        ("coastal", &["B01", "b01"]),
+        ("coastal", &["B01", "b01", "SR_B1"]),
         ("wvp",     &["B09", "b09"]),
-        // Reverse: band code -> common name
+        // Reverse S2: band code -> common name
         ("B02",  &["blue", "Blue"]),
         ("B03",  &["green", "Green"]),
         ("B04",  &["red", "Red"]),
@@ -122,9 +130,23 @@ pub fn resolve_asset_key<'a>(item: &'a StacItem, key: &'a str) -> Option<(&'a st
         ("B11",  &["swir16", "swir1"]),
         ("B12",  &["swir22", "swir2"]),
         ("SCL",  &["scl"]),
+        // === Landsat ===
+        ("SR_B1", &["coastal", "B01"]),
+        ("SR_B2", &["blue", "Blue", "B02"]),
+        ("SR_B3", &["green", "Green", "B03"]),
+        ("SR_B4", &["red", "Red", "B04"]),
+        ("SR_B5", &["nir", "nir08", "B08"]),
+        ("SR_B6", &["swir16", "swir1", "B11"]),
+        ("SR_B7", &["swir22", "swir2", "B12"]),
+        ("QA_PIXEL", &["qa_pixel", "QA_pixel"]),
+        ("qa_pixel", &["QA_PIXEL", "QA_pixel"]),
+        // === Sentinel-1 ===
+        ("vv", &["VV"]),
+        ("vh", &["VH"]),
+        ("VV", &["vv"]),
+        ("VH", &["vh"]),
     ];
 
-    let key_lower = key.to_lowercase();
     for &(name, alt_keys) in aliases {
         if name.to_lowercase() == key_lower {
             for &alt in alt_keys {

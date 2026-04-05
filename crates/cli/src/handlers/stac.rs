@@ -910,19 +910,23 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                                     Err(_) => { sign_failures += 1; None }
                                 }
                             }
-                            None => { asset_missing += 1; None }
+                            None => None // Mask asset not found — proceed without masking
                         }
                     });
 
-                    if let (Some(dh), Some(sh)) = (data_result, scl_result) {
+                    // Data asset is required; mask asset is optional.
+                    // If mask is unavailable, proceed without cloud masking.
+                    if let Some(dh) = data_result {
                         if scene_epsg.is_none() {
                             scene_epsg = tile_epsg;
                         }
                         tiles.push(TileRef {
                             data_href: dh,
-                            scl_href: sh,
+                            scl_href: scl_result.unwrap_or_default(),
                             epsg: tile_epsg,
                         });
+                    } else {
+                        asset_missing += 1;
                     }
                 }
 
@@ -1151,37 +1155,39 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                                 }
                             }
 
-                            // Read SCL tile at native resolution
-                            match CogReaderBlocking::open(&tile.scl_href, CogReaderOptions::default()) {
-                                Ok(mut sr) => {
-                                    match sr.read_bbox::<f64>(&tile_bb, None) {
-                                        Ok(r) => { scl_tiles.push(r); scl_ok += 1; }
-                                        Err(e) => {
-                                            scl_fail += 1;
-                                            if is_first_strip && scl_fail <= 2 {
-                                                eprintln!("  ⚠ {}: SCL read fail: {}", scene.date, e);
+                            // Read SCL/mask tile at native resolution (skip if no mask href)
+                            if !tile.scl_href.is_empty() {
+                                match CogReaderBlocking::open(&tile.scl_href, CogReaderOptions::default()) {
+                                    Ok(mut sr) => {
+                                        match sr.read_bbox::<f64>(&tile_bb, None) {
+                                            Ok(r) => { scl_tiles.push(r); scl_ok += 1; }
+                                            Err(e) => {
+                                                scl_fail += 1;
+                                                if is_first_strip && scl_fail <= 2 {
+                                                    eprintln!("  ⚠ {}: mask read fail: {}", scene.date, e);
+                                                }
                                             }
                                         }
                                     }
-                                }
-                                Err(e) => {
-                                    scl_fail += 1;
-                                    if is_first_strip {
-                                        eprintln!("  ⚠ {}: SCL open failed: {}", scene.date, e);
+                                    Err(e) => {
+                                        scl_fail += 1;
+                                        if is_first_strip {
+                                            eprintln!("  ⚠ {}: mask open failed: {}", scene.date, e);
+                                        }
                                     }
                                 }
                             }
-                        }
+                        } // end for (tile_idx, tile)
 
                         if is_first_strip {
-                            eprintln!("  ℹ {}: {} tiles, data={}/{} scl={}",
+                            eprintln!("  ℹ {}: {} tiles, data={}/{} mask={}",
                                 scene.date, scene.tiles.len(),
                                 data_ok, data_ok + data_fail, scl_ok);
                         }
 
-                        if data_tiles.is_empty() || scl_tiles.is_empty() {
+                        if data_tiles.is_empty() {
                             if is_first_strip {
-                                eprintln!("  ⚠ {}: SKIPPED (data={}, scl={})", scene.date, data_tiles.len(), scl_tiles.len());
+                                eprintln!("  ⚠ {}: SKIPPED (no data tiles)", scene.date);
                             }
                             continue;
                         }
@@ -1205,11 +1211,13 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                         }
 
                         unify_crs(&mut data_tiles);
-                        unify_crs(&mut scl_tiles);
+                        if !scl_tiles.is_empty() {
+                            unify_crs(&mut scl_tiles);
+                        }
 
                         // Mosaic spatial tiles for this date's strip
                         if is_first_strip {
-                            eprintln!("  ℹ {}: mosaic input: data={} scl={} tiles",
+                            eprintln!("  ℹ {}: mosaic input: data={} mask={} tiles",
                                 scene.date, data_tiles.len(), scl_tiles.len());
                         }
                         let data_m = if data_tiles.len() == 1 {
@@ -1225,15 +1233,18 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                             }
                         };
 
-                        let scl_m = if scl_tiles.len() == 1 {
-                            scl_tiles.into_iter().next().unwrap()
+                        // Mosaic mask tiles (optional — may be empty for collections without cloud mask)
+                        let scl_m = if scl_tiles.is_empty() {
+                            None
+                        } else if scl_tiles.len() == 1 {
+                            Some(scl_tiles.into_iter().next().unwrap())
                         } else {
                             let refs: Vec<&surtgis_core::Raster<f64>> = scl_tiles.iter().collect();
                             match surtgis_core::mosaic(&refs, None) {
-                                Ok(m) => m,
+                                Ok(m) => Some(m),
                                 Err(e) => {
-                                    eprintln!("  ⚠ Mosaic failed for date (SCL): {}", e);
-                                    continue;
+                                    eprintln!("  ⚠ Mosaic failed for date (mask): {}", e);
+                                    None
                                 }
                             }
                         };
@@ -1249,32 +1260,44 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                                 data_valid, data_total,
                                 if data_total > 0 { data_valid as f64 / data_total as f64 * 100.0 } else { 0.0 });
 
-                            let scl_valid = scl_m.data().iter().filter(|v| v.is_finite()).count();
-                            let scl_total = scl_m.data().len();
-                            eprintln!("    [mosaic] scl_m: {}x{} px=({:.1},{:.1}) valid={}/{} ({:.0}%)",
-                                scl_m.shape().1, scl_m.shape().0,
-                                scl_m.transform().pixel_width, scl_m.transform().pixel_height,
-                                scl_valid, scl_total,
-                                if scl_total > 0 { scl_valid as f64 / scl_total as f64 * 100.0 } else { 0.0 });
-                        }
-
-                        // Debug: check SCL value distribution before cloud mask
-                        if is_first_strip {
-                            let mut scl_hist = [0usize; 16];
-                            for v in scl_m.data().iter() {
-                                let vi = *v as usize;
-                                if vi < 16 { scl_hist[vi] += 1; }
+                            if let Some(ref scl) = scl_m {
+                                let scl_valid = scl.data().iter().filter(|v| v.is_finite()).count();
+                                let scl_total = scl.data().len();
+                                eprintln!("    [mosaic] mask: {}x{} px=({:.1},{:.1}) valid={}/{} ({:.0}%)",
+                                    scl.shape().1, scl.shape().0,
+                                    scl.transform().pixel_width, scl.transform().pixel_height,
+                                    scl_valid, scl_total,
+                                    if scl_total > 0 { scl_valid as f64 / scl_total as f64 * 100.0 } else { 0.0 });
+                            } else {
+                                eprintln!("    [mosaic] no mask — proceeding without cloud masking");
                             }
-                            let scl_nonzero: Vec<String> = scl_hist.iter().enumerate()
-                                .filter(|(_, c)| **c > 0)
-                                .map(|(i, c)| format!("{}:{}", i, c))
-                                .collect();
-                            eprintln!("    [scl] histogram: {}", scl_nonzero.join(" "));
                         }
 
-                        // Cloud mask using collection-specific strategy
-                        match mask_ref.mask(&data_m, &scl_m) {
-                            Ok(clean) => {
+                        // Debug: check mask value distribution before cloud mask
+                        if is_first_strip {
+                            if let Some(ref scl) = scl_m {
+                                let mut scl_hist = [0usize; 16];
+                                for v in scl.data().iter() {
+                                    let vi = *v as usize;
+                                    if vi < 16 { scl_hist[vi] += 1; }
+                                }
+                                let scl_nonzero: Vec<String> = scl_hist.iter().enumerate()
+                                    .filter(|(_, c)| **c > 0)
+                                    .map(|(i, c)| format!("{}:{}", i, c))
+                                    .collect();
+                                eprintln!("    [mask] histogram: {}", scl_nonzero.join(" "));
+                            }
+                        }
+
+                        // Cloud mask using collection-specific strategy (if mask available)
+                        let clean_result = if let Some(ref scl) = scl_m {
+                            mask_ref.mask(&data_m, scl).ok()
+                        } else {
+                            Some(data_m) // No mask → use data as-is
+                        };
+
+                        match clean_result {
+                            Some(clean) => {
                                 // Resample from native resolution to output grid
                                 let (clean_r, clean_c) = clean.shape();
 
@@ -1313,9 +1336,9 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                                     eprintln!("  ⚠ {}: 100% cloudy, skipped", scene.date);
                                 }
                             }
-                            Err(e) => {
+                            None => {
                                 if current_strip == 0 {
-                                    eprintln!("  ⚠ {}: cloud mask failed: {}", scene.date, e);
+                                    eprintln!("  ⚠ {}: cloud mask failed, skipping", scene.date);
                                 }
                             }
                         }
@@ -1706,6 +1729,17 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
 
             println!("\n💡 Usage: surtgis stac composite --catalog {} --collection <id> --asset <band> ...", catalog);
         }
+
+        StacCommands::TimeSeries {
+            catalog, bbox, collection, asset, datetime, interval,
+            scl_asset, max_scenes, align_to, output,
+        } => {
+            handle_time_series(
+                &catalog, &bbox, &collection, &asset, &datetime,
+                &interval, &scl_asset, max_scenes, align_to.as_ref(),
+                &output, compress,
+            )?;
+        }
     }
 
     Ok(())
@@ -1955,6 +1989,202 @@ pub fn fetch_stac_band(
 
     eprintln!("  ✓ {} band ready for indices", asset);
     Ok(final_result)
+}
+
+/// Handle `surtgis stac time-series`: download one composite per temporal interval.
+fn handle_time_series(
+    catalog: &str,
+    bbox: &str,
+    collection: &str,
+    asset: &str,
+    datetime: &str,
+    interval: &str,
+    _scl_asset: &str,
+    max_scenes: usize,
+    align_to: Option<&std::path::PathBuf>,
+    outdir: &std::path::PathBuf,
+    compress: bool,
+) -> Result<()> {
+    // Parse datetime range "YYYY-MM-DD/YYYY-MM-DD"
+    let parts: Vec<&str> = datetime.split('/').collect();
+    if parts.len() != 2 {
+        anyhow::bail!("datetime must be a range: YYYY-MM-DD/YYYY-MM-DD");
+    }
+    let start_date = parse_date(parts[0])?;
+    let end_date = parse_date(parts[1])?;
+
+    // Generate interval windows
+    let intervals = split_date_range(&start_date, &end_date, interval)?;
+    println!("Time series: {} intervals ({}) from {} to {}",
+        intervals.len(), interval, parts[0], parts[1]);
+
+    // Optionally load align-to reference
+    let reference = match align_to {
+        Some(path) => {
+            let r: surtgis_core::Raster<f64> = surtgis_core::io::read_geotiff(path, None)
+                .context("Failed to read align-to reference")?;
+            Some(r)
+        }
+        None => None,
+    };
+
+    std::fs::create_dir_all(outdir)?;
+    let start = Instant::now();
+
+    let mut success = 0;
+    let mut metadata: Vec<serde_json::Value> = Vec::new();
+
+    for (i, (win_start, win_end)) in intervals.iter().enumerate() {
+        let win_dt = format!("{}/{}", format_date(win_start), format_date(win_end));
+        let label = format_date(win_start);
+
+        println!("[{}/{}] {} → {}", i + 1, intervals.len(), format_date(win_start), format_date(win_end));
+
+        match fetch_stac_band(
+            catalog, bbox, collection, asset, &win_dt,
+            max_scenes, reference.as_ref(),
+        ) {
+            Ok(raster) => {
+                let (rows, cols) = raster.shape();
+                let valid = raster.data().iter().filter(|v| v.is_finite()).count();
+                let total = rows * cols;
+                let pct = if total > 0 { valid as f64 / total as f64 * 100.0 } else { 0.0 };
+
+                let filename = format!("{}_{}.tif", asset, label);
+                let path = outdir.join(&filename);
+                write_result(&raster, &path, compress)?;
+
+                println!("  → {} ({}x{}, {:.1}% valid)", filename, cols, rows, pct);
+
+                metadata.push(serde_json::json!({
+                    "index": i,
+                    "date_start": format_date(win_start),
+                    "date_end": format_date(win_end),
+                    "file": filename,
+                    "rows": rows,
+                    "cols": cols,
+                    "valid_pct": (pct * 10.0).round() / 10.0,
+                }));
+                success += 1;
+            }
+            Err(e) => {
+                eprintln!("  ⚠️ No data for this interval: {}", e);
+            }
+        }
+    }
+
+    // Write metadata JSON
+    let meta_path = outdir.join("time_series.json");
+    let meta_json = serde_json::json!({
+        "catalog": catalog,
+        "collection": collection,
+        "asset": asset,
+        "bbox": bbox,
+        "datetime": datetime,
+        "interval": interval,
+        "total_intervals": intervals.len(),
+        "successful": success,
+        "rasters": metadata,
+    });
+    std::fs::write(&meta_path, serde_json::to_string_pretty(&meta_json)?)?;
+    println!("\nMetadata → {}", meta_path.display());
+
+    done(&format!("Time series ({}/{})", success, intervals.len()), outdir, start.elapsed());
+    Ok(())
+}
+
+/// Simple date struct for interval splitting.
+#[derive(Clone, Copy)]
+struct SimpleDate {
+    year: i32,
+    month: u32,
+    day: u32,
+}
+
+fn parse_date(s: &str) -> Result<SimpleDate> {
+    let parts: Vec<&str> = s.trim().split('-').collect();
+    if parts.len() != 3 {
+        anyhow::bail!("invalid date format: '{}' (expected YYYY-MM-DD)", s);
+    }
+    Ok(SimpleDate {
+        year: parts[0].parse().context("invalid year")?,
+        month: parts[1].parse().context("invalid month")?,
+        day: parts[2].parse().context("invalid day")?,
+    })
+}
+
+fn format_date(d: &SimpleDate) -> String {
+    format!("{:04}-{:02}-{:02}", d.year, d.month, d.day)
+}
+
+fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) { 29 } else { 28 },
+        _ => 30,
+    }
+}
+
+fn advance_days(d: &SimpleDate, n: u32) -> SimpleDate {
+    let mut y = d.year;
+    let mut m = d.month;
+    let mut day = d.day + n;
+    loop {
+        let dim = days_in_month(y, m);
+        if day <= dim { break; }
+        day -= dim;
+        m += 1;
+        if m > 12 { m = 1; y += 1; }
+    }
+    SimpleDate { year: y, month: m, day }
+}
+
+fn advance_months(d: &SimpleDate, n: u32) -> SimpleDate {
+    let mut m = d.month + n;
+    let mut y = d.year;
+    while m > 12 { m -= 12; y += 1; }
+    let day = d.day.min(days_in_month(y, m));
+    SimpleDate { year: y, month: m, day }
+}
+
+fn date_le(a: &SimpleDate, b: &SimpleDate) -> bool {
+    (a.year, a.month, a.day) <= (b.year, b.month, b.day)
+}
+
+fn split_date_range(start: &SimpleDate, end: &SimpleDate, interval: &str) -> Result<Vec<(SimpleDate, SimpleDate)>> {
+    let mut windows = Vec::new();
+    let mut cursor = *start;
+
+    while date_le(&cursor, end) {
+        let next = match interval.to_lowercase().as_str() {
+            "monthly" | "month" => advance_months(&cursor, 1),
+            "biweekly" | "2weeks" => advance_days(&cursor, 14),
+            "weekly" | "week" => advance_days(&cursor, 7),
+            "quarterly" | "quarter" => advance_months(&cursor, 3),
+            "yearly" | "year" | "annual" => advance_months(&cursor, 12),
+            custom => {
+                let days: u32 = custom.parse()
+                    .with_context(|| format!("invalid interval: '{}'. Use monthly, biweekly, weekly, quarterly, yearly, or a number of days", custom))?;
+                advance_days(&cursor, days)
+            }
+        };
+        // End of this window is day before next window (or end_date)
+        let win_end = if date_le(&next, end) {
+            advance_days(&next, 0) // next itself is start of next window
+        } else {
+            *end
+        };
+        // The datetime for STAC search uses the window bounds
+        let actual_end = if date_le(&win_end, end) { win_end } else { *end };
+        windows.push((cursor, actual_end));
+        cursor = next;
+    }
+
+    if windows.is_empty() {
+        anyhow::bail!("date range too short for interval '{}'", interval);
+    }
+    Ok(windows)
 }
 
 /// DEPRECATED: Use fetch_stac_band() instead

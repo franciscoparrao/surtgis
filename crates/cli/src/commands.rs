@@ -123,6 +123,11 @@ pub enum Commands {
         #[command(subcommand)]
         action: PipelineCommands,
     },
+    /// Temporal analysis: trend, anomaly, phenology, statistics
+    Temporal {
+        #[command(subcommand)]
+        action: TemporalCommands,
+    },
     /// Machine learning: train, predict, and benchmark classifiers on geospatial features
     #[cfg(feature = "ml")]
     Ml {
@@ -1120,6 +1125,38 @@ pub enum StacCommands {
         /// Output GeoTIFF file
         output: PathBuf,
     },
+    /// Download a time series: one cloud-free composite per interval (monthly, biweekly, etc.)
+    TimeSeries {
+        /// Catalog: "pc" (Planetary Computer), "es" (Earth Search), or full URL
+        #[arg(long, default_value = "es")]
+        catalog: String,
+        /// Bounding box: west,south,east,north
+        #[arg(long)]
+        bbox: String,
+        /// Collection (e.g. "sentinel-2-l2a")
+        #[arg(long)]
+        collection: String,
+        /// Data asset to download (e.g. "B04", "nir", "red")
+        #[arg(long)]
+        asset: String,
+        /// Full datetime range (e.g. "2020-01-01/2024-12-31")
+        #[arg(long)]
+        datetime: String,
+        /// Temporal interval: "monthly", "biweekly", "weekly", or custom days (e.g. "30")
+        #[arg(long, default_value = "monthly")]
+        interval: String,
+        /// SCL asset key for cloud masking (use "none" to skip)
+        #[arg(long, default_value = "scl")]
+        scl_asset: String,
+        /// Maximum scenes per interval
+        #[arg(long, default_value = "8")]
+        max_scenes: usize,
+        /// Align output to this raster's grid (e.g., a DEM)
+        #[arg(long)]
+        align_to: Option<PathBuf>,
+        /// Output directory (one GeoTIFF per interval)
+        output: PathBuf,
+    },
     /// List all available STAC catalogs (curated + indexed)
     ListCatalogs {
         /// Search for catalogs by keyword (e.g., "sentinel-2", "dem", "thermal")
@@ -1186,6 +1223,89 @@ pub enum PipelineCommands {
         /// Compress output (DEFLATE)
         #[arg(long)]
         compress: Option<bool>,
+    },
+}
+
+// ─── Temporal analysis subcommands ──────────────────────────────────────
+
+#[derive(Subcommand)]
+pub enum TemporalCommands {
+    /// Per-pixel temporal statistics (mean, std, min, max, count, percentile)
+    Stats {
+        /// Input rasters (time-ordered GeoTIFFs)
+        #[arg(short, long, required = true)]
+        input: Vec<PathBuf>,
+        /// Output directory for statistic rasters
+        #[arg(short, long)]
+        outdir: PathBuf,
+        /// Which statistics to compute (comma-separated): mean,std,min,max,count,p10,p25,p50,p75,p90
+        #[arg(long, default_value = "mean,std,min,max,count")]
+        stats: String,
+    },
+    /// Pixel-wise linear trend analysis (OLS regression)
+    Trend {
+        /// Input rasters (time-ordered GeoTIFFs)
+        #[arg(short, long, required = true)]
+        input: Vec<PathBuf>,
+        /// Output directory for trend rasters (slope, intercept, r2, pvalue)
+        #[arg(short, long)]
+        outdir: PathBuf,
+        /// Method: "linear" (OLS) or "mann-kendall" (non-parametric)
+        #[arg(long, default_value = "linear")]
+        method: String,
+        /// Time values (comma-separated, e.g. fractional years). If omitted, uses 0,1,2,...
+        #[arg(long)]
+        times: Option<String>,
+    },
+    /// Change detection between two dates
+    Change {
+        /// Before raster (time T1)
+        #[arg(long)]
+        before: PathBuf,
+        /// After raster (time T2)
+        #[arg(long)]
+        after: PathBuf,
+        /// Output difference raster
+        output: PathBuf,
+        /// Threshold for significant decrease
+        #[arg(long, default_value = "-1.0")]
+        decrease_threshold: f64,
+        /// Threshold for significant increase
+        #[arg(long, default_value = "1.0")]
+        increase_threshold: f64,
+    },
+    /// Anomaly detection vs reference period
+    Anomaly {
+        /// Reference period rasters (baseline, at least 2)
+        #[arg(long, required = true)]
+        reference: Vec<PathBuf>,
+        /// Target rasters to evaluate
+        #[arg(long, required = true)]
+        target: Vec<PathBuf>,
+        /// Output directory
+        #[arg(short, long)]
+        outdir: PathBuf,
+        /// Method: "zscore", "difference", or "percent"
+        #[arg(long, default_value = "zscore")]
+        method: String,
+    },
+    /// Vegetation phenology metrics from NDVI/EVI time series
+    Phenology {
+        /// Input rasters (time-ordered NDVI/EVI GeoTIFFs, at least 6)
+        #[arg(short, long, required = true)]
+        input: Vec<PathBuf>,
+        /// Output directory for phenology rasters (sos, eos, peak, amplitude, etc.)
+        #[arg(short, long)]
+        outdir: PathBuf,
+        /// Day-of-year for each input (comma-separated). If omitted, uses indices.
+        #[arg(long)]
+        doys: Option<String>,
+        /// Threshold for SOS/EOS as fraction of amplitude (0-1)
+        #[arg(long, default_value = "0.5")]
+        threshold: f64,
+        /// Smoothing window size (odd number, 0=none)
+        #[arg(long, default_value = "5")]
+        smooth: usize,
     },
 }
 

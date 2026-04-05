@@ -21,6 +21,7 @@ mod maybe_rayon;
 pub mod terrain;
 pub mod hydrology;
 pub mod imagery;
+pub mod temporal;
 pub mod interpolation;
 pub mod landscape;
 pub mod classification;
@@ -110,6 +111,14 @@ pub mod prelude {
         normalized_difference, band_math, band_math_binary, reclassify,
         index_builder,
         BandMathOp, SpectralIndex,
+    };
+    pub use crate::temporal::{
+        temporal_mean, temporal_std, temporal_min, temporal_max, temporal_count,
+        temporal_percentile, temporal_stats, TemporalStats,
+        linear_trend, mann_kendall, sens_slope,
+        LinearTrendResult, MannKendallResult,
+        temporal_anomaly, AnomalyMethod,
+        vegetation_phenology, PhenologyParams, PhenologyResult,
     };
     pub use crate::interpolation::{
         idw, nearest_neighbor, tin_interpolation, tps_interpolation,
