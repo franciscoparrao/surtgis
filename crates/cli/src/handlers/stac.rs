@@ -2146,7 +2146,9 @@ struct SimpleDate {
 }
 
 fn parse_date(s: &str) -> Result<SimpleDate> {
-    let parts: Vec<&str> = s.trim().split('-').collect();
+    // Strip time component if present: "2023-01-01T00:00:00Z" → "2023-01-01"
+    let date_str = s.trim().split('T').next().unwrap_or(s.trim());
+    let parts: Vec<&str> = date_str.split('-').collect();
     if parts.len() != 3 {
         anyhow::bail!("invalid date format: '{}' (expected YYYY-MM-DD)", s);
     }
