@@ -3,10 +3,85 @@
 //! Supports Planetary Computer and Earth Search out of the box, plus
 //! arbitrary STAC API endpoints via [`StacCatalog::Custom`].
 
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use crate::error::{CloudError, Result};
 use crate::stac_models::{StacItem, StacItemCollection, StacLink, StacSearchParams};
+
+// ---------------------------------------------------------------------------
+// SAS Token Cache
+// ---------------------------------------------------------------------------
+
+/// Cache for Planetary Computer SAS tokens.
+///
+/// PC signs URLs at the container level: the SAS query string from one signed
+/// URL is valid for any file in the same Azure Blob container. We cache tokens
+/// per container and reuse them, eliminating the 200ms throttle per asset.
+///
+/// Token structure: `?se=<expiry>&sp=r&sv=...&sr=c&sig=<signature>`
+/// Typical validity: ~1 hour.
+struct SasTokenCache {
+    /// Map from container key (account + container) to (sas_query, obtained_at)
+    tokens: Mutex<HashMap<String, (String, Instant)>>,
+    /// Maximum age before a token is considered stale (re-sign).
+    /// PC tokens are valid ~1h, we refresh at 45min.
+    max_age: Duration,
+}
+
+impl SasTokenCache {
+    fn new() -> Self {
+        Self {
+            tokens: Mutex::new(HashMap::new()),
+            max_age: Duration::from_secs(45 * 60), // 45 minutes
+        }
+    }
+
+    /// Extract the container key from an Azure Blob Storage URL.
+    /// `https://account.blob.core.windows.net/container/path/file.tif` → `account/container`
+    fn container_key(href: &str) -> Option<String> {
+        let url = href.strip_prefix("https://").or_else(|| href.strip_prefix("http://"))?;
+        let parts: Vec<&str> = url.splitn(3, '/').collect();
+        if parts.len() >= 2 {
+            Some(format!("{}/{}", parts[0], parts[1]))
+        } else {
+            None
+        }
+    }
+
+    /// Try to apply a cached SAS token to the given href.
+    /// Returns Some(signed_url) if a valid cached token exists.
+    fn try_sign(&self, href: &str) -> Option<String> {
+        let key = Self::container_key(href)?;
+        let tokens = self.tokens.lock().ok()?;
+        let (sas_query, obtained_at) = tokens.get(&key)?;
+        if obtained_at.elapsed() < self.max_age {
+            // Apply cached SAS token: strip any existing query and append cached one
+            let base = href.split('?').next().unwrap_or(href);
+            Some(format!("{}?{}", base, sas_query))
+        } else {
+            None
+        }
+    }
+
+    /// Store a SAS token extracted from a signed URL.
+    fn cache_from_signed_url(&self, href: &str, signed_url: &str) {
+        if let Some(key) = Self::container_key(href) {
+            if let Some(query) = signed_url.split_once('?').map(|(_, q)| q.to_string()) {
+                if let Ok(mut tokens) = self.tokens.lock() {
+                    tokens.insert(key, (query, Instant::now()));
+                }
+            }
+        }
+    }
+
+    /// Number of cached containers.
+    #[allow(dead_code)]
+    fn len(&self) -> usize {
+        self.tokens.lock().map(|t| t.len()).unwrap_or(0)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Catalog enum
@@ -96,6 +171,7 @@ pub struct StacClient {
     catalog: StacCatalog,
     client: reqwest::Client,
     options: StacClientOptions,
+    sas_cache: SasTokenCache,
 }
 
 impl StacClient {
@@ -112,6 +188,7 @@ impl StacClient {
             catalog,
             client,
             options,
+            sas_cache: SasTokenCache::new(),
         })
     }
 
@@ -165,6 +242,11 @@ impl StacClient {
 
     /// Sign an asset href for Planetary Computer via the `/sign` endpoint.
     ///
+    /// Uses a per-container SAS token cache: the first sign for a storage
+    /// container hits the PC API, subsequent signs for the same container
+    /// reuse the cached token (valid ~45 min). This eliminates the 200ms
+    /// throttle for most requests.
+    ///
     /// For non-PC catalogs this is a no-op and returns the href unchanged.
     pub async fn sign_asset_href(
         &self,
@@ -174,7 +256,16 @@ impl StacClient {
         if !self.catalog.needs_signing() {
             return Ok(href.to_string());
         }
-        self.sign_pc_href(href).await
+
+        // Try cache first
+        if let Some(signed) = self.sas_cache.try_sign(href) {
+            return Ok(signed);
+        }
+
+        // Cache miss → sign via API and cache the token
+        let signed = self.sign_pc_href(href).await?;
+        self.sas_cache.cache_from_signed_url(href, &signed);
+        Ok(signed)
     }
 
     // ── Private helpers ─────────────────────────────────────────────

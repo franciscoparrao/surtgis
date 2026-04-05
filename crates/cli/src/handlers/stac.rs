@@ -792,6 +792,39 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             align_to,
             output,
         } => {
+            // Multi-band support: --asset "red,nir,swir16,blue"
+            let assets: Vec<&str> = asset.split(',').map(|s| s.trim()).collect();
+            if assets.len() > 1 {
+                println!("Multi-band composite: {} bands", assets.len());
+                let total_start = Instant::now();
+                for (band_idx, band) in assets.iter().enumerate() {
+                    let band_output = output.with_file_name(format!(
+                        "{}_{}.tif",
+                        output.file_stem().unwrap_or_default().to_string_lossy(),
+                        band
+                    ));
+                    println!("\n[{}/{}] Band: {} → {}", band_idx + 1, assets.len(), band, band_output.display());
+
+                    // Re-run composite for each band (SAS cache reuses tokens)
+                    let band_cmd = StacCommands::Composite {
+                        catalog: catalog.clone(),
+                        bbox: bbox.clone(),
+                        collection: collection.clone(),
+                        asset: band.to_string(),
+                        datetime: datetime.clone(),
+                        max_scenes,
+                        scl_asset: _scl_asset.clone(),
+                        scl_keep: _scl_keep.clone(),
+                        align_to: align_to.clone(),
+                        output: band_output,
+                    };
+                    // Recursive call for single-band
+                    handle(band_cmd, compress)?;
+                }
+                println!("\nAll {} bands complete in {:.1?}", assets.len(), total_start.elapsed());
+                return Ok(());
+            }
+
             // Get collection profile (determines cloud masking strategy)
             let profile = CollectionProfile::from_collection_name(&collection)?;
             let mask_asset_name = profile.mask_asset_name();
@@ -1089,98 +1122,64 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                     };
 
                     for scene in scenes_ref {
-                        let mut data_tiles: Vec<surtgis_core::Raster<f64>> = Vec::new();
-                        let mut scl_tiles: Vec<surtgis_core::Raster<f64>> = Vec::new();
-
-                        let out_epsg = scenes_ref.first().and_then(|s| s.epsg);
                         let is_first_strip = current_strip == 0;
 
+                        // Expand strip_bb slightly to ensure it covers COG tiles
+                        // that may be offset from the DEM grid by a few pixels.
+                        let pad = 100.0; // 100m padding (covers 10 pixels at 10m)
+                        let tile_bb = BBox::new(
+                            strip_bb.min_x - pad,
+                            strip_bb.min_y - pad,
+                            strip_bb.max_x + pad,
+                            strip_bb.max_y + pad,
+                        );
+
+                        // Download all tiles in parallel using std threads.
+                        // Each tile involves 1-2 HTTP range requests (data + mask).
+                        let tile_results: Vec<(
+                            Option<surtgis_core::Raster<f64>>,
+                            Option<surtgis_core::Raster<f64>>,
+                        )> = {
+                            let mut handles = Vec::with_capacity(scene.tiles.len());
+                            for (tile_idx, tile) in scene.tiles.iter().enumerate() {
+                                let data_href = tile.data_href.clone();
+                                let scl_href = tile.scl_href.clone();
+                                let bb = tile_bb;
+                                let first = is_first_strip && tile_idx == 0;
+                                handles.push(std::thread::spawn(move || {
+                                    let data = read_cog_tile(&data_href, &bb, first);
+                                    let mask = if scl_href.is_empty() {
+                                        None
+                                    } else {
+                                        read_cog_tile_raw(&scl_href, &bb)
+                                    };
+                                    (data, mask)
+                                }));
+                            }
+                            handles.into_iter().map(|h| h.join().unwrap_or((None, None))).collect()
+                        };
+
+                        let mut data_tiles: Vec<surtgis_core::Raster<f64>> = Vec::new();
+                        let mut scl_tiles: Vec<surtgis_core::Raster<f64>> = Vec::new();
                         let mut data_ok = 0usize;
                         let mut data_fail = 0usize;
                         let mut scl_ok = 0usize;
-                        let mut scl_fail = 0usize;
 
-                        for (tile_idx, tile) in scene.tiles.iter().enumerate() {
-                            // Expand strip_bb slightly to ensure it covers COG tiles
-                            // that may be offset from the DEM grid by a few pixels.
-                            let pad = 100.0; // 100m padding (covers 10 pixels at 10m)
-                            let tile_bb = BBox::new(
-                                strip_bb.min_x - pad,
-                                strip_bb.min_y - pad,
-                                strip_bb.max_x + pad,
-                                strip_bb.max_y + pad,
-                            );
-
-                            // Read data tile at native resolution
-                            match CogReaderBlocking::open(&tile.data_href, CogReaderOptions::default()) {
-                                Ok(mut dr) => {
-                                    let tile_meta = dr.metadata();
-                                    if is_first_strip && tile_idx == 0 {
-                                        eprintln!("    COG meta: {}x{} bps={} sf={} compression={} px={:.0}m",
-                                            tile_meta.width, tile_meta.height,
-                                            tile_meta.bits_per_sample, tile_meta.sample_format,
-                                            tile_meta.compression,
-                                            tile_meta.geo_transform.pixel_width.abs());
-                                    }
-                                    // Read at native resolution. Resample to output grid happens
-                                    // after mosaic + cloud mask to avoid tile alignment artifacts.
-                                    match dr.read_bbox::<f64>(&tile_bb, None) {
-                                        Ok(mut r) => {
-                                            // S2 L2A on Planetary Computer:
-                                            // Values are already surface reflectance × 10000.
-                                            // BOA_ADD_OFFSET is pre-applied by PC. Do NOT subtract 1000.
-                                            // DN=0 is nodata. Valid range: 1-10000 (reflectance 0.0001-1.0).
-                                            let nodata_val = tile_meta.nodata.unwrap_or(0.0);
-                                            for val in r.data_mut().iter_mut() {
-                                                if *val == nodata_val || *val == 0.0 {
-                                                    *val = f64::NAN;
-                                                }
-                                            }
-                                            data_tiles.push(r);
-                                            data_ok += 1;
-                                        }
-                                        Err(e) => {
-                                            data_fail += 1;
-                                            if data_fail <= 2 && is_first_strip {
-                                                eprintln!("  ⚠ {}: data read fail: {}", scene.date, e);
-                                            }
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    data_fail += 1;
-                                    if is_first_strip {
-                                        eprintln!("  ⚠ {}: COG open failed: {}", scene.date, e);
-                                    }
-                                }
+                        for (data_opt, mask_opt) in tile_results {
+                            if let Some(r) = data_opt {
+                                data_tiles.push(r);
+                                data_ok += 1;
+                            } else {
+                                data_fail += 1;
                             }
-
-                            // Read SCL/mask tile at native resolution (skip if no mask href)
-                            if !tile.scl_href.is_empty() {
-                                match CogReaderBlocking::open(&tile.scl_href, CogReaderOptions::default()) {
-                                    Ok(mut sr) => {
-                                        match sr.read_bbox::<f64>(&tile_bb, None) {
-                                            Ok(r) => { scl_tiles.push(r); scl_ok += 1; }
-                                            Err(e) => {
-                                                scl_fail += 1;
-                                                if is_first_strip && scl_fail <= 2 {
-                                                    eprintln!("  ⚠ {}: mask read fail: {}", scene.date, e);
-                                                }
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        scl_fail += 1;
-                                        if is_first_strip {
-                                            eprintln!("  ⚠ {}: mask open failed: {}", scene.date, e);
-                                        }
-                                    }
-                                }
+                            if let Some(r) = mask_opt {
+                                scl_tiles.push(r);
+                                scl_ok += 1;
                             }
-                        } // end for (tile_idx, tile)
+                        }
 
                         if is_first_strip {
-                            eprintln!("  ℹ {}: {} tiles, data={}/{} mask={}",
+                            eprintln!("  ℹ {}: {} tiles (parallel), data={}/{} mask={}",
                                 scene.date, scene.tiles.len(),
                                 data_ok, data_ok + data_fail, scl_ok);
                         }
@@ -1734,11 +1733,28 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             catalog, bbox, collection, asset, datetime, interval,
             scl_asset, max_scenes, align_to, output,
         } => {
-            handle_time_series(
-                &catalog, &bbox, &collection, &asset, &datetime,
-                &interval, &scl_asset, max_scenes, align_to.as_ref(),
-                &output, compress,
-            )?;
+            // Multi-band support: --asset "red,nir,swir16,blue"
+            let assets: Vec<&str> = asset.split(',').map(|s| s.trim()).collect();
+            if assets.len() > 1 {
+                println!("Multi-band time series: {} bands", assets.len());
+                let total_start = Instant::now();
+                for (band_idx, band) in assets.iter().enumerate() {
+                    let band_outdir = output.join(band);
+                    println!("\n[{}/{}] Band: {} → {}", band_idx + 1, assets.len(), band, band_outdir.display());
+                    handle_time_series(
+                        &catalog, &bbox, &collection, band, &datetime,
+                        &interval, &scl_asset, max_scenes, align_to.as_ref(),
+                        &band_outdir, compress,
+                    )?;
+                }
+                println!("\nAll {} bands complete in {:.1?}", assets.len(), total_start.elapsed());
+            } else {
+                handle_time_series(
+                    &catalog, &bbox, &collection, &asset, &datetime,
+                    &interval, &scl_asset, max_scenes, align_to.as_ref(),
+                    &output, compress,
+                )?;
+            }
         }
     }
 
@@ -1989,6 +2005,34 @@ pub fn fetch_stac_band(
 
     eprintln!("  ✓ {} band ready for indices", asset);
     Ok(final_result)
+}
+
+/// Read a COG tile (data band) at native resolution into a raster.
+/// Applies nodata filtering (DN=0 → NaN). Used by parallel tile download.
+fn read_cog_tile(href: &str, bb: &BBox, log_meta: bool) -> Option<surtgis_core::Raster<f64>> {
+    let mut dr = CogReaderBlocking::open(href, CogReaderOptions::default()).ok()?;
+    let tile_meta = dr.metadata();
+    if log_meta {
+        eprintln!("    COG meta: {}x{} bps={} sf={} compression={} px={:.0}m",
+            tile_meta.width, tile_meta.height,
+            tile_meta.bits_per_sample, tile_meta.sample_format,
+            tile_meta.compression,
+            tile_meta.geo_transform.pixel_width.abs());
+    }
+    let mut r: surtgis_core::Raster<f64> = dr.read_bbox(bb, None).ok()?;
+    let nodata_val = tile_meta.nodata.unwrap_or(0.0);
+    for val in r.data_mut().iter_mut() {
+        if *val == nodata_val || *val == 0.0 {
+            *val = f64::NAN;
+        }
+    }
+    Some(r)
+}
+
+/// Read a COG tile (mask/SCL band) at native resolution without nodata filtering.
+fn read_cog_tile_raw(href: &str, bb: &BBox) -> Option<surtgis_core::Raster<f64>> {
+    let mut sr = CogReaderBlocking::open(href, CogReaderOptions::default()).ok()?;
+    sr.read_bbox(bb, None).ok()
 }
 
 /// Handle `surtgis stac time-series`: download one composite per temporal interval.
