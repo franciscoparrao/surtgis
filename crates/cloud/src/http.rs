@@ -115,11 +115,59 @@ impl HttpClient {
         Ok(bytes.to_vec())
     }
 
-    /// Fetch multiple byte ranges concurrently.
+    /// Fetch multiple byte ranges concurrently, with automatic coalescing.
     ///
-    /// Each element in `ranges` is `(offset, length)`.
-    /// Returns one `Vec<u8>` per range, in the same order.
+    /// Adjacent or overlapping ranges are merged into a single HTTP request
+    /// for efficiency. Each element in `ranges` is `(offset, length)`.
+    /// Returns one `Vec<u8>` per original range, in the same order.
     pub async fn fetch_ranges(
+        &self,
+        url: &str,
+        ranges: &[(u64, u64)],
+        auth: &dyn CloudAuth,
+    ) -> Result<Vec<Vec<u8>>> {
+        if ranges.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Coalesce adjacent ranges (within 4KB gap tolerance).
+        // COG tiles are often sequential in the file.
+        let coalesced = coalesce_ranges(ranges, 4096);
+
+        if coalesced.len() == ranges.len() {
+            // No coalescing benefit — fetch all concurrently
+            return self.fetch_ranges_parallel(url, ranges, auth).await;
+        }
+
+        // Fetch coalesced ranges concurrently
+        let coalesced_ranges: Vec<(u64, u64)> = coalesced.iter()
+            .map(|g| (g.offset, g.length))
+            .collect();
+        let fetched = self.fetch_ranges_parallel(url, &coalesced_ranges, auth).await?;
+
+        // Split coalesced data back into original ranges
+        let mut results = vec![Vec::new(); ranges.len()];
+        for (group_idx, group) in coalesced.iter().enumerate() {
+            let group_data = &fetched[group_idx];
+            for &(orig_idx, local_offset, local_length) in &group.members {
+                let start = local_offset as usize;
+                let end = (local_offset + local_length) as usize;
+                if end <= group_data.len() {
+                    results[orig_idx] = group_data[start..end].to_vec();
+                } else {
+                    // Fallback: fetch individually if coalesced data is short
+                    results[orig_idx] = self.fetch_range(
+                        url, ranges[orig_idx].0, ranges[orig_idx].1, auth
+                    ).await?;
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Fetch multiple ranges concurrently without coalescing.
+    async fn fetch_ranges_parallel(
         &self,
         url: &str,
         ranges: &[(u64, u64)],
@@ -198,4 +246,67 @@ impl HttpClient {
     pub fn request_timeout(&self) -> Duration {
         self.request_timeout
     }
+}
+
+// ---------------------------------------------------------------------------
+// Range coalescing
+// ---------------------------------------------------------------------------
+
+/// A group of original ranges merged into a single fetch.
+struct CoalescedRange {
+    /// Start offset of the merged range.
+    offset: u64,
+    /// Total length of the merged range.
+    length: u64,
+    /// Members: (original_index, local_offset_within_group, original_length).
+    members: Vec<(usize, u64, u64)>,
+}
+
+/// Merge adjacent/overlapping byte ranges to reduce HTTP request count.
+///
+/// Ranges within `gap_tolerance` bytes of each other are merged.
+/// Returns groups that can be fetched as single requests and split afterwards.
+fn coalesce_ranges(ranges: &[(u64, u64)], gap_tolerance: u64) -> Vec<CoalescedRange> {
+    if ranges.is_empty() {
+        return Vec::new();
+    }
+
+    // Sort by offset, keeping track of original indices
+    let mut indexed: Vec<(usize, u64, u64)> = ranges.iter()
+        .enumerate()
+        .map(|(i, &(o, l))| (i, o, l))
+        .collect();
+    indexed.sort_by_key(|&(_, o, _)| o);
+
+    let mut groups: Vec<CoalescedRange> = Vec::new();
+    let (first_idx, first_off, first_len) = indexed[0];
+    let mut current = CoalescedRange {
+        offset: first_off,
+        length: first_len,
+        members: vec![(first_idx, 0, first_len)],
+    };
+
+    for &(orig_idx, offset, length) in &indexed[1..] {
+        let current_end = current.offset + current.length;
+        if offset <= current_end + gap_tolerance {
+            // Merge: extend current group
+            let local_offset = offset - current.offset;
+            current.members.push((orig_idx, local_offset, length));
+            let new_end = offset + length;
+            if new_end > current_end {
+                current.length = new_end - current.offset;
+            }
+        } else {
+            // Gap too large: start new group
+            groups.push(current);
+            current = CoalescedRange {
+                offset,
+                length,
+                members: vec![(orig_idx, 0, length)],
+            };
+        }
+    }
+    groups.push(current);
+
+    groups
 }

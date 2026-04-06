@@ -13,7 +13,8 @@ mod inner {
 
     /// Blocking wrapper around [`CogReader`].
     ///
-    /// Uses an internal single-threaded Tokio runtime. Not available on WASM.
+    /// Uses a multi-threaded Tokio runtime (2 worker threads) for efficient
+    /// parallel HTTP range request I/O. Not available on WASM.
     pub struct CogReaderBlocking {
         rt: tokio::runtime::Runtime,
         inner: CogReader,
@@ -22,7 +23,8 @@ mod inner {
     impl CogReaderBlocking {
         /// Open a remote COG (blocking).
         pub fn open(url: &str, options: CogReaderOptions) -> Result<Self> {
-            let rt = tokio::runtime::Builder::new_current_thread()
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
                 .enable_all()
                 .build()
                 .map_err(|e| crate::error::CloudError::Network(e.to_string()))?;

@@ -39,8 +39,8 @@ pub struct CogReaderOptions {
 impl Default for CogReaderOptions {
     fn default() -> Self {
         Self {
-            max_concurrent_fetches: 8,
-            cache_capacity: 128,
+            max_concurrent_fetches: 16,
+            cache_capacity: 256,
             request_timeout: Duration::from_secs(30),
             max_retries: 3,
             auth: Box::new(NoAuth),
