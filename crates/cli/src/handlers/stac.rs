@@ -1884,6 +1884,147 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                 )?;
             }
         }
+
+        #[cfg(feature = "zarr")]
+        StacCommands::DownloadClimate {
+            catalog,
+            bbox,
+            collection,
+            variable,
+            datetime,
+            aggregate,
+            output,
+        } => {
+            use surtgis_cloud::blocking::ZarrReaderBlocking;
+            use surtgis_cloud::{AggMethod, TimeReduction, ZarrReaderOptions};
+            use surtgis_cloud::zarr_auth::abfs_to_https_with_account;
+
+            let cat = StacCatalog::from_str_or_url(&catalog);
+            let bb = parse_bbox(&bbox)?;
+
+            // Parse aggregation
+            let (interval_type, agg_method) = parse_aggregate(&aggregate)?;
+
+            // Parse datetime range
+            let (dt_start, dt_end) = parse_datetime_range(&datetime)?;
+
+            // Search STAC for the collection item
+            let pb = spinner("Searching STAC catalog...");
+            let client = StacClientBlocking::new(cat, StacClientOptions::default())
+                .context("Failed to create STAC client")?;
+
+            let params = StacSearchParams::new()
+                .bbox(bb.min_x, bb.min_y, bb.max_x, bb.max_y)
+                .collections(&[collection.as_str()])
+                .datetime(&datetime)
+                .limit(1);
+
+            let results = client.search(&params).context("STAC search failed")?;
+            let item = results.features.first().ok_or_else(|| {
+                anyhow::anyhow!("No items found for collection '{}' in range '{}'", collection, datetime)
+            })?;
+            pb.finish_and_clear();
+
+            println!("Item: {} [{}]", item.id, item.collection.as_deref().unwrap_or("-"));
+
+            // Find the asset matching the variable name
+            let stac_asset = item.asset(&variable).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Asset '{}' not found. Available: {}",
+                    variable,
+                    item.assets.keys().cloned().collect::<Vec<_>>().join(", ")
+                )
+            })?;
+
+            // Get collection-level auth for Zarr
+            let auth = client.get_collection_zarr_auth(&collection)
+                .context("Failed to get collection auth")?;
+
+            let (sas_token, store_url) = if let Some((token, account, _container)) = auth {
+                let url = abfs_to_https_with_account(&stac_asset.href, Some(&account));
+                (Some(token), url)
+            } else {
+                (None, stac_asset.href.clone())
+            };
+
+            let opts = ZarrReaderOptions { sas_token };
+
+            // Open the Zarr store
+            let pb = spinner("Opening Zarr store...");
+            let reader = ZarrReaderBlocking::open(&store_url, &variable, opts)
+                .context("Failed to open Zarr store")?;
+
+            let meta = reader.metadata();
+            println!(
+                "Variable: {} — shape {:?}, dims {:?}",
+                meta.variable, meta.shape, meta.dimension_names
+            );
+            if let Some((t0, t1)) = &meta.time_range {
+                println!("Time range: {} to {}", t0.format("%Y-%m-%d"), t1.format("%Y-%m-%d"));
+            }
+            pb.finish_and_clear();
+
+            // Generate time intervals
+            let intervals = generate_intervals(dt_start, dt_end, interval_type);
+            println!(
+                "Downloading {} intervals ({}) for {}...",
+                intervals.len(),
+                aggregate,
+                variable
+            );
+
+            // Create output directory
+            std::fs::create_dir_all(&output)
+                .context("Failed to create output directory")?;
+
+            let total_start = Instant::now();
+            for (i, (int_start, int_end, label)) in intervals.iter().enumerate() {
+                let time = if agg_method.is_some() {
+                    TimeReduction::Aggregate {
+                        start: *int_start,
+                        end: *int_end,
+                        method: agg_method.unwrap(),
+                    }
+                } else {
+                    TimeReduction::Single(surtgis_cloud::TimeSelector::Nearest(*int_start))
+                };
+
+                let pb = spinner(&format!("[{}/{}] {}", i + 1, intervals.len(), label));
+                match reader.read_bbox(&bb, &time) {
+                    Ok(raster) => {
+                        let suffix = agg_method.map(|m| match m {
+                            AggMethod::Mean => "mean",
+                            AggMethod::Sum => "sum",
+                            AggMethod::Min => "min",
+                            AggMethod::Max => "max",
+                        }).unwrap_or("value");
+                        let filename = format!("{}_{}.tif", label, suffix);
+                        let out_path = output.join(&filename);
+                        write_result(&raster, &out_path, compress)?;
+                        let (rows, cols) = raster.shape();
+                        pb.finish_and_clear();
+                        println!("  {} — {}x{}", filename, cols, rows);
+                    }
+                    Err(e) => {
+                        pb.finish_and_clear();
+                        eprintln!("  Warning: {} — {}", label, e);
+                    }
+                }
+            }
+
+            let elapsed = total_start.elapsed();
+            println!(
+                "\nDone: {} intervals written to {} in {:.1?}",
+                intervals.len(),
+                output.display(),
+                elapsed
+            );
+        }
+
+        #[cfg(not(feature = "zarr"))]
+        StacCommands::DownloadClimate { .. } => {
+            anyhow::bail!("Zarr support not enabled. Recompile with --features zarr");
+        }
     }
 
     Ok(())
@@ -2489,4 +2630,128 @@ fn parse_time_step(s: &str) -> Result<surtgis_cloud::TimeReduction> {
             }
         }
     }
+}
+
+// ─── Climate download helpers ───────────────────────────────────────
+
+#[cfg(feature = "zarr")]
+enum IntervalType {
+    Daily,
+    Monthly,
+    Yearly,
+    None,
+}
+
+#[cfg(feature = "zarr")]
+fn parse_aggregate(s: &str) -> Result<(IntervalType, Option<surtgis_cloud::AggMethod>)> {
+    use surtgis_cloud::AggMethod;
+    match s.to_lowercase().replace('_', "-").as_str() {
+        "none" => Ok((IntervalType::None, None)),
+        "daily-sum" => Ok((IntervalType::Daily, Some(AggMethod::Sum))),
+        "daily-mean" => Ok((IntervalType::Daily, Some(AggMethod::Mean))),
+        "monthly-mean" => Ok((IntervalType::Monthly, Some(AggMethod::Mean))),
+        "monthly-sum" => Ok((IntervalType::Monthly, Some(AggMethod::Sum))),
+        "yearly-mean" => Ok((IntervalType::Yearly, Some(AggMethod::Mean))),
+        "yearly-sum" => Ok((IntervalType::Yearly, Some(AggMethod::Sum))),
+        other => anyhow::bail!(
+            "Invalid --aggregate: '{}'. Options: none, daily-sum, daily-mean, monthly-mean, monthly-sum, yearly-mean, yearly-sum",
+            other
+        ),
+    }
+}
+
+#[cfg(feature = "zarr")]
+fn parse_datetime_range(s: &str) -> Result<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)> {
+    let parts: Vec<&str> = s.split('/').collect();
+    if parts.len() != 2 {
+        anyhow::bail!("--datetime must be a range: 'YYYY-MM-DD/YYYY-MM-DD'");
+    }
+    let start = chrono::NaiveDate::parse_from_str(parts[0].trim(), "%Y-%m-%d")
+        .context("Invalid start date")?
+        .and_hms_opt(0, 0, 0).unwrap().and_utc();
+    let end = chrono::NaiveDate::parse_from_str(parts[1].trim(), "%Y-%m-%d")
+        .context("Invalid end date")?
+        .and_hms_opt(23, 59, 59).unwrap().and_utc();
+    Ok((start, end))
+}
+
+#[cfg(feature = "zarr")]
+fn generate_intervals(
+    start: chrono::DateTime<chrono::Utc>,
+    end: chrono::DateTime<chrono::Utc>,
+    interval: IntervalType,
+) -> Vec<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>, String)> {
+    use chrono::{Datelike, NaiveDate, TimeZone, Utc};
+
+    let mut intervals = Vec::new();
+
+    match interval {
+        IntervalType::None => {
+            // Single interval covering the entire range
+            let label = format!(
+                "{}_to_{}",
+                start.format("%Y-%m-%d"),
+                end.format("%Y-%m-%d")
+            );
+            intervals.push((start, end, label));
+        }
+        IntervalType::Daily => {
+            let mut day = start.date_naive();
+            let end_day = end.date_naive();
+            while day <= end_day {
+                let day_start = Utc.from_utc_datetime(
+                    &day.and_hms_opt(0, 0, 0).unwrap(),
+                );
+                let day_end = Utc.from_utc_datetime(
+                    &day.and_hms_opt(23, 59, 59).unwrap(),
+                );
+                let label = day.format("%Y-%m-%d").to_string();
+                intervals.push((day_start, day_end, label));
+                day = day.succ_opt().unwrap_or(day);
+            }
+        }
+        IntervalType::Monthly => {
+            let mut year = start.year();
+            let mut month = start.month();
+            while Utc.from_utc_datetime(
+                &NaiveDate::from_ymd_opt(year, month, 1).unwrap()
+                    .and_hms_opt(0, 0, 0).unwrap(),
+            ) <= end {
+                let month_start = Utc.from_utc_datetime(
+                    &NaiveDate::from_ymd_opt(year, month, 1).unwrap()
+                        .and_hms_opt(0, 0, 0).unwrap(),
+                );
+                let next_month = if month == 12 { (year + 1, 1) } else { (year, month + 1) };
+                let month_end = Utc.from_utc_datetime(
+                    &NaiveDate::from_ymd_opt(next_month.0, next_month.1, 1).unwrap()
+                        .and_hms_opt(0, 0, 0).unwrap(),
+                ) - chrono::TimeDelta::seconds(1);
+                let label = format!("{:04}-{:02}", year, month);
+                intervals.push((month_start, month_end, label));
+                month += 1;
+                if month > 12 {
+                    month = 1;
+                    year += 1;
+                }
+            }
+        }
+        IntervalType::Yearly => {
+            let mut year = start.year();
+            while year <= end.year() {
+                let year_start = Utc.from_utc_datetime(
+                    &NaiveDate::from_ymd_opt(year, 1, 1).unwrap()
+                        .and_hms_opt(0, 0, 0).unwrap(),
+                );
+                let year_end = Utc.from_utc_datetime(
+                    &NaiveDate::from_ymd_opt(year, 12, 31).unwrap()
+                        .and_hms_opt(23, 59, 59).unwrap(),
+                );
+                let label = format!("{:04}", year);
+                intervals.push((year_start, year_end, label));
+                year += 1;
+            }
+        }
+    }
+
+    intervals
 }

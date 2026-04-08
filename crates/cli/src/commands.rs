@@ -1163,6 +1163,32 @@ pub enum StacCommands {
         /// Output directory (one GeoTIFF per interval)
         output: PathBuf,
     },
+    /// Download climate data (Zarr) for a region and time range
+    ///
+    /// Searches a STAC catalog for climate datasets (ERA5, TerraClimate),
+    /// aggregates over time intervals, and writes one GeoTIFF per interval.
+    DownloadClimate {
+        /// Catalog: "pc" (Planetary Computer), "es" (Earth Search), or full URL
+        #[arg(long, default_value = "pc")]
+        catalog: String,
+        /// Bounding box: west,south,east,north
+        #[arg(long)]
+        bbox: String,
+        /// Collection (e.g. "era5-pds")
+        #[arg(long)]
+        collection: String,
+        /// Variable name (e.g. "precipitation_amount_1hour_Accumulation")
+        #[arg(long)]
+        variable: String,
+        /// Datetime range (e.g. "2020-01-01/2020-12-31")
+        #[arg(long)]
+        datetime: String,
+        /// Temporal aggregation: none, daily-sum, daily-mean, monthly-mean, monthly-sum, yearly-mean, yearly-sum
+        #[arg(long, default_value = "monthly-mean")]
+        aggregate: String,
+        /// Output directory (one GeoTIFF per interval)
+        output: PathBuf,
+    },
     /// List all available STAC catalogs (curated + indexed)
     ListCatalogs {
         /// Search for catalogs by keyword (e.g., "sentinel-2", "dem", "thermal")
