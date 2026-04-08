@@ -143,6 +143,25 @@ mod inner {
 
         rt.block_on(crate::stac_reader::search_and_read(catalog, params, asset_key, bbox))
     }
+
+    // ── CloudRasterReader trait impls ────────────────────────────────
+
+    impl crate::cloud_reader::CloudRasterReader for CogReaderBlocking {
+        fn read_bbox_f64(&mut self, bbox: &BBox) -> Result<Raster<f64>> {
+            self.read_bbox(bbox, None)
+        }
+
+        fn raster_meta(&self) -> crate::cloud_reader::RasterMeta {
+            let m = self.metadata();
+            crate::cloud_reader::RasterMeta {
+                geo_transform: m.geo_transform,
+                crs: m.crs,
+                nodata: m.nodata,
+                width: m.width as usize,
+                height: m.height as usize,
+            }
+        }
+    }
 }
 
 #[cfg(feature = "native")]
@@ -211,6 +230,32 @@ mod zarr_inner {
             .build()
             .map_err(|e| crate::error::CloudError::Network(e.to_string()))?;
         rt.block_on(ZarrReader::list_variables(store_url, options))
+    }
+
+    // ── CloudRasterReader impl for ZarrReaderBlocking ───────────────
+
+    /// Wraps a [`ZarrReaderBlocking`] with a fixed [`TimeReduction`] for use
+    /// through the [`CloudRasterReader`](crate::cloud_reader::CloudRasterReader) trait.
+    pub struct ZarrReaderWithTime {
+        pub reader: ZarrReaderBlocking,
+        pub time: TimeReduction,
+    }
+
+    impl crate::cloud_reader::CloudRasterReader for ZarrReaderWithTime {
+        fn read_bbox_f64(&mut self, bbox: &crate::tile_index::BBox) -> crate::error::Result<surtgis_core::raster::Raster<f64>> {
+            self.reader.read_bbox(bbox, &self.time)
+        }
+
+        fn raster_meta(&self) -> crate::cloud_reader::RasterMeta {
+            let m = self.reader.metadata();
+            crate::cloud_reader::RasterMeta {
+                geo_transform: m.geo_transform.clone(),
+                crs: m.crs.clone(),
+                nodata: m.nodata,
+                width: *m.shape.last().unwrap_or(&0) as usize,
+                height: m.shape.get(m.shape.len().wrapping_sub(2)).copied().unwrap_or(0) as usize,
+            }
+        }
     }
 }
 

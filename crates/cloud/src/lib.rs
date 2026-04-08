@@ -15,6 +15,7 @@
 
 pub mod auth;
 pub mod cache;
+pub mod cloud_reader;
 pub mod cog_reader;
 pub mod decompress;
 pub mod error;
@@ -37,6 +38,7 @@ pub mod zarr_auth;
 #[cfg(feature = "zarr")]
 pub mod zarr_reader;
 
+pub use cloud_reader::{CloudRasterReader, RasterMeta};
 pub use cog_reader::{CogMetadata, CogReader, CogReaderOptions, OverviewInfo};
 pub use error::{CloudError, Result};
 pub use stac_client::{StacCatalog, StacClient, StacClientOptions};
