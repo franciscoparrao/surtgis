@@ -118,6 +118,15 @@ mod inner {
         pub fn sign_asset_href(&self, href: &str, collection: &str) -> Result<String> {
             self.rt.block_on(self.inner.sign_asset_href(href, collection))
         }
+
+        /// Get collection Zarr auth info (token, account, container) for PC (blocking).
+        #[cfg(feature = "zarr")]
+        pub fn get_collection_zarr_auth(
+            &self,
+            collection: &str,
+        ) -> Result<Option<(String, String, String)>> {
+            self.rt.block_on(self.inner.get_collection_zarr_auth(collection))
+        }
     }
 
     /// One-shot: search a STAC catalog and read the first matching COG asset (blocking).
@@ -138,3 +147,72 @@ mod inner {
 
 #[cfg(feature = "native")]
 pub use inner::*;
+
+// ── Zarr blocking wrappers ──────────────────────────────────────────
+
+#[cfg(all(feature = "zarr", feature = "native"))]
+mod zarr_inner {
+    use surtgis_core::raster::Raster;
+
+    use crate::error::Result;
+    use crate::tile_index::BBox;
+    use crate::zarr_reader::{TimeReduction, ZarrMetadata, ZarrReader, ZarrReaderOptions};
+
+    /// Blocking wrapper around [`ZarrReader`].
+    pub struct ZarrReaderBlocking {
+        rt: tokio::runtime::Runtime,
+        inner: ZarrReader,
+    }
+
+    impl ZarrReaderBlocking {
+        /// Open a Zarr store and select a variable (blocking).
+        pub fn open(
+            store_url: &str,
+            variable: &str,
+            options: ZarrReaderOptions,
+        ) -> Result<Self> {
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .map_err(|e| crate::error::CloudError::Network(e.to_string()))?;
+
+            let inner = rt.block_on(ZarrReader::open(store_url, variable, options))?;
+            Ok(Self { rt, inner })
+        }
+
+        /// Read a geographic bounding box at a specific time (blocking).
+        pub fn read_bbox(
+            &self,
+            bbox: &BBox,
+            time: &TimeReduction,
+        ) -> Result<Raster<f64>> {
+            self.rt.block_on(self.inner.read_bbox(bbox, time))
+        }
+
+        /// Read the full spatial extent at a specific time (blocking).
+        pub fn read_full(&self, time: &TimeReduction) -> Result<Raster<f64>> {
+            self.rt.block_on(self.inner.read_full(time))
+        }
+
+        /// Return metadata.
+        pub fn metadata(&self) -> &ZarrMetadata {
+            self.inner.metadata()
+        }
+    }
+
+    /// One-shot: list variables in a Zarr store (blocking).
+    pub fn zarr_list_variables(
+        store_url: &str,
+        options: ZarrReaderOptions,
+    ) -> Result<Vec<String>> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| crate::error::CloudError::Network(e.to_string()))?;
+        rt.block_on(ZarrReader::list_variables(store_url, options))
+    }
+}
+
+#[cfg(all(feature = "zarr", feature = "native"))]
+pub use zarr_inner::*;

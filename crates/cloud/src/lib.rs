@@ -30,11 +30,23 @@ pub mod tile_index;
 pub mod sync_api;
 pub mod wasm_api;
 
+#[cfg(feature = "zarr")]
+pub mod zarr_cf;
+#[cfg(feature = "zarr")]
+pub mod zarr_auth;
+#[cfg(feature = "zarr")]
+pub mod zarr_reader;
+
 pub use cog_reader::{CogMetadata, CogReader, CogReaderOptions, OverviewInfo};
 pub use error::{CloudError, Result};
 pub use stac_client::{StacCatalog, StacClient, StacClientOptions};
-pub use stac_models::{StacItem, StacItemCollection, StacSearchParams};
+pub use stac_models::{AssetFormat, StacItem, StacItemCollection, StacSearchParams};
 pub use tile_index::BBox;
+
+#[cfg(feature = "zarr")]
+pub use zarr_reader::{
+    AggMethod, TimeReduction, TimeSelector, ZarrMetadata, ZarrReader, ZarrReaderOptions,
+};
 
 /// Blocking API re-exported as `blocking` module (native only).
 #[cfg(feature = "native")]

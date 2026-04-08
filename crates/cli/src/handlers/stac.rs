@@ -499,6 +499,8 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             collection,
             asset,
             datetime,
+            variable,
+            time_step,
             output,
         } => {
             let cat = StacCatalog::from_str_or_url(&catalog);
@@ -534,18 +536,23 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             let asset_key = if let Some(ref k) = asset {
                 k.clone()
             } else {
-                let (k, _) = item.first_cog_asset().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "No COG asset found. Specify --asset explicitly. Available: {}",
+                // Try COG first, then Zarr
+                if let Some((k, _)) = item.first_cog_asset() {
+                    println!("Auto-detected COG asset: {}", k);
+                    k.clone()
+                } else if let Some((k, _)) = item.first_zarr_asset() {
+                    println!("Auto-detected Zarr asset: {}", k);
+                    k.clone()
+                } else {
+                    anyhow::bail!(
+                        "No COG or Zarr asset found. Specify --asset explicitly. Available: {}",
                         item.assets
                             .keys()
                             .cloned()
                             .collect::<Vec<_>>()
                             .join(", ")
-                    )
-                })?;
-                println!("Auto-detected asset: {}", k);
-                k.clone()
+                    );
+                }
             };
 
             let stac_asset = item.asset(&asset_key).ok_or_else(|| {
@@ -560,6 +567,9 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                 )
             })?;
 
+            // Detect format
+            let format = item.asset_format(&asset_key);
+
             // Sign the href if needed
             let href = client
                 .sign_asset_href(
@@ -568,53 +578,109 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                 )
                 .context("Failed to sign asset URL")?;
 
-            // Read via CogReader
-            let pb = spinner("Fetching COG tiles...");
-            let start = Instant::now();
-            let opts = CogReaderOptions::default();
-            let mut reader = CogReaderBlocking::open(&href, opts)
-                .context("Failed to open remote COG")?;
+            match format {
+                #[cfg(feature = "zarr")]
+                surtgis_cloud::AssetFormat::Zarr => {
+                    use surtgis_cloud::blocking::ZarrReaderBlocking;
+                    use surtgis_cloud::{ZarrReaderOptions, TimeReduction, TimeSelector};
 
-            // Auto-reproject bbox if COG is in a projected CRS (e.g. UTM)
-            let read_bb = {
-                use surtgis_cloud::reproject;
-                // Prefer proj:epsg from STAC item (no extra HTTP request)
-                let epsg = item.epsg().or_else(|| {
-                    reader
-                        .metadata()
-                        .crs
-                        .as_ref()
-                        .and_then(|c| c.epsg())
-                });
-                if let Some(epsg) = epsg {
-                    if !reproject::is_wgs84(epsg) {
-                        let reprojected =
-                            reproject::reproject_bbox_to_cog(&bb, epsg);
-                        println!("Reprojected bbox to EPSG:{}", epsg);
-                        reprojected
-                    } else {
-                        bb
+                    let var = variable.as_deref().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "--variable is required for Zarr assets. \
+                            Hint: the store may contain variables like 'precipitation_amount_1hour_Accumulation', 'ppt', etc."
+                        )
+                    })?;
+
+                    // Extract SAS token for Azure Blob stores
+                    let sas_token = href.split_once('?').map(|(_, q)| q.to_string());
+                    let base_url = href.split('?').next().unwrap_or(&href);
+
+                    let opts = ZarrReaderOptions {
+                        sas_token,
+                    };
+
+                    // Parse time step
+                    let time = parse_time_step(&time_step)?;
+
+                    let pb = spinner("Opening Zarr store...");
+                    let start = Instant::now();
+                    let reader = ZarrReaderBlocking::open(base_url, var, opts)
+                        .context("Failed to open Zarr store")?;
+
+                    let meta = reader.metadata();
+                    println!(
+                        "Zarr: {} — shape {:?}, dims {:?}",
+                        meta.variable, meta.shape, meta.dimension_names
+                    );
+                    if let Some((t0, t1)) = &meta.time_range {
+                        println!("Time range: {} to {}", t0.format("%Y-%m-%d"), t1.format("%Y-%m-%d"));
                     }
-                } else {
-                    bb
+
+                    pb.finish_and_clear();
+                    let pb = spinner("Reading Zarr subset...");
+                    let raster = reader
+                        .read_bbox(&bb, &time)
+                        .context("Failed to read Zarr subset")?;
+                    pb.finish_and_clear();
+                    let elapsed = start.elapsed();
+
+                    let (rows, cols) = raster.shape();
+                    println!(
+                        "Fetched: {} x {} ({} cells)",
+                        cols, rows, raster.len()
+                    );
+                    write_result(&raster, &output, compress)?;
+                    done("STAC Zarr fetch", &output, elapsed);
                 }
-            };
 
-            let raster: surtgis_core::Raster<f64> = reader
-                .read_bbox(&read_bb, None)
-                .context("Failed to read bounding box from COG")?;
-            pb.finish_and_clear();
-            let elapsed = start.elapsed();
+                _ => {
+                    // COG path (existing logic)
+                    let pb = spinner("Fetching COG tiles...");
+                    let start = Instant::now();
+                    let opts = CogReaderOptions::default();
+                    let mut reader = CogReaderBlocking::open(&href, opts)
+                        .context("Failed to open remote COG")?;
 
-            let (rows, cols) = raster.shape();
-            println!(
-                "Fetched: {} x {} ({} cells)",
-                cols,
-                rows,
-                raster.len()
-            );
-            write_result(&raster, &output, compress)?;
-            done("STAC fetch", &output, elapsed);
+                    let read_bb = {
+                        use surtgis_cloud::reproject;
+                        let epsg = item.epsg().or_else(|| {
+                            reader
+                                .metadata()
+                                .crs
+                                .as_ref()
+                                .and_then(|c| c.epsg())
+                        });
+                        if let Some(epsg) = epsg {
+                            if !reproject::is_wgs84(epsg) {
+                                let reprojected =
+                                    reproject::reproject_bbox_to_cog(&bb, epsg);
+                                println!("Reprojected bbox to EPSG:{}", epsg);
+                                reprojected
+                            } else {
+                                bb
+                            }
+                        } else {
+                            bb
+                        }
+                    };
+
+                    let raster: surtgis_core::Raster<f64> = reader
+                        .read_bbox(&read_bb, None)
+                        .context("Failed to read bounding box from COG")?;
+                    pb.finish_and_clear();
+                    let elapsed = start.elapsed();
+
+                    let (rows, cols) = raster.shape();
+                    println!(
+                        "Fetched: {} x {} ({} cells)",
+                        cols,
+                        rows,
+                        raster.len()
+                    );
+                    write_result(&raster, &output, compress)?;
+                    done("STAC fetch", &output, elapsed);
+                }
+            }
         }
 
         StacCommands::FetchMosaic {
@@ -2391,5 +2457,36 @@ mod tests {
         let s2_profile = CollectionProfile::from_collection_name("sentinel-2-l2a").unwrap();
         let debug_str = format!("{:?}", s2_profile);
         assert!(debug_str.contains("Sentinel2L2A"));
+    }
+}
+
+// ─── Zarr time step parsing ─────────────────────────────────────────
+
+#[cfg(feature = "zarr")]
+fn parse_time_step(s: &str) -> Result<surtgis_cloud::TimeReduction> {
+    use surtgis_cloud::{TimeReduction, TimeSelector};
+
+    match s.to_lowercase().as_str() {
+        "first" => Ok(TimeReduction::Single(TimeSelector::First)),
+        "last" => Ok(TimeReduction::Single(TimeSelector::Last)),
+        other => {
+            // Try parsing as ISO datetime
+            if let Ok(dt) = chrono::NaiveDate::parse_from_str(other, "%Y-%m-%d") {
+                let dt_utc = dt.and_hms_opt(0, 0, 0).unwrap().and_utc();
+                Ok(TimeReduction::Single(TimeSelector::Nearest(dt_utc)))
+            } else if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(other, "%Y-%m-%dT%H:%M:%S") {
+                Ok(TimeReduction::Single(TimeSelector::Nearest(dt.and_utc())))
+            } else {
+                // Try as index
+                if let Ok(idx) = other.parse::<usize>() {
+                    Ok(TimeReduction::Single(TimeSelector::Index(idx)))
+                } else {
+                    anyhow::bail!(
+                        "Invalid --time-step: '{}'. Use 'first', 'last', an ISO date (2020-06-15), or an index (0)",
+                        other
+                    );
+                }
+            }
+        }
     }
 }

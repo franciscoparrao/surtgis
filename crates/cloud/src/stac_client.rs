@@ -268,6 +268,96 @@ impl StacClient {
         Ok(signed)
     }
 
+    /// Extract a raw SAS query string for a Planetary Computer URL.
+    ///
+    /// Returns `Some("se=...&sp=r&sv=...&sr=c&sig=...")` for PC catalogs,
+    /// `None` for non-PC catalogs. Uses the SAS token cache.
+    #[cfg(feature = "zarr")]
+    pub async fn get_sas_token(&self, href: &str) -> Result<Option<String>> {
+        if !self.catalog.needs_signing() {
+            return Ok(None);
+        }
+        let signed = self.sign_asset_href(href, "").await?;
+        Ok(signed.split_once('?').map(|(_, q)| q.to_string()))
+    }
+
+    /// Get collection-level SAS token and storage info from Planetary Computer.
+    ///
+    /// Uses the STAC collection metadata (`msft:storage_account`, `msft:container`)
+    /// and the `/api/sas/v1/token/{collection}` endpoint.
+    ///
+    /// Returns `Some((token, account, container))` for PC catalogs, `None` for others.
+    #[cfg(feature = "zarr")]
+    pub async fn get_collection_zarr_auth(
+        &self,
+        collection: &str,
+    ) -> Result<Option<(String, String, String)>> {
+        if !self.catalog.needs_signing() {
+            return Ok(None);
+        }
+
+        // Get storage account and container from collection metadata
+        let coll_url = format!(
+            "https://planetarycomputer.microsoft.com/api/stac/v1/collections/{}",
+            collection
+        );
+        let coll_resp = self
+            .client
+            .get(&coll_url)
+            .send()
+            .await
+            .map_err(|e| CloudError::Auth(format!("PC collection request failed: {e}")))?;
+
+        let coll_body: serde_json::Value = coll_resp
+            .json()
+            .await
+            .map_err(|e| CloudError::Auth(format!("parsing PC collection: {e}")))?;
+
+        let account = coll_body["msft:storage_account"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        let container = coll_body["msft:container"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+
+        // Get SAS token
+        let token_url = format!(
+            "https://planetarycomputer.microsoft.com/api/sas/v1/token/{}",
+            collection
+        );
+
+        let resp = self
+            .client
+            .get(&token_url)
+            .send()
+            .await
+            .map_err(|e| CloudError::Auth(format!("PC token request failed: {e}")))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(CloudError::Auth(format!(
+                "PC token returned HTTP {}: {}",
+                status,
+                body.chars().take(300).collect::<String>()
+            )));
+        }
+
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| CloudError::Auth(format!("parsing PC token: {e}")))?;
+
+        let token = body["token"]
+            .as_str()
+            .ok_or_else(|| CloudError::Auth("PC token response missing 'token'".into()))?
+            .to_string();
+
+        Ok(Some((token, account, container)))
+    }
+
     // ── Private helpers ─────────────────────────────────────────────
 
     async fn post_search(

@@ -14,9 +14,10 @@ name = "surtgis"
 path = "src/main.rs"
 
 [features]
-default = ["cloud"]
+default = ["cloud", "zarr"]
 gdal = ["surtgis-core/gdal"]
 cloud = ["dep:surtgis-cloud"]
+zarr = ["surtgis-cloud/zarr", "dep:chrono"]
 ml = ["dep:smelt-ml", "dep:csv"]
 
 [dependencies]
@@ -36,4 +37,5 @@ tokio = { workspace = true, features = ["rt", "macros"] }
 ndarray.workspace = true
 smelt-ml = { workspace = true, optional = true }
 csv = { workspace = true, optional = true }
+chrono = { workspace = true, optional = true }
 geo.workspace = true

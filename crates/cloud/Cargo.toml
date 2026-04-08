@@ -15,6 +15,7 @@ deflate = ["dep:flate2"]
 lzw = ["dep:weezl"]
 native = ["dep:tokio", "reqwest/rustls-tls"]
 wasm = ["dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:js-sys"]
+zarr = ["dep:zarrs", "dep:zarrs_object_store", "dep:zarrs_storage", "dep:object_store", "dep:chrono"]
 
 [dependencies]
 surtgis-core = { version = "0.5.0", path = "../core", default-features = false }
@@ -39,6 +40,13 @@ wasm-bindgen = { workspace = true, optional = true }
 wasm-bindgen-futures = { workspace = true, optional = true }
 js-sys = { workspace = true, optional = true }
 serde_json.workspace = true
+
+# Zarr / Climate data (optional)
+zarrs = { workspace = true, optional = true }
+zarrs_object_store = { workspace = true, optional = true }
+zarrs_storage = { workspace = true, optional = true }
+object_store = { workspace = true, optional = true }
+chrono = { workspace = true, optional = true }
 
 [dev-dependencies]
 approx.workspace = true

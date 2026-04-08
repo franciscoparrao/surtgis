@@ -43,6 +43,22 @@ pub enum CloudError {
 
     #[error("core error: {0}")]
     Core(#[from] surtgis_core::Error),
+
+    #[cfg(feature = "zarr")]
+    #[error("zarr error: {0}")]
+    Zarr(String),
+
+    #[cfg(feature = "zarr")]
+    #[error("zarr variable '{variable}' not found")]
+    ZarrVariableNotFound { variable: String },
+
+    #[cfg(feature = "zarr")]
+    #[error("zarr CF conventions error: {0}")]
+    ZarrCfError(String),
+
+    #[cfg(feature = "zarr")]
+    #[error("zarr time out of range: {requested} (available: {available})")]
+    ZarrTimeOutOfRange { requested: String, available: String },
 }
 
 /// Result alias for cloud operations.

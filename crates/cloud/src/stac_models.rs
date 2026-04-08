@@ -198,6 +198,39 @@ impl StacItem {
             is_data_role && (is_geotiff || href_tiff)
         })
     }
+
+    /// Find the first asset that is a Zarr store.
+    pub fn first_zarr_asset(&self) -> Option<(&String, &StacAsset)> {
+        self.assets.iter().find(|(_, a)| {
+            let is_data_role = a
+                .roles
+                .as_ref()
+                .map(|r| r.iter().any(|role| role == "data"))
+                .unwrap_or(false);
+            is_data_role && a.is_zarr()
+        })
+    }
+
+    /// Detect the format of a specific asset.
+    pub fn asset_format(&self, key: &str) -> AssetFormat {
+        match self.asset(key) {
+            Some(a) if a.is_zarr() => AssetFormat::Zarr,
+            Some(a) if a.is_cog() => AssetFormat::Cog,
+            Some(_) => AssetFormat::Unknown,
+            None => AssetFormat::Unknown,
+        }
+    }
+}
+
+/// Detected format of a STAC asset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssetFormat {
+    /// Cloud Optimized GeoTIFF.
+    Cog,
+    /// Zarr store.
+    Zarr,
+    /// Unknown format.
+    Unknown,
 }
 
 /// STAC Item properties.
@@ -249,6 +282,25 @@ pub struct StacAsset {
     /// All other asset fields.
     #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,
+}
+
+impl StacAsset {
+    /// Check if this asset is a Zarr store (by media type).
+    pub fn is_zarr(&self) -> bool {
+        self.type_.as_ref().is_some_and(|t| {
+            t.contains("zarr") || t.contains("application/vnd+zarr")
+        })
+    }
+
+    /// Check if this asset is a COG/GeoTIFF (by media type or extension).
+    pub fn is_cog(&self) -> bool {
+        let by_type = self.type_.as_ref().is_some_and(|t| {
+            t.contains("geotiff")
+                || t.contains("geo+tiff")
+                || t.contains("cloud-optimized")
+        });
+        by_type || self.href.ends_with(".tif") || self.href.ends_with(".tiff")
+    }
 }
 
 /// A STAC Link (used for pagination and related resources).

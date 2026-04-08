@@ -1067,6 +1067,12 @@ pub enum StacCommands {
         /// Datetime or range
         #[arg(long)]
         datetime: Option<String>,
+        /// Variable name for Zarr stores (e.g. "precipitation_amount_1hour_Accumulation")
+        #[arg(long)]
+        variable: Option<String>,
+        /// Time step for Zarr: "first", "last", or ISO datetime (e.g. "2020-06-15")
+        #[arg(long, default_value = "first")]
+        time_step: String,
         /// Output GeoTIFF file
         output: PathBuf,
     },
