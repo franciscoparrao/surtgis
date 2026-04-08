@@ -16,6 +16,7 @@ lzw = ["dep:weezl"]
 native = ["dep:tokio", "reqwest/rustls-tls"]
 wasm = ["dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:js-sys"]
 zarr = ["dep:zarrs", "dep:zarrs_object_store", "dep:zarrs_storage", "dep:object_store", "dep:chrono"]
+netcdf = ["dep:netcdf", "dep:chrono"]
 
 [dependencies]
 surtgis-core = { version = "0.5.0", path = "../core", default-features = false }
@@ -47,6 +48,7 @@ zarrs_object_store = { workspace = true, optional = true }
 zarrs_storage = { workspace = true, optional = true }
 object_store = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
+netcdf = { workspace = true, optional = true }
 
 [dev-dependencies]
 approx.workspace = true
