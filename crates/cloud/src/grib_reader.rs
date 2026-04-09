@@ -162,40 +162,78 @@ fn index_messages(data: &[u8]) -> Result<Vec<GribMessageInfo>> {
 }
 
 fn infer_grid_shape(latlons: &[(f64, f64)]) -> Result<(usize, usize)> {
-    let first_lat = latlons[0].0;
-    let ncols = latlons
-        .iter()
-        .take_while(|(lat, _)| (*lat - first_lat).abs() < 1e-6)
-        .count();
-    if ncols == 0 {
-        return Err(CloudError::Grib("cannot determine grid columns".into()));
+    if latlons.len() < 2 {
+        return Err(CloudError::Grib("too few grid points".into()));
     }
-    let nrows = latlons.len() / ncols;
-    if nrows * ncols != latlons.len() {
-        return Err(CloudError::Grib(format!(
-            "non-regular grid: {} pts ≠ {}×{}", latlons.len(), nrows, ncols
-        )));
+
+    // Determine scan direction from the first two points
+    let (lat0, lon0) = latlons[0];
+    let (lat1, lon1) = latlons[1];
+
+    if (lon1 - lon0).abs() > (lat1 - lat0).abs() {
+        // Scan direction: longitude changes first (standard i+ scan)
+        let ncols = latlons
+            .iter()
+            .take_while(|(lat, _)| (*lat - lat0).abs() < 1e-4)
+            .count();
+        if ncols == 0 {
+            return Err(CloudError::Grib("cannot determine grid columns".into()));
+        }
+        let nrows = latlons.len() / ncols;
+        if nrows * ncols != latlons.len() {
+            return Err(CloudError::Grib(format!(
+                "non-regular grid: {} pts ≠ {}×{}", latlons.len(), nrows, ncols
+            )));
+        }
+        Ok((nrows, ncols))
+    } else {
+        // Scan direction: latitude changes first (j+ scan)
+        let nrows = latlons
+            .iter()
+            .take_while(|(_, lon)| (*lon - lon0).abs() < 1e-4)
+            .count();
+        if nrows == 0 {
+            return Err(CloudError::Grib("cannot determine grid rows".into()));
+        }
+        let ncols = latlons.len() / nrows;
+        if nrows * ncols != latlons.len() {
+            return Err(CloudError::Grib(format!(
+                "non-regular grid: {} pts ≠ {}×{}", latlons.len(), nrows, ncols
+            )));
+        }
+        Ok((nrows, ncols))
     }
-    Ok((nrows, ncols))
 }
 
 fn build_geotransform(latlons: &[(f64, f64)], nrows: usize, ncols: usize) -> GeoTransform {
-    let (lat0, lon0) = latlons[0];
-    let (_, lon1) = latlons[ncols.min(latlons.len()) - 1];
-    let (lat_last, _) = latlons[(nrows - 1) * ncols];
+    // Use the first row (first ncols points) and first column (every ncols-th point)
+    let lat_first = latlons[0].0;
+    let lon_first = latlons[0].1;
+    let lon_last = latlons[ncols - 1].1;
+    let lat_last = latlons[(nrows - 1) * ncols].0;
 
-    let pw = if ncols > 1 { (lon1 - lon0) / (ncols - 1) as f64 } else { 1.0 };
-    let ph = if nrows > 1 { (lat_last - lat0) / (nrows - 1) as f64 } else { -1.0 };
+    let pw = if ncols > 1 { (lon_last - lon_first) / (ncols - 1) as f64 } else { 1.0 };
+    let ph = if nrows > 1 { (lat_last - lat_first) / (nrows - 1) as f64 } else { -1.0 };
 
-    GeoTransform::new(lon0 - pw / 2.0, lat0 - ph / 2.0, pw, ph)
+    GeoTransform::new(lon_first - pw / 2.0, lat_first - ph / 2.0, pw, ph)
 }
 
 fn crop_raster(raster: &Raster<f64>, bbox: &BBox) -> Result<Raster<f64>> {
     let t = raster.transform();
     let (rows, cols) = raster.shape();
 
-    let (c0f, r0f) = t.geo_to_pixel(bbox.min_x, bbox.max_y);
-    let (c1f, r1f) = t.geo_to_pixel(bbox.max_x, bbox.min_y);
+    // Detect 0-360 convention and adjust bbox
+    let (min_x, max_x) = if t.origin_x >= 0.0 && bbox.min_x < 0.0 {
+        // Raster uses 0-360, bbox uses -180..180
+        let mx = if bbox.min_x < 0.0 { bbox.min_x + 360.0 } else { bbox.min_x };
+        let mxx = if bbox.max_x < 0.0 { bbox.max_x + 360.0 } else { bbox.max_x };
+        (mx, mxx)
+    } else {
+        (bbox.min_x, bbox.max_x)
+    };
+
+    let (c0f, r0f) = t.geo_to_pixel(min_x, bbox.max_y);
+    let (c1f, r1f) = t.geo_to_pixel(max_x, bbox.min_y);
 
     let c0 = (c0f.floor() as isize).max(0) as usize;
     let r0 = (r0f.floor() as isize).max(0) as usize;

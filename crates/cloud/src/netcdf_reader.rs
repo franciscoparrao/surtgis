@@ -80,6 +80,8 @@ pub struct NetCdfReader {
     lon_coords: Vec<f64>,
     time_coords: Vec<DateTime<Utc>>,
     lat_descending: bool,
+    /// True if longitude uses 0-360 convention (e.g., CMIP6).
+    lon_0_360: bool,
     metadata: NetCdfMetadata,
 }
 
@@ -131,7 +133,9 @@ impl NetCdfReader {
         } else {
             raw_lat
         };
-        let lon_coords = normalise_longitude(raw_lon);
+        // Detect 0-360 lon convention but keep original coords for indexing
+        let lon_0_360 = raw_lon.iter().any(|&v| v > 180.0);
+        let lon_coords = raw_lon; // Keep original — convert bbox query instead
 
         // Read time coordinates
         let time_coords = if let Some(time_dim_idx) = cf.time_dim {
@@ -181,6 +185,7 @@ impl NetCdfReader {
             lon_coords,
             time_coords,
             lat_descending,
+            lon_0_360,
             metadata,
         })
     }
@@ -248,10 +253,15 @@ impl NetCdfReader {
         // Unpack scale/offset and replace fill values
         let data_2d = unpack_data(data_2d, &self.cf);
 
-        // Build GeoTransform for subset
+        // Build GeoTransform for subset (normalise lon to -180..180 for output)
         let sub_lat = &self.lat_coords[lat_start..lat_end];
-        let sub_lon = &self.lon_coords[lon_start..lon_end];
-        let geo_transform = build_geotransform(sub_lat, sub_lon);
+        let sub_lon_raw = &self.lon_coords[lon_start..lon_end];
+        let sub_lon: Vec<f64> = if self.lon_0_360 {
+            sub_lon_raw.iter().map(|&v| if v > 180.0 { v - 360.0 } else { v }).collect()
+        } else {
+            sub_lon_raw.to_vec()
+        };
+        let geo_transform = build_geotransform(sub_lat, &sub_lon);
 
         let mut raster = Raster::from_array(data_2d);
         raster.set_transform(geo_transform);
@@ -290,8 +300,16 @@ impl NetCdfReader {
     }
 
     fn lon_range_for_bbox(&self, bbox: &BBox) -> Result<(usize, usize)> {
-        let start = find_nearest(&self.lon_coords, bbox.min_x);
-        let end = (find_nearest(&self.lon_coords, bbox.max_x) + 1).min(self.lon_coords.len());
+        // Convert bbox lon to file convention if needed
+        let (min_x, max_x) = if self.lon_0_360 {
+            let min = if bbox.min_x < 0.0 { bbox.min_x + 360.0 } else { bbox.min_x };
+            let max = if bbox.max_x < 0.0 { bbox.max_x + 360.0 } else { bbox.max_x };
+            (min, max)
+        } else {
+            (bbox.min_x, bbox.max_x)
+        };
+        let start = find_nearest(&self.lon_coords, min_x);
+        let end = (find_nearest(&self.lon_coords, max_x) + 1).min(self.lon_coords.len());
         if start >= end {
             return Err(CloudError::BBoxOutside);
         }
