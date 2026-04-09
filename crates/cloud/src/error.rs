@@ -52,6 +52,10 @@ pub enum CloudError {
     #[error("netcdf error: {0}")]
     NetCdf(String),
 
+    #[cfg(feature = "grib")]
+    #[error("grib error: {0}")]
+    Grib(String),
+
     #[cfg(feature = "zarr")]
     #[error("zarr variable '{variable}' not found")]
     ZarrVariableNotFound { variable: String },

@@ -2205,6 +2205,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "grib"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "79a16c6440b9b4db71fc38ccdb2915f94875ecc99781d8607d3e398ad0b410b2"
+dependencies = [
+ "grib-build",
+ "grib-template-derive",
+ "grib-template-helpers",
+ "num",
+ "num_enum",
+ "toml_edit",
+]
+
+[[package]]
+name = "grib-build"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "853eb06cc4a82a72556d04e61d1534933dbbbf2686346865966a7528bed189f2"
+dependencies = [
+ "csv",
+ "serde",
+]
+
+[[package]]
+name = "grib-template-derive"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "840d75d1faafd3ff33e3d5d03d06296e339c554f30ea2b098327749d80b4d81f"
+dependencies = [
+ "grib-template-helpers",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "grib-template-helpers"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4d2b39b682ca332b648ca29306c26500463fe3c2ce7393063b23a6bd3cab39e"
+
+[[package]]
 name = "h2"
 version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5398,6 +5440,7 @@ dependencies = [
  "chrono",
  "flate2",
  "futures",
+ "grib",
  "js-sys",
  "lru 0.12.5",
  "ndarray",
@@ -5824,6 +5867,7 @@ dependencies = [
  "indexmap",
  "toml_datetime",
  "toml_parser",
+ "toml_writer",
  "winnow 1.0.0",
 ]
 
@@ -5835,6 +5879,12 @@ checksum = "7df25b4befd31c4816df190124375d5a20c6b6921e2cad937316de3fccd63420"
 dependencies = [
  "winnow 1.0.0",
 ]
+
+[[package]]
+name = "toml_writer"
+version = "1.1.1+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "756daf9b1013ebe47a8776667b466417e2d4c5679d441c26230efd9ef78692db"
 
 [[package]]
 name = "tower"

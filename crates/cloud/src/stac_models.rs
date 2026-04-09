@@ -215,6 +215,7 @@ impl StacItem {
     pub fn asset_format(&self, key: &str) -> AssetFormat {
         match self.asset(key) {
             Some(a) if a.is_zarr() => AssetFormat::Zarr,
+            Some(a) if a.is_grib() => AssetFormat::Grib,
             Some(a) if a.is_cog() => AssetFormat::Cog,
             Some(_) => AssetFormat::Unknown,
             None => AssetFormat::Unknown,
@@ -229,6 +230,8 @@ pub enum AssetFormat {
     Cog,
     /// Zarr store.
     Zarr,
+    /// GRIB2 meteorological data.
+    Grib,
     /// Unknown format.
     Unknown,
 }
@@ -290,6 +293,13 @@ impl StacAsset {
         self.type_.as_ref().is_some_and(|t| {
             t.contains("zarr") || t.contains("application/vnd+zarr")
         })
+    }
+
+    /// Check if this asset is a GRIB2 file (by media type or extension).
+    pub fn is_grib(&self) -> bool {
+        self.type_.as_ref().is_some_and(|t| {
+            t.contains("grib") || t.contains("GRIB")
+        }) || self.href.ends_with(".grib2") || self.href.ends_with(".grb2")
     }
 
     /// Check if this asset is a COG/GeoTIFF (by media type or extension).

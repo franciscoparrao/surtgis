@@ -14,11 +14,12 @@ name = "surtgis"
 path = "src/main.rs"
 
 [features]
-default = ["cloud", "zarr", "netcdf"]
+default = ["cloud", "zarr", "netcdf", "grib"]
 gdal = ["surtgis-core/gdal"]
 cloud = ["dep:surtgis-cloud"]
 zarr = ["surtgis-cloud/zarr", "dep:chrono"]
 netcdf = ["surtgis-cloud/netcdf"]
+grib = ["surtgis-cloud/grib"]
 ml = ["dep:smelt-ml", "dep:csv"]
 
 [dependencies]

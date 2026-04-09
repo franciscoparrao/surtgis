@@ -39,6 +39,8 @@ pub mod zarr_auth;
 pub mod zarr_reader;
 #[cfg(feature = "netcdf")]
 pub mod netcdf_reader;
+#[cfg(feature = "grib")]
+pub mod grib_reader;
 
 pub use cloud_reader::{CloudRasterReader, RasterMeta};
 pub use cog_reader::{CogMetadata, CogReader, CogReaderOptions, OverviewInfo};
