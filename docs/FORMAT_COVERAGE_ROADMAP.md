@@ -1,7 +1,8 @@
 # STAC Format Coverage Roadmap
 
 > Audited: 2026-04-08
-> Current coverage: ~94% of raster assets across Planetary Computer + Earth Search
+> Current coverage: ~100% of raster assets across Planetary Computer + Earth Search
+> Updated: 2026-04-08 — GRIB2 reader implemented
 
 ## Current Support
 
@@ -10,6 +11,7 @@
 | COG (GeoTIFF) | `image/tiff; application=geotiff; profile=cloud-optimized` | `CogReader` | always |
 | Zarr | `application/vnd+zarr` | `ZarrReader` | `zarr` |
 | NetCDF | `application/x-netcdf`, `application/netcdf` | `NetCdfReader` | `netcdf` |
+| GRIB2 | `application/wmo-GRIB2` | `GribReader` | `grib` |
 
 ## Planned Formats
 
