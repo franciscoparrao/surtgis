@@ -68,7 +68,9 @@ pub fn write_geotiff_streaming<F>(
 where
     F: FnMut(usize, usize) -> Result<Array2<f64>>,
 {
-    let file = BufWriter::new(File::create(path)?);
+    // Write to temp file first, then atomic rename to prevent corrupt partial files
+    let tmp_path = path.with_extension("tmp");
+    let file = BufWriter::new(File::create(&tmp_path)?);
 
     let compression = if config.compress {
         Compression::Deflate(DeflateLevel::Balanced)
@@ -173,6 +175,8 @@ where
         .write_data(&all_data)
         .map_err(|e| Error::Other(format!("Cannot write image data: {}", e)))?;
 
+    // Atomic rename: only appears at final path if write completed successfully
+    std::fs::rename(&tmp_path, path)?;
     Ok(())
 }
 

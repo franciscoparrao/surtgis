@@ -158,12 +158,24 @@ pub fn nbr(nir: &Raster<f64>, swir: &Raster<f64>) -> Result<Raster<f64>> {
 // SAVI
 // ---------------------------------------------------------------------------
 
-/// Parameters for SAVI
-#[derive(Debug, Clone)]
+/// Parameters for SAVI (Huete, 1988).
+///
+/// Serializable for reproducibility tracking.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SaviParams {
-    /// Soil brightness correction factor (0 = high vegetation, 1 = low vegetation)
-    /// Default: 0.5
+    /// Soil brightness correction factor (0 = high vegetation, 1 = low vegetation).
+    /// Default: 0.5. Valid range: [0, 1].
     pub l_factor: f64,
+}
+
+impl SaviParams {
+    /// Validate parameters are in expected ranges.
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        if !(0.0..=1.0).contains(&self.l_factor) {
+            return Err(format!("l_factor={} out of range [0, 1]", self.l_factor));
+        }
+        Ok(())
+    }
 }
 
 impl Default for SaviParams {
@@ -220,8 +232,10 @@ pub fn savi(nir: &Raster<f64>, red: &Raster<f64>, params: SaviParams) -> Result<
 // EVI
 // ---------------------------------------------------------------------------
 
-/// Parameters for EVI
-#[derive(Debug, Clone)]
+/// Parameters for EVI (Huete et al., 2002).
+///
+/// Serializable for reproducibility tracking.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EviParams {
     /// Gain factor (default: 2.5)
     pub g: f64,
@@ -231,6 +245,15 @@ pub struct EviParams {
     pub c2: f64,
     /// Canopy background adjustment (default: 1.0)
     pub l: f64,
+}
+
+impl EviParams {
+    /// Validate parameters are in expected ranges.
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        if self.g <= 0.0 { return Err(format!("g={} must be positive", self.g)); }
+        if self.l <= 0.0 { return Err(format!("l={} must be positive", self.l)); }
+        Ok(())
+    }
 }
 
 impl Default for EviParams {

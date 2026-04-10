@@ -207,8 +207,14 @@ where
         .as_ref()
         .map(|o| o.compression.to_lowercase() != "none")
         .unwrap_or(false);
-    let file = File::create(path.as_ref())?;
-    encode_geotiff(raster, file, compress)
+
+    // Write to temp file first, then atomic rename to prevent corrupt partial files
+    let final_path = path.as_ref();
+    let tmp_path = final_path.with_extension("tmp");
+    let file = File::create(&tmp_path)?;
+    encode_geotiff(raster, file, compress)?;
+    std::fs::rename(&tmp_path, final_path)?;
+    Ok(())
 }
 
 /// Write a Raster to an in-memory GeoTIFF buffer

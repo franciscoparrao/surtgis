@@ -399,7 +399,29 @@ fn compute_imagery_indices(bands: &S2Bands, outdir: &Path, compress: bool) -> Re
     helpers::write_result(&ndsi, &outdir.join("ndsi.tif"), compress)
         .context("Failed to write NDSI")?;
 
-    println!("  10 spectral indices computed");
+    // Write index parameters metadata for reproducibility
+    let savi_params = SaviParams::default();
+    let evi_params = EviParams::default();
+    let metadata = serde_json::json!({
+        "surtgis_version": env!("CARGO_PKG_VERSION"),
+        "indices": {
+            "ndvi": { "formula": "(NIR - Red) / (NIR + Red)", "params": null },
+            "ndwi": { "formula": "(Green - NIR) / (Green + NIR)", "params": null },
+            "mndwi": { "formula": "(Green - SWIR1) / (Green + SWIR1)", "params": null },
+            "nbr": { "formula": "(NIR - SWIR2) / (NIR + SWIR2)", "params": null },
+            "savi": { "formula": "(1+L)*(NIR-Red)/(NIR+Red+L)", "params": savi_params },
+            "evi": { "formula": "G*(NIR-Red)/(NIR+C1*Red-C2*Blue+L)", "params": evi_params },
+            "bsi": { "formula": "((SWIR2+Red)-(NIR+Blue))/((SWIR2+Red)+(NIR+Blue))", "params": null },
+            "ndbi": { "formula": "(SWIR1-NIR)/(SWIR1+NIR)", "params": null },
+            "ndmi": { "formula": "(NIR-SWIR1)/(NIR+SWIR1)", "params": null },
+            "ndsi": { "formula": "(Green-SWIR1)/(Green+SWIR1)", "params": null },
+        }
+    });
+    let meta_path = outdir.join("indices_metadata.json");
+    std::fs::write(&meta_path, serde_json::to_string_pretty(&metadata)?)
+        .context("Failed to write indices metadata")?;
+
+    println!("  10 spectral indices computed (metadata: indices_metadata.json)");
     Ok(())
 }
 
