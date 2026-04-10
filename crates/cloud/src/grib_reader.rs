@@ -206,14 +206,23 @@ fn infer_grid_shape(latlons: &[(f64, f64)]) -> Result<(usize, usize)> {
 }
 
 fn build_geotransform(latlons: &[(f64, f64)], nrows: usize, ncols: usize) -> GeoTransform {
-    // Use the first row (first ncols points) and first column (every ncols-th point)
+    // Use step from first two adjacent points (avoids wrap-around issues)
     let lat_first = latlons[0].0;
     let lon_first = latlons[0].1;
-    let lon_last = latlons[ncols - 1].1;
-    let lat_last = latlons[(nrows - 1) * ncols].0;
 
-    let pw = if ncols > 1 { (lon_last - lon_first) / (ncols - 1) as f64 } else { 1.0 };
-    let ph = if nrows > 1 { (lat_last - lat_first) / (nrows - 1) as f64 } else { -1.0 };
+    // Pixel width: from first two points in the same row
+    let pw = if ncols > 1 {
+        latlons[1].1 - latlons[0].1
+    } else {
+        1.0
+    };
+
+    // Pixel height: from first two rows
+    let ph = if nrows > 1 {
+        latlons[ncols].0 - latlons[0].0
+    } else {
+        -1.0
+    };
 
     GeoTransform::new(lon_first - pw / 2.0, lat_first - ph / 2.0, pw, ph)
 }
