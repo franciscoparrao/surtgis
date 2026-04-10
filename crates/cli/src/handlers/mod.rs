@@ -8,6 +8,7 @@ pub mod info;
 pub mod clip;
 pub mod pipeline;
 pub mod temporal;
+pub mod interpolation;
 
 #[cfg(feature = "cloud")]
 pub mod cog;

@@ -123,6 +123,11 @@ pub enum Commands {
         #[command(subcommand)]
         action: PipelineCommands,
     },
+    /// Geostatistical interpolation: variogram, kriging, universal kriging, regression kriging
+    Interpolation {
+        #[command(subcommand)]
+        action: InterpolationCommands,
+    },
     /// Temporal analysis: trend, anomaly, phenology, statistics
     Temporal {
         #[command(subcommand)]
@@ -1338,6 +1343,97 @@ pub enum TemporalCommands {
         /// Smoothing window size (odd number, 0=none)
         #[arg(long, default_value = "5")]
         smooth: usize,
+    },
+}
+
+// ─── Interpolation subcommands ─────────────────────────────────────────
+
+#[derive(Subcommand)]
+pub enum InterpolationCommands {
+    /// Compute empirical variogram and fit a theoretical model
+    Variogram {
+        /// Input points (GeoJSON/Shapefile with a numeric attribute)
+        points: PathBuf,
+        /// Attribute name containing the values to analyze
+        #[arg(long)]
+        attribute: String,
+        /// Number of lag bins (default: 15)
+        #[arg(long, default_value = "15")]
+        bins: usize,
+        /// Maximum lag distance (auto-detect if omitted)
+        #[arg(long)]
+        max_lag: Option<f64>,
+        /// Output JSON file with variogram data and fitted model
+        output: PathBuf,
+    },
+    /// Ordinary Kriging interpolation from points to raster
+    Kriging {
+        /// Input points (GeoJSON/Shapefile)
+        points: PathBuf,
+        /// Attribute name with values
+        #[arg(long)]
+        attribute: String,
+        /// Reference raster for output grid (resolution, extent, CRS)
+        #[arg(long)]
+        reference: PathBuf,
+        /// Variogram model: spherical, exponential, gaussian, matern
+        #[arg(long, default_value = "spherical")]
+        model: String,
+        /// Variogram range (auto-fit if omitted)
+        #[arg(long)]
+        range: Option<f64>,
+        /// Variogram sill (auto-fit if omitted)
+        #[arg(long)]
+        sill: Option<f64>,
+        /// Variogram nugget (default: 0)
+        #[arg(long, default_value = "0")]
+        nugget: f64,
+        /// Maximum neighbors for kriging (default: 16)
+        #[arg(long, default_value = "16")]
+        max_neighbors: usize,
+        /// Output raster
+        output: PathBuf,
+    },
+    /// Universal Kriging with polynomial drift
+    UniversalKriging {
+        /// Input points (GeoJSON/Shapefile)
+        points: PathBuf,
+        /// Attribute name with values
+        #[arg(long)]
+        attribute: String,
+        /// Reference raster for output grid
+        #[arg(long)]
+        reference: PathBuf,
+        /// Drift order: linear or quadratic
+        #[arg(long, default_value = "linear")]
+        drift: String,
+        /// Variogram model: spherical, exponential, gaussian
+        #[arg(long, default_value = "spherical")]
+        model: String,
+        /// Maximum neighbors (default: 16)
+        #[arg(long, default_value = "16")]
+        max_neighbors: usize,
+        /// Output raster
+        output: PathBuf,
+    },
+    /// Regression-Kriging: ML prediction + kriging on residuals
+    RegressionKriging {
+        /// Input points (GeoJSON/Shapefile)
+        points: PathBuf,
+        /// Attribute name with target values
+        #[arg(long)]
+        attribute: String,
+        /// Directory with covariable rasters (features)
+        #[arg(long)]
+        features: PathBuf,
+        /// Reference raster for output grid
+        #[arg(long)]
+        reference: PathBuf,
+        /// Variogram model for residuals
+        #[arg(long, default_value = "spherical")]
+        model: String,
+        /// Output raster
+        output: PathBuf,
     },
 }
 
