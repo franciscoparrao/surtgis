@@ -20,7 +20,7 @@ netcdf = ["dep:netcdf", "dep:chrono"]
 grib = ["dep:grib"]
 
 [dependencies]
-surtgis-core = { version = "0.5.0", path = "../core", default-features = false }
+surtgis-core = { version = "0.6.0", path = "../core", default-features = false }
 thiserror.workspace = true
 serde.workspace = true
 ndarray.workspace = true

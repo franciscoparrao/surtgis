@@ -16,8 +16,8 @@ crate-type = ["cdylib", "rlib"]
 default = []
 
 [dependencies]
-surtgis-core = { version = "0.5.0", path = "../core", default-features = false }
-surtgis-algorithms = { version = "0.5.0", path = "../algorithms", default-features = false }
+surtgis-core = { version = "0.6.0", path = "../core", default-features = false }
+surtgis-algorithms = { version = "0.6.0", path = "../algorithms", default-features = false }
 wasm-bindgen.workspace = true
 js-sys.workspace = true
 serde.workspace = true

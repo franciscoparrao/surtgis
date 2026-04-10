@@ -70,6 +70,8 @@ pub fn estimate_decompressed_size(path: &Path) -> Result<u64> {
 /// - force_streaming is true, OR
 /// - file size > 500MB, OR
 /// - estimated decompressed size > max_memory_bytes
+///
+/// Prints an informative message when auto-switching to streaming.
 pub fn should_stream(
     file_path: &Path,
     max_memory_bytes: Option<u64>,
@@ -82,6 +84,12 @@ pub fn should_stream(
     // Check file size (500MB threshold)
     if let Ok(metadata) = std::fs::metadata(file_path) {
         if metadata.len() > 500_000_000 {
+            let size_mb = metadata.len() / 1_000_000;
+            eprintln!(
+                "Note: file is {}MB (>500MB), switching to streaming mode automatically. \
+                 Use --streaming to skip this check.",
+                size_mb
+            );
             return Ok(true);
         }
     }
@@ -90,6 +98,13 @@ pub fn should_stream(
     if let Some(limit) = max_memory_bytes {
         let est_size = estimate_decompressed_size(file_path)?;
         if est_size > limit {
+            let est_mb = est_size / 1_000_000;
+            let limit_mb = limit / 1_000_000;
+            eprintln!(
+                "Note: estimated raster size (~{}MB) exceeds --max-memory limit ({}MB), \
+                 switching to streaming mode automatically.",
+                est_mb, limit_mb
+            );
             return Ok(true);
         }
     }

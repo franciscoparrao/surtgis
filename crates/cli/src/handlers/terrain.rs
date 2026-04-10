@@ -80,8 +80,7 @@ pub fn handle(algorithm: TerrainCommands, compress: bool, streaming: bool, mem_l
                 }
             };
 
-            let use_streaming = streaming || std::fs::metadata(&input)
-                .map(|m| m.len() > 500_000_000).unwrap_or(false);
+            let use_streaming = memory::should_stream(&input, mem_limit_bytes, streaming)?;
 
             if use_streaming {
                 let algo = AspectStreaming { output_format: fmt };
@@ -109,8 +108,7 @@ pub fn handle(algorithm: TerrainCommands, compress: bool, streaming: bool, mem_l
             altitude,
             z_factor,
         } => {
-            let use_streaming = streaming || std::fs::metadata(&input)
-                .map(|m| m.len() > 500_000_000).unwrap_or(false);
+            let use_streaming = memory::should_stream(&input, mem_limit_bytes, streaming)?;
 
             if use_streaming {
                 let algo = HillshadeStreaming { azimuth, altitude, z_factor };
@@ -155,8 +153,7 @@ pub fn handle(algorithm: TerrainCommands, compress: bool, streaming: bool, mem_l
                     CurvatureType::General
                 }
             };
-            let use_streaming = streaming || std::fs::metadata(&input)
-                .map(|m| m.len() > 500_000_000).unwrap_or(false);
+            let use_streaming = memory::should_stream(&input, mem_limit_bytes, streaming)?;
 
             if use_streaming {
                 let algo = CurvatureStreaming {
@@ -194,8 +191,7 @@ pub fn handle(algorithm: TerrainCommands, compress: bool, streaming: bool, mem_l
             output,
             radius,
         } => {
-            let use_streaming = streaming || std::fs::metadata(&input)
-                .map(|m| m.len() > 500_000_000).unwrap_or(false);
+            let use_streaming = memory::should_stream(&input, mem_limit_bytes, streaming)?;
 
             if use_streaming {
                 let algo = TpiStreaming { radius };
@@ -222,8 +218,7 @@ pub fn handle(algorithm: TerrainCommands, compress: bool, streaming: bool, mem_l
             output,
             radius,
         } => {
-            let use_streaming = streaming || std::fs::metadata(&input)
-                .map(|m| m.len() > 500_000_000).unwrap_or(false);
+            let use_streaming = memory::should_stream(&input, mem_limit_bytes, streaming)?;
 
             if use_streaming {
                 let algo = TriStreaming { radius };
@@ -292,8 +287,7 @@ pub fn handle(algorithm: TerrainCommands, compress: bool, streaming: bool, mem_l
         }
 
         TerrainCommands::Northness { input, output } => {
-            let use_streaming = streaming || std::fs::metadata(&input)
-                .map(|m| m.len() > 500_000_000).unwrap_or(false);
+            let use_streaming = memory::should_stream(&input, mem_limit_bytes, streaming)?;
 
             if use_streaming {
                 let algo = NorthnessStreaming;
@@ -315,8 +309,7 @@ pub fn handle(algorithm: TerrainCommands, compress: bool, streaming: bool, mem_l
         }
 
         TerrainCommands::Eastness { input, output } => {
-            let use_streaming = streaming || std::fs::metadata(&input)
-                .map(|m| m.len() > 500_000_000).unwrap_or(false);
+            let use_streaming = memory::should_stream(&input, mem_limit_bytes, streaming)?;
 
             if use_streaming {
                 let algo = EastnessStreaming;
@@ -407,8 +400,7 @@ pub fn handle(algorithm: TerrainCommands, compress: bool, streaming: bool, mem_l
             output,
             radius,
         } => {
-            let use_streaming = streaming || std::fs::metadata(&input)
-                .map(|m| m.len() > 500_000_000).unwrap_or(false);
+            let use_streaming = memory::should_stream(&input, mem_limit_bytes, streaming)?;
 
             if use_streaming {
                 let algo = DevStreaming { radius };
@@ -435,8 +427,7 @@ pub fn handle(algorithm: TerrainCommands, compress: bool, streaming: bool, mem_l
             output,
             radius,
         } => {
-            let use_streaming = streaming || std::fs::metadata(&input)
-                .map(|m| m.len() > 500_000_000).unwrap_or(false);
+            let use_streaming = memory::should_stream(&input, mem_limit_bytes, streaming)?;
 
             if use_streaming {
                 let algo = VrmStreaming { radius };
@@ -505,8 +496,7 @@ pub fn handle(algorithm: TerrainCommands, compress: bool, streaming: bool, mem_l
             output,
             radius,
         } => {
-            let use_streaming = streaming || std::fs::metadata(&input)
-                .map(|m| m.len() > 500_000_000).unwrap_or(false);
+            let use_streaming = memory::should_stream(&input, mem_limit_bytes, streaming)?;
 
             if use_streaming {
                 let algo = ConvergenceStreaming { radius };
@@ -529,8 +519,7 @@ pub fn handle(algorithm: TerrainCommands, compress: bool, streaming: bool, mem_l
         }
 
         TerrainCommands::MultiHillshade { input, output } => {
-            let use_streaming = streaming || std::fs::metadata(&input)
-                .map(|m| m.len() > 500_000_000).unwrap_or(false);
+            let use_streaming = memory::should_stream(&input, mem_limit_bytes, streaming)?;
 
             if use_streaming {
                 let algo = MultiHillshadeStreaming::default();
