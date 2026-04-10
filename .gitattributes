@@ -1,0 +1,5 @@
+# GitHub language statistics: mark auxiliary files as non-language
+benchmarks/*.py linguist-vendored
+surtgis-demo/** linguist-vendored
+docs/**/*.py linguist-vendored
+*.ipynb linguist-vendored

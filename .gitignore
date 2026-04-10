@@ -45,6 +45,11 @@ docs/*_biblio.json
 docs/INTERPOLATION_QUICK_REFERENCE.md
 docs/cloud_cog_reader_plan.md
 
+# Python virtual environments
+.venv/
+venv/
+__pycache__/
+
 # Web demo build output
 /web/dist/
 /web/node_modules/
