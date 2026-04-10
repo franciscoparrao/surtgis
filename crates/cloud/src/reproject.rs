@@ -28,7 +28,13 @@ pub fn reproject_bbox_to_cog(bbox: &BBox, target_epsg: u32) -> BBox {
     }
 
     let Some((zone, north)) = parse_utm_epsg(target_epsg) else {
-        // Unsupported CRS — return original bbox and let CogReader handle it.
+        // Not UTM — try proj4rs for other projections (Lambert, Albers, etc.)
+        #[cfg(feature = "projections")]
+        {
+            if let Some(reprojected) = reproject_bbox_proj4rs(bbox, target_epsg) {
+                return reprojected;
+            }
+        }
         #[cfg(feature = "native")]
         eprintln!(
             "warning: unsupported target CRS EPSG:{}, skipping bbox reprojection",
@@ -324,6 +330,48 @@ pub fn reproject_raster_utm(
     Some(out)
 }
 
+// ── proj4rs fallback for non-UTM projections ────────────────────────────
+
+/// Reproject a WGS84 bbox to any EPSG CRS using proj4rs.
+///
+/// Supports Lambert Conformal Conic, Albers Equal Area, Mercator, Polar
+/// Stereographic, and any projection defined in the proj4rs CRS database.
+#[cfg(feature = "projections")]
+fn reproject_bbox_proj4rs(bbox: &BBox, target_epsg: u32) -> Option<BBox> {
+    use proj4rs::Proj;
+
+    let src = Proj::from_epsg_code(4326).ok()?;
+    let dst = Proj::from_epsg_code(target_epsg as u16).ok()?;
+
+    let corners = [
+        (bbox.min_x, bbox.min_y),
+        (bbox.min_x, bbox.max_y),
+        (bbox.max_x, bbox.min_y),
+        (bbox.max_x, bbox.max_y),
+    ];
+
+    let mut min_x = f64::MAX;
+    let mut min_y = f64::MAX;
+    let mut max_x = f64::MIN;
+    let mut max_y = f64::MIN;
+
+    for &(lon, lat) in &corners {
+        // proj4rs geographic CRS expects radians
+        let (in_x, in_y) = if src.is_latlong() {
+            (lon.to_radians(), lat.to_radians())
+        } else {
+            (lon, lat)
+        };
+        let (x, y) = proj4rs::adaptors::transform_xy(&src, &dst, in_x, in_y).ok()?;
+        min_x = min_x.min(x);
+        min_y = min_y.min(y);
+        max_x = max_x.max(x);
+        max_y = max_y.max(y);
+    }
+
+    Some(BBox::new(min_x, min_y, max_x, max_y))
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -411,9 +459,19 @@ mod tests {
     #[test]
     fn reproject_bbox_unknown_epsg_noop() {
         let bbox = BBox::new(-3.75, 40.40, -3.70, 40.45);
-        let result = reproject_bbox_to_cog(&bbox, 3857);
+        // Use a truly invalid EPSG code
+        let result = reproject_bbox_to_cog(&bbox, 99999);
         // Unknown → return original
         assert!((result.min_x - bbox.min_x).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    #[cfg(feature = "projections")]
+    fn reproject_bbox_web_mercator() {
+        let bbox = BBox::new(-3.75, 40.40, -3.70, 40.45);
+        let result = reproject_bbox_to_cog(&bbox, 3857);
+        // Web Mercator: coordinates in metres
+        assert!(result.min_x.abs() > 1000.0, "expected metres, got {}", result.min_x);
     }
 
     #[test]
@@ -437,6 +495,21 @@ mod tests {
             height > 4_000.0 && height < 7_000.0,
             "height ~5.5km, got {height}"
         );
+    }
+
+    #[test]
+    #[cfg(feature = "projections")]
+    fn reproject_bbox_lambert() {
+        // Test Lambert Conformal Conic (EPSG:2154 — France Lambert-93)
+        let bbox = BBox::new(2.0, 48.5, 3.0, 49.0); // Paris area
+        // Test proj4rs directly
+        let result = super::reproject_bbox_proj4rs(&bbox, 2154);
+        assert!(result.is_some(), "proj4rs returned None for EPSG:2154");
+        let r = result.unwrap();
+        eprintln!("Lambert-93 result: ({}, {}) to ({}, {})", r.min_x, r.min_y, r.max_x, r.max_y);
+        // Lambert-93 Paris: x ~600000-700000, y ~6800000-6900000
+        assert!(r.min_x > 500_000.0, "expected metres x > 500000, got {}", r.min_x);
+        assert!(r.min_y > 6_000_000.0, "expected metres y > 6M, got {}", r.min_y);
     }
 
     #[test]

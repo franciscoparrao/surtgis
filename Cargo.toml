@@ -65,6 +65,7 @@ futures = "0.3"
 zarrs = { version = "0.23", default-features = false, features = ["gzip", "blosc", "zstd", "async"] }
 netcdf = { version = "0.12", default-features = false }
 grib = { version = "0.15", default-features = false }
+proj4rs = { version = "0.1", features = ["crs-definitions", "geo-types"] }
 zarrs_object_store = { version = "0.6", features = ["azure", "http"] }
 zarrs_storage = { version = "0.4", features = ["async"] }
 object_store = { version = "0.13", default-features = false, features = ["azure", "http"] }
