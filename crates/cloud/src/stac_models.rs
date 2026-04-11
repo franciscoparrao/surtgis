@@ -31,6 +31,25 @@ pub struct StacSearchParams {
     pub token: Option<String>,
 }
 
+/// Normalise a datetime string to RFC 3339.
+///
+/// `"2024-06-01"` → `"2024-06-01T00:00:00Z"`
+/// `"2024-06-01/2024-06-30"` → `"2024-06-01T00:00:00Z/2024-06-30T00:00:00Z"`
+/// Already-qualified strings (containing `T`) are left unchanged.
+fn normalise_datetime(dt: &str) -> String {
+    dt.split('/')
+        .map(|part| {
+            let trimmed = part.trim();
+            if trimmed.contains('T') {
+                trimmed.to_string()
+            } else {
+                format!("{}T00:00:00Z", trimmed)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 impl StacSearchParams {
     /// Create empty search params.
     pub fn new() -> Self {
@@ -50,8 +69,11 @@ impl StacSearchParams {
     }
 
     /// Set datetime or datetime range (e.g. `"2024-06-01/2024-06-30"`).
+    ///
+    /// Bare dates (`YYYY-MM-DD`) are normalised to RFC 3339 (`…T00:00:00Z`)
+    /// so that strict STAC APIs (Earth Search) accept them.
     pub fn datetime(mut self, dt: &str) -> Self {
-        self.datetime = Some(dt.to_string());
+        self.datetime = Some(normalise_datetime(dt));
         self
     }
 
@@ -491,7 +513,7 @@ mod tests {
 
         let json = serde_json::to_value(&params).unwrap();
         assert_eq!(json["bbox"], serde_json::json!([-3.75, 40.38, -3.65, 40.45]));
-        assert_eq!(json["datetime"], "2024-06-01/2024-06-30");
+        assert_eq!(json["datetime"], "2024-06-01T00:00:00Z/2024-06-30T00:00:00Z");
         assert_eq!(json["collections"], serde_json::json!(["sentinel-2-l2a"]));
         assert_eq!(json["limit"], 5);
         assert!(json.get("token").is_none());

@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use surtgis_algorithms::imagery::{CloudMaskStrategy, S2SclMask, LandsatQaMask, NoCloudMask};
 use surtgis_cloud::blocking::{CogReaderBlocking, StacClientBlocking};
@@ -1002,11 +1002,21 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             // -- Phase 1: Resolve asset URLs for all items (no data download) --
             // For each date, collect (data_href, scl_href, epsg) tuples
             #[allow(dead_code)]
-            /// Per-tile info including its native EPSG for bbox reprojection
+            /// Per-tile info including its native EPSG for bbox reprojection.
+            ///
+            /// Stores both signed and original (unsigned) asset hrefs so that
+            /// SAS tokens can be re-signed during long-running strip processing
+            /// (PC tokens expire after ~1 hour).
             struct TileRef {
                 data_href: String,
                 scl_href: String,
+                /// Original unsigned data href (for re-signing expired tokens)
+                original_data_href: String,
+                /// Original unsigned mask href (for re-signing expired tokens)
+                original_scl_href: String,
                 epsg: Option<u32>,
+                /// When the SAS token was last signed
+                signed_at: Instant,
             }
 
             struct SceneInfo {
@@ -1032,11 +1042,13 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                     let tile_epsg = item.epsg();
                     let item_id = item.id.as_str();
 
+                    // Resolve data asset: keep both original href (for re-signing) and signed href
                     let data_result = match resolve_asset_key(item, &asset) {
                         Some((resolved_key, a)) => {
                             debug!("item={} asset='{}' → '{}' ✓", item_id, asset, resolved_key);
+                            let original = a.href.clone();
                             match client.sign_asset_href(&a.href, item.collection.as_deref().unwrap_or("")) {
-                                Ok(h) => Some(h),
+                                Ok(h) => Some((h, original)),
                                 Err(e) => {
                                     sign_failures += 1;
                                     debug!("item={} asset='{}' sign FAILED: {}", item_id, asset, e);
@@ -1055,12 +1067,14 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                         }
                     };
 
+                    // Resolve mask asset: keep both original and signed hrefs
                     let scl_result = mask_asset_name.and_then(|mask_name| {
                         match resolve_asset_key(item, mask_name) {
                             Some((resolved_key, a)) => {
                                 debug!("item={} mask='{}' → '{}' ✓", item_id, mask_name, resolved_key);
+                                let original = a.href.clone();
                                 match client.sign_asset_href(&a.href, item.collection.as_deref().unwrap_or("")) {
-                                    Ok(h) => Some(h),
+                                    Ok(h) => Some((h, original)),
                                     Err(_) => { sign_failures += 1; None }
                                 }
                             }
@@ -1076,14 +1090,18 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                     });
 
                     // Data asset is required; mask asset is optional.
-                    if let Some(dh) = data_result {
+                    if let Some((dh, orig_dh)) = data_result {
                         if scene_epsg.is_none() {
                             scene_epsg = tile_epsg;
                         }
+                        let (sh, orig_sh) = scl_result.unwrap_or_default();
                         tiles.push(TileRef {
                             data_href: dh,
-                            scl_href: scl_result.unwrap_or_default(),
+                            scl_href: sh,
+                            original_data_href: orig_dh,
+                            original_scl_href: orig_sh,
                             epsg: tile_epsg,
+                            signed_at: Instant::now(),
                         });
                     }
                 }
@@ -1194,7 +1212,12 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                 rows_per_strip: strip_rows as u32,
             };
 
-            let scenes_ref = &scenes;
+            // Re-signing threshold: refresh SAS tokens if older than 30 minutes.
+            // PC tokens are valid ~1 hour; we refresh at 30 min to stay safe.
+            const TOKEN_REFRESH_THRESHOLD: Duration = Duration::from_secs(30 * 60);
+
+            let scenes_ref = &mut scenes;
+            let client_ref = &client;
             // Get cloud masking strategy from collection profile
             let cloud_mask_strategy = match &profile {
                 CollectionProfile::Sentinel2L2A {
@@ -1250,8 +1273,32 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                         r
                     };
 
-                    for scene in scenes_ref {
+                    for scene in scenes_ref.iter_mut() {
                         let is_first_strip = current_strip == 0;
+
+                        // Re-sign SAS tokens if they are near expiry.
+                        // PC tokens are valid ~1h; we refresh at 30min to avoid
+                        // silent HTTP 403 failures during long composites.
+                        let token_age = scene.tiles.first()
+                            .map(|t| t.signed_at.elapsed());
+                        if token_age.map(|age| age > TOKEN_REFRESH_THRESHOLD).unwrap_or(false) {
+                            let age_secs = token_age.unwrap().as_secs();
+                            let mut refreshed = 0usize;
+                            for tile in &mut scene.tiles {
+                                if let Ok(h) = client_ref.sign_asset_href(&tile.original_data_href, "") {
+                                    tile.data_href = h;
+                                }
+                                if !tile.original_scl_href.is_empty() {
+                                    if let Ok(h) = client_ref.sign_asset_href(&tile.original_scl_href, "") {
+                                        tile.scl_href = h;
+                                    }
+                                }
+                                tile.signed_at = Instant::now();
+                                refreshed += 1;
+                            }
+                            eprintln!("    [token] Re-signed {} tiles for {} (tokens were {}s old)",
+                                refreshed, scene.date, age_secs);
+                        }
 
                         // Expand strip_bb slightly to ensure it covers COG tiles
                         // that may be offset from the DEM grid by a few pixels.
@@ -2297,7 +2344,14 @@ pub fn fetch_stac_band(
 /// Read a COG tile (data band) at native resolution into a raster.
 /// Applies nodata filtering (DN=0 → NaN). Used by parallel tile download.
 fn read_cog_tile(href: &str, bb: &BBox, log_meta: bool) -> Option<surtgis_core::Raster<f64>> {
-    let mut dr = CogReaderBlocking::open(href, CogReaderOptions::default()).ok()?;
+    let mut dr = match CogReaderBlocking::open(href, CogReaderOptions::default()) {
+        Ok(r) => r,
+        Err(e) => {
+            let short_href = &href[..80.min(href.len())];
+            eprintln!("    [cog] open FAILED: {} (href={}...)", e, short_href);
+            return None;
+        }
+    };
     let tile_meta = dr.metadata();
     if log_meta {
         eprintln!("    COG meta: {}x{} bps={} sf={} compression={} px={:.0}m",
@@ -2306,7 +2360,13 @@ fn read_cog_tile(href: &str, bb: &BBox, log_meta: bool) -> Option<surtgis_core::
             tile_meta.compression,
             tile_meta.geo_transform.pixel_width.abs());
     }
-    let mut r: surtgis_core::Raster<f64> = dr.read_bbox(bb, None).ok()?;
+    let mut r: surtgis_core::Raster<f64> = match dr.read_bbox(bb, None) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("    [cog] read_bbox FAILED: {}", e);
+            return None;
+        }
+    };
     let nodata_val = tile_meta.nodata.unwrap_or(0.0);
     for val in r.data_mut().iter_mut() {
         if *val == nodata_val || *val == 0.0 {
@@ -2318,8 +2378,21 @@ fn read_cog_tile(href: &str, bb: &BBox, log_meta: bool) -> Option<surtgis_core::
 
 /// Read a COG tile (mask/SCL band) at native resolution without nodata filtering.
 fn read_cog_tile_raw(href: &str, bb: &BBox) -> Option<surtgis_core::Raster<f64>> {
-    let mut sr = CogReaderBlocking::open(href, CogReaderOptions::default()).ok()?;
-    sr.read_bbox(bb, None).ok()
+    let mut sr = match CogReaderBlocking::open(href, CogReaderOptions::default()) {
+        Ok(r) => r,
+        Err(e) => {
+            let short_href = &href[..80.min(href.len())];
+            eprintln!("    [cog] mask open FAILED: {} (href={}...)", e, short_href);
+            return None;
+        }
+    };
+    match sr.read_bbox(bb, None) {
+        Ok(r) => Some(r),
+        Err(e) => {
+            eprintln!("    [cog] mask read_bbox FAILED: {}", e);
+            None
+        }
+    }
 }
 
 /// Handle `surtgis stac time-series`: download one composite per temporal interval.
