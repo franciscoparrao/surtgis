@@ -1,12 +1,14 @@
 //! Handler for pipeline workflows.
 
 use anyhow::{Context, Result};
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Instant;
 
 use surtgis_algorithms::imagery::{
-    bsi, evi, EviParams, mndwi, nbr, ndbi, ndmi, ndsi, ndvi, ndwi, savi, SaviParams,
+    bsi, evi, evi2, EviParams, gndvi, mndwi, msavi, nbr, ndbi, ndmi, ndre, ndsi, ndvi, ndwi,
+    ngrdi, savi, SaviParams,
 };
 use surtgis_algorithms::terrain::{
     accumulation_zones, landform_classification, surface_area_ratio, valley_depth, wind_exposure,
@@ -52,6 +54,17 @@ pub fn handle(
                 mem_limit_bytes,
             )
         }
+        #[cfg(feature = "cloud")]
+        PipelineCommands::Temporal {
+            catalog, bbox, collection, datetime, interval,
+            index, analysis, method, threshold, smooth, stats,
+            max_scenes, outdir, keep_intermediates, align_to,
+        } => handle_temporal_pipeline(
+            &catalog, &bbox, &collection, &datetime, &interval,
+            &index, &analysis, &method, threshold, smooth, &stats,
+            max_scenes, &outdir, keep_intermediates, align_to.as_ref(),
+            compress,
+        ),
     }
 }
 
@@ -726,4 +739,495 @@ fn count_tif_files(dir: &Path) -> usize {
                 .count()
         })
         .unwrap_or(0)
+}
+
+// ─── Temporal pipeline ────────────────────────────────────────────────
+
+/// Return the band names required by a given spectral index.
+/// Names are resolved by `fetch_stac_band()` via `find_band_by_name()`.
+#[cfg(feature = "cloud")]
+fn required_bands(index: &str) -> Result<Vec<&'static str>> {
+    match index.to_lowercase().as_str() {
+        "ndvi" | "savi" | "evi2" | "msavi" => Ok(vec!["nir", "red"]),
+        "ndwi" | "gndvi" => Ok(vec!["green", "nir"]),
+        "mndwi" | "ndsi" => Ok(vec!["green", "swir16"]),
+        "nbr" => Ok(vec!["nir", "swir22"]),
+        "evi" => Ok(vec!["nir", "red", "blue"]),
+        "bsi" => Ok(vec!["swir22", "red", "nir", "blue"]),
+        "ndbi" | "ndmi" => Ok(vec!["nir", "swir16"]),
+        "ngrdi" => Ok(vec!["green", "red"]),
+        "ndre" => Ok(vec!["nir", "rededge"]),
+        _ => anyhow::bail!(
+            "Unknown index: '{}'. Supported: ndvi, ndwi, mndwi, nbr, savi, evi, evi2, \
+             bsi, ndbi, ndmi, ndsi, gndvi, ngrdi, ndre, msavi",
+            index
+        ),
+    }
+}
+
+/// Compute a spectral index from a map of band_name → Raster.
+#[cfg(feature = "cloud")]
+fn compute_index(index: &str, bands: &HashMap<&str, Raster<f64>>) -> Result<Raster<f64>> {
+    match index.to_lowercase().as_str() {
+        "ndvi" => ndvi(&bands["nir"], &bands["red"]).context("NDVI computation failed"),
+        "ndwi" => ndwi(&bands["green"], &bands["nir"]).context("NDWI computation failed"),
+        "mndwi" => mndwi(&bands["green"], &bands["swir16"]).context("MNDWI computation failed"),
+        "nbr" => nbr(&bands["nir"], &bands["swir22"]).context("NBR computation failed"),
+        "savi" => savi(&bands["nir"], &bands["red"], SaviParams { l_factor: 0.5 })
+            .context("SAVI computation failed"),
+        "evi" => evi(&bands["nir"], &bands["red"], &bands["blue"], EviParams::default())
+            .context("EVI computation failed"),
+        "evi2" => evi2(&bands["nir"], &bands["red"]).context("EVI2 computation failed"),
+        "bsi" => bsi(&bands["swir22"], &bands["red"], &bands["nir"], &bands["blue"])
+            .context("BSI computation failed"),
+        "ndbi" => ndbi(&bands["nir"], &bands["swir16"]).context("NDBI computation failed"),
+        "ndmi" => ndmi(&bands["nir"], &bands["swir16"]).context("NDMI computation failed"),
+        "ndsi" => ndsi(&bands["green"], &bands["swir16"]).context("NDSI computation failed"),
+        "gndvi" => gndvi(&bands["nir"], &bands["green"]).context("GNDVI computation failed"),
+        "ngrdi" => ngrdi(&bands["green"], &bands["red"]).context("NGRDI computation failed"),
+        "ndre" => ndre(&bands["nir"], &bands["rededge"]).context("NDRE computation failed"),
+        "msavi" => msavi(&bands["nir"], &bands["red"]).context("MSAVI computation failed"),
+        _ => anyhow::bail!("Unknown index: '{}'", index),
+    }
+}
+
+/// Convert a SimpleDate to fractional year (e.g. 2023.5 for ~July 2023).
+#[cfg(feature = "cloud")]
+fn date_to_fractional_year(d: &super::stac::SimpleDate) -> f64 {
+    use super::stac::days_in_month;
+    let days_in_year: f64 = if d.year % 4 == 0 && (d.year % 100 != 0 || d.year % 400 == 0) {
+        366.0
+    } else {
+        365.0
+    };
+    let mut doy = d.day as f64;
+    for m in 1..d.month {
+        doy += days_in_month(d.year, m) as f64;
+    }
+    d.year as f64 + (doy - 1.0) / days_in_year
+}
+
+/// End-to-end temporal pipeline: STAC download → spectral index → temporal analysis.
+#[cfg(feature = "cloud")]
+#[allow(clippy::too_many_arguments)]
+fn handle_temporal_pipeline(
+    catalog: &str,
+    bbox: &str,
+    collection: &str,
+    datetime: &str,
+    interval: &str,
+    index: &str,
+    analysis: &str,
+    method: &str,
+    threshold: f64,
+    smooth: usize,
+    stats_str: &str,
+    max_scenes: usize,
+    outdir: &Path,
+    keep_intermediates: bool,
+    align_to: Option<&PathBuf>,
+    compress: bool,
+) -> Result<()> {
+    use surtgis_algorithms::temporal::{
+        linear_trend, mann_kendall, temporal_percentile, temporal_stats,
+        vegetation_phenology, PhenologyParams,
+    };
+    use super::stac::{
+        parse_date, format_date, split_date_range, SimpleDate,
+    };
+
+    let total_start = Instant::now();
+
+    // ── 1. Validate inputs ──────────────────────────────────────────
+    let analyses: Vec<&str> = analysis.split(',').map(|s| s.trim()).collect();
+    for a in &analyses {
+        match *a {
+            "stats" | "trend" | "phenology" => {}
+            _ => anyhow::bail!(
+                "Unknown analysis type: '{}'. Supported: stats, trend, phenology",
+                a
+            ),
+        }
+    }
+
+    let band_names = required_bands(index)?;
+
+    let parts: Vec<&str> = datetime.split('/').collect();
+    if parts.len() != 2 {
+        anyhow::bail!("datetime must be a range: YYYY-MM-DD/YYYY-MM-DD");
+    }
+    let start_date = parse_date(parts[0])?;
+    let end_date = parse_date(parts[1])?;
+    let intervals = split_date_range(&start_date, &end_date, interval)?;
+
+    let min_intervals = if analyses.contains(&"phenology") { 6 } else { 2 };
+
+    // ── 2. Print header ─────────────────────────────────────────────
+    println!("SurtGIS Temporal Pipeline");
+    println!("{}", "=".repeat(50));
+    println!("  Catalog:    {}", catalog);
+    println!("  Collection: {}", collection);
+    println!("  BBox:       {}", bbox);
+    println!("  Period:     {} to {}", parts[0], parts[1]);
+    println!("  Interval:   {} ({} windows)", interval, intervals.len());
+    println!("  Index:      {} (bands: {})", index.to_uppercase(), band_names.join(", "));
+    println!("  Analysis:   {}", analyses.join(", "));
+    if analyses.contains(&"trend") {
+        println!("  Method:     {}", method);
+    }
+    println!("  Output:     {}", outdir.display());
+    println!();
+
+    // ── 3. Load reference (optional) ────────────────────────────────
+    let explicit_ref = match align_to {
+        Some(path) => {
+            let r: Raster<f64> = surtgis_core::io::read_geotiff(path, None)
+                .context("Failed to read align-to reference")?;
+            println!("  Align to: {} ({}x{})", path.display(), r.cols(), r.rows());
+            Some(r)
+        }
+        None => None,
+    };
+
+    // ── 4. Per-interval loop (memory-efficient) ─────────────────────
+    std::fs::create_dir_all(outdir)?;
+    if keep_intermediates {
+        std::fs::create_dir_all(outdir.join("intermediates"))?;
+    }
+
+    let mut index_stack: Vec<Raster<f64>> = Vec::with_capacity(intervals.len());
+    let mut dates: Vec<SimpleDate> = Vec::with_capacity(intervals.len());
+    let mut failed: Vec<serde_json::Value> = Vec::new();
+    let mut auto_ref: Option<Raster<f64>> = None;
+
+    for (i, (win_start, win_end)) in intervals.iter().enumerate() {
+        let win_dt = format!("{}/{}", format_date(win_start), format_date(win_end));
+        let label = format_date(win_start);
+        println!("[{}/{}] {} ...", i + 1, intervals.len(), label);
+
+        // Download all required bands in parallel
+        let mut handles = Vec::with_capacity(band_names.len());
+        for &band_name in &band_names {
+            let cat = catalog.to_string();
+            let bb = bbox.to_string();
+            let col = collection.to_string();
+            let bn = band_name.to_string();
+            let dt = win_dt.clone();
+            let ms = max_scenes;
+            handles.push(std::thread::spawn(move || {
+                let result = super::stac::fetch_stac_band(&cat, &bb, &col, &bn, &dt, ms, None);
+                (bn, result)
+            }));
+        }
+
+        let mut bands_map: HashMap<&str, Raster<f64>> = HashMap::new();
+        let mut band_failed = false;
+        for handle in handles {
+            let (bn, result) = handle.join().map_err(|_| anyhow::anyhow!("band download thread panicked"))?;
+            match result {
+                Ok(raster) => {
+                    // Match band name back to static str
+                    let key = band_names.iter().find(|&&k| k == bn.as_str()).unwrap();
+                    bands_map.insert(key, raster);
+                }
+                Err(e) => {
+                    eprintln!("  Skipped: {} band failed: {}", bn, e);
+                    failed.push(serde_json::json!({
+                        "index": i,
+                        "date_start": label,
+                        "error": format!("{} band failed: {}", bn, e),
+                    }));
+                    band_failed = true;
+                    break;
+                }
+            }
+        }
+
+        if band_failed {
+            continue;
+        }
+
+        // Align bands to reference if needed
+        let reference = explicit_ref.as_ref().or(auto_ref.as_ref());
+        if let Some(refr) = reference {
+            for (_, raster) in bands_map.iter_mut() {
+                if let Ok(aligned) = surtgis_core::resample_to_grid(
+                    raster,
+                    refr,
+                    surtgis_core::ResampleMethod::Bilinear,
+                ) {
+                    *raster = aligned;
+                }
+            }
+        }
+
+        // Compute spectral index
+        let index_raster = match compute_index(index, &bands_map) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("  Skipped: index computation failed: {}", e);
+                failed.push(serde_json::json!({
+                    "index": i,
+                    "date_start": label,
+                    "error": format!("index computation failed: {}", e),
+                }));
+                continue;
+            }
+        };
+        drop(bands_map); // free raw band memory
+
+        // Set auto-reference from first successful raster
+        if auto_ref.is_none() && explicit_ref.is_none() {
+            auto_ref = Some(index_raster.clone());
+        }
+
+        let (rows, cols) = index_raster.shape();
+        let valid = index_raster.data().iter().filter(|v| v.is_finite()).count();
+        let total = rows * cols;
+        let pct = if total > 0 { valid as f64 / total as f64 * 100.0 } else { 0.0 };
+        println!("  {} ({}x{}, {:.1}% valid)", index.to_uppercase(), cols, rows, pct);
+
+        // Write intermediate if requested
+        if keep_intermediates {
+            let filename = format!("{}_{}.tif", index, label);
+            let path = outdir.join("intermediates").join(&filename);
+            helpers::write_result(&index_raster, &path, compress)?;
+        }
+
+        dates.push(*win_start);
+        index_stack.push(index_raster);
+    }
+
+    println!();
+    println!("{}/{} intervals successful ({} failed)",
+        index_stack.len(), intervals.len(), failed.len());
+
+    // ── 5. Validate stack ───────────────────────────────────────────
+    if index_stack.len() < min_intervals {
+        anyhow::bail!(
+            "Need at least {} successful intervals (got {}). \
+             Check bbox, collection, date range, and cloud cover.",
+            min_intervals,
+            index_stack.len()
+        );
+    }
+
+    // Write intermediates metadata
+    if keep_intermediates {
+        let int_meta = serde_json::json!({
+            "index": index,
+            "total_intervals": intervals.len(),
+            "successful": index_stack.len(),
+            "rasters": dates.iter().enumerate().map(|(i, d)| {
+                serde_json::json!({
+                    "index": i,
+                    "date": format_date(d),
+                    "file": format!("{}_{}.tif", index, format_date(d)),
+                })
+            }).collect::<Vec<_>>(),
+        });
+        let meta_path = outdir.join("intermediates").join("time_series.json");
+        std::fs::write(&meta_path, serde_json::to_string_pretty(&int_meta)?)?;
+    }
+
+    // ── 6. Compute times ────────────────────────────────────────────
+    let fractional_years: Vec<f64> = dates.iter().map(|d| date_to_fractional_year(d)).collect();
+
+    let refs: Vec<&Raster<f64>> = index_stack.iter().collect();
+
+    // ── 7. Run temporal analyses ────────────────────────────────────
+    let mut output_summary: Vec<(&str, String, usize)> = Vec::new();
+
+    for &analysis_type in &analyses {
+        match analysis_type {
+            "stats" => {
+                let stats_dir = outdir.join("stats");
+                std::fs::create_dir_all(&stats_dir)?;
+                println!("\nComputing temporal statistics...");
+
+                let requested: Vec<&str> = stats_str.split(',').map(|s| s.trim()).collect();
+                let has_basic = requested.iter().any(|s| {
+                    matches!(*s, "mean" | "std" | "min" | "max" | "count")
+                });
+
+                let mut count = 0usize;
+                if has_basic {
+                    let ts = temporal_stats(&refs).context("temporal_stats failed")?;
+                    for stat_name in &requested {
+                        let (raster, name) = match *stat_name {
+                            "mean" => (Some(&ts.mean), "mean"),
+                            "std" => (Some(&ts.std), "std"),
+                            "min" => (Some(&ts.min), "min"),
+                            "max" => (Some(&ts.max), "max"),
+                            "count" => (Some(&ts.count), "count"),
+                            _ => (None, *stat_name),
+                        };
+                        if let Some(r) = raster {
+                            let path = stats_dir.join(format!("{}.tif", name));
+                            helpers::write_result(r, &path, compress)?;
+                            println!("  {} -> {}", name, path.display());
+                            count += 1;
+                        }
+                    }
+                }
+
+                // Handle percentiles
+                for stat_name in &requested {
+                    if stat_name.starts_with('p') {
+                        if let Ok(pct) = stat_name[1..].parse::<f64>() {
+                            let r = temporal_percentile(&refs, pct)
+                                .with_context(|| format!("percentile {} failed", pct))?;
+                            let path = stats_dir.join(format!("p{}.tif", pct as u32));
+                            helpers::write_result(&r, &path, compress)?;
+                            println!("  p{} -> {}", pct as u32, path.display());
+                            count += 1;
+                        }
+                    }
+                }
+
+                output_summary.push(("Stats", stats_dir.display().to_string(), count));
+            }
+
+            "trend" => {
+                let trend_dir = outdir.join("trend");
+                std::fs::create_dir_all(&trend_dir)?;
+
+                match method {
+                    "linear" | "ols" => {
+                        println!("\nComputing linear trend (OLS)...");
+                        let result = linear_trend(&refs, Some(&fractional_years))
+                            .context("linear_trend failed")?;
+
+                        helpers::write_result(&result.slope, &trend_dir.join("slope.tif"), compress)?;
+                        helpers::write_result(&result.intercept, &trend_dir.join("intercept.tif"), compress)?;
+                        helpers::write_result(&result.r_squared, &trend_dir.join("r_squared.tif"), compress)?;
+                        helpers::write_result(&result.p_value, &trend_dir.join("p_value.tif"), compress)?;
+
+                        println!("  slope     -> {}", trend_dir.join("slope.tif").display());
+                        println!("  intercept -> {}", trend_dir.join("intercept.tif").display());
+                        println!("  R2        -> {}", trend_dir.join("r_squared.tif").display());
+                        println!("  p-value   -> {}", trend_dir.join("p_value.tif").display());
+
+                        output_summary.push(("Trend (linear)", trend_dir.display().to_string(), 4));
+                    }
+                    "mann-kendall" | "mk" => {
+                        println!("\nComputing Mann-Kendall trend test...");
+                        let result = mann_kendall(&refs).context("mann_kendall failed")?;
+
+                        helpers::write_result(&result.tau, &trend_dir.join("tau.tif"), compress)?;
+                        helpers::write_result(&result.p_value, &trend_dir.join("p_value.tif"), compress)?;
+                        helpers::write_result(&result.trend, &trend_dir.join("trend.tif"), compress)?;
+                        helpers::write_result(&result.sens_slope, &trend_dir.join("sens_slope.tif"), compress)?;
+
+                        println!("  tau        -> {}", trend_dir.join("tau.tif").display());
+                        println!("  p-value    -> {}", trend_dir.join("p_value.tif").display());
+                        println!("  trend      -> {} (1=up, 0=none, -1=down)", trend_dir.join("trend.tif").display());
+                        println!("  Sen's slope -> {}", trend_dir.join("sens_slope.tif").display());
+
+                        output_summary.push(("Trend (Mann-Kendall)", trend_dir.display().to_string(), 4));
+                    }
+                    _ => anyhow::bail!(
+                        "Unknown trend method: '{}'. Use: linear, mann-kendall",
+                        method
+                    ),
+                }
+            }
+
+            "phenology" => {
+                let pheno_dir = outdir.join("phenology");
+                std::fs::create_dir_all(&pheno_dir)?;
+                println!("\nExtracting vegetation phenology ({} time steps)...", refs.len());
+
+                // Compute DOYs for phenology (fractional-year scale avoids wrap-around)
+                let doys: Vec<f64> = dates.iter().map(|d| {
+                    date_to_fractional_year(d) * 365.25
+                }).collect();
+
+                let params = PhenologyParams {
+                    threshold,
+                    smooth_window: if smooth % 2 == 1 { smooth } else { smooth + 1 },
+                };
+
+                let result = vegetation_phenology(&refs, Some(&doys), &params)
+                    .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+                let outputs = [
+                    (&result.sos, "sos", "Start of Season"),
+                    (&result.eos, "eos", "End of Season"),
+                    (&result.peak, "peak", "Peak value"),
+                    (&result.peak_time, "peak_time", "Peak time"),
+                    (&result.amplitude, "amplitude", "Amplitude"),
+                    (&result.season_length, "season_length", "Season length"),
+                ];
+
+                for (raster, name, desc) in &outputs {
+                    let path = pheno_dir.join(format!("{}.tif", name));
+                    helpers::write_result(raster, &path, compress)?;
+                    println!("  {} ({}) -> {}", name, desc, path.display());
+                }
+
+                output_summary.push(("Phenology", pheno_dir.display().to_string(), 6));
+            }
+
+            _ => {} // already validated above
+        }
+    }
+
+    // ── 8. Write metadata JSON ──────────────────────────────────────
+    let elapsed = total_start.elapsed();
+    let pipeline_meta = serde_json::json!({
+        "surtgis_version": env!("CARGO_PKG_VERSION"),
+        "pipeline": "temporal",
+        "parameters": {
+            "catalog": catalog,
+            "collection": collection,
+            "bbox": bbox,
+            "datetime": datetime,
+            "interval": interval,
+            "index": index,
+            "index_bands": band_names,
+            "analysis": analyses,
+            "trend_method": if analyses.contains(&"trend") { Some(method) } else { None },
+            "max_scenes": max_scenes,
+        },
+        "results": {
+            "total_intervals": intervals.len(),
+            "successful_intervals": index_stack.len(),
+            "failed_intervals": failed,
+            "time_steps": dates.iter().enumerate().map(|(i, d)| {
+                serde_json::json!({
+                    "index": i,
+                    "date": format_date(d),
+                    "fractional_year": fractional_years[i],
+                })
+            }).collect::<Vec<_>>(),
+        },
+        "outputs": output_summary.iter().map(|(name, dir, count)| {
+            serde_json::json!({
+                "analysis": name,
+                "directory": dir,
+                "files": count,
+            })
+        }).collect::<Vec<_>>(),
+        "processing_time_seconds": elapsed.as_secs_f64(),
+    });
+    let meta_path = outdir.join("pipeline_temporal.json");
+    std::fs::write(&meta_path, serde_json::to_string_pretty(&pipeline_meta)?)?;
+
+    // ── 9. Print summary ────────────────────────────────────────────
+    println!();
+    println!("{}", "=".repeat(50));
+    println!("PIPELINE COMPLETE ({:.1?})", elapsed);
+    println!("{}", "=".repeat(50));
+    for (name, dir, count) in &output_summary {
+        println!("  {} -> {} ({} files)", name, dir, count);
+    }
+    if keep_intermediates {
+        println!("  Intermediates -> {}/intermediates/ ({} files)",
+            outdir.display(), index_stack.len());
+    }
+    println!("  Metadata -> {}", meta_path.display());
+    println!();
+
+    Ok(())
 }

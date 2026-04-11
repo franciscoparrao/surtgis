@@ -1266,6 +1266,55 @@ pub enum PipelineCommands {
         #[arg(long)]
         compress: Option<bool>,
     },
+    /// End-to-end temporal analysis: STAC download → spectral index → trend/stats/phenology
+    #[cfg(feature = "cloud")]
+    Temporal {
+        /// STAC catalog: "pc" (Planetary Computer), "es" (Earth Search), or full URL
+        #[arg(long, default_value = "es")]
+        catalog: String,
+        /// Bounding box: west,south,east,north
+        #[arg(long)]
+        bbox: String,
+        /// Collection (e.g. "sentinel-2-l2a", "landsat-c2-l2")
+        #[arg(long)]
+        collection: String,
+        /// Date range: "YYYY-MM-DD/YYYY-MM-DD"
+        #[arg(long)]
+        datetime: String,
+        /// Temporal interval: "monthly", "biweekly", "weekly", "quarterly", "yearly", or custom days
+        #[arg(long, default_value = "monthly")]
+        interval: String,
+        /// Spectral index to compute: ndvi, ndwi, mndwi, nbr, savi, evi, evi2, bsi, ndbi, ndmi, ndsi, gndvi, ngrdi, ndre, msavi
+        #[arg(long)]
+        index: String,
+        /// Analysis type (comma-separated): stats, trend, phenology
+        #[arg(long)]
+        analysis: String,
+        /// Trend method (when analysis includes "trend"): linear, mann-kendall
+        #[arg(long, default_value = "linear")]
+        method: String,
+        /// Phenology threshold for SOS/EOS (0-1)
+        #[arg(long, default_value = "0.5")]
+        threshold: f64,
+        /// Phenology smoothing window (odd number)
+        #[arg(long, default_value = "5")]
+        smooth: usize,
+        /// Statistics to compute (when analysis includes "stats")
+        #[arg(long, default_value = "mean,std,min,max,count")]
+        stats: String,
+        /// Maximum scenes per interval window
+        #[arg(long, default_value = "8")]
+        max_scenes: usize,
+        /// Output directory
+        #[arg(long)]
+        outdir: PathBuf,
+        /// Keep per-interval index rasters as intermediate outputs
+        #[arg(long)]
+        keep_intermediates: bool,
+        /// Align output to this reference raster's grid (e.g., a DEM)
+        #[arg(long)]
+        align_to: Option<PathBuf>,
+    },
 }
 
 // ─── Temporal analysis subcommands ──────────────────────────────────────

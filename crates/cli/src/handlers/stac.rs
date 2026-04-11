@@ -2463,13 +2463,13 @@ fn handle_time_series(
 
 /// Simple date struct for interval splitting.
 #[derive(Clone, Copy)]
-struct SimpleDate {
-    year: i32,
-    month: u32,
-    day: u32,
+pub(crate) struct SimpleDate {
+    pub(crate) year: i32,
+    pub(crate) month: u32,
+    pub(crate) day: u32,
 }
 
-fn parse_date(s: &str) -> Result<SimpleDate> {
+pub(crate) fn parse_date(s: &str) -> Result<SimpleDate> {
     // Strip time component if present: "2023-01-01T00:00:00Z" → "2023-01-01"
     let date_str = s.trim().split('T').next().unwrap_or(s.trim());
     let parts: Vec<&str> = date_str.split('-').collect();
@@ -2483,11 +2483,11 @@ fn parse_date(s: &str) -> Result<SimpleDate> {
     })
 }
 
-fn format_date(d: &SimpleDate) -> String {
+pub(crate) fn format_date(d: &SimpleDate) -> String {
     format!("{:04}-{:02}-{:02}", d.year, d.month, d.day)
 }
 
-fn days_in_month(year: i32, month: u32) -> u32 {
+pub(crate) fn days_in_month(year: i32, month: u32) -> u32 {
     match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
@@ -2496,7 +2496,7 @@ fn days_in_month(year: i32, month: u32) -> u32 {
     }
 }
 
-fn advance_days(d: &SimpleDate, n: u32) -> SimpleDate {
+pub(crate) fn advance_days(d: &SimpleDate, n: u32) -> SimpleDate {
     let mut y = d.year;
     let mut m = d.month;
     let mut day = d.day + n;
@@ -2510,7 +2510,7 @@ fn advance_days(d: &SimpleDate, n: u32) -> SimpleDate {
     SimpleDate { year: y, month: m, day }
 }
 
-fn advance_months(d: &SimpleDate, n: u32) -> SimpleDate {
+pub(crate) fn advance_months(d: &SimpleDate, n: u32) -> SimpleDate {
     let mut m = d.month + n;
     let mut y = d.year;
     while m > 12 { m -= 12; y += 1; }
@@ -2518,11 +2518,11 @@ fn advance_months(d: &SimpleDate, n: u32) -> SimpleDate {
     SimpleDate { year: y, month: m, day }
 }
 
-fn date_le(a: &SimpleDate, b: &SimpleDate) -> bool {
+pub(crate) fn date_le(a: &SimpleDate, b: &SimpleDate) -> bool {
     (a.year, a.month, a.day) <= (b.year, b.month, b.day)
 }
 
-fn split_date_range(start: &SimpleDate, end: &SimpleDate, interval: &str) -> Result<Vec<(SimpleDate, SimpleDate)>> {
+pub(crate) fn split_date_range(start: &SimpleDate, end: &SimpleDate, interval: &str) -> Result<Vec<(SimpleDate, SimpleDate)>> {
     let mut windows = Vec::new();
     let mut cursor = *start;
 
