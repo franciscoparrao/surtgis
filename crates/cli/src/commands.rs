@@ -123,6 +123,11 @@ pub enum Commands {
         #[command(subcommand)]
         action: PipelineCommands,
     },
+    /// Vector geoprocessing: intersection, union, difference, dissolve, buffer
+    Vector {
+        #[command(subcommand)]
+        action: VectorCommands,
+    },
     /// Geostatistical interpolation: variogram, kriging, universal kriging, regression kriging
     Interpolation {
         #[command(subcommand)]
@@ -1343,6 +1348,59 @@ pub enum TemporalCommands {
         /// Smoothing window size (odd number, 0=none)
         #[arg(long, default_value = "5")]
         smooth: usize,
+    },
+}
+
+// ─── Vector subcommands ────────────────────────────────────────────────
+
+#[derive(Subcommand)]
+pub enum VectorCommands {
+    /// Geometric intersection of two vector layers (A ∩ B)
+    Intersection {
+        /// Input layer A (GeoJSON/Shapefile/GeoPackage)
+        input_a: PathBuf,
+        /// Input layer B (overlay)
+        input_b: PathBuf,
+        /// Output file
+        output: PathBuf,
+    },
+    /// Geometric union of two vector layers (A ∪ B)
+    Union {
+        input_a: PathBuf,
+        input_b: PathBuf,
+        output: PathBuf,
+    },
+    /// Geometric difference: features of A not covered by B (A - B)
+    Difference {
+        input_a: PathBuf,
+        input_b: PathBuf,
+        output: PathBuf,
+    },
+    /// Symmetric difference: areas in A or B but not both (A ⊕ B)
+    SymDifference {
+        input_a: PathBuf,
+        input_b: PathBuf,
+        output: PathBuf,
+    },
+    /// Dissolve all features into a single geometry
+    Dissolve {
+        /// Input layer
+        input: PathBuf,
+        /// Output file
+        output: PathBuf,
+    },
+    /// Buffer features by a distance
+    Buffer {
+        /// Input layer
+        input: PathBuf,
+        /// Buffer distance (in CRS units)
+        #[arg(long)]
+        distance: f64,
+        /// Number of segments per quarter circle (default: 8)
+        #[arg(long, default_value = "8")]
+        segments: usize,
+        /// Output file
+        output: PathBuf,
     },
 }
 

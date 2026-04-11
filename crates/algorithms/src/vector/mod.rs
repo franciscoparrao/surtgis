@@ -13,6 +13,7 @@
 mod buffer;
 mod clip;
 mod measurements;
+pub mod overlay;
 mod simplify;
 mod spatial;
 
@@ -21,3 +22,4 @@ pub use clip::{clip_by_rect, ClipRect};
 pub use measurements::{area, length, perimeter};
 pub use simplify::{simplify_dp, simplify_vw, SimplifyParams};
 pub use spatial::{bounding_box, centroid, convex_hull, dissolve, BoundingBox};
+pub use overlay::{intersection, union, difference, symmetric_difference, dissolve as dissolve_overlay};

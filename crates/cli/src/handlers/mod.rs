@@ -9,6 +9,7 @@ pub mod clip;
 pub mod pipeline;
 pub mod temporal;
 pub mod interpolation;
+pub mod vector;
 
 #[cfg(feature = "cloud")]
 pub mod cog;
