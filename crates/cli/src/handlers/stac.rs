@@ -1184,6 +1184,7 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             let num_strips = (out_rows + strip_rows - 1) / strip_rows;
             let n_scenes = scenes.len();
 
+            let out_epsg_for_tiles = out_crs.as_ref().and_then(|c| c.epsg());
             let config = surtgis_core::io::StripWriterConfig {
                 rows: out_rows,
                 cols: out_cols,
@@ -1269,10 +1270,22 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                             Option<surtgis_core::Raster<f64>>,
                         )> = {
                             let mut handles = Vec::with_capacity(scene.tiles.len());
+                            let out_epsg = out_epsg_for_tiles;
                             for (tile_idx, tile) in scene.tiles.iter().enumerate() {
                                 let data_href = tile.data_href.clone();
                                 let scl_href = tile.scl_href.clone();
-                                let bb = tile_bb;
+                                // Reproject strip bbox to tile's CRS if different from output CRS.
+                                // Without this, tiles in a different UTM zone silently return empty
+                                // (BBoxOutside) because the strip bbox doesn't intersect their extent.
+                                let bb = if let (Some(tile_epsg), Some(out_e)) = (tile.epsg, out_epsg) {
+                                    if tile_epsg != out_e {
+                                        reproject_bbox_between_crs(&tile_bb, out_e, tile_epsg)
+                                    } else {
+                                        tile_bb
+                                    }
+                                } else {
+                                    tile_bb
+                                };
                                 let first = is_first_strip && tile_idx == 0;
                                 handles.push(std::thread::spawn(move || {
                                     let data = read_cog_tile(&data_href, &bb, first);
@@ -2602,6 +2615,47 @@ mod tests {
 }
 
 // ─── Zarr time step parsing ─────────────────────────────────────────
+
+/// Reproject a bbox from one CRS to another using proj4rs.
+/// Falls back to identity if proj4rs is unavailable or CRS unknown.
+fn reproject_bbox_between_crs(bbox: &surtgis_cloud::BBox, from_epsg: u32, to_epsg: u32) -> surtgis_cloud::BBox {
+    #[cfg(feature = "projections")]
+    {
+        use proj4rs::Proj;
+        if let (Ok(src), Ok(dst)) = (
+            Proj::from_epsg_code(from_epsg as u16),
+            Proj::from_epsg_code(to_epsg as u16),
+        ) {
+            let corners = [
+                (bbox.min_x, bbox.min_y),
+                (bbox.min_x, bbox.max_y),
+                (bbox.max_x, bbox.min_y),
+                (bbox.max_x, bbox.max_y),
+            ];
+            let mut min_x = f64::MAX;
+            let mut min_y = f64::MAX;
+            let mut max_x = f64::MIN;
+            let mut max_y = f64::MIN;
+
+            for &(x, y) in &corners {
+                // proj4rs: projected CRS → projected CRS goes through internal geographic step
+                if let Ok((rx, ry)) = proj4rs::adaptors::transform_xy(&src, &dst, x, y) {
+                    min_x = min_x.min(rx);
+                    min_y = min_y.min(ry);
+                    max_x = max_x.max(rx);
+                    max_y = max_y.max(ry);
+                }
+            }
+
+            if min_x < max_x && min_y < max_y {
+                return surtgis_cloud::BBox::new(min_x, min_y, max_x, max_y);
+            }
+        }
+    }
+    // Fallback: try native UTM reprojection (WGS84 intermediary)
+    let wgs84 = surtgis_cloud::reproject::reproject_bbox_from_utm(bbox, from_epsg);
+    surtgis_cloud::reproject::reproject_bbox_to_cog(&wgs84, to_epsg)
+}
 
 #[cfg(feature = "zarr")]
 fn parse_time_step(s: &str) -> Result<surtgis_cloud::TimeReduction> {

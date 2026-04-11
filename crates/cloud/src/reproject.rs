@@ -330,6 +330,42 @@ pub fn reproject_raster_utm(
     Some(out)
 }
 
+/// Reproject a bbox FROM a UTM CRS back to WGS84.
+///
+/// Inverse of [`reproject_bbox_to_cog`]. Returns the original bbox if CRS
+/// is already WGS84 or is unsupported.
+pub fn reproject_bbox_from_utm(bbox: &BBox, source_epsg: u32) -> BBox {
+    if is_wgs84(source_epsg) {
+        return *bbox;
+    }
+
+    let Some((zone, north)) = parse_utm_epsg(source_epsg) else {
+        return *bbox;
+    };
+
+    let corners = [
+        (bbox.min_x, bbox.min_y),
+        (bbox.min_x, bbox.max_y),
+        (bbox.max_x, bbox.min_y),
+        (bbox.max_x, bbox.max_y),
+    ];
+
+    let mut min_lon = f64::MAX;
+    let mut min_lat = f64::MAX;
+    let mut max_lon = f64::MIN;
+    let mut max_lat = f64::MIN;
+
+    for &(e, n) in &corners {
+        let (lon, lat) = utm_to_wgs84(e, n, zone, north);
+        min_lon = min_lon.min(lon);
+        min_lat = min_lat.min(lat);
+        max_lon = max_lon.max(lon);
+        max_lat = max_lat.max(lat);
+    }
+
+    BBox::new(min_lon, min_lat, max_lon, max_lat)
+}
+
 // ── proj4rs fallback for non-UTM projections ────────────────────────────
 
 /// Reproject a WGS84 bbox to any EPSG CRS using proj4rs.

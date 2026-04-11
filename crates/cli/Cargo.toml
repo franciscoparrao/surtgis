@@ -20,7 +20,7 @@ cloud = ["dep:surtgis-cloud"]
 zarr = ["surtgis-cloud/zarr", "dep:chrono"]
 netcdf = ["surtgis-cloud/netcdf"]
 grib = ["surtgis-cloud/grib"]
-projections = ["surtgis-cloud/projections"]
+projections = ["surtgis-cloud/projections", "dep:proj4rs"]
 ml = ["dep:smelt-ml", "dep:csv"]
 
 [dependencies]
@@ -41,4 +41,5 @@ ndarray.workspace = true
 smelt-ml = { workspace = true, optional = true }
 csv = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
+proj4rs = { workspace = true, optional = true }
 geo.workspace = true
