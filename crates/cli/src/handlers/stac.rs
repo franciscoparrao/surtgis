@@ -861,36 +861,14 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             output,
         } => {
             // Multi-band support: --asset "red,nir,swir16,blue"
+            // Single pass: shared STAC search + shared mask download.
             let assets: Vec<&str> = asset.split(',').map(|s| s.trim()).collect();
             if assets.len() > 1 {
-                println!("Multi-band composite: {} bands", assets.len());
-                let total_start = Instant::now();
-                for (band_idx, band) in assets.iter().enumerate() {
-                    let band_output = output.with_file_name(format!(
-                        "{}_{}.tif",
-                        output.file_stem().unwrap_or_default().to_string_lossy(),
-                        band
-                    ));
-                    println!("\n[{}/{}] Band: {} → {}", band_idx + 1, assets.len(), band, band_output.display());
-
-                    // Re-run composite for each band (SAS cache reuses tokens)
-                    let band_cmd = StacCommands::Composite {
-                        catalog: catalog.clone(),
-                        bbox: bbox.clone(),
-                        collection: collection.clone(),
-                        asset: band.to_string(),
-                        datetime: datetime.clone(),
-                        max_scenes,
-                        scl_asset: _scl_asset.clone(),
-                        scl_keep: _scl_keep.clone(),
-                        align_to: align_to.clone(),
-                        output: band_output,
-                    };
-                    // Recursive call for single-band
-                    handle(band_cmd, compress)?;
-                }
-                println!("\nAll {} bands complete in {:.1?}", assets.len(), total_start.elapsed());
-                return Ok(());
+                return handle_multiband_composite(
+                    &catalog, &bbox, &collection, &assets,
+                    &datetime, max_scenes,
+                    align_to.as_ref(), &output, compress,
+                );
             }
 
             // Get collection profile (determines cloud masking strategy)
@@ -2339,6 +2317,575 @@ pub fn fetch_stac_band(
 
     eprintln!("  ✓ {} band ready for indices", asset);
     Ok(final_result)
+}
+
+// ---------------------------------------------------------------------------
+// Multi-band composite: single-pass, shared STAC search + shared mask
+// ---------------------------------------------------------------------------
+
+/// Handle multi-band `stac composite` in a single pass.
+///
+/// Shares the STAC search and SCL mask download across all bands, avoiding
+/// redundant HTTP requests. For N bands, this is ~N× faster than running
+/// N independent single-band composites.
+fn handle_multiband_composite(
+    catalog: &str,
+    bbox_str: &str,
+    collection: &str,
+    band_names: &[&str],
+    datetime: &str,
+    max_scenes: usize,
+    align_to: Option<&std::path::PathBuf>,
+    output: &std::path::Path,
+    compress: bool,
+) -> Result<()> {
+    use surtgis_cloud::reproject;
+
+    let n_bands = band_names.len();
+    println!("Multi-band composite: {} bands [{}]", n_bands, band_names.join(", "));
+
+    let profile = CollectionProfile::from_collection_name(collection)?;
+    let mask_asset_name = profile.mask_asset_name();
+    eprintln!("📷 Collection: {} (mask: {:?})", profile.description(), mask_asset_name);
+
+    let cat = StacCatalog::from_str_or_url(catalog);
+    let bb = parse_bbox(bbox_str)?;
+
+    // Estimate search limit
+    let bbox_width_deg = (bb.max_x - bb.min_x).abs();
+    let bbox_height_deg = (bb.max_y - bb.min_y).abs();
+    let tiles_x = ((bbox_width_deg * 111.0) / 60.0).ceil().max(1.0) as usize;
+    let tiles_y = ((bbox_height_deg * 111.0) / 60.0).ceil().max(1.0) as usize;
+    let est_tiles = tiles_x * tiles_y;
+    let search_limit = (max_scenes * est_tiles * 2).max(100).min(1000) as u32;
+
+    let params = StacSearchParams::new()
+        .bbox(bb.min_x, bb.min_y, bb.max_x, bb.max_y)
+        .datetime(datetime)
+        .collections(&[collection])
+        .limit(search_limit);
+
+    let pb = spinner("Searching STAC catalog...");
+    let client_opts = StacClientOptions {
+        max_items: search_limit as usize,
+        ..StacClientOptions::default()
+    };
+    let client = StacClientBlocking::new(cat, client_opts)
+        .context("Failed to create STAC client")?;
+    let items = client.search_all(&params).context("STAC search failed")?;
+    pb.finish_and_clear();
+
+    if items.is_empty() {
+        anyhow::bail!("No items found matching the search criteria");
+    }
+
+    // Group items by date
+    let mut by_date: BTreeMap<String, Vec<&StacItem>> = BTreeMap::new();
+    for item in &items {
+        let date = item.properties.datetime.as_deref().unwrap_or("")
+            .get(..10).unwrap_or("unknown").to_string();
+        by_date.entry(date).or_default().push(item);
+    }
+    let dates: Vec<String> = by_date.keys().take(max_scenes).cloned().collect();
+
+    println!("Found {} items across {} dates (using {} dates)",
+        items.len(), by_date.len(), dates.len());
+
+    let start = Instant::now();
+
+    // -- Phase 1b: Resolve N band assets + 1 mask per item --
+
+    /// Per-tile: holds N band hrefs (signed + original) plus shared mask href.
+    struct MbTileRef {
+        /// (signed_href, original_href) per band, same order as band_names
+        band_hrefs: Vec<(String, String)>,
+        scl_href: String,
+        original_scl_href: String,
+        epsg: Option<u32>,
+        signed_at: Instant,
+    }
+
+    struct MbScene {
+        date: String,
+        tiles: Vec<MbTileRef>,
+        epsg: Option<u32>,
+    }
+
+    let mut scenes: Vec<MbScene> = Vec::new();
+
+    for date in &dates {
+        let group = &by_date[date];
+        let mut tiles = Vec::new();
+        let mut scene_epsg = None;
+
+        for item in group {
+            let tile_epsg = item.epsg();
+
+            // Resolve all band assets for this item
+            let mut resolved_bands: Vec<(String, String)> = Vec::with_capacity(n_bands);
+            let mut all_bands_ok = true;
+
+            for &band_name in band_names {
+                match crate::streaming::resolve_asset_key(item, band_name) {
+                    Some((_resolved_key, a)) => {
+                        let original = a.href.clone();
+                        match client.sign_asset_href(&a.href, item.collection.as_deref().unwrap_or("")) {
+                            Ok(signed) => resolved_bands.push((signed, original)),
+                            Err(_) => { all_bands_ok = false; break; }
+                        }
+                    }
+                    None => { all_bands_ok = false; break; }
+                }
+            }
+
+            if !all_bands_ok {
+                continue; // Skip item if ANY band is missing (spatial consistency)
+            }
+
+            // Resolve mask asset (shared across all bands)
+            let (scl_signed, scl_original) = mask_asset_name
+                .and_then(|mask_name| {
+                    crate::streaming::resolve_asset_key(item, mask_name)
+                        .and_then(|(_, a)| {
+                            let orig = a.href.clone();
+                            client.sign_asset_href(&a.href, item.collection.as_deref().unwrap_or(""))
+                                .ok()
+                                .map(|signed| (signed, orig))
+                        })
+                })
+                .unwrap_or_default();
+
+            if scene_epsg.is_none() {
+                scene_epsg = tile_epsg;
+            }
+            tiles.push(MbTileRef {
+                band_hrefs: resolved_bands,
+                scl_href: scl_signed,
+                original_scl_href: scl_original,
+                epsg: tile_epsg,
+                signed_at: Instant::now(),
+            });
+        }
+
+        if !tiles.is_empty() {
+            scenes.push(MbScene { date: date.clone(), tiles, epsg: scene_epsg });
+        }
+    }
+
+    if scenes.is_empty() {
+        anyhow::bail!("No valid scenes found (all bands must be present in each item)");
+    }
+
+    eprintln!("  Resolved {} scenes with {} bands each", scenes.len(), n_bands);
+
+    // -- Phase 2: Determine output grid --
+    let first_href = &scenes[0].tiles[0].band_hrefs[0].0;
+    let opts = CogReaderOptions::default();
+    let probe_reader = CogReaderBlocking::open(first_href, opts)
+        .context("Failed to probe first COG")?;
+    let probe_meta = probe_reader.metadata();
+
+    let (out_cols, out_rows, out_transform, out_crs, cog_bb);
+
+    if let Some(ref align_path) = align_to {
+        let reference: surtgis_core::Raster<f64> =
+            surtgis_core::io::read_geotiff(align_path, None)
+                .context("Failed to read alignment reference raster")?;
+        let rgt = reference.transform();
+        let (rr, rc) = reference.shape();
+        out_rows = rr;
+        out_cols = rc;
+        out_transform = *rgt;
+        out_crs = reference.crs().cloned();
+        let min_x = rgt.origin_x;
+        let max_y = rgt.origin_y;
+        let max_x = min_x + rc as f64 * rgt.pixel_width;
+        let min_y = max_y + rr as f64 * rgt.pixel_height;
+        cog_bb = BBox::new(min_x, min_y, max_x, max_y);
+        eprintln!("  Using reference grid from --align-to: {}x{} px=({:.1},{:.1})",
+            rc, rr, rgt.pixel_width, rgt.pixel_height);
+    } else {
+        let cog_bb_computed = if let Some(epsg) = scenes[0].epsg {
+            if !reproject::is_wgs84(epsg) {
+                reproject::reproject_bbox_to_cog(&bb, epsg)
+            } else { bb }
+        } else { bb };
+        cog_bb = cog_bb_computed;
+        let pixel_width = probe_meta.geo_transform.pixel_width.abs();
+        let pixel_height = probe_meta.geo_transform.pixel_height.abs();
+        out_cols = ((cog_bb.max_x - cog_bb.min_x) / pixel_width).round() as usize;
+        out_rows = ((cog_bb.max_y - cog_bb.min_y) / pixel_height).round() as usize;
+        out_transform = surtgis_core::GeoTransform::new(
+            cog_bb.min_x, cog_bb.max_y, pixel_width, -pixel_height,
+        );
+        out_crs = scenes[0].epsg.map(surtgis_core::CRS::from_epsg);
+    }
+
+    println!("Output grid: {} x {} ({:.1}M cells), {} dates, {} bands",
+        out_cols, out_rows, (out_cols * out_rows) as f64 / 1e6,
+        scenes.len(), n_bands);
+
+    // -- Phase 3: Strip-by-strip processing --
+    let strip_rows = 512usize;
+    let num_strips = (out_rows + strip_rows - 1) / strip_rows;
+    let n_scenes = scenes.len();
+    let out_epsg_for_tiles = out_crs.as_ref().and_then(|c| c.epsg());
+    let total_cells = out_rows * out_cols;
+
+    const TOKEN_REFRESH_THRESHOLD: Duration = Duration::from_secs(30 * 60);
+
+    let cloud_mask_strategy: Arc<dyn CloudMaskStrategy> = match &profile {
+        CollectionProfile::Sentinel2L2A { cloud_mask_strategy } => cloud_mask_strategy.clone(),
+        CollectionProfile::LandsatC2L2 { cloud_mask_strategy } => cloud_mask_strategy.clone(),
+        CollectionProfile::Sentinel1RTC => Arc::new(NoCloudMask),
+    };
+
+    // Pre-allocate output buffers (one per band)
+    let mut band_buffers: Vec<Vec<f64>> = (0..n_bands)
+        .map(|_| vec![f64::NAN; total_cells])
+        .collect();
+
+    for strip_idx in 0..num_strips {
+        let row_start = strip_idx * strip_rows;
+        let row_end = (row_start + strip_rows).min(out_rows);
+        let actual_rows = row_end - row_start;
+
+        let ph = out_transform.pixel_height.abs();
+        let strip_min_y = cog_bb.max_y - (row_end as f64 * ph);
+        let strip_max_y = cog_bb.max_y - (row_start as f64 * ph);
+        let strip_bb = BBox::new(cog_bb.min_x, strip_min_y, cog_bb.max_x, strip_max_y);
+
+        print!("\r  Strip {}/{} (rows {}-{}, {} bands)...",
+            strip_idx + 1, num_strips, row_start, row_end, n_bands);
+
+        let strip_ref = {
+            let mut r = surtgis_core::Raster::<f64>::new(actual_rows, out_cols);
+            r.set_transform(surtgis_core::GeoTransform::new(
+                strip_bb.min_x, strip_bb.max_y,
+                out_transform.pixel_width, out_transform.pixel_height,
+            ));
+            r
+        };
+
+        // Per-band scene strips accumulator
+        let mut band_scene_strips: Vec<Vec<ndarray::Array2<f64>>> = (0..n_bands)
+            .map(|_| Vec::with_capacity(n_scenes))
+            .collect();
+
+        for scene in &mut scenes {
+            let is_first_strip = strip_idx == 0;
+
+            // Re-sign SAS tokens if near expiry
+            let token_age = scene.tiles.first().map(|t| t.signed_at.elapsed());
+            if token_age.map(|age| age > TOKEN_REFRESH_THRESHOLD).unwrap_or(false) {
+                let age_secs = token_age.unwrap().as_secs();
+                for tile in &mut scene.tiles {
+                    for (signed, original) in &mut tile.band_hrefs {
+                        if let Ok(h) = client.sign_asset_href(original, "") {
+                            *signed = h;
+                        }
+                    }
+                    if !tile.original_scl_href.is_empty() {
+                        if let Ok(h) = client.sign_asset_href(&tile.original_scl_href, "") {
+                            tile.scl_href = h;
+                        }
+                    }
+                    tile.signed_at = Instant::now();
+                }
+                eprintln!("    [token] Re-signed {} tiles for {} ({}s old)",
+                    scene.tiles.len(), scene.date, age_secs);
+            }
+
+            // Expand strip bbox for padding
+            let pad = 100.0;
+            let tile_bb = BBox::new(
+                strip_bb.min_x - pad, strip_bb.min_y - pad,
+                strip_bb.max_x + pad, strip_bb.max_y + pad,
+            );
+
+            // Download all tiles in parallel.
+            // Each thread downloads: mask COG (1×) + data COGs (N× sequential).
+            // Returns: (Vec<Option<Raster>> per band, Option<Raster> mask)
+            let tile_results: Vec<(Vec<Option<surtgis_core::Raster<f64>>>, Option<surtgis_core::Raster<f64>>)> = {
+                let mut handles = Vec::with_capacity(scene.tiles.len());
+                let out_epsg = out_epsg_for_tiles;
+
+                for tile in scene.tiles.iter() {
+                    let band_hrefs: Vec<String> = tile.band_hrefs.iter()
+                        .map(|(signed, _)| signed.clone())
+                        .collect();
+                    let scl_href = tile.scl_href.clone();
+                    let tile_epsg = tile.epsg;
+
+                    let bb = if let (Some(tepsg), Some(out_e)) = (tile_epsg, out_epsg) {
+                        if tepsg != out_e {
+                            reproject_bbox_between_crs(&tile_bb, out_e, tepsg)
+                        } else { tile_bb }
+                    } else { tile_bb };
+
+                    let first = is_first_strip;
+                    handles.push(std::thread::spawn(move || {
+                        // Download all band COGs sequentially for this tile
+                        let band_data: Vec<Option<surtgis_core::Raster<f64>>> = band_hrefs.iter()
+                            .enumerate()
+                            .map(|(i, href)| read_cog_tile(href, &bb, first && i == 0))
+                            .collect();
+                        // Download mask COG once
+                        let mask = if scl_href.is_empty() {
+                            None
+                        } else {
+                            read_cog_tile_raw(&scl_href, &bb)
+                        };
+                        (band_data, mask)
+                    }));
+                }
+                handles.into_iter().map(|h| h.join().unwrap_or_else(|_| (vec![None; n_bands], None))).collect()
+            };
+
+            // Separate successful tiles per band + mask.
+            // If ANY band fails for a tile, skip that tile for ALL bands (spatial consistency).
+            let mut per_band_tiles: Vec<Vec<surtgis_core::Raster<f64>>> = (0..n_bands)
+                .map(|_| Vec::new())
+                .collect();
+            let mut scl_tiles: Vec<surtgis_core::Raster<f64>> = Vec::new();
+            let mut tiles_ok = 0usize;
+
+            for (band_data, mask_opt) in tile_results {
+                // Check if all bands succeeded for this tile
+                let all_ok = band_data.iter().all(|r| r.is_some());
+                if !all_ok {
+                    continue; // Skip tile for all bands
+                }
+                for (bi, raster_opt) in band_data.into_iter().enumerate() {
+                    per_band_tiles[bi].push(raster_opt.unwrap());
+                }
+                if let Some(m) = mask_opt {
+                    scl_tiles.push(m);
+                }
+                tiles_ok += 1;
+            }
+
+            if is_first_strip {
+                eprintln!("  ℹ {}: {} tiles OK ({} bands/tile), mask={}",
+                    scene.date, tiles_ok, n_bands, scl_tiles.len());
+            }
+
+            if tiles_ok == 0 {
+                continue;
+            }
+
+            // Unify CRS across tiles (per band + mask)
+            fn unify_crs(tiles: &mut Vec<surtgis_core::Raster<f64>>) {
+                if tiles.len() <= 1 { return; }
+                let target_epsg = tiles[0].crs().and_then(|c| c.epsg());
+                if let Some(target) = target_epsg {
+                    for i in 1..tiles.len() {
+                        if let Some(src_epsg) = tiles[i].crs().and_then(|c| c.epsg()) {
+                            if src_epsg != target {
+                                if let Some(reprojected) = surtgis_cloud::reproject::reproject_raster_utm(
+                                    &tiles[i], src_epsg, target,
+                                ) {
+                                    tiles[i] = reprojected;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            for band_tiles in &mut per_band_tiles {
+                unify_crs(band_tiles);
+            }
+            if !scl_tiles.is_empty() {
+                unify_crs(&mut scl_tiles);
+            }
+
+            // Mosaic mask tiles ONCE (shared across all bands)
+            let scl_m = if scl_tiles.is_empty() {
+                None
+            } else if scl_tiles.len() == 1 {
+                Some(scl_tiles.into_iter().next().unwrap())
+            } else {
+                let refs: Vec<&surtgis_core::Raster<f64>> = scl_tiles.iter().collect();
+                surtgis_core::mosaic(&refs, None).ok()
+            };
+
+            // Process each band: mosaic → cloud mask → resample → accumulate
+            for bi in 0..n_bands {
+                let data_tiles = std::mem::take(&mut per_band_tiles[bi]);
+                if data_tiles.is_empty() { continue; }
+
+                let data_m = if data_tiles.len() == 1 {
+                    data_tiles.into_iter().next().unwrap()
+                } else {
+                    let refs: Vec<&surtgis_core::Raster<f64>> = data_tiles.iter().collect();
+                    match surtgis_core::mosaic(&refs, None) {
+                        Ok(m) => m,
+                        Err(_) => continue,
+                    }
+                };
+
+                // Apply shared cloud mask
+                let clean = if let Some(ref scl) = scl_m {
+                    cloud_mask_strategy.mask(&data_m, scl).unwrap_or(data_m)
+                } else {
+                    data_m
+                };
+
+                // Resample to output grid
+                let resampled = surtgis_core::resample_to_grid(
+                    &clean, &strip_ref,
+                    surtgis_core::ResampleMethod::Bilinear,
+                ).unwrap_or(clean);
+
+                let valid = resampled.data().iter().filter(|v| v.is_finite()).count();
+                if valid > 0 {
+                    band_scene_strips[bi].push(resampled.data().to_owned());
+                }
+            }
+        } // end for scene
+
+        // Compute median + fill for each band, copy into output buffer
+        for bi in 0..n_bands {
+            let scene_strips = &band_scene_strips[bi];
+            let mut strip_out = ndarray::Array2::<f64>::from_elem(
+                (actual_rows, out_cols), f64::NAN,
+            );
+
+            if !scene_strips.is_empty() {
+                let n = scene_strips.len();
+
+                // Sort by coverage for greedy fill
+                let mut coverage: Vec<(usize, usize)> = scene_strips.iter().enumerate()
+                    .map(|(i, s)| (i, s.iter().filter(|v| v.is_finite()).count()))
+                    .collect();
+                coverage.sort_by(|a, b| b.1.cmp(&a.1));
+
+                // Median
+                for r in 0..actual_rows {
+                    for c in 0..out_cols {
+                        let mut values: Vec<f64> = Vec::with_capacity(n);
+                        for strip in scene_strips {
+                            if r < strip.nrows() && c < strip.ncols() {
+                                let v = strip[[r, c]];
+                                if v.is_finite() { values.push(v); }
+                            }
+                        }
+                        if !values.is_empty() {
+                            values.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+                            let mid = values.len() / 2;
+                            strip_out[[r, c]] = if values.len() % 2 == 0 {
+                                (values[mid - 1] + values[mid]) / 2.0
+                            } else {
+                                values[mid]
+                            };
+                        }
+                    }
+                }
+
+                // Temporal fill
+                let nan_before = strip_out.iter().filter(|v| !v.is_finite()).count();
+                if nan_before > 0 {
+                    for &(scene_idx, _) in &coverage {
+                        let strip = &scene_strips[scene_idx];
+                        for r in 0..actual_rows {
+                            for c in 0..out_cols {
+                                if !strip_out[[r, c]].is_finite()
+                                    && r < strip.nrows() && c < strip.ncols()
+                                {
+                                    let v = strip[[r, c]];
+                                    if v.is_finite() { strip_out[[r, c]] = v; }
+                                }
+                            }
+                        }
+                        let remaining = strip_out.iter().filter(|v| !v.is_finite()).count();
+                        if remaining == 0 { break; }
+                    }
+                }
+
+                // Spatial fill (3x3 iterative mean)
+                let mut nan_remaining = strip_out.iter().filter(|v| !v.is_finite()).count();
+                if nan_remaining > 0 && nan_remaining < strip_out.len() {
+                    for _pass in 0..20 {
+                        let prev = strip_out.clone();
+                        let mut filled = 0usize;
+                        for r in 0..actual_rows {
+                            for c in 0..out_cols {
+                                if prev[[r, c]].is_finite() { continue; }
+                                let mut sum = 0.0;
+                                let mut cnt = 0u32;
+                                for dr in -1i32..=1 {
+                                    for dc in -1i32..=1 {
+                                        let nr = r as i32 + dr;
+                                        let nc = c as i32 + dc;
+                                        if nr >= 0 && nr < actual_rows as i32
+                                            && nc >= 0 && nc < out_cols as i32
+                                        {
+                                            let v = prev[[nr as usize, nc as usize]];
+                                            if v.is_finite() { sum += v; cnt += 1; }
+                                        }
+                                    }
+                                }
+                                if cnt >= 2 {
+                                    strip_out[[r, c]] = sum / cnt as f64;
+                                    filled += 1;
+                                }
+                            }
+                        }
+                        if filled == 0 { break; }
+                        nan_remaining = strip_out.iter().filter(|v| !v.is_finite()).count();
+                        if nan_remaining == 0 { break; }
+                    }
+                }
+            }
+
+            // Copy strip into output buffer at the correct row offset
+            let buf = &mut band_buffers[bi];
+            let offset = row_start * out_cols;
+            if let Some(slice) = strip_out.as_slice() {
+                buf[offset..offset + actual_rows * out_cols].copy_from_slice(slice);
+            }
+        } // end for band
+
+        // Log strip summary for first band
+        let valid_b0 = band_scene_strips[0].len();
+        if strip_idx == 0 || strip_idx == num_strips - 1 {
+            eprintln!("  Strip {}/{}: {} scenes contributed to {} bands",
+                strip_idx + 1, num_strips, valid_b0, n_bands);
+        }
+    } // end for strip
+
+    println!(); // newline after \r progress
+
+    // -- Phase 4: Write N output files --
+    let stem = output.file_stem().unwrap_or_default().to_string_lossy();
+    let opts = if compress {
+        Some(surtgis_core::io::GeoTiffOptions { compression: "DEFLATE".into() })
+    } else {
+        None
+    };
+
+    for (bi, band_name) in band_names.iter().enumerate() {
+        let band_path = output.with_file_name(format!("{}_{}.tif", stem, band_name));
+        let buffer = std::mem::take(&mut band_buffers[bi]);
+        let mut raster = surtgis_core::Raster::from_vec(buffer, out_rows, out_cols)
+            .context("Failed to create raster from buffer")?;
+        raster.set_transform(out_transform);
+        raster.set_crs(out_crs.clone());
+        surtgis_core::io::write_geotiff(&raster, &band_path, opts.clone())
+            .with_context(|| format!("Failed to write {}", band_path.display()))?;
+        let file_size = std::fs::metadata(&band_path).map(|m| m.len()).unwrap_or(0);
+        println!("  ✓ {} → {} ({:.1} MB)",
+            band_name, band_path.display(), file_size as f64 / 1e6);
+    }
+
+    let elapsed = start.elapsed();
+    let total_tiles: usize = scenes.iter().map(|s| s.tiles.len()).sum();
+    println!("Multi-band composite: {} dates × {} bands ({} tiles) → {} × {} ({:.1}M cells) in {:.1?}",
+        scenes.len(), n_bands, total_tiles,
+        out_cols, out_rows, (out_cols * out_rows) as f64 / 1e6, elapsed);
+
+    Ok(())
 }
 
 /// Read a COG tile (data band) at native resolution into a raster.
