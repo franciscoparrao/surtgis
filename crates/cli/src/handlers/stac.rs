@@ -2643,7 +2643,10 @@ fn handle_multiband_composite(
             };
 
             // Separate successful tiles per band + mask.
-            // If ANY band fails for a tile, skip that tile for ALL bands (spatial consistency).
+            // Three cases per tile:
+            //   - ALL bands None → tile doesn't cover this strip (BBoxOutside), skip silently
+            //   - SOME bands None → true inconsistency, discard tile for ALL bands
+            //   - ALL bands Some → include tile
             let mut per_band_tiles: Vec<Vec<surtgis_core::Raster<f64>>> = (0..n_bands)
                 .map(|_| Vec::new())
                 .collect();
@@ -2651,11 +2654,18 @@ fn handle_multiband_composite(
             let mut tiles_ok = 0usize;
 
             for (band_data, mask_opt) in tile_results {
-                // Check if all bands succeeded for this tile
-                let all_ok = band_data.iter().all(|r| r.is_some());
-                if !all_ok {
-                    continue; // Skip tile for all bands
+                let n_some = band_data.iter().filter(|r| r.is_some()).count();
+                if n_some == 0 {
+                    continue; // Tile doesn't cover this strip (BBoxOutside for all bands)
                 }
+                if n_some < n_bands {
+                    // Some bands succeeded, others failed → inconsistency, skip tile
+                    if is_first_strip {
+                        eprintln!("    ⚠ Tile has {}/{} bands — skipping for consistency", n_some, n_bands);
+                    }
+                    continue;
+                }
+                // All bands present → include this tile
                 for (bi, raster_opt) in band_data.into_iter().enumerate() {
                     per_band_tiles[bi].push(raster_opt.unwrap());
                 }
