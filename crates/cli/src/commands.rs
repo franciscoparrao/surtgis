@@ -1141,6 +1141,9 @@ pub enum StacCommands {
         /// Multi-band output naming: "prefix" → {stem}_{band}.tif (default), "asset" → {band}.tif
         #[arg(long, default_value = "prefix")]
         naming: String,
+        /// Cache downloaded COG tiles locally (~/.cache/surtgis/cog/) for fast re-runs
+        #[arg(long)]
+        cache: bool,
         /// Output GeoTIFF file
         output: PathBuf,
     },

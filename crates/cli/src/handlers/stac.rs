@@ -859,6 +859,7 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             scl_keep: _scl_keep,    // DEPRECATED: ignored (profile determines masking)
             align_to,
             naming,
+            cache,
             output,
         } => {
             // Multi-band support: --asset "red,nir,swir16,blue"
@@ -868,7 +869,7 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                 return handle_multiband_composite(
                     &catalog, &bbox, &collection, &assets,
                     &datetime, max_scenes,
-                    align_to.as_ref(), &output, &naming, compress,
+                    align_to.as_ref(), &output, &naming, cache, compress,
                 );
             }
 
@@ -2321,6 +2322,54 @@ pub fn fetch_stac_band(
 }
 
 // ---------------------------------------------------------------------------
+// COG tile cache: skip HTTP downloads for previously-fetched tiles
+// ---------------------------------------------------------------------------
+
+/// Compute a cache path for a COG tile, based on the base URL (without SAS query params) and bbox.
+fn cog_cache_path(href: &str, bb: &BBox) -> std::path::PathBuf {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    // Strip SAS query params (they change on every signing)
+    let base_url = href.split('?').next().unwrap_or(href);
+    // Include bbox in key (same COG, different strip = different cache entry)
+    let key = format!("{}__{:.2}_{:.2}_{:.2}_{:.2}", base_url, bb.min_x, bb.min_y, bb.max_x, bb.max_y);
+    let mut hasher = DefaultHasher::new();
+    key.hash(&mut hasher);
+    let hash = hasher.finish();
+    let hex = format!("{:016x}", hash);
+
+    let cache_dir = std::env::var("XDG_CACHE_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|_| std::env::var("HOME").map(|h| std::path::PathBuf::from(h).join(".cache")))
+        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"))
+        .join("surtgis")
+        .join("cog");
+
+    cache_dir.join(&hex[..2]).join(&hex[2..4]).join(format!("{}.tif", &hex[4..]))
+}
+
+/// Try to read a cached COG tile from disk.
+fn cache_read(path: &std::path::Path) -> Option<surtgis_core::Raster<f64>> {
+    if !path.exists() {
+        return None;
+    }
+    surtgis_core::io::read_geotiff::<f64, _>(path, None).ok()
+}
+
+/// Write a raster to the cache.
+fn cache_write(path: &std::path::Path, raster: &surtgis_core::Raster<f64>) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = surtgis_core::io::write_geotiff(
+        raster,
+        path,
+        Some(surtgis_core::io::GeoTiffOptions { compression: "DEFLATE".into() }),
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Multi-band composite: single-pass, shared STAC search + shared mask
 // ---------------------------------------------------------------------------
 
@@ -2339,6 +2388,7 @@ fn handle_multiband_composite(
     align_to: Option<&std::path::PathBuf>,
     output: &std::path::Path,
     naming: &str,
+    use_cache: bool,
     compress: bool,
 ) -> Result<()> {
     use surtgis_cloud::reproject;
@@ -2349,6 +2399,10 @@ fn handle_multiband_composite(
     let profile = CollectionProfile::from_collection_name(collection)?;
     let mask_asset_name = profile.mask_asset_name();
     eprintln!("📷 Collection: {} (mask: {:?})", profile.description(), mask_asset_name);
+    if use_cache {
+        let sample_dir = cog_cache_path("sample", &BBox::new(0.0, 0.0, 1.0, 1.0));
+        eprintln!("📦 COG cache enabled: {}", sample_dir.parent().unwrap().parent().unwrap().parent().unwrap().display());
+    }
 
     let cat = StacCatalog::from_str_or_url(catalog);
     let bb = parse_bbox(bbox_str)?;
@@ -2619,6 +2673,7 @@ fn handle_multiband_composite(
                     let scl_href = tile.scl_href.clone();
                     let tile_epsg = tile.epsg;
                     let n_bands_t = n_bands;
+                    let tile_cache = use_cache;
 
                     let bb = if let (Some(tepsg), Some(out_e)) = (tile_epsg, out_epsg) {
                         if tepsg != out_e {
@@ -2627,23 +2682,44 @@ fn handle_multiband_composite(
                     } else { tile_bb };
 
                     handles.push(std::thread::spawn(move || {
-                        // One runtime per tile — all band+mask downloads share it concurrently
-                        let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                        // Check cache first (synchronous disk I/O)
+                        if tile_cache {
+                            let mut all_cached = true;
+                            let mut cached_bands: Vec<Option<surtgis_core::Raster<f64>>> = Vec::with_capacity(n_bands_t);
+                            for href in &band_hrefs {
+                                let cp = cog_cache_path(href, &bb);
+                                match cache_read(&cp) {
+                                    Some(r) => cached_bands.push(Some(r)),
+                                    None => { all_cached = false; break; }
+                                }
+                            }
+                            if all_cached && cached_bands.len() == n_bands_t {
+                                let cached_mask = if !scl_href.is_empty() {
+                                    let cp = cog_cache_path(&scl_href, &bb);
+                                    cache_read(&cp)
+                                } else { None };
+                                return (cached_bands, cached_mask);
+                            }
+                        }
+
+                        // Cache miss — download via HTTP
+                        let Ok(rt) = tokio::runtime::Builder::new_multi_thread()
+                            .worker_threads(4)
                             .enable_all()
                             .build()
                         else {
                             return (vec![None; n_bands_t], None);
                         };
-                        let local = tokio::task::LocalSet::new();
 
-                        local.block_on(&rt, async {
+                        rt.block_on(async {
                             use surtgis_cloud::{CogReader, CogReaderOptions};
 
-                            // Spawn all band downloads as concurrent local tasks
+                            // Spawn all band downloads as concurrent tasks (true parallelism)
                             let mut band_handles = Vec::with_capacity(n_bands_t);
                             for href in band_hrefs {
                                 let bb = bb;
-                                band_handles.push(tokio::task::spawn_local(async move {
+                                let do_cache = tile_cache;
+                                band_handles.push(tokio::spawn(async move {
                                     let mut reader = CogReader::open(&href, CogReaderOptions::default()).await.ok()?;
                                     let nodata_val = reader.metadata().nodata.unwrap_or(0.0);
                                     let mut r: surtgis_core::Raster<f64> = reader.read_bbox(&bb, None).await.ok()?;
@@ -2652,6 +2728,10 @@ fn handle_multiband_composite(
                                             *val = f64::NAN;
                                         }
                                     }
+                                    if do_cache {
+                                        let cp = cog_cache_path(&href, &bb);
+                                        cache_write(&cp, &r);
+                                    }
                                     Some(r)
                                 }));
                             }
@@ -2659,9 +2739,15 @@ fn handle_multiband_composite(
                             // Spawn mask download (concurrent with band downloads)
                             let mask_handle = if !scl_href.is_empty() {
                                 let bb = bb;
-                                Some(tokio::task::spawn_local(async move {
+                                let do_cache = tile_cache;
+                                Some(tokio::spawn(async move {
                                     let mut reader = CogReader::open(&scl_href, CogReaderOptions::default()).await.ok()?;
-                                    reader.read_bbox::<f64>(&bb, None).await.ok()
+                                    let r: surtgis_core::Raster<f64> = reader.read_bbox(&bb, None).await.ok()?;
+                                    if do_cache {
+                                        let cp = cog_cache_path(&scl_href, &bb);
+                                        cache_write(&cp, &r);
+                                    }
+                                    Some(r)
                                 }))
                             } else {
                                 None
