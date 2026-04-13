@@ -2605,9 +2605,9 @@ fn handle_multiband_composite(
                 strip_bb.max_x + pad, strip_bb.max_y + pad,
             );
 
-            // Download all tiles in parallel.
-            // Each thread downloads: mask COG (1×) + data COGs (N× sequential).
-            // Returns: (Vec<Option<Raster>> per band, Option<Raster> mask)
+            // Download all tiles in parallel (1 thread per MGRS tile).
+            // Within each thread, all band COGs + mask are downloaded CONCURRENTLY
+            // using spawn_local on a single-threaded tokio runtime (async I/O multiplexing).
             let tile_results: Vec<(Vec<Option<surtgis_core::Raster<f64>>>, Option<surtgis_core::Raster<f64>>)> = {
                 let mut handles = Vec::with_capacity(scene.tiles.len());
                 let out_epsg = out_epsg_for_tiles;
@@ -2618,6 +2618,7 @@ fn handle_multiband_composite(
                         .collect();
                     let scl_href = tile.scl_href.clone();
                     let tile_epsg = tile.epsg;
+                    let n_bands_t = n_bands;
 
                     let bb = if let (Some(tepsg), Some(out_e)) = (tile_epsg, out_epsg) {
                         if tepsg != out_e {
@@ -2625,20 +2626,61 @@ fn handle_multiband_composite(
                         } else { tile_bb }
                     } else { tile_bb };
 
-                    let first = is_first_strip;
                     handles.push(std::thread::spawn(move || {
-                        // Download all band COGs sequentially for this tile
-                        let band_data: Vec<Option<surtgis_core::Raster<f64>>> = band_hrefs.iter()
-                            .enumerate()
-                            .map(|(i, href)| read_cog_tile(href, &bb, first && i == 0))
-                            .collect();
-                        // Download mask COG once
-                        let mask = if scl_href.is_empty() {
-                            None
-                        } else {
-                            read_cog_tile_raw(&scl_href, &bb)
+                        // One runtime per tile — all band+mask downloads share it concurrently
+                        let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                        else {
+                            return (vec![None; n_bands_t], None);
                         };
-                        (band_data, mask)
+                        let local = tokio::task::LocalSet::new();
+
+                        local.block_on(&rt, async {
+                            use surtgis_cloud::{CogReader, CogReaderOptions};
+
+                            // Spawn all band downloads as concurrent local tasks
+                            let mut band_handles = Vec::with_capacity(n_bands_t);
+                            for href in band_hrefs {
+                                let bb = bb;
+                                band_handles.push(tokio::task::spawn_local(async move {
+                                    let mut reader = CogReader::open(&href, CogReaderOptions::default()).await.ok()?;
+                                    let nodata_val = reader.metadata().nodata.unwrap_or(0.0);
+                                    let mut r: surtgis_core::Raster<f64> = reader.read_bbox(&bb, None).await.ok()?;
+                                    for val in r.data_mut().iter_mut() {
+                                        if *val == nodata_val || *val == 0.0 {
+                                            *val = f64::NAN;
+                                        }
+                                    }
+                                    Some(r)
+                                }));
+                            }
+
+                            // Spawn mask download (concurrent with band downloads)
+                            let mask_handle = if !scl_href.is_empty() {
+                                let bb = bb;
+                                Some(tokio::task::spawn_local(async move {
+                                    let mut reader = CogReader::open(&scl_href, CogReaderOptions::default()).await.ok()?;
+                                    reader.read_bbox::<f64>(&bb, None).await.ok()
+                                }))
+                            } else {
+                                None
+                            };
+
+                            // Collect band results
+                            let mut band_data = Vec::with_capacity(n_bands_t);
+                            for handle in band_handles {
+                                band_data.push(handle.await.ok().flatten());
+                            }
+                            // Collect mask result
+                            let mask = if let Some(h) = mask_handle {
+                                h.await.ok().flatten()
+                            } else {
+                                None
+                            };
+
+                            (band_data, mask)
+                        })
                     }));
                 }
                 handles.into_iter().map(|h| h.join().unwrap_or_else(|_| (vec![None; n_bands], None))).collect()
