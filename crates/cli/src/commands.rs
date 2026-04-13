@@ -1138,6 +1138,9 @@ pub enum StacCommands {
         /// Align output to this raster's grid (resamples to match origin, cell size, dims)
         #[arg(long)]
         align_to: Option<PathBuf>,
+        /// Multi-band output naming: "prefix" → {stem}_{band}.tif (default), "asset" → {band}.tif
+        #[arg(long, default_value = "prefix")]
+        naming: String,
         /// Output GeoTIFF file
         output: PathBuf,
     },

@@ -858,6 +858,7 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             scl_asset: _scl_asset,  // DEPRECATED: ignored (profile determines masking)
             scl_keep: _scl_keep,    // DEPRECATED: ignored (profile determines masking)
             align_to,
+            naming,
             output,
         } => {
             // Multi-band support: --asset "red,nir,swir16,blue"
@@ -867,7 +868,7 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                 return handle_multiband_composite(
                     &catalog, &bbox, &collection, &assets,
                     &datetime, max_scenes,
-                    align_to.as_ref(), &output, compress,
+                    align_to.as_ref(), &output, &naming, compress,
                 );
             }
 
@@ -2337,6 +2338,7 @@ fn handle_multiband_composite(
     max_scenes: usize,
     align_to: Option<&std::path::PathBuf>,
     output: &std::path::Path,
+    naming: &str,
     compress: bool,
 ) -> Result<()> {
     use surtgis_cloud::reproject;
@@ -2869,6 +2871,7 @@ fn handle_multiband_composite(
 
     // -- Phase 4: Write N output files --
     let stem = output.file_stem().unwrap_or_default().to_string_lossy();
+    let use_asset_naming = naming.eq_ignore_ascii_case("asset");
     let opts = if compress {
         Some(surtgis_core::io::GeoTiffOptions { compression: "DEFLATE".into() })
     } else {
@@ -2876,7 +2879,13 @@ fn handle_multiband_composite(
     };
 
     for (bi, band_name) in band_names.iter().enumerate() {
-        let band_path = output.with_file_name(format!("{}_{}.tif", stem, band_name));
+        let band_path = if use_asset_naming {
+            // --naming=asset → {dir}/{band}.tif
+            output.with_file_name(format!("{}.tif", band_name))
+        } else {
+            // --naming=prefix (default) → {dir}/{stem}_{band}.tif
+            output.with_file_name(format!("{}_{}.tif", stem, band_name))
+        };
         let buffer = std::mem::take(&mut band_buffers[bi]);
         let mut raster = surtgis_core::Raster::from_vec(buffer, out_rows, out_cols)
             .context("Failed to create raster from buffer")?;
@@ -2920,7 +2929,11 @@ fn read_cog_tile(href: &str, bb: &BBox, log_meta: bool) -> Option<surtgis_core::
     let mut r: surtgis_core::Raster<f64> = match dr.read_bbox(bb, None) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("    [cog] read_bbox FAILED: {}", e);
+            // BBoxOutside is expected (tile doesn't cover this strip) — don't log
+            let msg = e.to_string();
+            if !msg.contains("bbox does not intersect") {
+                eprintln!("    [cog] read_bbox FAILED: {}", msg);
+            }
             return None;
         }
     };
@@ -2946,7 +2959,10 @@ fn read_cog_tile_raw(href: &str, bb: &BBox) -> Option<surtgis_core::Raster<f64>>
     match sr.read_bbox(bb, None) {
         Ok(r) => Some(r),
         Err(e) => {
-            eprintln!("    [cog] mask read_bbox FAILED: {}", e);
+            let msg = e.to_string();
+            if !msg.contains("bbox does not intersect") {
+                eprintln!("    [cog] mask read_bbox FAILED: {}", msg);
+            }
             None
         }
     }
