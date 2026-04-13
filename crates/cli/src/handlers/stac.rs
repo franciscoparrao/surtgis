@@ -53,7 +53,12 @@ impl CollectionProfile {
                 cloud_mask_strategy: Arc::new(LandsatQaMask::new()),
             }),
             "sentinel-1-rtc" => Ok(Self::Sentinel1RTC),
-            _ => anyhow::bail!("Unknown collection: {}", name),
+            // Any other collection: treat as no cloud masking needed
+            // (derived products like WorldCover, DEMs, etc.)
+            _ => {
+                eprintln!("  ℹ Collection '{}' not recognized — proceeding without cloud masking", name);
+                Ok(Self::Sentinel1RTC)
+            }
         }
     }
 
@@ -3376,8 +3381,9 @@ mod tests {
     }
 
     #[test]
-    fn test_collection_profile_unknown() {
-        assert!(CollectionProfile::from_collection_name("unknown-collection").is_err());
+    fn test_collection_profile_unknown_falls_back() {
+        let profile = CollectionProfile::from_collection_name("esa-worldcover").unwrap();
+        assert_eq!(profile.mask_asset_name(), None); // no cloud masking
     }
 
     #[test]
