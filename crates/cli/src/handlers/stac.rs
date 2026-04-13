@@ -2418,7 +2418,11 @@ fn handle_multiband_composite(
     let tiles_x = ((bbox_width_deg * 111.0) / 60.0).ceil().max(1.0) as usize;
     let tiles_y = ((bbox_height_deg * 111.0) / 60.0).ceil().max(1.0) as usize;
     let est_tiles = tiles_x * tiles_y;
-    let search_limit = (max_scenes * est_tiles * 2).max(100).min(1000) as u32;
+    // Need spatial_tiles × max_scenes × 5 safety margin (S2 has ~73 dates/year per tile).
+    // Floor 1000, cap 10000 — same as single-band path.
+    let search_limit = ((est_tiles * max_scenes * 5).max(1000) as u32).min(10000);
+    eprintln!("  bbox: {:.1}°×{:.1}° (~{} spatial tiles), search_limit={}",
+        bbox_width_deg, bbox_height_deg, est_tiles, search_limit);
 
     let params = StacSearchParams::new()
         .bbox(bb.min_x, bb.min_y, bb.max_x, bb.max_y)
