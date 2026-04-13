@@ -907,11 +907,12 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             eprintln!("  bbox: {:.1}×{:.1} km, ~{} spatial tiles, search_limit={}",
                 bbox_width_km, bbox_height_km, estimated_spatial_tiles, search_limit);
 
+            // Page size ≤ 1000 (PC API rejects higher); total via pagination.
             let params = StacSearchParams::new()
                 .bbox(bb.min_x, bb.min_y, bb.max_x, bb.max_y)
                 .collections(&[collection.as_str()])
                 .datetime(&datetime)
-                .limit(search_limit);
+                .limit(search_limit.min(1000));
 
             let pb = spinner("Searching STAC catalog...");
             let client_opts = StacClientOptions {
@@ -2106,11 +2107,12 @@ pub fn fetch_stac_band(
         * (((bbox_h_km / 60.0).ceil() as usize).max(1));
     let search_limit = ((tiles_est * max_scenes * 5).max(1000)).min(10000) as u32;
 
+    // Page size ≤ 1000 (PC API rejects higher); total via pagination.
     let params = StacSearchParams::new()
         .bbox(bb.min_x, bb.min_y, bb.max_x, bb.max_y)
         .collections(&[collection])
         .datetime(datetime)
-        .limit(search_limit);
+        .limit(search_limit.min(1000));
 
     let pb = spinner(&format!(
         "Searching for {} scenes (limit={})...",
@@ -2424,15 +2426,16 @@ fn handle_multiband_composite(
     eprintln!("  bbox: {:.1}°×{:.1}° (~{} spatial tiles), search_limit={}",
         bbox_width_deg, bbox_height_deg, est_tiles, search_limit);
 
+    // Page size ≤ 1000 (PC API rejects higher); total via pagination.
     let params = StacSearchParams::new()
         .bbox(bb.min_x, bb.min_y, bb.max_x, bb.max_y)
         .datetime(datetime)
         .collections(&[collection])
-        .limit(search_limit);
+        .limit(search_limit.min(1000));
 
     let pb = spinner("Searching STAC catalog...");
     let client_opts = StacClientOptions {
-        max_items: search_limit as usize,
+        max_items: search_limit as usize,  // total deseado (paginación automática)
         ..StacClientOptions::default()
     };
     let client = StacClientBlocking::new(cat, client_opts)
