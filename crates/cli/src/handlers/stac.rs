@@ -942,8 +942,17 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                 by_date.entry(date).or_default().push(item);
             }
 
-            let dates: Vec<String> =
-                by_date.keys().take(max_scenes).cloned().collect();
+            // Select dates by spatial coverage: prefer dates with more tiles.
+            // This ensures both S2 orbit columns (C+D) are represented even when
+            // they capture on different dates.
+            let mut date_coverage: Vec<(String, usize)> = by_date.iter()
+                .map(|(d, items)| (d.clone(), items.len()))
+                .collect();
+            date_coverage.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+            let dates: Vec<String> = date_coverage.into_iter()
+                .take(max_scenes)
+                .map(|(d, _)| d)
+                .collect();
 
             // Log tiles per date to verify all tiles are included
             let tiles_per_date: Vec<usize> = dates.iter()
@@ -2454,7 +2463,16 @@ fn handle_multiband_composite(
             .get(..10).unwrap_or("unknown").to_string();
         by_date.entry(date).or_default().push(item);
     }
-    let dates: Vec<String> = by_date.keys().take(max_scenes).cloned().collect();
+    // Select dates by spatial coverage: prefer dates with more tiles.
+    // This ensures both S2 orbit columns are represented.
+    let mut date_coverage: Vec<(String, usize)> = by_date.iter()
+        .map(|(d, items)| (d.clone(), items.len()))
+        .collect();
+    date_coverage.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let dates: Vec<String> = date_coverage.into_iter()
+        .take(max_scenes)
+        .map(|(d, _)| d)
+        .collect();
 
     println!("Found {} items across {} dates (using {} dates)",
         items.len(), by_date.len(), dates.len());
