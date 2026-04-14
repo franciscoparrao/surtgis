@@ -45,6 +45,9 @@ fn main() -> Result<()> {
         Commands::Vector { action } => handlers::vector::handle(action)?,
         Commands::Interpolation { action } => handlers::interpolation::handle(action, compress)?,
         Commands::Temporal { action } => handlers::temporal::handle(action, compress)?,
+        Commands::Classification { algorithm } => handlers::classification::handle(algorithm, compress)?,
+        Commands::Texture { algorithm } => handlers::texture::handle(algorithm, compress)?,
+        Commands::Statistics { algorithm } => handlers::statistics::handle(algorithm, compress)?,
         #[cfg(feature = "ml")]
         Commands::Ml { action } => handlers::ml::handle(action, compress)?,
     }

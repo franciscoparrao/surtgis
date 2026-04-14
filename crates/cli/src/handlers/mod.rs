@@ -10,6 +10,9 @@ pub mod pipeline;
 pub mod temporal;
 pub mod interpolation;
 pub mod vector;
+pub mod classification;
+pub mod texture;
+pub mod statistics;
 
 #[cfg(feature = "cloud")]
 pub mod cog;

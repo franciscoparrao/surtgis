@@ -138,6 +138,21 @@ pub enum Commands {
         #[command(subcommand)]
         action: TemporalCommands,
     },
+    /// Classification: unsupervised/supervised raster classification (k-means, PCA, etc.)
+    Classification {
+        #[command(subcommand)]
+        algorithm: ClassificationCommands,
+    },
+    /// Texture analysis: edge detection and GLCM texture measures
+    Texture {
+        #[command(subcommand)]
+        algorithm: TextureCommands,
+    },
+    /// Statistics: focal, zonal, and spatial autocorrelation
+    Statistics {
+        #[command(subcommand)]
+        algorithm: StatisticsCommands,
+    },
     /// Machine learning: train, predict, and benchmark classifiers on geospatial features
     #[cfg(feature = "ml")]
     Ml {
@@ -1615,5 +1630,176 @@ pub enum MlCommands {
         /// Task type: classification or regression
         #[arg(long, default_value = "classification")]
         task: String,
+    },
+}
+
+// ─── Classification subcommands ────────────────────────────────────────
+
+#[derive(Subcommand)]
+pub enum ClassificationCommands {
+    /// K-means unsupervised clustering
+    Kmeans {
+        /// Input raster
+        input: PathBuf,
+        /// Output classified raster
+        output: PathBuf,
+        /// Number of clusters
+        #[arg(short, long, default_value = "5")]
+        classes: usize,
+        /// Maximum iterations
+        #[arg(long, default_value = "100")]
+        max_iter: usize,
+        /// Convergence threshold
+        #[arg(long, default_value = "0.001")]
+        convergence: f64,
+        /// Random seed
+        #[arg(long, default_value = "42")]
+        seed: u64,
+    },
+    /// ISODATA adaptive clustering (auto-splits/merges clusters)
+    Isodata {
+        /// Input raster
+        input: PathBuf,
+        /// Output classified raster
+        output: PathBuf,
+        /// Initial number of clusters
+        #[arg(short, long, default_value = "5")]
+        classes: usize,
+        /// Minimum clusters
+        #[arg(long, default_value = "2")]
+        min_classes: usize,
+        /// Maximum clusters
+        #[arg(long, default_value = "10")]
+        max_classes: usize,
+        /// Maximum iterations
+        #[arg(long, default_value = "50")]
+        max_iter: usize,
+    },
+    /// Principal Component Analysis (multi-band input)
+    Pca {
+        /// Input raster bands (comma-separated paths)
+        #[arg(long)]
+        bands: String,
+        /// Output directory for PC rasters
+        output: PathBuf,
+        /// Number of components (default: all)
+        #[arg(short, long)]
+        components: Option<usize>,
+    },
+    /// Minimum distance supervised classification
+    MinDistance {
+        /// Input raster
+        input: PathBuf,
+        /// Output classified raster
+        output: PathBuf,
+        /// Training raster (class labels)
+        #[arg(long)]
+        training: PathBuf,
+    },
+    /// Maximum likelihood supervised classification
+    MaxLikelihood {
+        /// Input raster
+        input: PathBuf,
+        /// Output classified raster
+        output: PathBuf,
+        /// Training raster (class labels)
+        #[arg(long)]
+        training: PathBuf,
+    },
+}
+
+// ─── Texture subcommands ───────────────────────────────────────────────
+
+#[derive(Subcommand)]
+pub enum TextureCommands {
+    /// GLCM texture (Haralick): energy, contrast, homogeneity, correlation, entropy
+    Glcm {
+        /// Input raster
+        input: PathBuf,
+        /// Output texture raster
+        output: PathBuf,
+        /// Texture measure: energy, contrast, homogeneity, correlation, entropy, dissimilarity
+        #[arg(short, long, default_value = "contrast")]
+        texture: String,
+        /// Window radius
+        #[arg(short, long, default_value = "3")]
+        radius: usize,
+        /// Quantization levels
+        #[arg(long, default_value = "32")]
+        levels: usize,
+    },
+    /// Sobel edge detection (gradient magnitude)
+    Sobel {
+        /// Input raster
+        input: PathBuf,
+        /// Output edge raster
+        output: PathBuf,
+    },
+    /// Laplacian edge detection (second derivative)
+    Laplacian {
+        /// Input raster
+        input: PathBuf,
+        /// Output edge raster
+        output: PathBuf,
+    },
+}
+
+// ─── Statistics subcommands ────────────────────────────────────────────
+
+#[derive(Subcommand)]
+pub enum StatisticsCommands {
+    /// Focal (moving window) statistics
+    Focal {
+        /// Input raster
+        input: PathBuf,
+        /// Output raster
+        output: PathBuf,
+        /// Statistic: mean, std, min, max, range, sum, count, median
+        #[arg(short, long, default_value = "mean")]
+        stat: String,
+        /// Window radius (size = 2r+1)
+        #[arg(short, long, default_value = "3")]
+        radius: usize,
+        /// Use circular window instead of square
+        #[arg(long)]
+        circular: bool,
+    },
+    /// Zonal statistics (JSON output by zone)
+    Zonal {
+        /// Input values raster
+        input: PathBuf,
+        /// Zone raster (integer classes)
+        #[arg(long)]
+        zones: PathBuf,
+        /// Output JSON file
+        output: PathBuf,
+    },
+    /// Zonal statistics as raster (each cell = zone statistic)
+    ZonalRaster {
+        /// Input values raster
+        input: PathBuf,
+        /// Zone raster (integer classes)
+        #[arg(long)]
+        zones: PathBuf,
+        /// Output raster
+        output: PathBuf,
+        /// Statistic: mean, std, min, max, range, sum, count, median
+        #[arg(short, long, default_value = "mean")]
+        stat: String,
+    },
+    /// Global Moran's I spatial autocorrelation (prints result)
+    MoransI {
+        /// Input raster
+        input: PathBuf,
+    },
+    /// Local Getis-Ord Gi* hotspot analysis
+    GetisOrd {
+        /// Input raster
+        input: PathBuf,
+        /// Output z-scores raster
+        output: PathBuf,
+        /// Neighborhood radius
+        #[arg(short, long, default_value = "3")]
+        radius: usize,
     },
 }
