@@ -40,30 +40,37 @@ mod tests {
     /// Test LandsatQaMask strategy with synthetic data
     #[test]
     fn test_landsat_cloud_masking_trait() {
-        // Create synthetic data
-        let data_array = ndarray::Array2::from_elem((10, 10), 5000.0);
+        // Create synthetic data (5000.0 = valid surface reflectance)
+        let mut data_array = ndarray::Array2::from_elem((10, 10), 5000.0);
+        data_array[[7, 7]] = 0.0; // fill value in data
         let mut data = Raster::from_array(data_array);
         data.set_transform(surtgis_core::GeoTransform::new(0.0, 100.0, 1.0, -1.0));
 
-        // Create QA_PIXEL mask: bitmask with cloud/shadow/snow bits
-        // bit 1 = cloud, bit 3 = cloud shadow, bit 4 = snow
-        let mut qa_array = ndarray::Array2::from_elem((10, 10), 0.0); // all valid (no bits set)
-        qa_array[[2, 2]] = 2.0; // bit 1 set = cloud
-        qa_array[[3, 3]] = 8.0; // bit 3 set = shadow
-        qa_array[[5, 5]] = 16.0; // bit 4 set = snow
+        // Create QA_PIXEL mask: bitmask with fill/cloud/shadow bits
+        // bit 0 = fill, bit 1 = dilated cloud, bit 3 = cloud, bit 4 = shadow
+        let mut qa_array = ndarray::Array2::from_elem((10, 10), 64.0); // all clear (bit 6 = Clear)
+        qa_array[[1, 1]] = 0.0; // no classification (fill)
+        qa_array[[2, 2]] = 2.0; // bit 1 set = dilated cloud
+        qa_array[[3, 3]] = 8.0; // bit 3 set = cloud
+        qa_array[[5, 5]] = 16.0; // bit 4 set = shadow
+        qa_array[[6, 6]] = 1.0; // bit 0 set = fill
+        qa_array[[7, 7]] = 64.0; // clear QA but data=0 (fill value)
 
         let mut qa = Raster::from_array(qa_array);
         qa.set_transform(surtgis_core::GeoTransform::new(0.0, 100.0, 1.0, -1.0));
 
-        // Apply masking
-        let strategy = LandsatQaMask::new(); // default: exclude bits 1,3,4
+        // Apply masking — default: exclude bits 0,1,3,4 + qa==0 + data==0
+        let strategy = LandsatQaMask::new();
         let result = strategy.mask(&data, &qa).unwrap();
 
         // Verify results
-        assert!((result.data()[[0, 0]] - 5000.0).abs() < 1e-6); // valid
-        assert!(result.data()[[2, 2]].is_nan()); // cloud masked
-        assert!(result.data()[[3, 3]].is_nan()); // shadow masked
-        assert!(result.data()[[5, 5]].is_nan()); // snow masked
+        assert!((result.data()[[0, 0]] - 5000.0).abs() < 1e-6); // QA=64 (clear) → keep
+        assert!(result.data()[[1, 1]].is_nan()); // QA=0 (no classification) → NaN
+        assert!(result.data()[[2, 2]].is_nan()); // QA=2 (dilated cloud) → NaN
+        assert!(result.data()[[3, 3]].is_nan()); // QA=8 (cloud) → NaN
+        assert!(result.data()[[5, 5]].is_nan()); // QA=16 (shadow) → NaN
+        assert!(result.data()[[6, 6]].is_nan()); // QA=1 (fill bit) → NaN
+        assert!(result.data()[[7, 7]].is_nan()); // QA=64 but data=0 → NaN
     }
 
     /// Test NoCloudMask strategy (SAR) - should preserve all data

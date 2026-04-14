@@ -72,17 +72,17 @@ impl CloudMaskStrategy for S2SclMask {
 /// Landsat Collection 2 QA_PIXEL cloud masking
 #[derive(Clone)]
 pub struct LandsatQaMask {
-    /// Bits to exclude (cloud, shadow, snow, etc.)
-    /// Bit 1: cloud, Bit 3: cloud shadow, Bit 4: snow/ice
-    /// Default: 0b0001_1010 = bits 1, 3, 4 set → exclude cloud|shadow|snow
+    /// Bits to exclude (fill, cloud, shadow, snow, etc.)
+    /// Bit 0: fill, Bit 1: dilated cloud, Bit 3: cloud, Bit 4: cloud shadow
+    /// Default: 0b0001_1011 = bits 0, 1, 3, 4 set → exclude fill|cloud|shadow
     pub exclude_bits: u16,
 }
 
 impl LandsatQaMask {
-    /// Create with default excluded bits: cloud (1) | shadow (3) | snow (4)
+    /// Create with default excluded bits: fill (0) | dilated cloud (1) | cloud (3) | shadow (4)
     pub fn new() -> Self {
         Self {
-            exclude_bits: 0b0001_1010, // bits 1, 3, 4
+            exclude_bits: 0b0001_1011, // bits 0, 1, 3, 4
         }
     }
 
@@ -126,11 +126,13 @@ impl CloudMaskStrategy for NoCloudMask {
 /// Apply cloud mask using Landsat QA_PIXEL bitmask
 ///
 /// Sets pixels where any excluded bit is set to NaN.
+/// Also excludes fill pixels (data == 0 or QA == 0).
 ///
 /// QA_PIXEL bits:
-/// - Bit 1: Cloud
-/// - Bit 3: Cloud shadow
-/// - Bit 4: Snow/Ice
+/// - Bit 0: Fill
+/// - Bit 1: Dilated Cloud
+/// - Bit 3: Cloud
+/// - Bit 4: Cloud Shadow
 fn cloud_mask_qa_pixel(
     data: &Raster<f64>,
     qa: &Raster<f64>,
@@ -158,10 +160,13 @@ fn cloud_mask_qa_pixel(
             for col in 0..cols {
                 let qa_col = ((col as f64 * col_scale).floor() as usize).min(qc - 1);
                 let qa_val = qa_arr[[qa_row, qa_col]] as u16;
-                // Keep pixel if none of the excluded bits are set
-                if (qa_val & exclude_bits) == 0 {
-                    out_row[col] = data_arr[[row, col]];
+                let data_val = data_arr[[row, col]];
+                // Skip fill pixels: QA==0 (no classification), data==0 (fill value),
+                // or any excluded bit set
+                if qa_val == 0 || data_val == 0.0 || (qa_val & exclude_bits) != 0 {
+                    continue;
                 }
+                out_row[col] = data_val;
             }
         });
 
@@ -349,29 +354,35 @@ mod tests {
     #[test]
     fn test_landsat_qa_mask_trait() {
         // Test CloudMaskStrategy trait for Landsat
-        // QA_PIXEL bitmask: exclude bits 1 (cloud), 3 (shadow), 4 (snow)
-        // 0b0000_0000 = 0 → no flags → keep
-        // 0b0000_0010 = 2 → bit 1 set (cloud) → exclude
-        // 0b0000_1000 = 8 → bit 3 set (shadow) → exclude
-        // 0b0001_0000 = 16 → bit 4 set (snow) → exclude
+        // Default exclude bits: 0 (fill), 1 (dilated cloud), 3 (cloud), 4 (shadow)
+        // Also excludes: qa==0 (no classification) and data==0 (fill value)
+        //
+        // QA=0 → exclude (no classification available)
+        // QA=1 → exclude (bit 0 = fill)
+        // QA=2 → exclude (bit 1 = dilated cloud)
+        // QA=8 → exclude (bit 3 = cloud)
+        // QA=16 → exclude (bit 4 = shadow)
+        // QA=64 → keep (bit 6 = clear, no excluded bits)
 
         let data = make_raster(vec![
-            vec![100.0, 100.0],
-            vec![100.0, 100.0],
+            vec![100.0, 100.0, 100.0],
+            vec![100.0, 100.0, 0.0],
         ]);
         let qa = make_raster(vec![
-            vec![0.0, 2.0],   // clear, cloud
-            vec![8.0, 16.0],  // shadow, snow
+            vec![0.0, 1.0, 64.0],   // no-classification, fill, clear
+            vec![2.0, 8.0, 64.0],   // dilated cloud, cloud, clear+data=0
         ]);
 
         let strategy = LandsatQaMask::new();
         let result = strategy.mask(&data, &qa).unwrap();
         let d = result.data();
 
-        assert!((d[[0, 0]] - 100.0).abs() < 1e-10); // QA=0 → keep
-        assert!(d[[0, 1]].is_nan()); // QA=2 (cloud) → NaN
-        assert!(d[[1, 0]].is_nan()); // QA=8 (shadow) → NaN
-        assert!(d[[1, 1]].is_nan()); // QA=16 (snow) → NaN
+        assert!(d[[0, 0]].is_nan()); // QA=0 → NaN (no classification)
+        assert!(d[[0, 1]].is_nan()); // QA=1 (fill bit) → NaN
+        assert!((d[[0, 2]] - 100.0).abs() < 1e-10); // QA=64 (clear) → keep
+        assert!(d[[1, 0]].is_nan()); // QA=2 (dilated cloud) → NaN
+        assert!(d[[1, 1]].is_nan()); // QA=8 (cloud) → NaN
+        assert!(d[[1, 2]].is_nan()); // QA=64 but data=0 (fill value) → NaN
     }
 
     #[test]
