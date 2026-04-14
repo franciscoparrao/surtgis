@@ -2732,9 +2732,27 @@ fn handle_multiband_composite(
                                 let bb = bb;
                                 let do_cache = tile_cache;
                                 band_handles.push(tokio::spawn(async move {
-                                    let mut reader = CogReader::open(&href, CogReaderOptions::default()).await.ok()?;
+                                    let mut reader = match CogReader::open(&href, CogReaderOptions::default()).await {
+                                        Ok(r) => r,
+                                        Err(e) => {
+                                            let msg = e.to_string();
+                                            if !msg.contains("bbox does not intersect") {
+                                                eprintln!("    [cog] async open FAILED: {}", msg);
+                                            }
+                                            return None;
+                                        }
+                                    };
                                     let nodata_val = reader.metadata().nodata.unwrap_or(0.0);
-                                    let mut r: surtgis_core::Raster<f64> = reader.read_bbox(&bb, None).await.ok()?;
+                                    let mut r: surtgis_core::Raster<f64> = match reader.read_bbox(&bb, None).await {
+                                        Ok(r) => r,
+                                        Err(e) => {
+                                            let msg = e.to_string();
+                                            if !msg.contains("bbox does not intersect") {
+                                                eprintln!("    [cog] async read_bbox FAILED: {}", msg);
+                                            }
+                                            return None;
+                                        }
+                                    };
                                     for val in r.data_mut().iter_mut() {
                                         if *val == nodata_val || *val == 0.0 {
                                             *val = f64::NAN;
@@ -2754,7 +2772,16 @@ fn handle_multiband_composite(
                                 let do_cache = tile_cache;
                                 Some(tokio::spawn(async move {
                                     let mut reader = CogReader::open(&scl_href, CogReaderOptions::default()).await.ok()?;
-                                    let r: surtgis_core::Raster<f64> = reader.read_bbox(&bb, None).await.ok()?;
+                                    let r: surtgis_core::Raster<f64> = match reader.read_bbox(&bb, None).await {
+                                        Ok(r) => r,
+                                        Err(e) => {
+                                            let msg = e.to_string();
+                                            if !msg.contains("bbox does not intersect") {
+                                                eprintln!("    [cog] async mask FAILED: {}", msg);
+                                            }
+                                            return None;
+                                        }
+                                    };
                                     if do_cache {
                                         let cp = cog_cache_path(&scl_href, &bb);
                                         cache_write(&cp, &r);
@@ -2794,17 +2821,20 @@ fn handle_multiband_composite(
                 .collect();
             let mut scl_tiles: Vec<surtgis_core::Raster<f64>> = Vec::new();
             let mut tiles_ok = 0usize;
+            let mut tiles_outside = 0usize;
+            let mut tiles_inconsistent = 0usize;
 
             for (band_data, mask_opt) in tile_results {
                 let n_some = band_data.iter().filter(|r| r.is_some()).count();
                 if n_some == 0 {
+                    tiles_outside += 1;
                     continue; // Tile doesn't cover this strip (BBoxOutside for all bands)
                 }
                 if n_some < n_bands {
                     // Some bands succeeded, others failed → inconsistency, skip tile
-                    if is_first_strip {
-                        eprintln!("    ⚠ Tile has {}/{} bands — skipping for consistency", n_some, n_bands);
-                    }
+                    tiles_inconsistent += 1;
+                    eprintln!("    ⚠ {}: tile has {}/{} bands — skipping for consistency",
+                        scene.date, n_some, n_bands);
                     continue;
                 }
                 // All bands present → include this tile
@@ -2817,9 +2847,9 @@ fn handle_multiband_composite(
                 tiles_ok += 1;
             }
 
-            if is_first_strip {
-                eprintln!("  ℹ {}: {} tiles OK ({} bands/tile), mask={}",
-                    scene.date, tiles_ok, n_bands, scl_tiles.len());
+            if is_first_strip || tiles_ok == 0 {
+                eprintln!("  ℹ {}: tiles OK={} outside={} inconsistent={} mask={}",
+                    scene.date, tiles_ok, tiles_outside, tiles_inconsistent, scl_tiles.len());
             }
 
             if tiles_ok == 0 {
