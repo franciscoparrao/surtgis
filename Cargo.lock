@@ -5228,6 +5228,8 @@ checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 [[package]]
 name = "smelt-ml"
 version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3bfb79622a83f0a97cbf875aaa1b92a0dbce9f557641260df312a4d6e9704827"
 dependencies = [
  "csv",
  "ndarray",
@@ -5421,7 +5423,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "surtgis"
-version = "0.6.11"
+version = "0.6.12"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5446,7 +5448,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-algorithms"
-version = "0.6.11"
+version = "0.6.12"
 dependencies = [
  "anyhow",
  "approx",
@@ -5466,7 +5468,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-cloud"
-version = "0.6.11"
+version = "0.6.12"
 dependencies = [
  "approx",
  "byteorder",
@@ -5497,7 +5499,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-colormap"
-version = "0.6.11"
+version = "0.6.12"
 dependencies = [
  "num-traits",
  "surtgis-core",
@@ -5505,7 +5507,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-core"
-version = "0.6.11"
+version = "0.6.12"
 dependencies = [
  "anyhow",
  "approx",
@@ -5526,7 +5528,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-gui"
-version = "0.6.11"
+version = "0.6.12"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -5547,7 +5549,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-parallel"
-version = "0.6.11"
+version = "0.6.12"
 dependencies = [
  "criterion",
  "crossbeam",
@@ -5559,7 +5561,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-python"
-version = "0.6.11"
+version = "0.6.12"
 dependencies = [
  "numpy",
  "pyo3",
@@ -5569,7 +5571,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-wasm"
-version = "0.6.11"
+version = "0.6.12"
 dependencies = [
  "js-sys",
  "serde",
