@@ -20,7 +20,7 @@ use surtgis_core::StripProcessor;
 
 use crate::commands::TerrainCommands;
 use crate::helpers::{
-    done, parse_advanced_curvature_type, read_dem, write_result, write_result_u8,
+    done, parse_advanced_curvature_type, read_dem, spinner, write_result, write_result_u8,
 };
 use crate::memory;
 
@@ -581,6 +581,270 @@ pub fn handle(algorithm: TerrainCommands, compress: bool, streaming: bool, mem_l
             let elapsed = start.elapsed();
             write_result(&result, &output, compress)?;
             done("Surface area ratio", &output, elapsed);
+        }
+
+        TerrainCommands::SolarRadiation { input, output, day, hour: _hour, latitude } => {
+            use surtgis_algorithms::terrain::{solar_radiation, SolarParams};
+            // solar_radiation needs slope+aspect as input (radians)
+            let dem = read_dem(&input)?;
+            let start = Instant::now();
+            let pb = spinner("Computing slope+aspect for solar...");
+            let slope_r = slope(&dem, SlopeParams { units: SlopeUnits::Radians, z_factor: 1.0 })
+                .context("Slope failed")?;
+            let aspect_r = aspect(&dem, AspectOutput::Radians)
+                .context("Aspect failed")?;
+            pb.finish_and_clear();
+            let pb = spinner(&format!("Solar radiation (day={})...", day));
+            let result = solar_radiation(&slope_r, &aspect_r, SolarParams {
+                day, latitude, transmittance: 0.7, ..SolarParams::default()
+            }).context("Solar radiation failed")?;
+            pb.finish_and_clear();
+            write_result(&result.total, &output, compress)?;
+            done("Solar radiation", &output, start.elapsed());
+        }
+
+        TerrainCommands::SolarRadiationAnnual { input, output, latitude } => {
+            use surtgis_algorithms::terrain::{solar_radiation_annual, SolarParams};
+            let dem = read_dem(&input)?;
+            let start = Instant::now();
+            let pb = spinner("Computing slope+aspect...");
+            let slope_r = slope(&dem, SlopeParams { units: SlopeUnits::Radians, z_factor: 1.0 })
+                .context("Slope failed")?;
+            let aspect_r = aspect(&dem, AspectOutput::Radians)
+                .context("Aspect failed")?;
+            pb.finish_and_clear();
+            let pb = spinner("Annual solar radiation...");
+            let result = solar_radiation_annual(&slope_r, &aspect_r, SolarParams {
+                day: 1, latitude, transmittance: 0.7, ..SolarParams::default()
+            }).context("Annual solar radiation failed")?;
+            pb.finish_and_clear();
+            write_result(&result.annual.total, &output, compress)?;
+            done("Annual solar radiation", &output, start.elapsed());
+        }
+
+        TerrainCommands::ContourLines { input, output, interval, base } => {
+            use surtgis_algorithms::terrain::{contour_lines, ContourParams};
+            let dem = read_dem(&input)?;
+            let start = Instant::now();
+            let result = contour_lines(&dem, ContourParams { interval, base })
+                .context("Contour lines failed")?;
+            write_result(&result, &output, compress)?;
+            done("Contour lines", &output, start.elapsed());
+        }
+
+        TerrainCommands::CostDistance { input, sources, output } => {
+            use surtgis_algorithms::terrain::{cost_distance, CostDistanceParams};
+            let cost = read_dem(&input)?;
+            let pb = spinner("Reading sources...");
+            let src: surtgis_core::Raster<f64> = surtgis_core::io::read_geotiff(&sources, None)
+                .context("Failed to read source raster")?;
+            pb.finish_and_clear();
+            // Extract source positions from non-zero cells
+            let mut src_positions = Vec::new();
+            let (sr, sc) = src.shape();
+            for r in 0..sr {
+                for c in 0..sc {
+                    if let Some(&v) = src.data().get([r, c]) {
+                        if v != 0.0 && v.is_finite() { src_positions.push((r, c)); }
+                    }
+                }
+            }
+            println!("  {} source cells", src_positions.len());
+            let start = Instant::now();
+            let pb = spinner("Cost distance...");
+            let result = cost_distance(&cost, CostDistanceParams { sources: src_positions })
+                .context("Cost distance failed")?;
+            pb.finish_and_clear();
+            write_result(&result, &output, compress)?;
+            done("Cost distance", &output, start.elapsed());
+        }
+
+        TerrainCommands::ShapeIndex { input, output } => {
+            use surtgis_algorithms::terrain::shape_index;
+            let dem = read_dem(&input)?;
+            let start = Instant::now();
+            let result = shape_index(&dem).context("Shape index failed")?;
+            write_result(&result, &output, compress)?;
+            done("Shape index", &output, start.elapsed());
+        }
+
+        TerrainCommands::Curvedness { input, output } => {
+            use surtgis_algorithms::terrain::curvedness;
+            let dem = read_dem(&input)?;
+            let start = Instant::now();
+            let result = curvedness(&dem).context("Curvedness failed")?;
+            write_result(&result, &output, compress)?;
+            done("Curvedness", &output, start.elapsed());
+        }
+
+        TerrainCommands::GaussianSmoothing { input, output, sigma, radius } => {
+            use surtgis_algorithms::terrain::{gaussian_smoothing, GaussianSmoothingParams};
+            let dem = read_dem(&input)?;
+            let r = radius.unwrap_or((3.0 * sigma).ceil() as usize);
+            let start = Instant::now();
+            let pb = spinner(&format!("Gaussian smoothing (sigma={}, radius={})...", sigma, r));
+            let result = gaussian_smoothing(&dem, GaussianSmoothingParams { radius: r, sigma })
+                .context("Smoothing failed")?;
+            pb.finish_and_clear();
+            write_result(&result, &output, compress)?;
+            done("Gaussian smoothing", &output, start.elapsed());
+        }
+
+        TerrainCommands::FeaturePreservingSmoothing { input, output, strength: _strength, iterations } => {
+            use surtgis_algorithms::terrain::{feature_preserving_smoothing, SmoothingParams};
+            let dem = read_dem(&input)?;
+            let start = Instant::now();
+            let pb = spinner("Feature-preserving smoothing...");
+            let result = feature_preserving_smoothing(&dem, SmoothingParams {
+                radius: 2, iterations, threshold: 15.0,
+            }).context("Smoothing failed")?;
+            pb.finish_and_clear();
+            write_result(&result, &output, compress)?;
+            done("Feature-preserving smoothing", &output, start.elapsed());
+        }
+
+        TerrainCommands::WindExposure { input, output, direction, radius } => {
+            use surtgis_algorithms::terrain::{wind_exposure, WindExposureParams};
+            let dem = read_dem(&input)?;
+            let start = Instant::now();
+            let pb = spinner(&format!("Wind exposure (dir={}°, radius={})...", direction, radius));
+            let result = wind_exposure(&dem, WindExposureParams {
+                radius, directions: 8,
+                wind_direction: Some(direction.to_radians()),
+                wind_window: 45.0,
+            }).context("Wind exposure failed")?;
+            pb.finish_and_clear();
+            write_result(&result, &output, compress)?;
+            done("Wind exposure", &output, start.elapsed());
+        }
+
+        TerrainCommands::HorizonAngle { input, output, azimuth, radius } => {
+            use surtgis_algorithms::terrain::horizon_angle_map;
+            let dem = read_dem(&input)?;
+            let start = Instant::now();
+            let pb = spinner(&format!("Horizon angle (az={}°, radius={})...", azimuth, radius));
+            let result = horizon_angle_map(&dem, azimuth.to_radians(), radius)
+                .context("Horizon angle failed")?;
+            pb.finish_and_clear();
+            write_result(&result, &output, compress)?;
+            done("Horizon angle", &output, start.elapsed());
+        }
+
+        TerrainCommands::AccumulationZones { input, output } => {
+            use surtgis_algorithms::terrain::accumulation_zones;
+            let dem = read_dem(&input)?;
+            let start = Instant::now();
+            let pb = spinner("Accumulation zones...");
+            let result = accumulation_zones(&dem)
+                .context("Accumulation zones failed")?;
+            pb.finish_and_clear();
+            write_result(&result, &output, compress)?;
+            done("Accumulation zones", &output, start.elapsed());
+        }
+
+        TerrainCommands::Spi { flow_acc, slope: slope_path, output } => {
+            use surtgis_algorithms::terrain::spi;
+            let fa = read_dem(&flow_acc)?;
+            let sl = read_dem(&slope_path)?;
+            let start = Instant::now();
+            let result = spi(&fa, &sl).context("SPI failed")?;
+            write_result(&result, &output, compress)?;
+            done("SPI", &output, start.elapsed());
+        }
+
+        TerrainCommands::Sti { flow_acc, slope: slope_path, output } => {
+            use surtgis_algorithms::terrain::{sti, StiParams};
+            let fa = read_dem(&flow_acc)?;
+            let sl = read_dem(&slope_path)?;
+            let start = Instant::now();
+            let result = sti(&fa, &sl, StiParams { m: 0.4, n: 1.3 })
+                .context("STI failed")?;
+            write_result(&result, &output, compress)?;
+            done("STI", &output, start.elapsed());
+        }
+
+        TerrainCommands::Twi { flow_acc, slope: slope_path, output } => {
+            use surtgis_algorithms::terrain::twi;
+            let fa = read_dem(&flow_acc)?;
+            let sl = read_dem(&slope_path)?;
+            let start = Instant::now();
+            let result = twi(&fa, &sl).context("TWI failed")?;
+            write_result(&result, &output, compress)?;
+            done("TWI", &output, start.elapsed());
+        }
+
+        TerrainCommands::LogTransform { input, output } => {
+            use surtgis_algorithms::terrain::log_transform;
+            let raster = read_dem(&input)?;
+            let start = Instant::now();
+            let result = log_transform(&raster).context("Log transform failed")?;
+            write_result(&result, &output, compress)?;
+            done("Log transform", &output, start.elapsed());
+        }
+
+        TerrainCommands::Uncertainty { input, outdir, error_std, n_simulations: _n } => {
+            use surtgis_algorithms::terrain::{uncertainty, UncertaintyParams};
+            std::fs::create_dir_all(&outdir).context("Failed to create output directory")?;
+            let dem = read_dem(&input)?;
+            let start = Instant::now();
+            let pb = spinner("Uncertainty analysis...");
+            let result = uncertainty(&dem, UncertaintyParams { dem_rmse: error_std })
+                .context("Uncertainty failed")?;
+            pb.finish_and_clear();
+            write_result(&result.slope_rmse, &outdir.join("slope_rmse.tif"), compress)?;
+            write_result(&result.aspect_rmse, &outdir.join("aspect_rmse.tif"), compress)?;
+            done("Uncertainty", &outdir, start.elapsed());
+        }
+
+        TerrainCommands::ViewshedPderl { input, output, row, col, height } => {
+            use surtgis_algorithms::terrain::{viewshed_pderl, PderlViewshedParams};
+            let dem = read_dem(&input)?;
+            let start = Instant::now();
+            let pb = spinner("PDERL viewshed...");
+            let result = viewshed_pderl(&dem, PderlViewshedParams {
+                observer_row: row, observer_col: col,
+                observer_height: height, target_height: 0.0,
+                max_radius: 0,
+            }).context("Viewshed failed")?;
+            pb.finish_and_clear();
+            write_result_u8(&result, &output, compress)?;
+            done("PDERL Viewshed", &output, start.elapsed());
+        }
+
+        TerrainCommands::ViewshedXdraw { input, output, row, col, height } => {
+            use surtgis_algorithms::terrain::viewshed_xdraw;
+            let dem = read_dem(&input)?;
+            let start = Instant::now();
+            let pb = spinner("XDraw viewshed...");
+            let result = viewshed_xdraw(&dem, ViewshedParams {
+                observer_row: row, observer_col: col,
+                observer_height: height, target_height: 0.0,
+                max_radius: 0,
+            }).context("Viewshed failed")?;
+            pb.finish_and_clear();
+            write_result_u8(&result, &output, compress)?;
+            done("XDraw Viewshed", &output, start.elapsed());
+        }
+
+        TerrainCommands::ViewshedMultiple { input, output, observers, height } => {
+            use surtgis_algorithms::terrain::viewshed_multiple;
+            let dem = read_dem(&input)?;
+            let obs: Vec<(usize, usize)> = observers.split(';')
+                .filter_map(|s| {
+                    let parts: Vec<&str> = s.trim().split(',').collect();
+                    if parts.len() == 2 {
+                        Some((parts[0].trim().parse().ok()?, parts[1].trim().parse().ok()?))
+                    } else { None }
+                })
+                .collect();
+            println!("  {} observer locations", obs.len());
+            let start = Instant::now();
+            let pb = spinner("Multiple viewshed...");
+            let result = viewshed_multiple(&dem, &obs, height)
+                .context("Multiple viewshed failed")?;
+            pb.finish_and_clear();
+            write_result(&result, &output, compress)?;
+            done("Multiple Viewshed", &output, start.elapsed());
         }
 
         TerrainCommands::All { input, outdir } => {

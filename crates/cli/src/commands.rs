@@ -414,6 +414,195 @@ pub enum TerrainCommands {
         #[arg(short, long)]
         outdir: PathBuf,
     },
+    /// Solar radiation (clear-sky insolation for a given day/hour)
+    SolarRadiation {
+        input: PathBuf,
+        output: PathBuf,
+        /// Day of year (1-365)
+        #[arg(long)]
+        day: u32,
+        /// Hour (solar time, 0-24)
+        #[arg(long)]
+        hour: f64,
+        /// Latitude in degrees
+        #[arg(long)]
+        latitude: f64,
+    },
+    /// Annual solar radiation (integrated over full year)
+    SolarRadiationAnnual {
+        input: PathBuf,
+        output: PathBuf,
+        /// Latitude in degrees
+        #[arg(long)]
+        latitude: f64,
+    },
+    /// Contour lines as raster
+    ContourLines {
+        input: PathBuf,
+        output: PathBuf,
+        /// Contour interval
+        #[arg(long, default_value = "100")]
+        interval: f64,
+        /// Base contour value
+        #[arg(long, default_value = "0")]
+        base: f64,
+    },
+    /// Cost distance from source points
+    CostDistance {
+        /// Cost surface raster
+        input: PathBuf,
+        /// Source points raster (non-zero = source)
+        #[arg(long)]
+        sources: PathBuf,
+        /// Output accumulated cost raster
+        output: PathBuf,
+    },
+    /// Shape index (concavity/convexity, -1 to +1)
+    ShapeIndex {
+        input: PathBuf,
+        output: PathBuf,
+    },
+    /// Curvedness (magnitude of curvature)
+    Curvedness {
+        input: PathBuf,
+        output: PathBuf,
+    },
+    /// Gaussian smoothing
+    GaussianSmoothing {
+        input: PathBuf,
+        output: PathBuf,
+        /// Sigma (standard deviation in cells)
+        #[arg(long, default_value = "1.0")]
+        sigma: f64,
+        /// Kernel radius in cells (default: ceil(3*sigma))
+        #[arg(long)]
+        radius: Option<usize>,
+    },
+    /// Feature-preserving smoothing (edge-aware)
+    FeaturePreservingSmoothing {
+        input: PathBuf,
+        output: PathBuf,
+        /// Smoothing strength
+        #[arg(long, default_value = "1.0")]
+        strength: f64,
+        /// Number of iterations
+        #[arg(long, default_value = "3")]
+        iterations: usize,
+    },
+    /// Wind exposure index
+    WindExposure {
+        input: PathBuf,
+        output: PathBuf,
+        /// Wind direction in degrees from north (0=N, 90=E)
+        #[arg(long, default_value = "270")]
+        direction: f64,
+        /// Search radius in cells
+        #[arg(long, default_value = "100")]
+        radius: usize,
+    },
+    /// Horizon angles for a given azimuth
+    HorizonAngle {
+        input: PathBuf,
+        output: PathBuf,
+        /// Azimuth in degrees from north
+        #[arg(long, default_value = "180")]
+        azimuth: f64,
+        /// Search radius in cells
+        #[arg(long, default_value = "100")]
+        radius: usize,
+    },
+    /// Accumulation zones (contributing area classification)
+    AccumulationZones {
+        input: PathBuf,
+        output: PathBuf,
+    },
+    /// Stream Power Index (SPI = A × tan(slope))
+    Spi {
+        /// Flow accumulation raster
+        #[arg(long)]
+        flow_acc: PathBuf,
+        /// Slope raster (radians)
+        #[arg(long)]
+        slope: PathBuf,
+        output: PathBuf,
+    },
+    /// Sediment Transport Index (STI)
+    Sti {
+        /// Flow accumulation raster
+        #[arg(long)]
+        flow_acc: PathBuf,
+        /// Slope raster (radians)
+        #[arg(long)]
+        slope: PathBuf,
+        output: PathBuf,
+    },
+    /// Topographic Wetness Index (TWI = ln(A / tan(slope)))
+    Twi {
+        /// Flow accumulation raster
+        #[arg(long)]
+        flow_acc: PathBuf,
+        /// Slope raster (radians)
+        #[arg(long)]
+        slope: PathBuf,
+        output: PathBuf,
+    },
+    /// Log transform (ln(x+1))
+    LogTransform {
+        input: PathBuf,
+        output: PathBuf,
+    },
+    /// DEM uncertainty analysis (Monte Carlo)
+    Uncertainty {
+        input: PathBuf,
+        /// Output directory (mean, std, etc.)
+        #[arg(short, long)]
+        outdir: PathBuf,
+        /// Error standard deviation (meters)
+        #[arg(long, default_value = "1.0")]
+        error_std: f64,
+        /// Number of simulations
+        #[arg(long, default_value = "100")]
+        n_simulations: usize,
+    },
+    /// PDERL viewshed (reference plane algorithm)
+    ViewshedPderl {
+        input: PathBuf,
+        output: PathBuf,
+        /// Observer row
+        #[arg(long)]
+        row: usize,
+        /// Observer column
+        #[arg(long)]
+        col: usize,
+        /// Observer height above ground
+        #[arg(long, default_value = "1.7")]
+        height: f64,
+    },
+    /// XDraw viewshed (approximate, fast)
+    ViewshedXdraw {
+        input: PathBuf,
+        output: PathBuf,
+        /// Observer row
+        #[arg(long)]
+        row: usize,
+        /// Observer column
+        #[arg(long)]
+        col: usize,
+        /// Observer height above ground
+        #[arg(long, default_value = "1.7")]
+        height: f64,
+    },
+    /// Multiple-observer cumulative viewshed
+    ViewshedMultiple {
+        input: PathBuf,
+        output: PathBuf,
+        /// Observer locations as row,col pairs (e.g. "10,20;30,40;50,60")
+        #[arg(long)]
+        observers: String,
+        /// Observer height above ground
+        #[arg(long, default_value = "1.7")]
+        height: f64,
+    },
 }
 
 // ─── Hydrology subcommands ──────────────────────────────────────────────
