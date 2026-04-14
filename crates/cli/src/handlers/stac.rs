@@ -2732,37 +2732,49 @@ fn handle_multiband_composite(
                                 let bb = bb;
                                 let do_cache = tile_cache;
                                 band_handles.push(tokio::spawn(async move {
-                                    let mut reader = match CogReader::open(&href, CogReaderOptions::default()).await {
-                                        Ok(r) => r,
-                                        Err(e) => {
-                                            let msg = e.to_string();
-                                            if !msg.contains("bbox does not intersect") {
-                                                eprintln!("    [cog] async open FAILED: {}", msg);
-                                            }
-                                            return None;
+                                    // Try up to 2 attempts (1 retry) for transient HTTP errors
+                                    for attempt in 0..2u8 {
+                                        if attempt > 0 {
+                                            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                                         }
-                                    };
-                                    let nodata_val = reader.metadata().nodata.unwrap_or(0.0);
-                                    let mut r: surtgis_core::Raster<f64> = match reader.read_bbox(&bb, None).await {
-                                        Ok(r) => r,
-                                        Err(e) => {
-                                            let msg = e.to_string();
-                                            if !msg.contains("bbox does not intersect") {
-                                                eprintln!("    [cog] async read_bbox FAILED: {}", msg);
+                                        let reader = CogReader::open(&href, CogReaderOptions::default()).await;
+                                        let mut reader = match reader {
+                                            Ok(r) => r,
+                                            Err(e) => {
+                                                let msg = e.to_string();
+                                                if msg.contains("bbox does not intersect") { return None; }
+                                                if attempt == 1 {
+                                                    eprintln!("    [cog] open FAILED (2 attempts): {}", msg);
+                                                    return None;
+                                                }
+                                                continue;
                                             }
-                                            return None;
-                                        }
-                                    };
-                                    for val in r.data_mut().iter_mut() {
-                                        if *val == nodata_val || *val == 0.0 {
-                                            *val = f64::NAN;
+                                        };
+                                        let nodata_val = reader.metadata().nodata.unwrap_or(0.0);
+                                        match reader.read_bbox::<f64>(&bb, None).await {
+                                            Ok(mut r) => {
+                                                for val in r.data_mut().iter_mut() {
+                                                    if *val == nodata_val || *val == 0.0 {
+                                                        *val = f64::NAN;
+                                                    }
+                                                }
+                                                if do_cache {
+                                                    let cp = cog_cache_path(&href, &bb);
+                                                    cache_write(&cp, &r);
+                                                }
+                                                return Some(r);
+                                            }
+                                            Err(e) => {
+                                                let msg = e.to_string();
+                                                if msg.contains("bbox does not intersect") { return None; }
+                                                if attempt == 1 {
+                                                    eprintln!("    [cog] read FAILED (2 attempts): {}", msg);
+                                                    return None;
+                                                }
+                                            }
                                         }
                                     }
-                                    if do_cache {
-                                        let cp = cog_cache_path(&href, &bb);
-                                        cache_write(&cp, &r);
-                                    }
-                                    Some(r)
+                                    None
                                 }));
                             }
 
@@ -2771,22 +2783,31 @@ fn handle_multiband_composite(
                                 let bb = bb;
                                 let do_cache = tile_cache;
                                 Some(tokio::spawn(async move {
-                                    let mut reader = CogReader::open(&scl_href, CogReaderOptions::default()).await.ok()?;
-                                    let r: surtgis_core::Raster<f64> = match reader.read_bbox(&bb, None).await {
-                                        Ok(r) => r,
-                                        Err(e) => {
-                                            let msg = e.to_string();
-                                            if !msg.contains("bbox does not intersect") {
-                                                eprintln!("    [cog] async mask FAILED: {}", msg);
-                                            }
-                                            return None;
+                                    for attempt in 0..2u8 {
+                                        if attempt > 0 {
+                                            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                                         }
-                                    };
-                                    if do_cache {
-                                        let cp = cog_cache_path(&scl_href, &bb);
-                                        cache_write(&cp, &r);
+                                        let mut reader = match CogReader::open(&scl_href, CogReaderOptions::default()).await {
+                                            Ok(r) => r,
+                                            Err(_) if attempt == 0 => continue,
+                                            Err(_) => return None,
+                                        };
+                                        match reader.read_bbox::<f64>(&bb, None).await {
+                                            Ok(r) => {
+                                                if do_cache {
+                                                    let cp = cog_cache_path(&scl_href, &bb);
+                                                    cache_write(&cp, &r);
+                                                }
+                                                return Some(r);
+                                            }
+                                            Err(e) => {
+                                                let msg = e.to_string();
+                                                if msg.contains("bbox does not intersect") { return None; }
+                                                if attempt == 1 { return None; }
+                                            }
+                                        }
                                     }
-                                    Some(r)
+                                    None
                                 }))
                             } else {
                                 None
@@ -2811,18 +2832,18 @@ fn handle_multiband_composite(
                 handles.into_iter().map(|h| h.join().unwrap_or_else(|_| (vec![None; n_bands], None))).collect()
             };
 
-            // Separate successful tiles per band + mask.
-            // Three cases per tile:
-            //   - ALL bands None → tile doesn't cover this strip (BBoxOutside), skip silently
-            //   - SOME bands None → true inconsistency, discard tile for ALL bands
-            //   - ALL bands Some → include tile
+            // Per-band tile collection. Each band keeps tiles independently:
+            //   - Band with data → include for that band
+            //   - Band without data (BBoxOutside or HTTP error) → skip for that band only
+            // This is permissive: bands may have different scene counts per pixel.
+            // The median composite handles this naturally (NaN is ignored).
             let mut per_band_tiles: Vec<Vec<surtgis_core::Raster<f64>>> = (0..n_bands)
                 .map(|_| Vec::new())
                 .collect();
             let mut scl_tiles: Vec<surtgis_core::Raster<f64>> = Vec::new();
             let mut tiles_ok = 0usize;
             let mut tiles_outside = 0usize;
-            let mut tiles_inconsistent = 0usize;
+            let mut tiles_partial = 0usize;
 
             for (band_data, mask_opt) in tile_results {
                 let n_some = band_data.iter().filter(|r| r.is_some()).count();
@@ -2831,15 +2852,13 @@ fn handle_multiband_composite(
                     continue; // Tile doesn't cover this strip (BBoxOutside for all bands)
                 }
                 if n_some < n_bands {
-                    // Some bands succeeded, others failed → inconsistency, skip tile
-                    tiles_inconsistent += 1;
-                    eprintln!("    ⚠ {}: tile has {}/{} bands — skipping for consistency",
-                        scene.date, n_some, n_bands);
-                    continue;
+                    tiles_partial += 1;
                 }
-                // All bands present → include this tile
+                // Include each band that succeeded (don't discard all for one failure)
                 for (bi, raster_opt) in band_data.into_iter().enumerate() {
-                    per_band_tiles[bi].push(raster_opt.unwrap());
+                    if let Some(r) = raster_opt {
+                        per_band_tiles[bi].push(r);
+                    }
                 }
                 if let Some(m) = mask_opt {
                     scl_tiles.push(m);
@@ -2847,9 +2866,9 @@ fn handle_multiband_composite(
                 tiles_ok += 1;
             }
 
-            if is_first_strip || tiles_ok == 0 {
-                eprintln!("  ℹ {}: tiles OK={} outside={} inconsistent={} mask={}",
-                    scene.date, tiles_ok, tiles_outside, tiles_inconsistent, scl_tiles.len());
+            if is_first_strip || tiles_ok == 0 || tiles_partial > 0 {
+                eprintln!("  ℹ {}: tiles OK={} outside={} partial={} mask={}",
+                    scene.date, tiles_ok, tiles_outside, tiles_partial, scl_tiles.len());
             }
 
             if tiles_ok == 0 {
