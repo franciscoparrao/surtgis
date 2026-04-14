@@ -170,6 +170,139 @@ pub fn handle(action: InterpolationCommands, compress: bool) -> Result<()> {
             write_result(&out, &output, compress)?;
             done("Regression-Kriging", &output, start.elapsed());
         }
+
+        InterpolationCommands::Idw {
+            points, attribute, reference, power, max_radius, max_points, output,
+        } => {
+            use surtgis_algorithms::interpolation::{idw, IdwParams};
+
+            let samples = load_samples(&points, &attribute)?;
+            let ref_raster: Raster<f64> = read_geotiff(&reference, None)?;
+            let (rows, cols) = ref_raster.shape();
+            println!("Points: {}, Grid: {}x{}", samples.len(), cols, rows);
+
+            let start = Instant::now();
+            let pb = spinner(&format!("IDW (power={})...", power));
+            let result = idw(&samples, IdwParams {
+                power,
+                max_radius,
+                max_points,
+                rows,
+                cols,
+                transform: ref_raster.transform().clone(),
+                ..IdwParams::default()
+            }).context("IDW failed")?;
+            pb.finish_and_clear();
+
+            let mut out = result;
+            out.set_crs(ref_raster.crs().cloned());
+            write_result(&out, &output, compress)?;
+            done("IDW", &output, start.elapsed());
+        }
+
+        InterpolationCommands::NearestNeighbor {
+            points, attribute, reference, max_radius, output,
+        } => {
+            use surtgis_algorithms::interpolation::{nearest_neighbor, NearestNeighborParams};
+
+            let samples = load_samples(&points, &attribute)?;
+            let ref_raster: Raster<f64> = read_geotiff(&reference, None)?;
+            let (rows, cols) = ref_raster.shape();
+            println!("Points: {}, Grid: {}x{}", samples.len(), cols, rows);
+
+            let start = Instant::now();
+            let pb = spinner("Nearest Neighbor...");
+            let result = nearest_neighbor(&samples, NearestNeighborParams {
+                max_radius,
+                rows,
+                cols,
+                transform: ref_raster.transform().clone(),
+            }).context("Nearest Neighbor failed")?;
+            pb.finish_and_clear();
+
+            let mut out = result;
+            out.set_crs(ref_raster.crs().cloned());
+            write_result(&out, &output, compress)?;
+            done("Nearest Neighbor", &output, start.elapsed());
+        }
+
+        InterpolationCommands::NaturalNeighbor {
+            points, attribute, reference, output,
+        } => {
+            use surtgis_algorithms::interpolation::{natural_neighbor, NaturalNeighborParams};
+
+            let samples = load_samples(&points, &attribute)?;
+            let ref_raster: Raster<f64> = read_geotiff(&reference, None)?;
+            let (rows, cols) = ref_raster.shape();
+            println!("Points: {}, Grid: {}x{}", samples.len(), cols, rows);
+
+            let start = Instant::now();
+            let pb = spinner("Natural Neighbor...");
+            let result = natural_neighbor(&samples, NaturalNeighborParams {
+                max_neighbors: 20,
+                sub_resolution: 11,
+                rows,
+                cols,
+                transform: ref_raster.transform().clone(),
+            }).context("Natural Neighbor failed")?;
+            pb.finish_and_clear();
+
+            let mut out = result;
+            out.set_crs(ref_raster.crs().cloned());
+            write_result(&out, &output, compress)?;
+            done("Natural Neighbor", &output, start.elapsed());
+        }
+
+        InterpolationCommands::Tps {
+            points, attribute, reference, smoothing, output,
+        } => {
+            use surtgis_algorithms::interpolation::{tps_interpolation, TpsParams};
+
+            let samples = load_samples(&points, &attribute)?;
+            let ref_raster: Raster<f64> = read_geotiff(&reference, None)?;
+            let (rows, cols) = ref_raster.shape();
+            println!("Points: {}, Grid: {}x{}", samples.len(), cols, rows);
+
+            let start = Instant::now();
+            let pb = spinner("Thin Plate Spline...");
+            let result = tps_interpolation(&samples, TpsParams {
+                rows,
+                cols,
+                transform: ref_raster.transform().clone(),
+                smoothing,
+            }).context("TPS failed")?;
+            pb.finish_and_clear();
+
+            let mut out = result;
+            out.set_crs(ref_raster.crs().cloned());
+            write_result(&out, &output, compress)?;
+            done("TPS", &output, start.elapsed());
+        }
+
+        InterpolationCommands::Tin {
+            points, attribute, reference, output,
+        } => {
+            use surtgis_algorithms::interpolation::{tin_interpolation, TinParams};
+
+            let samples = load_samples(&points, &attribute)?;
+            let ref_raster: Raster<f64> = read_geotiff(&reference, None)?;
+            let (rows, cols) = ref_raster.shape();
+            println!("Points: {}, Grid: {}x{}", samples.len(), cols, rows);
+
+            let start = Instant::now();
+            let pb = spinner("TIN interpolation...");
+            let result = tin_interpolation(&samples, TinParams {
+                rows,
+                cols,
+                transform: ref_raster.transform().clone(),
+            }).context("TIN failed")?;
+            pb.finish_and_clear();
+
+            let mut out = result;
+            out.set_crs(ref_raster.crs().cloned());
+            write_result(&out, &output, compress)?;
+            done("TIN", &output, start.elapsed());
+        }
     }
     Ok(())
 }

@@ -1563,6 +1563,86 @@ pub enum InterpolationCommands {
         /// Output raster
         output: PathBuf,
     },
+    /// Inverse Distance Weighting interpolation
+    Idw {
+        /// Input points (GeoJSON/Shapefile)
+        points: PathBuf,
+        /// Attribute name with values
+        #[arg(long)]
+        attribute: String,
+        /// Reference raster for output grid
+        #[arg(long)]
+        reference: PathBuf,
+        /// Power parameter (default: 2.0, higher = more local)
+        #[arg(long, default_value = "2.0")]
+        power: f64,
+        /// Maximum search radius (default: unlimited)
+        #[arg(long)]
+        max_radius: Option<f64>,
+        /// Maximum neighbors (default: all)
+        #[arg(long)]
+        max_points: Option<usize>,
+        /// Output raster
+        output: PathBuf,
+    },
+    /// Nearest Neighbor interpolation (Voronoi/Thiessen)
+    NearestNeighbor {
+        /// Input points (GeoJSON/Shapefile)
+        points: PathBuf,
+        /// Attribute name with values
+        #[arg(long)]
+        attribute: String,
+        /// Reference raster for output grid
+        #[arg(long)]
+        reference: PathBuf,
+        /// Maximum search radius (default: unlimited)
+        #[arg(long)]
+        max_radius: Option<f64>,
+        /// Output raster
+        output: PathBuf,
+    },
+    /// Natural Neighbor interpolation (Sibson)
+    NaturalNeighbor {
+        /// Input points (GeoJSON/Shapefile)
+        points: PathBuf,
+        /// Attribute name with values
+        #[arg(long)]
+        attribute: String,
+        /// Reference raster for output grid
+        #[arg(long)]
+        reference: PathBuf,
+        /// Output raster
+        output: PathBuf,
+    },
+    /// Thin Plate Spline interpolation
+    Tps {
+        /// Input points (GeoJSON/Shapefile)
+        points: PathBuf,
+        /// Attribute name with values
+        #[arg(long)]
+        attribute: String,
+        /// Reference raster for output grid
+        #[arg(long)]
+        reference: PathBuf,
+        /// Smoothing parameter (0 = exact, >0 = smoothing spline)
+        #[arg(long, default_value = "0.0")]
+        smoothing: f64,
+        /// Output raster
+        output: PathBuf,
+    },
+    /// TIN (Triangulated Irregular Network) interpolation
+    Tin {
+        /// Input points (GeoJSON/Shapefile)
+        points: PathBuf,
+        /// Attribute name with values
+        #[arg(long)]
+        attribute: String,
+        /// Reference raster for output grid
+        #[arg(long)]
+        reference: PathBuf,
+        /// Output raster
+        output: PathBuf,
+    },
 }
 
 // ─── ML subcommands ────────────────────────────────────────────────────
