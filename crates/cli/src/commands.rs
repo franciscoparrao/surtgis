@@ -1348,6 +1348,9 @@ pub enum StacCommands {
         /// Cache downloaded COG tiles locally (~/.cache/surtgis/cog/) for fast re-runs
         #[arg(long)]
         cache: bool,
+        /// Rows per processing strip (larger = fewer HTTP requests but more RAM). Default: 512
+        #[arg(long, default_value = "512")]
+        strip_rows: usize,
         /// Output GeoTIFF file
         output: PathBuf,
     },

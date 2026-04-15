@@ -865,6 +865,7 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             align_to,
             naming,
             cache,
+            strip_rows: cli_strip_rows,
             output,
         } => {
             // Multi-band support: --asset "red,nir,swir16,blue"
@@ -874,7 +875,7 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                 return handle_multiband_composite(
                     &catalog, &bbox, &collection, &assets,
                     &datetime, max_scenes,
-                    align_to.as_ref(), &output, &naming, cache, compress,
+                    align_to.as_ref(), &output, &naming, cache, cli_strip_rows, compress,
                 );
             }
 
@@ -2405,6 +2406,7 @@ fn handle_multiband_composite(
     output: &std::path::Path,
     naming: &str,
     use_cache: bool,
+    strip_rows_cfg: usize,
     compress: bool,
 ) -> Result<()> {
     use surtgis_cloud::reproject;
@@ -2612,7 +2614,7 @@ fn handle_multiband_composite(
         scenes.len(), n_bands);
 
     // -- Phase 3: Strip-by-strip processing --
-    let strip_rows = 512usize;
+    let strip_rows = strip_rows_cfg;
     let num_strips = (out_rows + strip_rows - 1) / strip_rows;
     let n_scenes = scenes.len();
     let out_epsg_for_tiles = out_crs.as_ref().and_then(|c| c.epsg());
@@ -2625,6 +2627,15 @@ fn handle_multiband_composite(
         CollectionProfile::LandsatC2L2 { cloud_mask_strategy } => cloud_mask_strategy.clone(),
         CollectionProfile::Sentinel1RTC => Arc::new(NoCloudMask),
     };
+
+    // Shared tokio runtime for ALL downloads across ALL strips.
+    // Reusing one runtime (8 workers) instead of creating one per tile per strip
+    // eliminates ~3,200 runtime creations and preserves HTTP connection pools.
+    let download_rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(8)
+        .enable_all()
+        .build()
+        .context("Failed to create download runtime")?;
 
     // Pre-allocate output buffers (one per band)
     let mut band_buffers: Vec<Vec<f64>> = (0..n_bands)
@@ -2689,21 +2700,24 @@ fn handle_multiband_composite(
                 strip_bb.max_x + pad, strip_bb.max_y + pad,
             );
 
-            // Download all tiles in parallel (1 thread per MGRS tile).
-            // Within each thread, all band COGs + mask are downloaded CONCURRENTLY
-            // using spawn_local on a single-threaded tokio runtime (async I/O multiplexing).
+            // Download all tiles concurrently on the shared runtime.
+            // All bands + mask across ALL tiles are spawned as tokio tasks.
+            // No std::thread::spawn needed — the runtime's 8 workers handle parallelism.
             let tile_results: Vec<(Vec<Option<surtgis_core::Raster<f64>>>, Option<surtgis_core::Raster<f64>>)> = {
-                let mut handles = Vec::with_capacity(scene.tiles.len());
                 let out_epsg = out_epsg_for_tiles;
+                let tile_cache = use_cache;
 
-                for tile in scene.tiles.iter() {
+                // Check cache first (synchronous, before async block)
+                let mut cached_results: Vec<Option<(Vec<Option<surtgis_core::Raster<f64>>>, Option<surtgis_core::Raster<f64>>)>> =
+                    Vec::with_capacity(scene.tiles.len());
+                let mut tiles_to_download: Vec<(usize, Vec<String>, String, BBox)> = Vec::new();
+
+                for (ti, tile) in scene.tiles.iter().enumerate() {
                     let band_hrefs: Vec<String> = tile.band_hrefs.iter()
                         .map(|(signed, _)| signed.clone())
                         .collect();
                     let scl_href = tile.scl_href.clone();
                     let tile_epsg = tile.epsg;
-                    let n_bands_t = n_bands;
-                    let tile_cache = use_cache;
 
                     let bb = if let (Some(tepsg), Some(out_e)) = (tile_epsg, out_epsg) {
                         if tepsg != out_e {
@@ -2711,60 +2725,51 @@ fn handle_multiband_composite(
                         } else { tile_bb }
                     } else { tile_bb };
 
-                    handles.push(std::thread::spawn(move || {
-                        // Check cache first (synchronous disk I/O)
-                        if tile_cache {
-                            let mut all_cached = true;
-                            let mut cached_bands: Vec<Option<surtgis_core::Raster<f64>>> = Vec::with_capacity(n_bands_t);
-                            for href in &band_hrefs {
-                                let cp = cog_cache_path(href, &bb);
-                                match cache_read(&cp) {
-                                    Some(r) => cached_bands.push(Some(r)),
-                                    None => { all_cached = false; break; }
-                                }
-                            }
-                            if all_cached && cached_bands.len() == n_bands_t {
-                                let cached_mask = if !scl_href.is_empty() {
-                                    let cp = cog_cache_path(&scl_href, &bb);
-                                    cache_read(&cp)
-                                } else { None };
-                                return (cached_bands, cached_mask);
+                    // Check disk cache
+                    if tile_cache {
+                        let mut all_cached = true;
+                        let mut cached_bands: Vec<Option<surtgis_core::Raster<f64>>> = Vec::with_capacity(n_bands);
+                        for href in &band_hrefs {
+                            match cache_read(&cog_cache_path(href, &bb)) {
+                                Some(r) => cached_bands.push(Some(r)),
+                                None => { all_cached = false; break; }
                             }
                         }
+                        if all_cached && cached_bands.len() == n_bands {
+                            let cached_mask = if !scl_href.is_empty() {
+                                cache_read(&cog_cache_path(&scl_href, &bb))
+                            } else { None };
+                            cached_results.push(Some((cached_bands, cached_mask)));
+                            continue;
+                        }
+                    }
+                    cached_results.push(None); // needs download
+                    tiles_to_download.push((ti, band_hrefs, scl_href, bb));
+                }
 
-                        // Cache miss — download via HTTP
-                        let Ok(rt) = tokio::runtime::Builder::new_multi_thread()
-                            .worker_threads(4)
-                            .enable_all()
-                            .build()
-                        else {
-                            return (vec![None; n_bands_t], None);
-                        };
+                // Download missing tiles on the shared runtime
+                if !tiles_to_download.is_empty() {
+                    let downloaded = download_rt.block_on(async {
+                        use surtgis_cloud::{CogReader, CogReaderOptions};
 
-                        rt.block_on(async {
-                            use surtgis_cloud::{CogReader, CogReaderOptions};
+                        let mut tile_handles: Vec<(usize, Vec<tokio::task::JoinHandle<Option<surtgis_core::Raster<f64>>>>, Option<tokio::task::JoinHandle<Option<surtgis_core::Raster<f64>>>>)> = Vec::new();
 
-                            // Spawn all band downloads as concurrent tasks (true parallelism)
-                            let mut band_handles = Vec::with_capacity(n_bands_t);
+                        for (ti, band_hrefs, scl_href, bb) in tiles_to_download {
+                            let mut band_handles = Vec::with_capacity(n_bands);
                             for href in band_hrefs {
                                 let bb = bb;
                                 let do_cache = tile_cache;
                                 band_handles.push(tokio::spawn(async move {
-                                    // Try up to 2 attempts (1 retry) for transient HTTP errors
                                     for attempt in 0..2u8 {
                                         if attempt > 0 {
                                             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                                         }
-                                        let reader = CogReader::open(&href, CogReaderOptions::default()).await;
-                                        let mut reader = match reader {
+                                        let mut reader = match CogReader::open(&href, CogReaderOptions::default()).await {
                                             Ok(r) => r,
                                             Err(e) => {
                                                 let msg = e.to_string();
                                                 if msg.contains("bbox does not intersect") { return None; }
-                                                if attempt == 1 {
-                                                    eprintln!("    [cog] open FAILED (2 attempts): {}", msg);
-                                                    return None;
-                                                }
+                                                if attempt == 1 { eprintln!("    [cog] open FAILED: {}", msg); return None; }
                                                 continue;
                                             }
                                         };
@@ -2772,50 +2777,9 @@ fn handle_multiband_composite(
                                         match reader.read_bbox::<f64>(&bb, None).await {
                                             Ok(mut r) => {
                                                 for val in r.data_mut().iter_mut() {
-                                                    if *val == nodata_val || *val == 0.0 {
-                                                        *val = f64::NAN;
-                                                    }
+                                                    if *val == nodata_val || *val == 0.0 { *val = f64::NAN; }
                                                 }
-                                                if do_cache {
-                                                    let cp = cog_cache_path(&href, &bb);
-                                                    cache_write(&cp, &r);
-                                                }
-                                                return Some(r);
-                                            }
-                                            Err(e) => {
-                                                let msg = e.to_string();
-                                                if msg.contains("bbox does not intersect") { return None; }
-                                                if attempt == 1 {
-                                                    eprintln!("    [cog] read FAILED (2 attempts): {}", msg);
-                                                    return None;
-                                                }
-                                            }
-                                        }
-                                    }
-                                    None
-                                }));
-                            }
-
-                            // Spawn mask download (concurrent with band downloads)
-                            let mask_handle = if !scl_href.is_empty() {
-                                let bb = bb;
-                                let do_cache = tile_cache;
-                                Some(tokio::spawn(async move {
-                                    for attempt in 0..2u8 {
-                                        if attempt > 0 {
-                                            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                                        }
-                                        let mut reader = match CogReader::open(&scl_href, CogReaderOptions::default()).await {
-                                            Ok(r) => r,
-                                            Err(_) if attempt == 0 => continue,
-                                            Err(_) => return None,
-                                        };
-                                        match reader.read_bbox::<f64>(&bb, None).await {
-                                            Ok(r) => {
-                                                if do_cache {
-                                                    let cp = cog_cache_path(&scl_href, &bb);
-                                                    cache_write(&cp, &r);
-                                                }
+                                                if do_cache { cache_write(&cog_cache_path(&href, &bb), &r); }
                                                 return Some(r);
                                             }
                                             Err(e) => {
@@ -2826,28 +2790,57 @@ fn handle_multiband_composite(
                                         }
                                     }
                                     None
-                                }))
-                            } else {
-                                None
-                            };
-
-                            // Collect band results
-                            let mut band_data = Vec::with_capacity(n_bands_t);
-                            for handle in band_handles {
-                                band_data.push(handle.await.ok().flatten());
+                                }));
                             }
-                            // Collect mask result
-                            let mask = if let Some(h) = mask_handle {
-                                h.await.ok().flatten()
-                            } else {
-                                None
-                            };
+                            let mask_handle = if !scl_href.is_empty() {
+                                let bb = bb;
+                                let do_cache = tile_cache;
+                                Some(tokio::spawn(async move {
+                                    for attempt in 0..2u8 {
+                                        if attempt > 0 { tokio::time::sleep(std::time::Duration::from_secs(1)).await; }
+                                        let mut reader = match CogReader::open(&scl_href, CogReaderOptions::default()).await {
+                                            Ok(r) => r,
+                                            Err(_) if attempt == 0 => continue,
+                                            Err(_) => return None,
+                                        };
+                                        match reader.read_bbox::<f64>(&bb, None).await {
+                                            Ok(r) => {
+                                                if do_cache { cache_write(&cog_cache_path(&scl_href, &bb), &r); }
+                                                return Some(r);
+                                            }
+                                            Err(e) => {
+                                                if !e.to_string().contains("bbox does not intersect") && attempt == 1 { return None; }
+                                                if e.to_string().contains("bbox does not intersect") { return None; }
+                                            }
+                                        }
+                                    }
+                                    None
+                                }))
+                            } else { None };
+                            tile_handles.push((ti, band_handles, mask_handle));
+                        }
 
-                            (band_data, mask)
-                        })
-                    }));
+                        // Collect results
+                        let mut results: Vec<(usize, Vec<Option<surtgis_core::Raster<f64>>>, Option<surtgis_core::Raster<f64>>)> = Vec::new();
+                        for (ti, band_handles, mask_handle) in tile_handles {
+                            let mut bands = Vec::with_capacity(n_bands);
+                            for h in band_handles { bands.push(h.await.ok().flatten()); }
+                            let mask = if let Some(h) = mask_handle { h.await.ok().flatten() } else { None };
+                            results.push((ti, bands, mask));
+                        }
+                        results
+                    });
+
+                    // Merge downloaded results into cached_results
+                    for (ti, bands, mask) in downloaded {
+                        cached_results[ti] = Some((bands, mask));
+                    }
                 }
-                handles.into_iter().map(|h| h.join().unwrap_or_else(|_| (vec![None; n_bands], None))).collect()
+
+                // Flatten: all tiles now have results
+                cached_results.into_iter()
+                    .map(|r| r.unwrap_or_else(|| (vec![None; n_bands], None)))
+                    .collect()
             };
 
             // Per-band tile collection. Each band keeps tiles independently:
