@@ -136,6 +136,20 @@ impl StacCatalog {
     pub fn needs_signing(&self) -> bool {
         matches!(self, Self::PlanetaryComputer)
     }
+
+    /// Maximum items per search page for this catalog.
+    ///
+    /// Different STAC APIs have different limits:
+    /// - Planetary Computer: 1000
+    /// - Earth Search: 250 (502 above this)
+    /// - Custom/unknown: 250 (conservative default)
+    pub fn max_page_size(&self) -> u32 {
+        match self {
+            Self::PlanetaryComputer => 1000,
+            Self::EarthSearch => 250,
+            Self::Custom(_) => 250,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
