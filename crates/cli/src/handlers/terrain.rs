@@ -4,17 +4,24 @@ use anyhow::{Context, Result};
 use std::time::Instant;
 
 use surtgis_algorithms::terrain::{
-    advanced_curvatures, aspect, convergence_index, curvature, dev, eastness, geomorphons,
-    hillshade, landform_classification, ls_factor, mrvbf, multidirectional_hillshade,
-    negative_openness, northness, positive_openness, relative_slope_position, sky_view_factor,
-    slope, surface_area_ratio, tpi, tri, valley_depth, viewshed, vrm,
-    AspectOutput, AspectStreaming, ConvergenceParams, ConvergenceStreaming,
-    CurvatureParams, CurvatureStreaming, CurvatureType, DevParams, DevStreaming,
-    EastnessStreaming, GeomorphonParams, HillshadeParams, HillshadeStreaming, LandformParams,
-    LsFactorParams, MultiHillshadeParams, MultiHillshadeStreaming, MrvbfParams,
-    NorthnessStreaming, OpennessParams, SarParams, SlopeParams, SlopeStreaming, SlopeUnits,
-    SvfParams, TpiParams, TpiStreaming, TriParams, TriStreaming, ViewshedParams, VrmParams,
-    VrmStreaming,
+    advanced_curvatures, aspect, circular_variance_aspect, convergence_index, curvature, dev,
+    diff_from_mean_elev, directional_relief, downslope_index, eastness, edge_density,
+    elev_above_pit, elev_relative_to_min_max, geomorphons, hillshade, hypsometric_hillshade,
+    landform_classification, ls_factor, max_branch_length, mrvbf, multidirectional_hillshade,
+    negative_openness, neighbour_stats, normal_vector_deviation, northness, pennock,
+    percent_elev_range, positive_openness, relative_aspect, relative_slope_position,
+    sky_view_factor, slope, spherical_std_dev, surface_area_ratio, tpi, tri, valley_depth,
+    viewshed, vrm,
+    AspectOutput, AspectStreaming, CircularVarianceParams, CircularVarianceStreaming,
+    ConvergenceParams, ConvergenceStreaming, CurvatureParams, CurvatureStreaming, CurvatureType,
+    DevParams, DevStreaming, DiffFromMeanParams, DiffFromMeanStreaming, DirectionalReliefParams,
+    DownslopeIndexParams, EdgeDensityParams, EastnessStreaming, GeomorphonParams, HillshadeParams,
+    HillshadeStreaming, LandformParams, LsFactorParams, MultiHillshadeParams,
+    MultiHillshadeStreaming, MrvbfParams, NormalDeviationParams, NormalDeviationStreaming,
+    NorthnessStreaming, OpennessParams, PennockParams, PercentElevRangeParams,
+    PercentElevRangeStreaming, RelativeAspectParams, SarParams, SlopeParams, SlopeStreaming,
+    SlopeUnits, SphericalStdDevParams, SphericalStdDevStreaming, SvfParams, TpiParams,
+    TpiStreaming, TriParams, TriStreaming, ViewshedParams, VrmParams, VrmStreaming,
 };
 use surtgis_core::StripProcessor;
 
@@ -845,6 +852,220 @@ pub fn handle(algorithm: TerrainCommands, compress: bool, streaming: bool, mem_l
             pb.finish_and_clear();
             write_result(&result, &output, compress)?;
             done("Multiple Viewshed", &output, start.elapsed());
+        }
+
+        TerrainCommands::HypsometricHillshade { input, output, azimuth, altitude, z_factor } => {
+            let dem = read_dem(&input)?;
+            let start = Instant::now();
+            let result = hypsometric_hillshade(
+                &dem,
+                HillshadeParams { azimuth, altitude, z_factor, normalized: true },
+            ).context("Failed to compute hypsometric hillshade")?;
+            write_result(&result, &output, compress)?;
+            done("Hypsometric Hillshade", &output, start.elapsed());
+        }
+
+        TerrainCommands::ElevRelative { input, output } => {
+            let dem = read_dem(&input)?;
+            let start = Instant::now();
+            let result = elev_relative_to_min_max(&dem)
+                .context("Failed to compute elevation relative to min/max")?;
+            write_result(&result, &output, compress)?;
+            done("Elev Relative to Min/Max", &output, start.elapsed());
+        }
+
+        TerrainCommands::DiffFromMean { input, output, radius } => {
+            let use_streaming = memory::should_stream(&input, mem_limit_bytes, streaming)?;
+
+            if use_streaming {
+                let algo = DiffFromMeanStreaming { radius };
+                let processor = StripProcessor::new(256);
+                let start = Instant::now();
+                let (rows, cols) = processor.process(&input, &output, &algo, compress)
+                    .context("Failed to compute diff-from-mean (streaming)")?;
+                let elapsed = start.elapsed();
+                println!("Diff from Mean (streaming): {} x {}", cols, rows);
+                done("Diff from Mean Elev", &output, elapsed);
+            } else {
+                let dem = read_dem(&input)?;
+                let start = Instant::now();
+                let result = diff_from_mean_elev(&dem, DiffFromMeanParams { radius })
+                    .context("Failed to compute diff from mean elevation")?;
+                write_result(&result, &output, compress)?;
+                done("Diff from Mean Elev", &output, start.elapsed());
+            }
+        }
+
+        TerrainCommands::PercentElevRange { input, output, radius } => {
+            let use_streaming = memory::should_stream(&input, mem_limit_bytes, streaming)?;
+
+            if use_streaming {
+                let algo = PercentElevRangeStreaming { radius };
+                let processor = StripProcessor::new(256);
+                let start = Instant::now();
+                let (rows, cols) = processor.process(&input, &output, &algo, compress)
+                    .context("Failed to compute percent-elev-range (streaming)")?;
+                let elapsed = start.elapsed();
+                println!("Percent Elev Range (streaming): {} x {}", cols, rows);
+                done("Percent Elev Range", &output, elapsed);
+            } else {
+                let dem = read_dem(&input)?;
+                let start = Instant::now();
+                let result = percent_elev_range(&dem, PercentElevRangeParams { radius })
+                    .context("Failed to compute percent elevation range")?;
+                write_result(&result, &output, compress)?;
+                done("Percent Elev Range", &output, start.elapsed());
+            }
+        }
+
+        TerrainCommands::ElevAbovePit { input, output } => {
+            let dem = read_dem(&input)?;
+            let start = Instant::now();
+            let result = elev_above_pit(&dem)
+                .context("Failed to compute elevation above pit")?;
+            write_result(&result, &output, compress)?;
+            done("Elev Above Pit", &output, start.elapsed());
+        }
+
+        TerrainCommands::CircularVarianceAspect { input, output, radius } => {
+            let use_streaming = memory::should_stream(&input, mem_limit_bytes, streaming)?;
+
+            if use_streaming {
+                let algo = CircularVarianceStreaming { radius };
+                let processor = StripProcessor::new(256);
+                let start = Instant::now();
+                let (rows, cols) = processor.process(&input, &output, &algo, compress)
+                    .context("Failed to compute circular variance of aspect (streaming)")?;
+                let elapsed = start.elapsed();
+                println!("Circular Variance Aspect (streaming): {} x {}", cols, rows);
+                done("Circular Variance Aspect", &output, elapsed);
+            } else {
+                let dem = read_dem(&input)?;
+                let start = Instant::now();
+                let result = circular_variance_aspect(&dem, CircularVarianceParams { radius })
+                    .context("Failed to compute circular variance of aspect")?;
+                write_result(&result, &output, compress)?;
+                done("Circular Variance Aspect", &output, start.elapsed());
+            }
+        }
+
+        TerrainCommands::Neighbours { input, outdir } => {
+            std::fs::create_dir_all(&outdir)
+                .context("Failed to create output directory")?;
+            let dem = read_dem(&input)?;
+            let start = Instant::now();
+            let result = neighbour_stats(&dem)
+                .context("Failed to compute neighbour statistics")?;
+            write_result(&result.max_downslope_change, &outdir.join("max_downslope_change.tif"), compress)?;
+            write_result(&result.min_downslope_change, &outdir.join("min_downslope_change.tif"), compress)?;
+            write_result(&result.max_upslope_change, &outdir.join("max_upslope_change.tif"), compress)?;
+            write_result(&result.num_downslope, &outdir.join("num_downslope.tif"), compress)?;
+            write_result(&result.num_upslope, &outdir.join("num_upslope.tif"), compress)?;
+            println!("  5 neighbour statistics saved to {}", outdir.display());
+            done("Neighbour Stats", &outdir, start.elapsed());
+        }
+
+        TerrainCommands::Pennock { input, output, slope_threshold, curv_threshold } => {
+            let dem = read_dem(&input)?;
+            let start = Instant::now();
+            let result = pennock(&dem, PennockParams {
+                slope_threshold,
+                profile_curv_threshold: curv_threshold,
+                plan_curv_threshold: 0.0,
+            }).context("Failed to compute Pennock classification")?;
+            write_result(&result, &output, compress)?;
+            done("Pennock Landform", &output, start.elapsed());
+        }
+
+        TerrainCommands::EdgeDensity { input, output, radius, threshold } => {
+            let dem = read_dem(&input)?;
+            let start = Instant::now();
+            let result = edge_density(&dem, EdgeDensityParams { radius, threshold })
+                .context("Failed to compute edge density")?;
+            write_result(&result, &output, compress)?;
+            done("Edge Density", &output, start.elapsed());
+        }
+
+        TerrainCommands::RelativeAspect { input, output, sigma } => {
+            let dem = read_dem(&input)?;
+            let start = Instant::now();
+            let result = relative_aspect(&dem, RelativeAspectParams { sigma })
+                .context("Failed to compute relative aspect")?;
+            write_result(&result, &output, compress)?;
+            done("Relative Aspect", &output, start.elapsed());
+        }
+
+        TerrainCommands::NormalDeviation { input, output, radius } => {
+            let use_streaming = memory::should_stream(&input, mem_limit_bytes, streaming)?;
+
+            if use_streaming {
+                let algo = NormalDeviationStreaming { radius };
+                let processor = StripProcessor::new(256);
+                let start = Instant::now();
+                let (rows, cols) = processor.process(&input, &output, &algo, compress)
+                    .context("Failed to compute normal deviation (streaming)")?;
+                let elapsed = start.elapsed();
+                println!("Normal Deviation (streaming): {} x {}", cols, rows);
+                done("Normal Deviation", &output, elapsed);
+            } else {
+                let dem = read_dem(&input)?;
+                let start = Instant::now();
+                let result = normal_vector_deviation(&dem, NormalDeviationParams { radius })
+                    .context("Failed to compute normal vector deviation")?;
+                write_result(&result, &output, compress)?;
+                done("Normal Deviation", &output, start.elapsed());
+            }
+        }
+
+        TerrainCommands::SphericalStdDev { input, output, radius } => {
+            let use_streaming = memory::should_stream(&input, mem_limit_bytes, streaming)?;
+
+            if use_streaming {
+                let algo = SphericalStdDevStreaming { radius };
+                let processor = StripProcessor::new(256);
+                let start = Instant::now();
+                let (rows, cols) = processor.process(&input, &output, &algo, compress)
+                    .context("Failed to compute spherical std dev (streaming)")?;
+                let elapsed = start.elapsed();
+                println!("Spherical Std Dev (streaming): {} x {}", cols, rows);
+                done("Spherical Std Dev", &output, elapsed);
+            } else {
+                let dem = read_dem(&input)?;
+                let start = Instant::now();
+                let result = spherical_std_dev(&dem, SphericalStdDevParams { radius })
+                    .context("Failed to compute spherical std dev of normals")?;
+                write_result(&result, &output, compress)?;
+                done("Spherical Std Dev", &output, start.elapsed());
+            }
+        }
+
+        TerrainCommands::DirectionalRelief { input, output, radius, azimuth } => {
+            let dem = read_dem(&input)?;
+            let start = Instant::now();
+            let result = directional_relief(&dem, DirectionalReliefParams { radius, azimuth })
+                .context("Failed to compute directional relief")?;
+            write_result(&result, &output, compress)?;
+            done("Directional Relief", &output, start.elapsed());
+        }
+
+        TerrainCommands::DownslopeIndex { input, output, drop: drop_val } => {
+            let dem = read_dem(&input)?;
+            let start = Instant::now();
+            let result = downslope_index(&dem, DownslopeIndexParams { drop: drop_val })
+                .context("Failed to compute downslope index")?;
+            write_result(&result, &output, compress)?;
+            done("Downslope Index", &output, start.elapsed());
+        }
+
+        TerrainCommands::MaxBranchLength { input, output } => {
+            let dem = read_dem(&input)?;
+            let start = Instant::now();
+            let pb = spinner("Computing max branch length (fill + flow dir + topo sort)...");
+            let result = max_branch_length(&dem)
+                .context("Failed to compute max branch length")?;
+            pb.finish_and_clear();
+            write_result(&result, &output, compress)?;
+            done("Max Branch Length", &output, start.elapsed());
         }
 
         TerrainCommands::All { input, outdir } => {

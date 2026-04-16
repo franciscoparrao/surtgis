@@ -603,6 +603,131 @@ pub enum TerrainCommands {
         #[arg(long, default_value = "1.7")]
         height: f64,
     },
+    /// Hypsometrically tinted hillshade (hillshade × normalized elevation)
+    HypsometricHillshade {
+        input: PathBuf,
+        output: PathBuf,
+        /// Sun azimuth in degrees
+        #[arg(short, long, default_value = "315")]
+        azimuth: f64,
+        /// Sun altitude in degrees
+        #[arg(short = 'l', long, default_value = "45")]
+        altitude: f64,
+        /// Z-factor
+        #[arg(short, long, default_value = "1.0")]
+        z_factor: f64,
+    },
+    /// Elevation relative to global min/max (normalized 0–1)
+    ElevRelative {
+        input: PathBuf,
+        output: PathBuf,
+    },
+    /// Difference from mean elevation (non-normalized, in DEM units)
+    DiffFromMean {
+        input: PathBuf,
+        output: PathBuf,
+        /// Neighborhood radius in cells
+        #[arg(short, long, default_value = "10")]
+        radius: usize,
+    },
+    /// Percent elevation range (local position 0–100%)
+    PercentElevRange {
+        input: PathBuf,
+        output: PathBuf,
+        /// Neighborhood radius in cells
+        #[arg(short, long, default_value = "10")]
+        radius: usize,
+    },
+    /// Elevation above pit / depth in sink
+    ElevAbovePit {
+        input: PathBuf,
+        output: PathBuf,
+    },
+    /// Circular variance of aspect (0=uniform, 1=dispersed)
+    CircularVarianceAspect {
+        input: PathBuf,
+        output: PathBuf,
+        /// Neighborhood radius in cells
+        #[arg(short, long, default_value = "3")]
+        radius: usize,
+    },
+    /// Neighbour elevation statistics (3×3 window, 5 outputs)
+    Neighbours {
+        input: PathBuf,
+        /// Output directory for all 5 statistics
+        #[arg(short, long)]
+        outdir: PathBuf,
+    },
+    /// Pennock landform classification (7 classes)
+    Pennock {
+        input: PathBuf,
+        output: PathBuf,
+        /// Slope threshold (degrees) for "level" class
+        #[arg(long, default_value = "3.0")]
+        slope_threshold: f64,
+        /// Profile curvature threshold for linear vs convex/concave
+        #[arg(long, default_value = "0.1")]
+        curv_threshold: f64,
+    },
+    /// Edge density (proportion of edge pixels in focal window)
+    EdgeDensity {
+        input: PathBuf,
+        output: PathBuf,
+        /// Neighborhood radius in cells
+        #[arg(short, long, default_value = "3")]
+        radius: usize,
+        /// Sobel magnitude threshold for edge detection
+        #[arg(short, long, default_value = "0.5")]
+        threshold: f64,
+    },
+    /// Relative aspect (local vs regional aspect difference, 0–180°)
+    RelativeAspect {
+        input: PathBuf,
+        output: PathBuf,
+        /// Gaussian sigma for regional smoothing
+        #[arg(long, default_value = "50")]
+        sigma: f64,
+    },
+    /// Average normal vector angular deviation (degrees)
+    NormalDeviation {
+        input: PathBuf,
+        output: PathBuf,
+        /// Neighborhood radius in cells
+        #[arg(short, long, default_value = "3")]
+        radius: usize,
+    },
+    /// Spherical standard deviation of surface normals
+    SphericalStdDev {
+        input: PathBuf,
+        output: PathBuf,
+        /// Neighborhood radius in cells
+        #[arg(short, long, default_value = "3")]
+        radius: usize,
+    },
+    /// Directional relief (elevation range along azimuth)
+    DirectionalRelief {
+        input: PathBuf,
+        output: PathBuf,
+        /// Search radius in cells
+        #[arg(short, long, default_value = "10")]
+        radius: usize,
+        /// Azimuth in degrees (0 = multidirectional average)
+        #[arg(short, long, default_value = "0")]
+        azimuth: f64,
+    },
+    /// Downslope index (distance to reach elevation drop, Hjerdt 2004)
+    DownslopeIndex {
+        input: PathBuf,
+        output: PathBuf,
+        /// Elevation drop threshold in DEM units
+        #[arg(short, long, default_value = "2.0")]
+        drop: f64,
+    },
+    /// Maximum upstream branch length (longest D8 flow path)
+    MaxBranchLength {
+        input: PathBuf,
+        output: PathBuf,
+    },
 }
 
 // ─── Hydrology subcommands ──────────────────────────────────────────────

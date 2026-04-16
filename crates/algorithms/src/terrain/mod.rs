@@ -23,6 +23,7 @@
 mod accumulation_zones;
 mod aspect;
 mod chebyshev_spectral;
+mod circular_variance_aspect;
 mod contour;
 mod convergence;
 mod cost_distance;
@@ -30,22 +31,36 @@ mod curvature;
 pub mod derivatives;
 mod curvature_advanced;
 mod dev;
+mod diff_from_mean_elev;
+mod directional_relief;
+mod downslope_index;
+mod edge_density;
+mod elev_above_pit;
+mod elev_relative_to_min_max;
 mod gaussian_scale_space;
 mod geomorphons;
 mod hillshade;
 mod horizon_angles;
+mod hypsometric_hillshade;
 mod landform;
 mod lineament;
 mod log_transform;
+mod max_branch_length;
 mod mrvbf;
 mod multidirectional_hillshade;
 mod multiscale_curvatures;
+mod neighbours;
+mod normal_vector_deviation;
 mod northness_eastness;
 mod openness;
+mod pennock;
+mod percent_elev_range;
 mod rea;
+mod relative_aspect;
 mod shape_index;
 pub(crate) mod slope;
 mod smoothing;
+mod spherical_std_dev;
 mod solar_radiation;
 mod sky_view_factor;
 mod spi_sti;
@@ -65,6 +80,7 @@ mod relative_slope_position;
 mod surface_area_ratio;
 mod wind_exposure;
 
+pub use circular_variance_aspect::{circular_variance_aspect, CircularVarianceParams, CircularVarianceStreaming};
 pub use accumulation_zones::{
     accumulation_zones, ZONE_ACCUMULATION, ZONE_DISPERSION,
     ZONE_TRANSITIONAL_ACC, ZONE_TRANSITIONAL_DISP,
@@ -76,17 +92,31 @@ pub use convergence::{convergence_index, ConvergenceParams, ConvergenceStreaming
 pub use curvature::{curvature, Curvature, CurvatureParams, CurvatureType, CurvatureStreaming, DerivativeMethod, CurvatureFormula};
 pub use curvature_advanced::{advanced_curvatures, all_curvatures, AdvancedCurvatureType, AllCurvatures};
 pub use dev::{dev, Dev, DevParams, DevStreaming};
+pub use diff_from_mean_elev::{diff_from_mean_elev, DiffFromMeanParams, DiffFromMeanStreaming};
+pub use directional_relief::{directional_relief, DirectionalReliefParams};
+pub use downslope_index::{downslope_index, DownslopeIndexParams};
+pub use edge_density::{edge_density, EdgeDensityParams};
+pub use elev_above_pit::elev_above_pit;
+pub use elev_relative_to_min_max::elev_relative_to_min_max;
 pub use geomorphons::{geomorphons, GeomorphonParams};
 pub use hillshade::{hillshade, Hillshade, HillshadeParams, HillshadeStreaming};
+pub use hypsometric_hillshade::hypsometric_hillshade;
 pub use landform::{landform_classification, Landform, LandformParams};
 pub use log_transform::log_transform;
+pub use max_branch_length::max_branch_length;
 pub use mrvbf::{mrvbf, MrvbfParams};
 pub use multidirectional_hillshade::{multidirectional_hillshade, MultiHillshadeParams, MultiHillshadeStreaming};
 pub use multiscale_curvatures::{multiscale_curvatures, MultiscaleCurvatureParams, MultiscaleCurvatureType};
 pub use northness_eastness::{northness, eastness, northness_eastness, NorthnessStreaming, EastnessStreaming};
+pub use neighbours::{neighbour_stats, NeighbourStatsResult};
+pub use normal_vector_deviation::{normal_vector_deviation, NormalDeviationParams, NormalDeviationStreaming};
 pub use openness::{positive_openness, negative_openness, OpennessParams};
+pub use pennock::{pennock, PennockParams};
+pub use percent_elev_range::{percent_elev_range, PercentElevRangeParams, PercentElevRangeStreaming};
+pub use relative_aspect::{relative_aspect, RelativeAspectParams};
 pub use shape_index::{shape_index, curvedness};
 pub use slope::{slope, Slope, SlopeParams, SlopeStreaming, SlopeUnits};
+pub use spherical_std_dev::{spherical_std_dev, SphericalStdDevParams, SphericalStdDevStreaming};
 pub use smoothing::{
     feature_preserving_smoothing, SmoothingParams,
     gaussian_smoothing, GaussianSmoothingParams,
