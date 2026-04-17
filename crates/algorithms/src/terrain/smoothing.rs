@@ -261,7 +261,9 @@ impl Default for GaussianSmoothingParams {
 
 /// Apply Gaussian smoothing to a DEM.
 ///
-/// Standard isotropic Gaussian filter using a precomputed kernel.
+/// Uses separable convolution (row pass + column pass) for O(n·k) efficiency
+/// instead of direct 2D convolution O(n·k²).
+///
 /// Florinsky (2025) Eq. 6.10: G(x,y) = (1/2πσ²) exp(-(x²+y²)/(2σ²))
 ///
 /// # Arguments
@@ -279,77 +281,85 @@ pub fn gaussian_smoothing(
     }
 
     let (rows, cols) = dem.shape();
-    let r = params.radius as isize;
     let sigma = if params.sigma <= 0.0 {
         params.radius as f64 / 2.0
     } else {
         params.sigma
     };
-    let two_sigma_sq = 2.0 * sigma * sigma;
 
-    // Precompute kernel
-    let kernel_size = 2 * params.radius + 1;
-    let mut kernel = vec![0.0_f64; kernel_size * kernel_size];
-    let mut kernel_sum = 0.0;
+    // Build 1D Gaussian kernel truncated at the given radius
+    let half = params.radius;
+    let size = 2 * half + 1;
+    let denom = 2.0 * sigma * sigma;
+    let kernel: Vec<f64> = (0..size)
+        .map(|i| {
+            let x = i as f64 - half as f64;
+            (-x * x / denom).exp()
+        })
+        .collect();
 
-    for dr in -r..=r {
-        for dc in -r..=r {
-            let dist_sq = (dr * dr + dc * dc) as f64;
-            let w = (-dist_sq / two_sigma_sq).exp();
-            let idx = ((dr + r) as usize) * kernel_size + (dc + r) as usize;
-            kernel[idx] = w;
-            kernel_sum += w;
-        }
-    }
-
-    // Normalize kernel
-    for w in kernel.iter_mut() {
-        *w /= kernel_sum;
-    }
-
-    let nodata = dem.nodata();
     let data = dem.data();
 
+    // Row pass: convolve each row with the 1D kernel
+    let row_smoothed: Vec<f64> = (0..rows)
+        .into_par_iter()
+        .flat_map(|row| {
+            let mut out = vec![f64::NAN; cols];
+            for col in 0..cols {
+                let center = data[[row, col]];
+                if center.is_nan() {
+                    continue;
+                }
+                let mut sum = 0.0;
+                let mut wsum = 0.0;
+                for (ki, &kw) in kernel.iter().enumerate() {
+                    let c = col as isize + ki as isize - half as isize;
+                    if c >= 0 && c < cols as isize {
+                        let v = data[[row, c as usize]];
+                        if !v.is_nan() {
+                            sum += kw * v;
+                            wsum += kw;
+                        }
+                    }
+                }
+                if wsum > 0.0 {
+                    out[col] = sum / wsum;
+                }
+            }
+            out
+        })
+        .collect();
+
+    let row_arr = Array2::from_shape_vec((rows, cols), row_smoothed)
+        .map_err(|e| Error::Other(e.to_string()))?;
+
+    // Column pass: convolve each column with the 1D kernel
     let output_data: Vec<f64> = (0..rows)
         .into_par_iter()
         .flat_map(|row| {
-            let mut row_data = vec![f64::NAN; cols];
+            let mut out = vec![f64::NAN; cols];
             for col in 0..cols {
-                let z0 = data[(row, col)];
-                if z0.is_nan() {
+                let center = row_arr[[row, col]];
+                if center.is_nan() {
                     continue;
                 }
-                if let Some(nd) = nodata
-                    && (z0 - nd).abs() < f64::EPSILON { continue; }
-
                 let mut sum = 0.0;
                 let mut wsum = 0.0;
-
-                for dr in -r..=r {
-                    let nr = row as isize + dr;
-                    if nr < 0 || (nr as usize) >= rows { continue; }
-
-                    for dc in -r..=r {
-                        let nc = col as isize + dc;
-                        if nc < 0 || (nc as usize) >= cols { continue; }
-
-                        let z = data[(nr as usize, nc as usize)];
-                        if z.is_nan() { continue; }
-                        if let Some(nd) = nodata
-                            && (z - nd).abs() < f64::EPSILON { continue; }
-
-                        let ki = ((dr + r) as usize) * kernel_size + (dc + r) as usize;
-                        let w = kernel[ki];
-                        sum += z * w;
-                        wsum += w;
+                for (ki, &kw) in kernel.iter().enumerate() {
+                    let r = row as isize + ki as isize - half as isize;
+                    if r >= 0 && r < rows as isize {
+                        let v = row_arr[[r as usize, col]];
+                        if !v.is_nan() {
+                            sum += kw * v;
+                            wsum += kw;
+                        }
                     }
                 }
-
                 if wsum > 0.0 {
-                    row_data[col] = sum / wsum;
+                    out[col] = sum / wsum;
                 }
             }
-            row_data
+            out
         })
         .collect();
 
