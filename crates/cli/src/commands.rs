@@ -62,13 +62,30 @@ pub enum Commands {
         #[command(subcommand)]
         algorithm: LandscapeCommands,
     },
-    /// Clip a raster by polygon (.geojson, .shp, .gpkg)
+    /// Extract raster values at point locations to CSV
+    Extract {
+        /// Directory with features.json and feature rasters (from `pipeline features`)
+        #[arg(long)]
+        features_dir: PathBuf,
+        /// Vector file with labeled points (.geojson, .shp, .gpkg)
+        #[arg(long)]
+        points: PathBuf,
+        /// Property name containing the target label/value
+        #[arg(long)]
+        target: String,
+        /// Output CSV file
+        output: PathBuf,
+    },
+    /// Clip a raster by polygon or bounding box
     Clip {
         /// Input raster file
         input: PathBuf,
         /// Vector file with polygon(s) (.geojson, .shp, .gpkg)
         #[arg(long)]
-        polygon: PathBuf,
+        polygon: Option<PathBuf>,
+        /// Bounding box: xmin,ymin,xmax,ymax (same CRS as input)
+        #[arg(long)]
+        bbox: Option<String>,
         /// Output file
         output: PathBuf,
     },
@@ -333,7 +350,7 @@ pub enum TerrainCommands {
     AdvancedCurvature {
         input: PathBuf,
         output: PathBuf,
-        /// Curvature type: mean_h, gaussian_k, kmin, kmax, kh, kv, khe, kve, ka, kr, rotor, laplacian, unsphericity, difference
+        /// Curvature type: mean_h|mean, gaussian_k|gaussian, kmin|minimal, kmax|maximal, kh|horizontal, kv|vertical, khe|horizontal_excess, kve|vertical_excess, ka|accumulation, kr|ring, rotor, laplacian, unsphericity, difference
         #[arg(short = 't', long, default_value = "mean_h")]
         curvature_type: String,
     },
@@ -654,9 +671,12 @@ pub enum TerrainCommands {
     /// Neighbour elevation statistics (3×3 window, 5 outputs)
     Neighbours {
         input: PathBuf,
-        /// Output directory for all 5 statistics
+        /// Output path: directory (all 5 stats) or file (with --stat)
         #[arg(short, long)]
-        outdir: PathBuf,
+        output: PathBuf,
+        /// Single statistic: max_downslope_change, min_downslope_change, max_upslope_change, num_downslope, num_upslope
+        #[arg(long)]
+        stat: Option<String>,
     },
     /// Pennock landform classification (7 classes)
     Pennock {
@@ -1600,9 +1620,6 @@ pub enum PipelineCommands {
         /// Include extra features (valley depth, surface area ratio, landform, wind exposure, accumulation zones)
         #[arg(long)]
         extras: bool,
-        /// Compress output (DEFLATE)
-        #[arg(long)]
-        compress: Option<bool>,
     },
     /// End-to-end temporal analysis: STAC download → spectral index → trend/stats/phenology
     #[cfg(feature = "cloud")]

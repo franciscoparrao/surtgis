@@ -42,18 +42,14 @@ pub fn handle(
             outdir,
             skip_hydrology,
             extras,
-            compress: compress_opt,
-        } => {
-            let effective_compress = compress_opt.unwrap_or(compress);
-            handle_features_generate(
-                &input,
-                &outdir,
-                skip_hydrology,
-                extras,
-                effective_compress,
-                mem_limit_bytes,
-            )
-        }
+        } => handle_features_generate(
+            &input,
+            &outdir,
+            skip_hydrology,
+            extras,
+            compress,
+            mem_limit_bytes,
+        ),
         #[cfg(feature = "cloud")]
         PipelineCommands::Temporal {
             catalog, bbox, collection, datetime, interval,

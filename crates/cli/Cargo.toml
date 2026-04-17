@@ -21,7 +21,7 @@ zarr = ["surtgis-cloud/zarr", "dep:chrono"]
 netcdf = ["surtgis-cloud/netcdf"]
 grib = ["surtgis-cloud/grib"]
 projections = ["surtgis-cloud/projections", "dep:proj4rs"]
-ml = ["dep:smelt-ml", "dep:csv"]
+ml = ["dep:smelt-ml"]
 
 [dependencies]
 surtgis-core = { version = "0.6.1", path = "../core", features = ["shapefile", "geopackage"] }
@@ -39,7 +39,7 @@ reqwest = { workspace = true, features = ["json"] }
 tokio = { workspace = true, features = ["rt", "macros"] }
 ndarray.workspace = true
 smelt-ml = { workspace = true, optional = true }
-csv = { workspace = true, optional = true }
+csv.workspace = true
 chrono = { workspace = true, optional = true }
 proj4rs = { workspace = true, optional = true }
 geo.workspace = true

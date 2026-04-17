@@ -949,20 +949,39 @@ pub fn handle(algorithm: TerrainCommands, compress: bool, streaming: bool, mem_l
             }
         }
 
-        TerrainCommands::Neighbours { input, outdir } => {
-            std::fs::create_dir_all(&outdir)
-                .context("Failed to create output directory")?;
+        TerrainCommands::Neighbours { input, output, stat } => {
             let dem = read_dem(&input)?;
             let start = Instant::now();
             let result = neighbour_stats(&dem)
                 .context("Failed to compute neighbour statistics")?;
-            write_result(&result.max_downslope_change, &outdir.join("max_downslope_change.tif"), compress)?;
-            write_result(&result.min_downslope_change, &outdir.join("min_downslope_change.tif"), compress)?;
-            write_result(&result.max_upslope_change, &outdir.join("max_upslope_change.tif"), compress)?;
-            write_result(&result.num_downslope, &outdir.join("num_downslope.tif"), compress)?;
-            write_result(&result.num_upslope, &outdir.join("num_upslope.tif"), compress)?;
-            println!("  5 neighbour statistics saved to {}", outdir.display());
-            done("Neighbour Stats", &outdir, start.elapsed());
+
+            if let Some(stat_name) = stat {
+                // Single statistic → write to output file
+                let raster = match stat_name.as_str() {
+                    "max_downslope_change" => &result.max_downslope_change,
+                    "min_downslope_change" => &result.min_downslope_change,
+                    "max_upslope_change" => &result.max_upslope_change,
+                    "num_downslope" => &result.num_downslope,
+                    "num_upslope" => &result.num_upslope,
+                    other => anyhow::bail!(
+                        "Unknown stat '{}'. Valid: max_downslope_change, min_downslope_change, max_upslope_change, num_downslope, num_upslope",
+                        other
+                    ),
+                };
+                write_result(raster, &output, compress)?;
+                done(&format!("Neighbours ({})", stat_name), &output, start.elapsed());
+            } else {
+                // All 5 → write to output directory
+                std::fs::create_dir_all(&output)
+                    .context("Failed to create output directory")?;
+                write_result(&result.max_downslope_change, &output.join("max_downslope_change.tif"), compress)?;
+                write_result(&result.min_downslope_change, &output.join("min_downslope_change.tif"), compress)?;
+                write_result(&result.max_upslope_change, &output.join("max_upslope_change.tif"), compress)?;
+                write_result(&result.num_downslope, &output.join("num_downslope.tif"), compress)?;
+                write_result(&result.num_upslope, &output.join("num_upslope.tif"), compress)?;
+                println!("  5 neighbour statistics saved to {}", output.display());
+                done("Neighbour Stats", &output, start.elapsed());
+            }
         }
 
         TerrainCommands::Pennock { input, output, slope_threshold, curv_threshold } => {

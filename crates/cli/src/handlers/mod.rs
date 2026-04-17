@@ -6,6 +6,7 @@ pub mod morphology;
 pub mod mosaic;
 pub mod info;
 pub mod clip;
+pub mod extract;
 pub mod pipeline;
 pub mod temporal;
 pub mod interpolation;
