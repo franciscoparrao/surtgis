@@ -129,6 +129,23 @@ where
         raster.set_crs(Some(crs));
     }
 
+    // Read GDAL_NODATA tag (42113) — ASCII string with nodata value
+    if let Some(nodata_f64) = read_nodata(&mut decoder) {
+        if let Some(nd) = num_traits::cast::<f64, T>(nodata_f64) {
+            raster.set_nodata(Some(nd));
+            // For float types, replace nodata values with NaN so that
+            // all algorithms (which check .is_nan()) handle them correctly.
+            if T::is_float() {
+                let nan_val = T::default_nodata(); // NaN for floats
+                for val in raster.data_mut().iter_mut() {
+                    if val.is_nodata(Some(nd)) {
+                        *val = nan_val;
+                    }
+                }
+            }
+        }
+    }
+
     Ok(raster)
 }
 
@@ -188,6 +205,12 @@ fn read_geotransform<R: std::io::Read + std::io::Seek>(
     }
 
     Err(Error::Other("Cannot determine geotransform".into()))
+}
+
+/// Read GDAL_NODATA tag (42113) — stored as ASCII string, parsed to f64.
+fn read_nodata<R: std::io::Read + std::io::Seek>(decoder: &mut Decoder<R>) -> Option<f64> {
+    let s = decoder.get_tag_ascii_string(Tag::Unknown(42113)).ok()?;
+    s.trim().trim_end_matches('\0').parse::<f64>().ok()
 }
 
 /// Write a Raster to a GeoTIFF file
@@ -325,6 +348,21 @@ where
         .encoder()
         .write_tag(Tag::Unknown(34735), geokeys.as_slice())
         .map_err(|e| Error::Other(format!("Cannot write geokey tag: {}", e)))?;
+
+    // GDAL_NODATA tag (42113) — write as ASCII string
+    if let Some(nd) = raster.nodata() {
+        if let Some(nd_f64) = nd.to_f64() {
+            let nodata_str = if nd_f64.is_nan() {
+                "nan\0".to_string()
+            } else {
+                format!("{}\0", nd_f64)
+            };
+            image
+                .encoder()
+                .write_tag(Tag::Unknown(42113), nodata_str.as_bytes())
+                .map_err(|e| Error::Other(format!("Cannot write nodata tag: {}", e)))?;
+        }
+    }
 
     image
         .write_data(&data)

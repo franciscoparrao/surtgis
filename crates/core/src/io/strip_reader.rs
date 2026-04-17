@@ -59,6 +59,9 @@ impl StripReader {
         // Read CRS from GeoKeys
         let crs = read_crs_from_decoder(&mut decoder);
 
+        // Read GDAL_NODATA tag (42113) — ASCII string
+        let nodata = read_nodata_from_decoder(&mut decoder);
+
         Ok(Self {
             decoder,
             rows,
@@ -67,7 +70,7 @@ impl StripReader {
             num_strips,
             transform,
             crs,
-            nodata: None,
+            nodata,
         })
     }
 
@@ -247,6 +250,14 @@ fn read_geotransform_from_decoder<R: std::io::Read + std::io::Seek>(
     }
 
     Err(Error::Other("Cannot determine geotransform".into()))
+}
+
+/// Read GDAL_NODATA tag (42113) — ASCII string parsed to f64.
+fn read_nodata_from_decoder<R: std::io::Read + std::io::Seek>(
+    decoder: &mut Decoder<R>,
+) -> Option<f64> {
+    let s = decoder.get_tag_ascii_string(Tag::Unknown(42113)).ok()?;
+    s.trim().trim_end_matches('\0').parse::<f64>().ok()
 }
 
 /// Read CRS EPSG from GeoKeyDirectory tag (34735).

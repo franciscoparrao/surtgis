@@ -1205,6 +1205,7 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                 cols: out_cols,
                 transform: out_transform,
                 crs: out_crs,
+                nodata: Some(f64::NAN),
                 compress,
                 rows_per_strip: strip_rows as u32,
             };

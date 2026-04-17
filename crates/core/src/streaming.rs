@@ -66,16 +66,17 @@ impl StripProcessor {
         let cols = reader.cols();
         let radius = algorithm.kernel_radius();
 
+        let nodata = reader.nodata();
+
         let config = StripWriterConfig {
             rows,
             cols,
             transform: reader.transform().clone(),
             crs: reader.crs().cloned(),
+            nodata: nodata.or(Some(f64::NAN)),
             compress,
             rows_per_strip: self.chunk_rows as u32,
         };
-
-        let nodata = reader.nodata();
         let cell_size_x = reader.transform().pixel_width.abs();
         let cell_size_y = reader.transform().pixel_height.abs();
 

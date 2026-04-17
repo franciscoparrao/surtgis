@@ -27,6 +27,8 @@ pub struct StripWriterConfig {
     pub transform: GeoTransform,
     /// Optional CRS to embed.
     pub crs: Option<CRS>,
+    /// Optional NoData value to embed as GDAL_NODATA tag (42113).
+    pub nodata: Option<f64>,
     /// Whether to use DEFLATE compression.
     pub compress: bool,
     /// Number of rows per output strip.
@@ -52,6 +54,7 @@ pub struct StripWriterConfig {
 ///     cols: 1000,
 ///     transform: GeoTransform::new(0.0, 1000.0, 10.0, -10.0),
 ///     crs: None,
+///     nodata: Some(f64::NAN),
 ///     compress: false,
 ///     rows_per_strip: 256,
 /// };
@@ -149,6 +152,19 @@ where
         .write_tag(Tag::Unknown(34735), geokeys.as_slice())
         .map_err(|e| Error::Other(format!("Cannot write geokey tag: {}", e)))?;
 
+    // GDAL_NODATA tag (42113) — write as ASCII string
+    if let Some(nd) = config.nodata {
+        let nodata_str = if nd.is_nan() {
+            "nan\0".to_string()
+        } else {
+            format!("{}\0", nd)
+        };
+        image
+            .encoder()
+            .write_tag(Tag::Unknown(42113), nodata_str.as_bytes())
+            .map_err(|e| Error::Other(format!("Cannot write nodata tag: {}", e)))?;
+    }
+
     // Collect all strip data via callbacks, then write using write_data()
     // which correctly applies compression. (write_strip() alone does not
     // activate the compression encoder — it's a tiff crate design quirk.)
@@ -195,6 +211,7 @@ mod tests {
             cols,
             transform: GeoTransform::new(100.0, 200.0, 10.0, -10.0),
             crs: Some(CRS::from_epsg(32719)),
+            nodata: Some(-9999.0),
             compress: false,
             rows_per_strip: 32,
         };
