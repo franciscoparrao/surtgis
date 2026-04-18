@@ -1806,6 +1806,203 @@ fn haralick_glcm_compute<'py>(
 }
 
 // ===========================================================================
+// ML / Geospatial extraction & prediction
+// ===========================================================================
+
+/// Extract pixel values from multiple rasters at point locations.
+///
+/// Args:
+///     rasters: list of 2D numpy arrays (all same shape)
+///     points_x: 1D array of X coordinates (in pixel space: column indices)
+///     points_y: 1D array of Y coordinates (in pixel space: row indices)
+///
+/// Returns:
+///     2D numpy array of shape (N_valid_points, N_rasters) with extracted values.
+///     Points outside bounds or with NaN in any raster are excluded.
+///
+/// Example:
+///     import surtgis, rasterio, numpy as np
+///     slope = rasterio.open("slope.tif").read(1).astype(np.float64)
+///     aspect = rasterio.open("aspect.tif").read(1).astype(np.float64)
+///     # Convert geo coords to pixel coords using rasterio transform
+///     cols, rows = rasterio.transform.rowcol(transform, xs, ys)
+///     X = surtgis.extract_at_points([slope, aspect], cols, rows)
+#[pyfunction]
+fn extract_at_points<'py>(
+    py: Python<'py>,
+    rasters: Vec<PyReadonlyArray2<'py, f64>>,
+    points_col: PyReadonlyArray2<'py, f64>,
+    points_row: PyReadonlyArray2<'py, f64>,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    if rasters.is_empty() {
+        return Err(PyValueError::new_err("rasters list must not be empty"));
+    }
+
+    let ref_shape = rasters[0].shape().to_vec();
+    for (i, r) in rasters.iter().enumerate().skip(1) {
+        if r.shape() != ref_shape.as_slice() {
+            return Err(PyValueError::new_err(format!(
+                "Raster {} shape {:?} does not match raster 0 shape {:?}",
+                i, r.shape(), ref_shape
+            )));
+        }
+    }
+
+    let cols_slice = points_col.as_slice()
+        .map_err(|_| PyValueError::new_err("points_col must be contiguous"))?;
+    let rows_slice = points_row.as_slice()
+        .map_err(|_| PyValueError::new_err("points_row must be contiguous"))?;
+
+    let n_points = cols_slice.len();
+    if rows_slice.len() != n_points {
+        return Err(PyValueError::new_err("points_col and points_row must have same length"));
+    }
+
+    let n_rasters = rasters.len();
+    let rows_max = ref_shape[0];
+    let cols_max = ref_shape[1];
+
+    // Pre-borrow all raster slices
+    let raster_slices: Vec<&[f64]> = rasters.iter()
+        .map(|r| r.as_slice().unwrap())
+        .collect();
+
+    let mut result_data: Vec<f64> = Vec::new();
+    let mut valid_count = 0usize;
+
+    for i in 0..n_points {
+        let col = cols_slice[i] as isize;
+        let row = rows_slice[i] as isize;
+
+        if row < 0 || col < 0 || row as usize >= rows_max || col as usize >= cols_max {
+            continue;
+        }
+
+        let idx = row as usize * cols_max + col as usize;
+        let mut has_nan = false;
+        let start = result_data.len();
+
+        for slice in &raster_slices {
+            let v = slice[idx];
+            if !v.is_finite() {
+                has_nan = true;
+                break;
+            }
+            result_data.push(v);
+        }
+
+        if has_nan {
+            result_data.truncate(start);
+        } else {
+            valid_count += 1;
+        }
+    }
+
+    let arr = Array2::from_shape_vec((valid_count, n_rasters), result_data)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(arr.into_pyarray(py))
+}
+
+/// Apply a Python prediction function to a stack of rasters, producing a prediction raster.
+///
+/// Args:
+///     rasters: list of 2D numpy arrays (all same shape), one per feature
+///     predict_fn: Python callable that takes a 2D array (N, n_features) and returns 1D array (N,)
+///     batch_size: number of pixels per batch (default 100000)
+///
+/// Returns:
+///     2D numpy array with predictions. NaN where any input raster has NaN.
+///
+/// Example:
+///     import surtgis, xgboost as xgb
+///     model = xgb.XGBRegressor().fit(X_train, y_train)
+///     prediction = surtgis.predict_raster([slope, aspect, tpi], model.predict)
+#[pyfunction]
+#[pyo3(signature = (rasters, predict_fn, batch_size=100000))]
+fn predict_raster<'py>(
+    py: Python<'py>,
+    rasters: Vec<PyReadonlyArray2<'py, f64>>,
+    predict_fn: &Bound<'py, PyAny>,
+    batch_size: usize,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    if rasters.is_empty() {
+        return Err(PyValueError::new_err("rasters list must not be empty"));
+    }
+
+    let rows = rasters[0].shape()[0];
+    let cols = rasters[0].shape()[1];
+    let ref_shape = rasters[0].shape().to_vec();
+
+    for (i, r) in rasters.iter().enumerate().skip(1) {
+        if r.shape() != ref_shape.as_slice() {
+            return Err(PyValueError::new_err(format!(
+                "Raster {} shape {:?} does not match raster 0 shape {:?}",
+                i, r.shape(), ref_shape
+            )));
+        }
+    }
+
+    let n_features = rasters.len();
+    let total_pixels = rows * cols;
+
+    // Pre-borrow all raster slices
+    let raster_slices: Vec<&[f64]> = rasters.iter()
+        .map(|r| r.as_slice().unwrap())
+        .collect();
+
+    let mut output = vec![f64::NAN; total_pixels];
+
+    // Process in batches to avoid creating huge temporary arrays
+    let mut batch_indices: Vec<usize> = Vec::with_capacity(batch_size);
+    let mut batch_features: Vec<f64> = Vec::with_capacity(batch_size * n_features);
+
+    for pixel in 0..total_pixels {
+        // Check if all rasters have valid data at this pixel
+        let mut valid = true;
+        for slice in &raster_slices {
+            if !slice[pixel].is_finite() {
+                valid = false;
+                break;
+            }
+        }
+
+        if valid {
+            batch_indices.push(pixel);
+            for slice in &raster_slices {
+                batch_features.push(slice[pixel]);
+            }
+        }
+
+        // When batch is full or at the end, predict
+        if batch_indices.len() >= batch_size || (pixel == total_pixels - 1 && !batch_indices.is_empty()) {
+            let n = batch_indices.len();
+            let batch_arr = Array2::from_shape_vec((n, n_features), batch_features.clone())
+                .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            let batch_py = batch_arr.into_pyarray(py);
+
+            let predictions = predict_fn.call1((batch_py,))?;
+            let pred_vec: Vec<f64> = predictions.extract()
+                .map_err(|e| PyValueError::new_err(
+                    format!("predict_fn must return array-like of floats: {}", e)
+                ))?;
+
+            for (j, &idx) in batch_indices.iter().enumerate() {
+                if j < pred_vec.len() {
+                    output[idx] = pred_vec[j];
+                }
+            }
+
+            batch_indices.clear();
+            batch_features.clear();
+        }
+    }
+
+    let arr = Array2::from_shape_vec((rows, cols), output)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(arr.into_pyarray(py))
+}
+
+// ===========================================================================
 // Module definition
 // ===========================================================================
 
@@ -1937,6 +2134,10 @@ fn surtgis(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(sobel_edge_compute, m)?)?;
     m.add_function(wrap_pyfunction!(laplacian_compute, m)?)?;
     m.add_function(wrap_pyfunction!(haralick_glcm_compute, m)?)?;
+
+    // ML / Geospatial extraction & prediction
+    m.add_function(wrap_pyfunction!(extract_at_points, m)?)?;
+    m.add_function(wrap_pyfunction!(predict_raster, m)?)?;
 
     Ok(())
 }
