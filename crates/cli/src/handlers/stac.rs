@@ -2616,11 +2616,34 @@ fn handle_multiband_composite(
         scenes.len(), n_bands);
 
     // -- Phase 3: Strip-by-strip processing --
-    let strip_rows = strip_rows_cfg;
-    let num_strips = (out_rows + strip_rows - 1) / strip_rows;
     let n_scenes = scenes.len();
     let out_epsg_for_tiles = out_crs.as_ref().and_then(|c| c.epsg());
     let total_cells = out_rows * out_cols;
+
+    // Auto-cap strip_rows to keep peak RAM reasonable.
+    // Peak memory for band_scene_strips ≈ strip_rows × out_cols × n_bands × n_scenes × 8 bytes.
+    // Target: 4 GB for the scene accumulator (leaves headroom for downloads + output buffers).
+    const TARGET_SCENE_ACCUMULATOR_BYTES: usize = 4 * 1024 * 1024 * 1024;
+    let bytes_per_row = out_cols.max(1) * n_bands.max(1) * n_scenes.max(1) * 8;
+    let auto_strip_rows = (TARGET_SCENE_ACCUMULATOR_BYTES / bytes_per_row.max(1))
+        .clamp(16, 512);
+    let strip_rows = strip_rows_cfg.min(auto_strip_rows);
+    if strip_rows < strip_rows_cfg {
+        let est_peak_gb = (strip_rows * bytes_per_row) as f64 / 1e9;
+        let requested_peak_gb = (strip_rows_cfg * bytes_per_row) as f64 / 1e9;
+        eprintln!(
+            "⚠ strip_rows capped: {} → {} (requested peak ~{:.1} GB, using ~{:.1} GB for {} bands × {} scenes × {} cols)",
+            strip_rows_cfg, strip_rows, requested_peak_gb, est_peak_gb,
+            n_bands, n_scenes, out_cols,
+        );
+    } else {
+        let est_peak_gb = (strip_rows * bytes_per_row) as f64 / 1e9;
+        eprintln!(
+            "  Estimated peak RAM for scene accumulator: ~{:.1} GB (strip_rows={}, {} bands × {} scenes × {} cols)",
+            est_peak_gb, strip_rows, n_bands, n_scenes, out_cols,
+        );
+    }
+    let num_strips = (out_rows + strip_rows - 1) / strip_rows;
 
     const TOKEN_REFRESH_THRESHOLD: Duration = Duration::from_secs(30 * 60);
 
@@ -3017,15 +3040,18 @@ fn handle_multiband_composite(
                     }
                 }
 
-                // Spatial fill (3x3 iterative mean)
+                // Spatial fill (3x3 iterative mean) — double-buffered to avoid
+                // cloning the entire strip every pass.
                 let mut nan_remaining = strip_out.iter().filter(|v| !v.is_finite()).count();
                 if nan_remaining > 0 && nan_remaining < strip_out.len() {
+                    let mut prev_buf = strip_out.clone(); // single allocation, reused
                     for _pass in 0..20 {
-                        let prev = strip_out.clone();
+                        // Copy current strip_out into prev_buf (no new allocation)
+                        prev_buf.assign(&strip_out);
                         let mut filled = 0usize;
                         for r in 0..actual_rows {
                             for c in 0..out_cols {
-                                if prev[[r, c]].is_finite() { continue; }
+                                if prev_buf[[r, c]].is_finite() { continue; }
                                 let mut sum = 0.0;
                                 let mut cnt = 0u32;
                                 for dr in -1i32..=1 {
@@ -3035,7 +3061,7 @@ fn handle_multiband_composite(
                                         if nr >= 0 && nr < actual_rows as i32
                                             && nc >= 0 && nc < out_cols as i32
                                         {
-                                            let v = prev[[nr as usize, nc as usize]];
+                                            let v = prev_buf[[nr as usize, nc as usize]];
                                             if v.is_finite() { sum += v; cnt += 1; }
                                         }
                                     }
