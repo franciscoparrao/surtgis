@@ -261,7 +261,78 @@ pub fn solar_radiation(
         ghi_flat_daily += (beam_horiz + dhi) * dt;
     }
 
-    // Process each cell
+    // Pre-compute sun geometry per timestep ONCE (independent of cell).
+    // Moves ~15 trig calls (asin, acos, powf, exp) out of the 45M-cell inner loop.
+    // Previously these were recomputed per-cell per-timestep → O(n_cells × n_steps) trig calls.
+    // Now: O(n_steps) trig calls + O(n_cells × n_steps) simple arithmetic.
+    struct SunStep {
+        sin_alt: f64,
+        cos_alt: f64,
+        az: f64,
+        // Beam: air_mass + beam_normal precomputed (independent of cell)
+        beam_normal: f64,
+        // Diffuse: precomputed for all models
+        dhi: f64,
+        ghi: f64,
+        theta_z: f64,
+        sin3_tz: f64,     // for Klucher
+        f_clear: f64,     // for Klucher
+        dni: f64,         // for Perez
+        air_mass: f64,    // for Perez
+        is_above_horizon: bool,
+    }
+
+    let sun_steps: Vec<SunStep> = (0..=num_steps)
+        .filter_map(|step| {
+            let hour = sunrise_hour + step as f64 * dt;
+            if hour > sunset_hour {
+                return None;
+            }
+            let omega = (hour - 12.0) * 15.0_f64.to_radians();
+            let sin_alt = lat_rad.sin() * declination.sin()
+                + lat_rad.cos() * declination.cos() * omega.cos();
+
+            if sin_alt <= 0.0 {
+                return Some(SunStep {
+                    sin_alt: 0.0, cos_alt: 1.0, az: 0.0,
+                    beam_normal: 0.0, dhi: 0.0, ghi: 0.0,
+                    theta_z: PI / 2.0, sin3_tz: 0.0, f_clear: 0.0,
+                    dni: 0.0, air_mass: 0.0, is_above_horizon: false,
+                });
+            }
+
+            let alt = sin_alt.asin();
+            let cos_alt = alt.cos();
+
+            let cos_az = (declination.sin() - lat_rad.sin() * sin_alt) / (lat_rad.cos() * cos_alt);
+            let az = if omega > 0.0 {
+                2.0 * PI - cos_az.clamp(-1.0, 1.0).acos()
+            } else {
+                cos_az.clamp(-1.0, 1.0).acos()
+            };
+
+            let air_mass = 1.0 / (sin_alt + 0.50572 * (alt.to_degrees() + 6.07995).powf(-1.6364));
+            let beam_normal = beam_normal_irradiance(
+                params.solar_constant, air_mass, params.transmittance, params.linke_turbidity,
+            );
+
+            let i0 = params.solar_constant * sin_alt;
+            let ghi = i0;
+            let dhi = ghi * params.diffuse_proportion;
+            let theta_z = (PI / 2.0) - alt;
+            let sin3_tz = theta_z.sin().powi(3);
+            let f_clear = if ghi > 1e-6 { 1.0 - (dhi / ghi).powi(2) } else { 0.0 };
+            let dni = if sin_alt > 0.01 { (ghi - dhi) / sin_alt } else { 0.0 };
+
+            Some(SunStep {
+                sin_alt, cos_alt, az,
+                beam_normal, dhi, ghi, theta_z, sin3_tz, f_clear,
+                dni, air_mass, is_above_horizon: true,
+            })
+        })
+        .collect();
+
+    // Process each cell using pre-computed sun geometry
     let result_data: Vec<(f64, f64, f64)> = (0..rows)
         .into_par_iter()
         .flat_map(|row| {
@@ -275,82 +346,40 @@ pub fn solar_radiation(
                     continue;
                 }
 
+                // Per-cell precomputation (once, not per-timestep)
+                let slp_cos = slp.cos();
+                let slp_sin = slp.sin();
+                let svf_approx = (1.0 + slp_cos) / 2.0;
+                let half_slope_sin3 = (slp / 2.0).sin().powi(3);
+
                 let mut beam_daily = 0.0;
                 let mut diffuse_daily = 0.0;
 
-                for step in 0..=num_steps {
-                    let hour = sunrise_hour + step as f64 * dt;
-                    if hour > sunset_hour { break; }
+                for sun in &sun_steps {
+                    if !sun.is_above_horizon { continue; }
 
-                    let omega = (hour - 12.0) * 15.0_f64.to_radians();
+                    // Incidence angle: the ONLY expensive op left in inner loop
+                    let cos_inc = sun.sin_alt * slp_cos
+                        + sun.cos_alt * slp_sin * (sun.az - asp).cos();
 
-                    // Solar altitude angle
-                    let sin_alt = lat_rad.sin() * declination.sin()
-                        + lat_rad.cos() * declination.cos() * omega.cos();
-
-                    if sin_alt <= 0.0 { continue; } // Below horizon
-
-                    let alt = sin_alt.asin();
-
-                    // Solar azimuth
-                    let cos_az = (declination.sin() - lat_rad.sin() * sin_alt)
-                        / (lat_rad.cos() * alt.cos());
-                    let az = if omega > 0.0 {
-                        2.0 * PI - cos_az.clamp(-1.0, 1.0).acos()
-                    } else {
-                        cos_az.clamp(-1.0, 1.0).acos()
-                    };
-
-                    // Incidence angle on sloped surface
-                    let cos_inc = sin_alt * slp.cos()
-                        + alt.cos() * slp.sin() * (az - asp).cos();
-
-                    // Direct beam on surface (only if sun hits the surface)
                     if cos_inc > 0.0 {
-                        let air_mass = 1.0 / (sin_alt + 0.50572 * (alt.to_degrees() + 6.07995).powf(-1.6364));
-                        let beam_normal = beam_normal_irradiance(
-                            params.solar_constant, air_mass, params.transmittance, params.linke_turbidity,
-                        );
-                        beam_daily += beam_normal * cos_inc * dt;
+                        beam_daily += sun.beam_normal * cos_inc * dt;
                     }
-
-                    // Diffuse radiation
-                    let i0 = params.solar_constant * sin_alt;
-                    let ghi = i0; // Global horizontal irradiance approximation
-                    let dhi = ghi * params.diffuse_proportion;
-                    let svf_approx = (1.0 + slp.cos()) / 2.0;
 
                     let diffuse_inst = match params.diffuse_model {
                         DiffuseModel::Isotropic => {
-                            dhi * svf_approx
+                            sun.dhi * svf_approx
                         }
                         DiffuseModel::Klucher => {
-                            let f_clear = if ghi > 1e-6 {
-                                1.0 - (dhi / ghi).powi(2)
-                            } else {
-                                0.0
-                            };
-                            let theta_z = (PI / 2.0) - alt;
-                            let sin3_tz = theta_z.sin().powi(3);
                             let cos_theta = cos_inc.max(0.0);
                             let cos2_theta = cos_theta * cos_theta;
-                            let half_slope_sin3 = (slp / 2.0).sin().powi(3);
-
-                            dhi * svf_approx
-                                * (1.0 + f_clear * cos2_theta * sin3_tz)
-                                * (1.0 + f_clear * half_slope_sin3)
+                            sun.dhi * svf_approx
+                                * (1.0 + sun.f_clear * cos2_theta * sun.sin3_tz)
+                                * (1.0 + sun.f_clear * half_slope_sin3)
                         }
                         DiffuseModel::Perez => {
-                            let theta_z = (PI / 2.0) - alt;
-                            let air_mass = 1.0 / (sin_alt + 0.50572
-                                * (alt.to_degrees() + 6.07995).powf(-1.6364));
-                            let dni = if sin_alt > 0.01 {
-                                (ghi - dhi) / sin_alt
-                            } else {
-                                0.0
-                            };
-                            perez_diffuse(dhi, ghi, dni, theta_z, cos_inc,
-                                slp, air_mass, params.solar_constant)
+                            perez_diffuse(sun.dhi, sun.ghi, sun.dni, sun.theta_z, cos_inc,
+                                slp, sun.air_mass, params.solar_constant)
                         }
                     };
 
@@ -358,7 +387,7 @@ pub fn solar_radiation(
                 }
 
                 // Reflected radiation: albedo × GHI_flat × ground_view_factor
-                let reflected_daily = params.albedo * ghi_flat_daily * (1.0 - slp.cos()) / 2.0;
+                let reflected_daily = params.albedo * ghi_flat_daily * (1.0 - slp_cos) / 2.0;
 
                 *row_data_col = (beam_daily, diffuse_daily, reflected_daily);
             }
@@ -638,6 +667,94 @@ pub fn solar_radiation_shadowed(
     Ok(SolarRadiationResult { beam, diffuse, reflected, total })
 }
 
+/// Compute annual solar radiation only (memory-efficient).
+///
+/// Unlike `solar_radiation_annual` which returns all 12 monthly rasters,
+/// this version accumulates each month into the annual total and drops
+/// the monthly result immediately. For a 45M-cell DEM, this saves ~15 GB
+/// of RAM (4 rasters × 12 months × 45M × 8 bytes).
+pub fn solar_radiation_annual_only(
+    slope_rad: &Raster<f64>,
+    aspect_rad: &Raster<f64>,
+    params: SolarParams,
+) -> Result<SolarRadiationResult> {
+    let (rows, cols) = slope_rad.shape();
+
+    let mut ann_beam_data = Array2::from_elem((rows, cols), 0.0_f64);
+    let mut ann_diff_data = Array2::from_elem((rows, cols), 0.0_f64);
+    let mut ann_refl_data = Array2::from_elem((rows, cols), 0.0_f64);
+    let mut ann_total_data = Array2::from_elem((rows, cols), 0.0_f64);
+    let mut has_data = Array2::from_elem((rows, cols), false);
+
+    for month in 0..12 {
+        let mut month_params = params.clone();
+        month_params.day = KLEIN_REPRESENTATIVE_DAYS[month];
+        let n_days = DAYS_PER_MONTH[month] as f64;
+
+        // Compute this month's daily radiation
+        let daily = solar_radiation(slope_rad, aspect_rad, month_params)?;
+
+        // Accumulate into annual, then drop the monthly result
+        let beam_slice = daily.beam.data().as_slice().expect("contiguous");
+        let diff_slice = daily.diffuse.data().as_slice().expect("contiguous");
+        let refl_slice = daily.reflected.data().as_slice().expect("contiguous");
+        let total_slice = daily.total.data().as_slice().expect("contiguous");
+        let ann_beam_slice = ann_beam_data.as_slice_mut().expect("contiguous");
+        let ann_diff_slice = ann_diff_data.as_slice_mut().expect("contiguous");
+        let ann_refl_slice = ann_refl_data.as_slice_mut().expect("contiguous");
+        let ann_total_slice = ann_total_data.as_slice_mut().expect("contiguous");
+        let has_slice = has_data.as_slice_mut().expect("contiguous");
+
+        for i in 0..beam_slice.len() {
+            let b = beam_slice[i];
+            if !b.is_nan() {
+                ann_beam_slice[i] += b * n_days;
+                ann_diff_slice[i] += diff_slice[i] * n_days;
+                ann_refl_slice[i] += refl_slice[i] * n_days;
+                ann_total_slice[i] += total_slice[i] * n_days;
+                has_slice[i] = true;
+            }
+        }
+        // `daily` dropped here → frees ~1.4 GB for 45M cells
+    }
+
+    // Set NaN where no data contributed
+    let ann_beam_slice = ann_beam_data.as_slice_mut().expect("contiguous");
+    let ann_diff_slice = ann_diff_data.as_slice_mut().expect("contiguous");
+    let ann_refl_slice = ann_refl_data.as_slice_mut().expect("contiguous");
+    let ann_total_slice = ann_total_data.as_slice_mut().expect("contiguous");
+    let has_slice = has_data.as_slice().expect("contiguous");
+
+    for i in 0..has_slice.len() {
+        if !has_slice[i] {
+            ann_beam_slice[i] = f64::NAN;
+            ann_diff_slice[i] = f64::NAN;
+            ann_refl_slice[i] = f64::NAN;
+            ann_total_slice[i] = f64::NAN;
+        }
+    }
+
+    let mut a_beam = slope_rad.with_same_meta::<f64>(rows, cols);
+    let mut a_diff = slope_rad.with_same_meta::<f64>(rows, cols);
+    let mut a_refl = slope_rad.with_same_meta::<f64>(rows, cols);
+    let mut a_total = slope_rad.with_same_meta::<f64>(rows, cols);
+    a_beam.set_nodata(Some(f64::NAN));
+    a_diff.set_nodata(Some(f64::NAN));
+    a_refl.set_nodata(Some(f64::NAN));
+    a_total.set_nodata(Some(f64::NAN));
+    *a_beam.data_mut() = ann_beam_data;
+    *a_diff.data_mut() = ann_diff_data;
+    *a_refl.data_mut() = ann_refl_data;
+    *a_total.data_mut() = ann_total_data;
+
+    Ok(SolarRadiationResult {
+        beam: a_beam,
+        diffuse: a_diff,
+        reflected: a_refl,
+        total: a_total,
+    })
+}
+
 /// Representative day of year for each month (Klein 1977).
 /// These days have declination closest to the monthly average.
 const KLEIN_REPRESENTATIVE_DAYS: [u32; 12] = [
@@ -699,31 +816,36 @@ pub fn solar_radiation_annual(
         let daily = solar_radiation(slope_rad, aspect_rad, month_params)?;
         let n_days = DAYS_PER_MONTH[month] as f64;
 
-        // Scale daily → monthly and accumulate annual
-        let mut m_beam_data = Array2::from_elem((rows, cols), f64::NAN);
-        let mut m_diff_data = Array2::from_elem((rows, cols), f64::NAN);
-        let mut m_refl_data = Array2::from_elem((rows, cols), f64::NAN);
-        let mut m_total_data = Array2::from_elem((rows, cols), f64::NAN);
+        // Scale daily → monthly and accumulate annual (vectorized per-element)
+        let beam_arr = daily.beam.data();
+        let diff_arr = daily.diffuse.data();
+        let refl_arr = daily.reflected.data();
+        let total_arr = daily.total.data();
 
-        for r in 0..rows {
-            for c in 0..cols {
-                let b = daily.beam.data()[[r, c]];
-                if !b.is_nan() {
-                    let d = daily.diffuse.data()[[r, c]];
-                    let rf = daily.reflected.data()[[r, c]];
-                    let t = daily.total.data()[[r, c]];
+        let m_beam_data = beam_arr.mapv(|b| if b.is_nan() { f64::NAN } else { b * n_days });
+        let m_diff_data = diff_arr.mapv(|d| if d.is_nan() { f64::NAN } else { d * n_days });
+        let m_refl_data = refl_arr.mapv(|r| if r.is_nan() { f64::NAN } else { r * n_days });
+        let m_total_data = total_arr.mapv(|t| if t.is_nan() { f64::NAN } else { t * n_days });
 
-                    m_beam_data[[r, c]] = b * n_days;
-                    m_diff_data[[r, c]] = d * n_days;
-                    m_refl_data[[r, c]] = rf * n_days;
-                    m_total_data[[r, c]] = t * n_days;
+        // Accumulate into annual via flat slice iteration (skip NaN)
+        let beam_slice = beam_arr.as_slice().expect("contiguous");
+        let diff_slice = diff_arr.as_slice().expect("contiguous");
+        let refl_slice = refl_arr.as_slice().expect("contiguous");
+        let total_slice = total_arr.as_slice().expect("contiguous");
+        let ann_beam_slice = ann_beam_data.as_slice_mut().expect("contiguous");
+        let ann_diff_slice = ann_diff_data.as_slice_mut().expect("contiguous");
+        let ann_refl_slice = ann_refl_data.as_slice_mut().expect("contiguous");
+        let ann_total_slice = ann_total_data.as_slice_mut().expect("contiguous");
+        let has_slice = has_data.as_slice_mut().expect("contiguous");
 
-                    ann_beam_data[[r, c]] += b * n_days;
-                    ann_diff_data[[r, c]] += d * n_days;
-                    ann_refl_data[[r, c]] += rf * n_days;
-                    ann_total_data[[r, c]] += t * n_days;
-                    has_data[[r, c]] = true;
-                }
+        for i in 0..beam_slice.len() {
+            let b = beam_slice[i];
+            if !b.is_nan() {
+                ann_beam_slice[i] += b * n_days;
+                ann_diff_slice[i] += diff_slice[i] * n_days;
+                ann_refl_slice[i] += refl_slice[i] * n_days;
+                ann_total_slice[i] += total_slice[i] * n_days;
+                has_slice[i] = true;
             }
         }
 

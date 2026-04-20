@@ -8,6 +8,7 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(name = "surtgis")]
 #[command(author, version, about = "High-performance geospatial analysis", long_about = None)]
+#[command(allow_negative_numbers = true)]
 pub struct Cli {
     /// Verbose output
     #[arg(short, long, global = true)]
@@ -441,16 +442,16 @@ pub enum TerrainCommands {
         /// Hour (solar time, 0-24)
         #[arg(long)]
         hour: f64,
-        /// Latitude in degrees
-        #[arg(long)]
+        /// Latitude in degrees (negative for southern hemisphere)
+        #[arg(long, allow_hyphen_values = true)]
         latitude: f64,
     },
     /// Annual solar radiation (integrated over full year)
     SolarRadiationAnnual {
         input: PathBuf,
         output: PathBuf,
-        /// Latitude in degrees
-        #[arg(long)]
+        /// Latitude in degrees (negative for southern hemisphere)
+        #[arg(long, allow_hyphen_values = true)]
         latitude: f64,
     },
     /// Contour lines as raster

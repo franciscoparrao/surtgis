@@ -611,7 +611,7 @@ pub fn handle(algorithm: TerrainCommands, compress: bool, streaming: bool, mem_l
         }
 
         TerrainCommands::SolarRadiationAnnual { input, output, latitude } => {
-            use surtgis_algorithms::terrain::{solar_radiation_annual, SolarParams};
+            use surtgis_algorithms::terrain::{solar_radiation_annual_only, SolarParams};
             let dem = read_dem(&input)?;
             let start = Instant::now();
             let pb = spinner("Computing slope+aspect...");
@@ -621,11 +621,13 @@ pub fn handle(algorithm: TerrainCommands, compress: bool, streaming: bool, mem_l
                 .context("Aspect failed")?;
             pb.finish_and_clear();
             let pb = spinner("Annual solar radiation...");
-            let result = solar_radiation_annual(&slope_r, &aspect_r, SolarParams {
+            // Use annual_only: computes 12 months sequentially, drops each after accumulating.
+            // For 45M cells: ~3 GB peak instead of ~17 GB.
+            let result = solar_radiation_annual_only(&slope_r, &aspect_r, SolarParams {
                 day: 1, latitude, transmittance: 0.7, ..SolarParams::default()
             }).context("Annual solar radiation failed")?;
             pb.finish_and_clear();
-            write_result(&result.annual.total, &output, compress)?;
+            write_result(&result.total, &output, compress)?;
             done("Annual solar radiation", &output, start.elapsed());
         }
 

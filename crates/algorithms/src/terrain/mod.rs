@@ -123,7 +123,7 @@ pub use smoothing::{
     iterative_mean_smoothing, IterativeMeanParams,
     fft_low_pass, FftLowPassParams,
 };
-pub use solar_radiation::{solar_radiation, solar_radiation_shadowed, solar_radiation_annual, SolarParams, SolarRadiationResult, MonthlySolarResult, DiffuseModel};
+pub use solar_radiation::{solar_radiation, solar_radiation_shadowed, solar_radiation_annual, solar_radiation_annual_only, SolarParams, SolarRadiationResult, MonthlySolarResult, DiffuseModel};
 pub use sky_view_factor::{sky_view_factor, SvfParams};
 pub use spi_sti::{spi, sti, StiParams};
 pub use tpi::{tpi, Tpi, TpiParams, TpiStreaming};
