@@ -130,6 +130,104 @@ pub fn undo_horizontal_differencing(
     }
 }
 
+/// Undo floating-point predictor (TIFF Predictor=3).
+///
+/// Per TIFF Technical Note 3 — applies per row, in two steps:
+///   1. Byte-wise cumulative sum with stride = `samples_per_pixel` (=1 for
+///      grayscale DEM). Undoes the differencing applied during encoding.
+///   2. Un-shuffle from planar (big-endian layout) to native-endian interleaved:
+///      plane 0 = MSB of each sample, plane 1 = next byte, ..., last = LSB.
+///
+/// Matches the Rust `tiff` crate implementation (predict_f32) and libtiff.
+/// Used by Copernicus DEM GLO-30/90, NASADEM, and other f32 COGs.
+pub fn undo_floating_point_predictor(
+    data: &mut [u8],
+    tile_width: usize,
+    bytes_per_sample: usize,
+) {
+    undo_floating_point_predictor_multi(data, tile_width, bytes_per_sample, 1)
+}
+
+/// Same as [`undo_floating_point_predictor`] but with explicit `samples_per_pixel`.
+///
+/// For multi-band (RGB etc.) use samples_per_pixel = number of bands.
+/// For grayscale (DEM) use samples_per_pixel = 1.
+pub fn undo_floating_point_predictor_multi(
+    data: &mut [u8],
+    tile_width: usize,
+    bytes_per_sample: usize,
+    samples_per_pixel: usize,
+) {
+    if tile_width == 0 || bytes_per_sample <= 1 || samples_per_pixel == 0 { return; }
+    let row_bytes = tile_width * bytes_per_sample * samples_per_pixel;
+    let mut tmp = vec![0u8; row_bytes];
+    let n_samples_in_row = tile_width * samples_per_pixel;
+
+    for row_start in (0..data.len()).step_by(row_bytes) {
+        let row_end = (row_start + row_bytes).min(data.len());
+        let row = &mut data[row_start..row_end];
+        if row.len() != row_bytes { continue; }
+
+        // Step 1: byte-wise cumsum with stride = samples_per_pixel.
+        // (For grayscale, stride=1, so it's continuous byte-wise cumsum.)
+        for i in samples_per_pixel..row_bytes {
+            row[i] = row[i].wrapping_add(row[i - samples_per_pixel]);
+        }
+
+        // Step 2: un-shuffle planes → interleaved samples, big-endian to native.
+        // Planar layout: [plane0 (MSB): sample 0, sample 1, ..., sample N-1,
+        //                 plane1:        sample 0, sample 1, ..., sample N-1,
+        //                 ...
+        //                 plane{B-1} (LSB): sample 0, sample 1, ..., sample N-1]
+        // where N = tile_width * samples_per_pixel, B = bytes_per_sample.
+        match bytes_per_sample {
+            4 => {
+                for i in 0..n_samples_in_row {
+                    let val = u32::from_be_bytes([
+                        row[i],
+                        row[n_samples_in_row + i],
+                        row[2 * n_samples_in_row + i],
+                        row[3 * n_samples_in_row + i],
+                    ]);
+                    let bytes = val.to_ne_bytes();
+                    tmp[i * 4..i * 4 + 4].copy_from_slice(&bytes);
+                }
+            }
+            8 => {
+                for i in 0..n_samples_in_row {
+                    let val = u64::from_be_bytes([
+                        row[i],
+                        row[n_samples_in_row + i],
+                        row[2 * n_samples_in_row + i],
+                        row[3 * n_samples_in_row + i],
+                        row[4 * n_samples_in_row + i],
+                        row[5 * n_samples_in_row + i],
+                        row[6 * n_samples_in_row + i],
+                        row[7 * n_samples_in_row + i],
+                    ]);
+                    let bytes = val.to_ne_bytes();
+                    tmp[i * 8..i * 8 + 8].copy_from_slice(&bytes);
+                }
+            }
+            2 => {
+                for i in 0..n_samples_in_row {
+                    let val = u16::from_be_bytes([row[i], row[n_samples_in_row + i]]);
+                    let bytes = val.to_ne_bytes();
+                    tmp[i * 2..i * 2 + 2].copy_from_slice(&bytes);
+                }
+            }
+            _ => {
+                for i in 0..n_samples_in_row {
+                    for b in 0..bytes_per_sample {
+                        tmp[i * bytes_per_sample + b] = row[b * n_samples_in_row + i];
+                    }
+                }
+            }
+        }
+        row.copy_from_slice(&tmp);
+    }
+}
+
 /// Convert raw decompressed bytes into typed values.
 ///
 /// Interprets `raw` as an array of the appropriate type based on

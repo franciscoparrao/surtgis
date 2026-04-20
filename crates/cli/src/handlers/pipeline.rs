@@ -67,7 +67,7 @@ pub fn handle(
 pub fn handle_susceptibility(
     dem_source: &str,
     s2_source: &str,
-    _bbox_str: &str,
+    bbox_str: &str,
     _datetime_str: &str,
     outdir: &Path,
     _max_scenes: usize,
@@ -97,27 +97,54 @@ pub fn handle_susceptibility(
     println!("📍 STEP 1: Loading DEM...");
     let pb = helpers::spinner("Reading and validating DEM");
 
-    let dem_path = if dem_source.contains('/') || dem_source.contains('\\') {
-        // Local file
-        PathBuf::from(dem_source)
-    } else {
-        // STAC source - for MVP, skip STAC download
-        pb.finish_and_clear();
-        return Err(anyhow::anyhow!(
-            "MVP: provide local DEM path (STAC download not implemented)"
-        ));
-    };
-
-    // Verify DEM exists
-    if !dem_path.exists() {
-        pb.finish_and_clear();
-        return Err(anyhow::anyhow!("DEM file not found: {}", dem_path.display()));
-    }
-
-    // Copy DEM to output
     let output_dem = outdir.join("dem.tif");
-    std::fs::copy(&dem_path, &output_dem)
-        .context("Failed to copy DEM to output directory")?;
+
+    let dem_path: PathBuf = if dem_source.contains('/') || dem_source.contains('\\') {
+        // Local file: copy to output for bookkeeping
+        let src = PathBuf::from(dem_source);
+        if !src.exists() {
+            pb.finish_and_clear();
+            return Err(anyhow::anyhow!("DEM file not found: {}", src.display()));
+        }
+        std::fs::copy(&src, &output_dem)
+            .context("Failed to copy DEM to output directory")?;
+        src
+    } else {
+        // STAC collection ID: download mosaic to output/dem.tif
+        pb.finish_and_clear();
+        let dem_pb = helpers::spinner(&format!("Downloading DEM from STAC ({})", dem_source));
+
+        // Map collection IDs to their DEM asset name on Planetary Computer
+        let asset = match dem_source {
+            "cop-dem-glo-30" | "cop-dem-glo-90" => "data",
+            "nasadem" => "elevation",
+            "3dep-seamless" => "data",
+            _ => "data", // sensible default
+        };
+
+        let raster = super::stac::fetch_stac_band(
+            "pc",
+            bbox_str,
+            dem_source,
+            asset,
+            "", // DEM is static; no datetime filter
+            1,  // single mosaic
+            None,
+        )
+        .with_context(|| format!("Failed to fetch DEM from STAC collection '{}'", dem_source))?;
+
+        surtgis_core::io::write_geotiff(
+            &raster,
+            &output_dem,
+            if compress {
+                Some(surtgis_core::io::GeoTiffOptions { compression: "DEFLATE".into() })
+            } else { None },
+        )
+        .context("Failed to write downloaded DEM")?;
+
+        dem_pb.finish_and_clear();
+        output_dem.clone()
+    };
 
     // Get DEM info
     let dem = surtgis_core::io::read_geotiff::<f64, _>(&dem_path, None)
@@ -151,14 +178,14 @@ pub fn handle_susceptibility(
         println!("\n📍 STEP 4: Sentinel-2 imagery (6 bands from STAC)...");
         eprintln!("  Downloading from Planetary Computer:");
         eprintln!("    Collection: {}", s2_source);
-        eprintln!("    BBox: {}", _bbox_str);
+        eprintln!("    BBox: {}", bbox_str);
         eprintln!("    Dates: {}", _datetime_str);
         eprintln!("    Max scenes: {}", _max_scenes);
 
         // Download 6 S2 bands aligned to DEM grid
         let bands = download_s2_bands(
             s2_source,
-            &_bbox_str,
+            bbox_str,
             &_datetime_str,
             _max_scenes,
             &_scl_keep_str,

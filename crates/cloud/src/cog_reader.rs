@@ -312,19 +312,34 @@ impl CogReader {
                 let mut raw = decompress::decompress_tile(
                     &fetched[j], compression, raw_tile_size,
                 )?;
-                // Apply predictor undo: Predictor=2 = horizontal differencing
-                if ifd.predictor == 2 {
-                    if fetch_count == 0 {
-                        let before_u16 = if raw.len() >= 4 { u16::from_le_bytes([raw[0], raw[1]]) } else { 0 };
+                // Apply predictor undo (TIFF tag 317):
+                //   1 = no predictor
+                //   2 = horizontal differencing (integer samples)
+                //   3 = floating-point predictor (TIFF TN3 — used by Copernicus DEM)
+                match ifd.predictor {
+                    1 => {}
+                    2 => {
                         decompress::undo_horizontal_differencing(&mut raw, tw, bytes_per_pixel);
-                        let after_u16 = if raw.len() >= 4 { u16::from_le_bytes([raw[0], raw[1]]) } else { 0 };
-                        eprintln!("    [pred] undo: bps={} tw={} len={} pixel[0] {} → {}",
-                            bytes_per_pixel, tw, raw.len(), before_u16, after_u16);
-                    } else {
-                        decompress::undo_horizontal_differencing(&mut raw, tw, bytes_per_pixel);
+                        if fetch_count == 0 {
+                            eprintln!("    [pred] undo horiz-diff: bps={} tw={} len={}",
+                                bytes_per_pixel, tw, raw.len());
+                        }
                     }
-                } else if fetch_count == 0 {
-                    eprintln!("    [pred] SKIP: predictor={}", ifd.predictor);
+                    3 => {
+                        decompress::undo_floating_point_predictor(&mut raw, tw, bytes_per_pixel);
+                        if fetch_count == 0 {
+                            let sample0 = if raw.len() >= 4 {
+                                f32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]])
+                            } else { 0.0 };
+                            eprintln!("    [pred] undo fp-predictor: bps={} tw={} sample[0]={}",
+                                bytes_per_pixel, tw, sample0);
+                        }
+                    }
+                    p => {
+                        if fetch_count == 0 {
+                            eprintln!("    [pred] UNSUPPORTED: predictor={}", p);
+                        }
+                    }
                 }
                 fetch_count += 1;
                 let key = TileKey {

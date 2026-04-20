@@ -1578,7 +1578,7 @@ pub enum StacCommands {
 pub enum PipelineCommands {
     /// Compute susceptibility factors from DEM + S2 imagery
     Susceptibility {
-        /// DEM source: "copernicus-dem-glo-30" or local path
+        /// DEM source: STAC collection ID (cop-dem-glo-30, cop-dem-glo-90, nasadem, 3dep-seamless) or local file path
         #[arg(long)]
         dem: String,
 
