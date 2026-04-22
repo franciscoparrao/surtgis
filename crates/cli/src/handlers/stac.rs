@@ -2622,59 +2622,85 @@ fn handle_multiband_composite(
 
     // Auto-cap strip_rows to keep peak RAM reasonable.
     //
-    // Peak RAM has three components:
-    //   A) Output buffers (persistent): n_bands × total_cells × 8 bytes
-    //   B) Scene accumulator (per strip): strip_rows × out_cols × n_bands × n_scenes × 8 bytes
-    //   C) Download working set (per scene): scales with tile_width², n_bands, concurrency
+    // Peak RAM during one strip has FOUR components. Three of them scale with strip_rows (S):
     //
-    // Earth Search uses 1024×1024 COG tiles; Planetary Computer uses 512×512. The download
-    // working set is ~4× larger for ES because each decoded tile intersecting the strip bbox
-    // produces up to ~150 MB (f64) versus ~40 MB for PC. With ~450 concurrent tokio tasks
-    // per scene (tiles × bands), ES can spike to 20+ GB of decoded buffers in flight.
+    //   A) Output buffers (persistent, independent of S):
+    //        n_bands × total_cells × 8 bytes
+    //   B) Scene accumulator (per strip):
+    //        S × out_cols × n_bands × n_scenes × 8 bytes
+    //   C) Per-scene tile cache (transient, within one scene's processing):
+    //        Decoded f64 rasters accumulated in `per_band_tiles` and `scl_tiles` for all
+    //        tiles of the current scene, held until each band's mosaic consumes them.
+    //        Scales roughly as n_bands × S × out_cols × 8 × inflation, where `inflation`
+    //        absorbs native-resolution ratio, reprojection bloat, and n_outer_tiles per
+    //        scene. Empirical for Sentinel-2 L2A: ~100 on Earth Search, ~30 on Planetary
+    //        Computer (smaller COG tiles → less decompression overhead).
+    //   D) Concurrent tile decode (fixed overhead):
+    //        tile_concurrency × (n_bands + 1) × tile_internal_bytes
     //
-    // We reserve a download budget that encompasses (C) and size the accumulator (B) from
-    // what remains of a fixed global budget.
+    // Solve for S: `budget ≥ A + D + S × n_bands × out_cols × 8 × (inflation + n_scenes)`
+    //   → S ≤ (budget - A - D) / (n_bands × out_cols × 8 × (inflation + n_scenes))
+    //
+    // Empirical calibration (Maule 7274×5725, 10 bands × 42 scenes, ES):
+    //   v0.6.19 (S=175): observed ~30 GB, inflation ≈ 130
+    //   v0.6.22 (S=127): observed ~20 GB, inflation ≈ 107
+    // Using inflation=130 conservatively for ES caps S tighter.
+    //
+    // Override with `SURTGIS_RAM_BUDGET_GB` env var when running on hosts with
+    // significantly more or less than the 16 GB default budget.
     let stac_cat_for_budget = StacCatalog::from_str_or_url(catalog);
-    let (download_reserve_bytes, catalog_label) = match stac_cat_for_budget {
+    let (per_scene_inflation, tile_concurrency, catalog_label) = match stac_cat_for_budget {
         StacCatalog::EarthSearch =>
-            (6_usize * 1024 * 1024 * 1024, "Earth Search (1024² COG tiles)"),
+            (130_usize, 3_usize, "Earth Search (1024² COG tiles, heavy reprojection)"),
         StacCatalog::PlanetaryComputer =>
-            (3_usize * 1024 * 1024 * 1024, "Planetary Computer (512² COG tiles)"),
+            (30_usize, 16_usize, "Planetary Computer (512² COG tiles)"),
         StacCatalog::Custom(_) =>
-            (6_usize * 1024 * 1024 * 1024, "custom catalog"),
+            (130_usize, 3_usize, "custom catalog"),
     };
-    const GLOBAL_RAM_BUDGET_BYTES: usize = 12 * 1024 * 1024 * 1024; // conservative cap for 16-32 GB hosts
+    let tile_internal_bytes = match stac_cat_for_budget {
+        StacCatalog::EarthSearch | StacCatalog::Custom(_) => 1024_usize * 1024 * 8,
+        StacCatalog::PlanetaryComputer => 512_usize * 512 * 8,
+    };
+    let concurrent_decode_bytes = tile_concurrency * (n_bands + 1) * tile_internal_bytes;
+
+    let budget_gb = std::env::var("SURTGIS_RAM_BUDGET_GB")
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+        .filter(|gb| *gb > 0.5)
+        .unwrap_or(16.0);
+    let global_budget_bytes = (budget_gb * 1e9) as usize;
     let output_buffer_bytes = n_bands.max(1) * total_cells.max(1) * 8;
-    let accumulator_budget = GLOBAL_RAM_BUDGET_BYTES
+    let per_row_variable_bytes = n_bands.max(1) * out_cols.max(1) * 8
+        * (per_scene_inflation + n_scenes.max(1));
+
+    let variable_budget = global_budget_bytes
         .saturating_sub(output_buffer_bytes)
-        .saturating_sub(download_reserve_bytes)
-        .max(512 * 1024 * 1024); // floor 512 MB so we always make forward progress
-    let bytes_per_row = out_cols.max(1) * n_bands.max(1) * n_scenes.max(1) * 8;
-    let auto_strip_rows = (accumulator_budget / bytes_per_row.max(1)).clamp(16, 512);
+        .saturating_sub(concurrent_decode_bytes)
+        .max(64 * 1024 * 1024); // floor so we can always make some forward progress
+    let auto_strip_rows = (variable_budget / per_row_variable_bytes.max(1)).clamp(8, 512);
     let strip_rows = strip_rows_cfg.min(auto_strip_rows);
+
     let output_gb = output_buffer_bytes as f64 / 1e9;
-    let download_gb = download_reserve_bytes as f64 / 1e9;
-    let accumulator_gb = (strip_rows * bytes_per_row) as f64 / 1e9;
-    let estimated_total_gb = output_gb + download_gb + accumulator_gb;
+    let concurrent_gb = concurrent_decode_bytes as f64 / 1e9;
+    let per_scene_cache_gb = (strip_rows * n_bands * out_cols * 8 * per_scene_inflation) as f64 / 1e9;
+    let accumulator_gb = (strip_rows * n_bands * n_scenes * out_cols * 8) as f64 / 1e9;
+    let estimated_total_gb = output_gb + concurrent_gb + per_scene_cache_gb + accumulator_gb;
+
     if strip_rows < strip_rows_cfg {
-        let requested_accumulator_gb = (strip_rows_cfg * bytes_per_row) as f64 / 1e9;
+        let requested_acc_gb = (strip_rows_cfg * n_bands * n_scenes * out_cols * 8) as f64 / 1e9;
         eprintln!(
             "⚠ strip_rows capped: {} → {} ({}): accumulator {:.1} GB → {:.1} GB",
-            strip_rows_cfg, strip_rows, catalog_label, requested_accumulator_gb, accumulator_gb,
+            strip_rows_cfg, strip_rows, catalog_label, requested_acc_gb, accumulator_gb,
         );
     }
     eprintln!(
-        "  RAM budget — output buffers: {:.1} GB | download reserve: {:.1} GB | accumulator: {:.1} GB (strip_rows={}) → ~{:.1} GB peak",
-        output_gb, download_gb, accumulator_gb, strip_rows, estimated_total_gb,
+        "  RAM budget ({:.1} GB target) — output: {:.1} GB | concurrent decode: {:.1} GB | per-scene tile cache: {:.1} GB | accumulator: {:.1} GB (strip_rows={}) → ~{:.1} GB peak",
+        budget_gb, output_gb, concurrent_gb, per_scene_cache_gb, accumulator_gb, strip_rows, estimated_total_gb,
+    );
+    eprintln!(
+        "  (override with SURTGIS_RAM_BUDGET_GB=<N> if peak estimate doesn't match available RAM)",
     );
     let num_strips = (out_rows + strip_rows - 1) / strip_rows;
-
-    // Concurrent decoded-tile reads per scene. ES tiles are 4× larger; process fewer at a time
-    // to keep the in-flight decoded buffer bounded.
-    let tile_concurrency = match stac_cat_for_budget {
-        StacCatalog::EarthSearch | StacCatalog::Custom(_) => 4usize,
-        StacCatalog::PlanetaryComputer => 16usize,
-    };
 
     const TOKEN_REFRESH_THRESHOLD: Duration = Duration::from_secs(30 * 60);
 
