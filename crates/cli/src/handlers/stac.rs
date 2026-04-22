@@ -2621,29 +2621,60 @@ fn handle_multiband_composite(
     let total_cells = out_rows * out_cols;
 
     // Auto-cap strip_rows to keep peak RAM reasonable.
-    // Peak memory for band_scene_strips ≈ strip_rows × out_cols × n_bands × n_scenes × 8 bytes.
-    // Target: 4 GB for the scene accumulator (leaves headroom for downloads + output buffers).
-    const TARGET_SCENE_ACCUMULATOR_BYTES: usize = 4 * 1024 * 1024 * 1024;
+    //
+    // Peak RAM has three components:
+    //   A) Output buffers (persistent): n_bands × total_cells × 8 bytes
+    //   B) Scene accumulator (per strip): strip_rows × out_cols × n_bands × n_scenes × 8 bytes
+    //   C) Download working set (per scene): scales with tile_width², n_bands, concurrency
+    //
+    // Earth Search uses 1024×1024 COG tiles; Planetary Computer uses 512×512. The download
+    // working set is ~4× larger for ES because each decoded tile intersecting the strip bbox
+    // produces up to ~150 MB (f64) versus ~40 MB for PC. With ~450 concurrent tokio tasks
+    // per scene (tiles × bands), ES can spike to 20+ GB of decoded buffers in flight.
+    //
+    // We reserve a download budget that encompasses (C) and size the accumulator (B) from
+    // what remains of a fixed global budget.
+    let stac_cat_for_budget = StacCatalog::from_str_or_url(catalog);
+    let (download_reserve_bytes, catalog_label) = match stac_cat_for_budget {
+        StacCatalog::EarthSearch =>
+            (6_usize * 1024 * 1024 * 1024, "Earth Search (1024² COG tiles)"),
+        StacCatalog::PlanetaryComputer =>
+            (3_usize * 1024 * 1024 * 1024, "Planetary Computer (512² COG tiles)"),
+        StacCatalog::Custom(_) =>
+            (6_usize * 1024 * 1024 * 1024, "custom catalog"),
+    };
+    const GLOBAL_RAM_BUDGET_BYTES: usize = 12 * 1024 * 1024 * 1024; // conservative cap for 16-32 GB hosts
+    let output_buffer_bytes = n_bands.max(1) * total_cells.max(1) * 8;
+    let accumulator_budget = GLOBAL_RAM_BUDGET_BYTES
+        .saturating_sub(output_buffer_bytes)
+        .saturating_sub(download_reserve_bytes)
+        .max(512 * 1024 * 1024); // floor 512 MB so we always make forward progress
     let bytes_per_row = out_cols.max(1) * n_bands.max(1) * n_scenes.max(1) * 8;
-    let auto_strip_rows = (TARGET_SCENE_ACCUMULATOR_BYTES / bytes_per_row.max(1))
-        .clamp(16, 512);
+    let auto_strip_rows = (accumulator_budget / bytes_per_row.max(1)).clamp(16, 512);
     let strip_rows = strip_rows_cfg.min(auto_strip_rows);
+    let output_gb = output_buffer_bytes as f64 / 1e9;
+    let download_gb = download_reserve_bytes as f64 / 1e9;
+    let accumulator_gb = (strip_rows * bytes_per_row) as f64 / 1e9;
+    let estimated_total_gb = output_gb + download_gb + accumulator_gb;
     if strip_rows < strip_rows_cfg {
-        let est_peak_gb = (strip_rows * bytes_per_row) as f64 / 1e9;
-        let requested_peak_gb = (strip_rows_cfg * bytes_per_row) as f64 / 1e9;
+        let requested_accumulator_gb = (strip_rows_cfg * bytes_per_row) as f64 / 1e9;
         eprintln!(
-            "⚠ strip_rows capped: {} → {} (requested peak ~{:.1} GB, using ~{:.1} GB for {} bands × {} scenes × {} cols)",
-            strip_rows_cfg, strip_rows, requested_peak_gb, est_peak_gb,
-            n_bands, n_scenes, out_cols,
-        );
-    } else {
-        let est_peak_gb = (strip_rows * bytes_per_row) as f64 / 1e9;
-        eprintln!(
-            "  Estimated peak RAM for scene accumulator: ~{:.1} GB (strip_rows={}, {} bands × {} scenes × {} cols)",
-            est_peak_gb, strip_rows, n_bands, n_scenes, out_cols,
+            "⚠ strip_rows capped: {} → {} ({}): accumulator {:.1} GB → {:.1} GB",
+            strip_rows_cfg, strip_rows, catalog_label, requested_accumulator_gb, accumulator_gb,
         );
     }
+    eprintln!(
+        "  RAM budget — output buffers: {:.1} GB | download reserve: {:.1} GB | accumulator: {:.1} GB (strip_rows={}) → ~{:.1} GB peak",
+        output_gb, download_gb, accumulator_gb, strip_rows, estimated_total_gb,
+    );
     let num_strips = (out_rows + strip_rows - 1) / strip_rows;
+
+    // Concurrent decoded-tile reads per scene. ES tiles are 4× larger; process fewer at a time
+    // to keep the in-flight decoded buffer bounded.
+    let tile_concurrency = match stac_cat_for_budget {
+        StacCatalog::EarthSearch | StacCatalog::Custom(_) => 4usize,
+        StacCatalog::PlanetaryComputer => 16usize,
+    };
 
     const TOKEN_REFRESH_THRESHOLD: Duration = Duration::from_secs(30 * 60);
 
@@ -2772,86 +2803,94 @@ fn handle_multiband_composite(
                     tiles_to_download.push((ti, band_hrefs, scl_href, bb));
                 }
 
-                // Download missing tiles on the shared runtime
+                // Download missing tiles on the shared runtime, in chunks of `tile_concurrency`
+                // outer tiles. Each chunk fully resolves before the next starts so that decoded
+                // f64 rasters held in JoinHandles don't accumulate across the whole scene.
                 if !tiles_to_download.is_empty() {
                     let downloaded = download_rt.block_on(async {
                         use surtgis_cloud::{CogReader, CogReaderOptions};
 
-                        let mut tile_handles: Vec<(usize, Vec<tokio::task::JoinHandle<Option<surtgis_core::Raster<f64>>>>, Option<tokio::task::JoinHandle<Option<surtgis_core::Raster<f64>>>>)> = Vec::new();
+                        let mut results: Vec<(usize, Vec<Option<surtgis_core::Raster<f64>>>, Option<surtgis_core::Raster<f64>>)> = Vec::with_capacity(tiles_to_download.len());
+                        let mut remaining = tiles_to_download;
+                        while !remaining.is_empty() {
+                            let take_n = tile_concurrency.min(remaining.len());
+                            let chunk: Vec<_> = remaining.drain(..take_n).collect();
 
-                        for (ti, band_hrefs, scl_href, bb) in tiles_to_download {
-                            let mut band_handles = Vec::with_capacity(n_bands);
-                            for href in band_hrefs {
-                                let bb = bb;
-                                let do_cache = tile_cache;
-                                band_handles.push(tokio::spawn(async move {
-                                    for attempt in 0..2u8 {
-                                        if attempt > 0 {
-                                            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                                        }
-                                        let mut reader = match CogReader::open(&href, CogReaderOptions::default()).await {
-                                            Ok(r) => r,
-                                            Err(e) => {
-                                                let msg = e.to_string();
-                                                if msg.contains("bbox does not intersect") { return None; }
-                                                if attempt == 1 { eprintln!("    [cog] open FAILED: {}", msg); return None; }
-                                                continue;
+                            let mut tile_handles: Vec<(usize, Vec<tokio::task::JoinHandle<Option<surtgis_core::Raster<f64>>>>, Option<tokio::task::JoinHandle<Option<surtgis_core::Raster<f64>>>>)> = Vec::with_capacity(chunk.len());
+
+                            for (ti, band_hrefs, scl_href, bb) in chunk {
+                                let mut band_handles = Vec::with_capacity(n_bands);
+                                for href in band_hrefs {
+                                    let bb = bb;
+                                    let do_cache = tile_cache;
+                                    band_handles.push(tokio::spawn(async move {
+                                        for attempt in 0..2u8 {
+                                            if attempt > 0 {
+                                                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                                             }
-                                        };
-                                        let nodata_val = reader.metadata().nodata.unwrap_or(0.0);
-                                        match reader.read_bbox::<f64>(&bb, None).await {
-                                            Ok(mut r) => {
-                                                for val in r.data_mut().iter_mut() {
-                                                    if *val == nodata_val || *val == 0.0 { *val = f64::NAN; }
+                                            let mut reader = match CogReader::open(&href, CogReaderOptions::default()).await {
+                                                Ok(r) => r,
+                                                Err(e) => {
+                                                    let msg = e.to_string();
+                                                    if msg.contains("bbox does not intersect") { return None; }
+                                                    if attempt == 1 { eprintln!("    [cog] open FAILED: {}", msg); return None; }
+                                                    continue;
                                                 }
-                                                if do_cache { cache_write(&cog_cache_path(&href, &bb), &r); }
-                                                return Some(r);
-                                            }
-                                            Err(e) => {
-                                                let msg = e.to_string();
-                                                if msg.contains("bbox does not intersect") { return None; }
-                                                if attempt == 1 { return None; }
+                                            };
+                                            let nodata_val = reader.metadata().nodata.unwrap_or(0.0);
+                                            match reader.read_bbox::<f64>(&bb, None).await {
+                                                Ok(mut r) => {
+                                                    for val in r.data_mut().iter_mut() {
+                                                        if *val == nodata_val || *val == 0.0 { *val = f64::NAN; }
+                                                    }
+                                                    if do_cache { cache_write(&cog_cache_path(&href, &bb), &r); }
+                                                    return Some(r);
+                                                }
+                                                Err(e) => {
+                                                    let msg = e.to_string();
+                                                    if msg.contains("bbox does not intersect") { return None; }
+                                                    if attempt == 1 { return None; }
+                                                }
                                             }
                                         }
-                                    }
-                                    None
-                                }));
+                                        None
+                                    }));
+                                }
+                                let mask_handle = if !scl_href.is_empty() {
+                                    let bb = bb;
+                                    let do_cache = tile_cache;
+                                    Some(tokio::spawn(async move {
+                                        for attempt in 0..2u8 {
+                                            if attempt > 0 { tokio::time::sleep(std::time::Duration::from_secs(1)).await; }
+                                            let mut reader = match CogReader::open(&scl_href, CogReaderOptions::default()).await {
+                                                Ok(r) => r,
+                                                Err(_) if attempt == 0 => continue,
+                                                Err(_) => return None,
+                                            };
+                                            match reader.read_bbox::<f64>(&bb, None).await {
+                                                Ok(r) => {
+                                                    if do_cache { cache_write(&cog_cache_path(&scl_href, &bb), &r); }
+                                                    return Some(r);
+                                                }
+                                                Err(e) => {
+                                                    if !e.to_string().contains("bbox does not intersect") && attempt == 1 { return None; }
+                                                    if e.to_string().contains("bbox does not intersect") { return None; }
+                                                }
+                                            }
+                                        }
+                                        None
+                                    }))
+                                } else { None };
+                                tile_handles.push((ti, band_handles, mask_handle));
                             }
-                            let mask_handle = if !scl_href.is_empty() {
-                                let bb = bb;
-                                let do_cache = tile_cache;
-                                Some(tokio::spawn(async move {
-                                    for attempt in 0..2u8 {
-                                        if attempt > 0 { tokio::time::sleep(std::time::Duration::from_secs(1)).await; }
-                                        let mut reader = match CogReader::open(&scl_href, CogReaderOptions::default()).await {
-                                            Ok(r) => r,
-                                            Err(_) if attempt == 0 => continue,
-                                            Err(_) => return None,
-                                        };
-                                        match reader.read_bbox::<f64>(&bb, None).await {
-                                            Ok(r) => {
-                                                if do_cache { cache_write(&cog_cache_path(&scl_href, &bb), &r); }
-                                                return Some(r);
-                                            }
-                                            Err(e) => {
-                                                if !e.to_string().contains("bbox does not intersect") && attempt == 1 { return None; }
-                                                if e.to_string().contains("bbox does not intersect") { return None; }
-                                            }
-                                        }
-                                    }
-                                    None
-                                }))
-                            } else { None };
-                            tile_handles.push((ti, band_handles, mask_handle));
-                        }
 
-                        // Collect results
-                        let mut results: Vec<(usize, Vec<Option<surtgis_core::Raster<f64>>>, Option<surtgis_core::Raster<f64>>)> = Vec::new();
-                        for (ti, band_handles, mask_handle) in tile_handles {
-                            let mut bands = Vec::with_capacity(n_bands);
-                            for h in band_handles { bands.push(h.await.ok().flatten()); }
-                            let mask = if let Some(h) = mask_handle { h.await.ok().flatten() } else { None };
-                            results.push((ti, bands, mask));
+                            // Drain this chunk before starting the next one
+                            for (ti, band_handles, mask_handle) in tile_handles {
+                                let mut bands = Vec::with_capacity(n_bands);
+                                for h in band_handles { bands.push(h.await.ok().flatten()); }
+                                let mask = if let Some(h) = mask_handle { h.await.ok().flatten() } else { None };
+                                results.push((ti, bands, mask));
+                            }
                         }
                         results
                     });
