@@ -2392,6 +2392,133 @@ fn cache_write(path: &std::path::Path, raster: &surtgis_core::Raster<f64>) {
 // Multi-band composite: single-pass, shared STAC search + shared mask
 // ---------------------------------------------------------------------------
 
+/// Download a batch of COG tile rasters concurrently, bounded by chunking.
+///
+/// Only `tile_concurrency` tiles decode at a time, and each chunk fully
+/// drains before the next chunk starts. That way decoded f64 rasters don't
+/// accumulate across an entire scene in `JoinHandle`s.
+///
+/// - `tasks`: `(href, bbox_in_tile_crs)` per tile.
+/// - `zero_to_nan`: convert 0.0 / nodata → NaN for data bands. Masks (SCL,
+///   QA_PIXEL) keep raw categorical values.
+fn download_tile_rasters_chunked(
+    tasks: &[(String, BBox)],
+    use_cache: bool,
+    tile_concurrency: usize,
+    download_rt: &tokio::runtime::Runtime,
+    zero_to_nan: bool,
+) -> Vec<Option<surtgis_core::Raster<f64>>> {
+    if tasks.is_empty() {
+        return Vec::new();
+    }
+    download_rt.block_on(async {
+        use surtgis_cloud::{CogReader, CogReaderOptions};
+
+        let mut results: Vec<Option<surtgis_core::Raster<f64>>> =
+            (0..tasks.len()).map(|_| None).collect();
+
+        let mut needs_download: Vec<usize> = Vec::with_capacity(tasks.len());
+        for (idx, (href, bb)) in tasks.iter().enumerate() {
+            if use_cache {
+                if let Some(r) = cache_read(&cog_cache_path(href, bb)) {
+                    results[idx] = Some(r);
+                    continue;
+                }
+            }
+            needs_download.push(idx);
+        }
+
+        let chunk_size = tile_concurrency.max(1);
+        for chunk_indices in needs_download.chunks(chunk_size) {
+            let mut handles: Vec<(usize, tokio::task::JoinHandle<Option<surtgis_core::Raster<f64>>>)> =
+                Vec::with_capacity(chunk_indices.len());
+            for &idx in chunk_indices {
+                let (href, bb) = tasks[idx].clone();
+                let do_cache = use_cache;
+                let zero_nan = zero_to_nan;
+                let href_cache = href.clone();
+                handles.push((idx, tokio::spawn(async move {
+                    for attempt in 0..2u8 {
+                        if attempt > 0 {
+                            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        }
+                        let mut reader = match CogReader::open(&href, CogReaderOptions::default()).await {
+                            Ok(r) => r,
+                            Err(e) => {
+                                let msg = e.to_string();
+                                if msg.contains("bbox does not intersect") { return None; }
+                                if attempt == 1 {
+                                    eprintln!("    [cog] open FAILED: {}", msg);
+                                    return None;
+                                }
+                                continue;
+                            }
+                        };
+                        let nodata_val = reader.metadata().nodata.unwrap_or(0.0);
+                        match reader.read_bbox::<f64>(&bb, None).await {
+                            Ok(mut r) => {
+                                if zero_nan {
+                                    for val in r.data_mut().iter_mut() {
+                                        if *val == nodata_val || *val == 0.0 {
+                                            *val = f64::NAN;
+                                        }
+                                    }
+                                }
+                                if do_cache {
+                                    cache_write(&cog_cache_path(&href_cache, &bb), &r);
+                                }
+                                return Some(r);
+                            }
+                            Err(e) => {
+                                let msg = e.to_string();
+                                if msg.contains("bbox does not intersect") { return None; }
+                                if attempt == 1 { return None; }
+                            }
+                        }
+                    }
+                    None
+                })));
+            }
+            for (idx, h) in handles {
+                results[idx] = h.await.ok().flatten();
+            }
+        }
+
+        results
+    })
+}
+
+/// Reproject tiles that don't match the first tile's EPSG so mosaic() can
+/// stitch them. No-op for single-tile or already-consistent sets.
+fn unify_tile_crs(tiles: &mut Vec<surtgis_core::Raster<f64>>) {
+    if tiles.len() <= 1 { return; }
+    let target_epsg = tiles[0].crs().and_then(|c| c.epsg());
+    if let Some(target) = target_epsg {
+        for i in 1..tiles.len() {
+            if let Some(src_epsg) = tiles[i].crs().and_then(|c| c.epsg()) {
+                if src_epsg != target {
+                    if let Some(reprojected) = surtgis_cloud::reproject::reproject_raster_utm(
+                        &tiles[i], src_epsg, target,
+                    ) {
+                        tiles[i] = reprojected;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Mosaic tiles into a single raster. None if empty. Unifies CRS first.
+fn mosaic_tile_rasters(
+    mut tiles: Vec<surtgis_core::Raster<f64>>,
+) -> Option<surtgis_core::Raster<f64>> {
+    if tiles.is_empty() { return None; }
+    if tiles.len() == 1 { return Some(tiles.into_iter().next().unwrap()); }
+    unify_tile_crs(&mut tiles);
+    let refs: Vec<&surtgis_core::Raster<f64>> = tiles.iter().collect();
+    surtgis_core::mosaic(&refs, None).ok()
+}
+
 /// Handle multi-band `stac composite` in a single pass.
 ///
 /// Shares the STAC search and SCL mask download across all bands, avoiding
@@ -2622,46 +2749,45 @@ fn handle_multiband_composite(
 
     // Auto-cap strip_rows to keep peak RAM reasonable.
     //
-    // Peak RAM during one strip has FOUR components. Three of them scale with strip_rows (S):
+    // With the outer-band structural refactor (v0.6.24), only ONE band's
+    // tile cache is resident at any moment, so peak RAM no longer scales
+    // with n_bands × per-tile cache. The components are:
     //
-    //   A) Output buffers (persistent, independent of S):
-    //        n_bands × total_cells × 8 bytes
-    //   B) Scene accumulator (per strip):
-    //        S × out_cols × n_bands × n_scenes × 8 bytes
-    //   C) Per-scene tile cache (transient, within one scene's processing):
-    //        Decoded f64 rasters accumulated in `per_band_tiles` and `scl_tiles` for all
-    //        tiles of the current scene, held until each band's mosaic consumes them.
-    //        Scales roughly as n_bands × S × out_cols × 8 × inflation, where `inflation`
-    //        absorbs native-resolution ratio, reprojection bloat, and n_outer_tiles per
-    //        scene. Empirical for Sentinel-2 L2A: ~100 on Earth Search, ~30 on Planetary
-    //        Computer (smaller COG tiles → less decompression overhead).
-    //   D) Concurrent tile decode (fixed overhead):
-    //        tile_concurrency × (n_bands + 1) × tile_internal_bytes
+    //   A) Output buffers (persistent): n_bands × total_cells × 8
+    //   B) Cloud mask mosaics, one per scene held for the whole strip:
+    //        n_scenes × S × out_cols × 8 × mask_inflation
+    //        (mask_inflation captures native resolution ratio + mosaic overhead)
+    //   C) Per-band scene strips (just the active band):
+    //        n_scenes × S × out_cols × 8
+    //   D) Active-band mosaic working set (transient, one band mosaicked):
+    //        S × out_cols × 8 × band_inflation
+    //   E) Concurrent tile decode (fixed small):
+    //        tile_concurrency × tile_internal_bytes (only 1 asset in flight at a time)
     //
-    // Solve for S: `budget ≥ A + D + S × n_bands × out_cols × 8 × (inflation + n_scenes)`
-    //   → S ≤ (budget - A - D) / (n_bands × out_cols × 8 × (inflation + n_scenes))
+    // Solve for S:
+    //   budget ≥ A + E + S × out_cols × 8 × (n_scenes × mask_inflation + n_scenes + band_inflation)
     //
-    // Empirical calibration (Maule 7274×5725, 10 bands × 42 scenes, ES):
-    //   v0.6.19 (S=175): observed ~30 GB, inflation ≈ 130
-    //   v0.6.22 (S=127): observed ~20 GB, inflation ≈ 107
-    // Using inflation=130 conservatively for ES caps S tighter.
+    // Inflation constants from empirical COG output sizes at native resolution:
+    //   Sentinel-2 L2A on Earth Search (1024² COGs, multi-UTM reprojection): band_inflation≈14, mask_inflation≈4
+    //   Sentinel-2 L2A on Planetary Computer (512² COGs, mostly single UTM): band_inflation≈8, mask_inflation≈2
+    //   Landsat / other: conservative ES-like numbers
     //
-    // Override with `SURTGIS_RAM_BUDGET_GB` env var when running on hosts with
-    // significantly more or less than the 16 GB default budget.
+    // Override with `SURTGIS_RAM_BUDGET_GB` env var; default 16 GB.
     let stac_cat_for_budget = StacCatalog::from_str_or_url(catalog);
-    let (per_scene_inflation, tile_concurrency, catalog_label) = match stac_cat_for_budget {
+    let (band_inflation, mask_inflation, tile_concurrency, catalog_label) = match stac_cat_for_budget {
         StacCatalog::EarthSearch =>
-            (130_usize, 3_usize, "Earth Search (1024² COG tiles, heavy reprojection)"),
+            (14_usize, 4_usize, 8_usize, "Earth Search (1024² COGs, multi-UTM reprojection)"),
         StacCatalog::PlanetaryComputer =>
-            (30_usize, 16_usize, "Planetary Computer (512² COG tiles)"),
+            (8_usize, 2_usize, 16_usize, "Planetary Computer (512² COGs)"),
         StacCatalog::Custom(_) =>
-            (130_usize, 3_usize, "custom catalog"),
+            (14_usize, 4_usize, 8_usize, "custom catalog"),
     };
     let tile_internal_bytes = match stac_cat_for_budget {
         StacCatalog::EarthSearch | StacCatalog::Custom(_) => 1024_usize * 1024 * 8,
         StacCatalog::PlanetaryComputer => 512_usize * 512 * 8,
     };
-    let concurrent_decode_bytes = tile_concurrency * (n_bands + 1) * tile_internal_bytes;
+    // With outer-band-loop we only download 1 band's assets (or mask) at a time per scene
+    let concurrent_decode_bytes = tile_concurrency * tile_internal_bytes;
 
     let budget_gb = std::env::var("SURTGIS_RAM_BUDGET_GB")
         .ok()
@@ -2670,35 +2796,38 @@ fn handle_multiband_composite(
         .unwrap_or(16.0);
     let global_budget_bytes = (budget_gb * 1e9) as usize;
     let output_buffer_bytes = n_bands.max(1) * total_cells.max(1) * 8;
-    let per_row_variable_bytes = n_bands.max(1) * out_cols.max(1) * 8
-        * (per_scene_inflation + n_scenes.max(1));
+
+    let per_row_coef = n_scenes.max(1) * mask_inflation
+        + n_scenes.max(1)
+        + band_inflation;
+    let per_row_variable_bytes = out_cols.max(1) * 8 * per_row_coef;
 
     let variable_budget = global_budget_bytes
         .saturating_sub(output_buffer_bytes)
         .saturating_sub(concurrent_decode_bytes)
-        .max(64 * 1024 * 1024); // floor so we can always make some forward progress
+        .max(64 * 1024 * 1024);
     let auto_strip_rows = (variable_budget / per_row_variable_bytes.max(1)).clamp(8, 512);
     let strip_rows = strip_rows_cfg.min(auto_strip_rows);
 
     let output_gb = output_buffer_bytes as f64 / 1e9;
     let concurrent_gb = concurrent_decode_bytes as f64 / 1e9;
-    let per_scene_cache_gb = (strip_rows * n_bands * out_cols * 8 * per_scene_inflation) as f64 / 1e9;
-    let accumulator_gb = (strip_rows * n_bands * n_scenes * out_cols * 8) as f64 / 1e9;
-    let estimated_total_gb = output_gb + concurrent_gb + per_scene_cache_gb + accumulator_gb;
+    let mask_cache_gb = (strip_rows * n_scenes * out_cols * 8 * mask_inflation) as f64 / 1e9;
+    let scene_strips_gb = (strip_rows * n_scenes * out_cols * 8) as f64 / 1e9;
+    let band_working_gb = (strip_rows * out_cols * 8 * band_inflation) as f64 / 1e9;
+    let estimated_total_gb = output_gb + concurrent_gb + mask_cache_gb + scene_strips_gb + band_working_gb;
 
     if strip_rows < strip_rows_cfg {
-        let requested_acc_gb = (strip_rows_cfg * n_bands * n_scenes * out_cols * 8) as f64 / 1e9;
         eprintln!(
-            "⚠ strip_rows capped: {} → {} ({}): accumulator {:.1} GB → {:.1} GB",
-            strip_rows_cfg, strip_rows, catalog_label, requested_acc_gb, accumulator_gb,
+            "⚠ strip_rows capped: {} → {} ({}): fitting within {:.1} GB budget",
+            strip_rows_cfg, strip_rows, catalog_label, budget_gb,
         );
     }
     eprintln!(
-        "  RAM budget ({:.1} GB target) — output: {:.1} GB | concurrent decode: {:.1} GB | per-scene tile cache: {:.1} GB | accumulator: {:.1} GB (strip_rows={}) → ~{:.1} GB peak",
-        budget_gb, output_gb, concurrent_gb, per_scene_cache_gb, accumulator_gb, strip_rows, estimated_total_gb,
+        "  RAM budget ({:.1} GB target) — output: {:.1} GB | mask cache: {:.1} GB | scene strips: {:.1} GB | band working: {:.1} GB | decode: {:.1} GB (strip_rows={}) → ~{:.1} GB peak",
+        budget_gb, output_gb, mask_cache_gb, scene_strips_gb, band_working_gb, concurrent_gb, strip_rows, estimated_total_gb,
     );
     eprintln!(
-        "  (override with SURTGIS_RAM_BUDGET_GB=<N> if peak estimate doesn't match available RAM)",
+        "  (outer-band architecture: one band resident at a time; override with SURTGIS_RAM_BUDGET_GB=<N>)",
     );
     let num_strips = (out_rows + strip_rows - 1) / strip_rows;
 
@@ -2724,6 +2853,23 @@ fn handle_multiband_composite(
         .map(|_| vec![f64::NAN; total_cells])
         .collect();
 
+    // === Strip loop ===
+    //
+    // Structural refactor (v0.6.24): outer-band loop eliminates the per-scene
+    // multi-band tile cache that dominated peak RAM in prior versions. Peak
+    // memory now scales with ONE band at a time, not n_bands together.
+    //
+    //   Phase A (per strip): Precompute cloud masks for each scene.
+    //       Masks are tiny after mosaic (~MB each) and reused across all
+    //       bands, so caching n_scenes mosaicked masks is cheap.
+    //   Phase B (per strip, per band): For each band, iterate scenes:
+    //       download band tiles → mosaic → apply cached mask → resample →
+    //       push into scene_strips. Compute median + fill + write to
+    //       output buffer. Drop scene_strips before next band.
+    //
+    // Trade: n_bands× more HTTP requests for data bands. With --cache on,
+    // these are disk reads after the first strip. Without cache, HTTP doubles
+    // but each transfer is much smaller (1 band vs 10 per tile).
     for strip_idx in 0..num_strips {
         let row_start = strip_idx * strip_rows;
         let row_end = (row_start + strip_rows).min(out_rows);
@@ -2746,23 +2892,24 @@ fn handle_multiband_composite(
             r
         };
 
-        // Per-band scene strips accumulator
-        let mut band_scene_strips: Vec<Vec<ndarray::Array2<f64>>> = (0..n_bands)
-            .map(|_| Vec::with_capacity(n_scenes))
-            .collect();
+        // Strip bbox padded for tile overlap
+        let pad = 100.0;
+        let tile_bb = BBox::new(
+            strip_bb.min_x - pad, strip_bb.min_y - pad,
+            strip_bb.max_x + pad, strip_bb.max_y + pad,
+        );
+
+        // --- Phase A: Precompute mosaicked cloud masks per scene ---
+        let mut scene_masks: Vec<Option<surtgis_core::Raster<f64>>> = Vec::with_capacity(n_scenes);
 
         for scene in &mut scenes {
-            let is_first_strip = strip_idx == 0;
-
-            // Re-sign SAS tokens if near expiry
+            // Refresh SAS tokens if stale
             let token_age = scene.tiles.first().map(|t| t.signed_at.elapsed());
             if token_age.map(|age| age > TOKEN_REFRESH_THRESHOLD).unwrap_or(false) {
                 let age_secs = token_age.unwrap().as_secs();
                 for tile in &mut scene.tiles {
                     for (signed, original) in &mut tile.band_hrefs {
-                        if let Ok(h) = client.sign_asset_href(original, "") {
-                            *signed = h;
-                        }
+                        if let Ok(h) = client.sign_asset_href(original, "") { *signed = h; }
                     }
                     if !tile.original_scl_href.is_empty() {
                         if let Ok(h) = client.sign_asset_href(&tile.original_scl_href, "") {
@@ -2775,266 +2922,85 @@ fn handle_multiband_composite(
                     scene.tiles.len(), scene.date, age_secs);
             }
 
-            // Expand strip bbox for padding
-            let pad = 100.0;
-            let tile_bb = BBox::new(
-                strip_bb.min_x - pad, strip_bb.min_y - pad,
-                strip_bb.max_x + pad, strip_bb.max_y + pad,
-            );
-
-            // Download all tiles concurrently on the shared runtime.
-            // All bands + mask across ALL tiles are spawned as tokio tasks.
-            // No std::thread::spawn needed — the runtime's 8 workers handle parallelism.
-            let tile_results: Vec<(Vec<Option<surtgis_core::Raster<f64>>>, Option<surtgis_core::Raster<f64>>)> = {
-                let out_epsg = out_epsg_for_tiles;
-                let tile_cache = use_cache;
-
-                // Check cache first (synchronous, before async block)
-                let mut cached_results: Vec<Option<(Vec<Option<surtgis_core::Raster<f64>>>, Option<surtgis_core::Raster<f64>>)>> =
-                    Vec::with_capacity(scene.tiles.len());
-                let mut tiles_to_download: Vec<(usize, Vec<String>, String, BBox)> = Vec::new();
-
-                for (ti, tile) in scene.tiles.iter().enumerate() {
-                    let band_hrefs: Vec<String> = tile.band_hrefs.iter()
-                        .map(|(signed, _)| signed.clone())
-                        .collect();
-                    let scl_href = tile.scl_href.clone();
-                    let tile_epsg = tile.epsg;
-
-                    let bb = if let (Some(tepsg), Some(out_e)) = (tile_epsg, out_epsg) {
+            // Build mask (href, bbox) tasks — one per tile that has an SCL href
+            let mask_tasks: Vec<(String, BBox)> = scene.tiles.iter()
+                .filter(|t| !t.scl_href.is_empty())
+                .map(|tile| {
+                    let bb = if let (Some(tepsg), Some(out_e)) = (tile.epsg, out_epsg_for_tiles) {
                         if tepsg != out_e {
                             reproject_bbox_between_crs(&tile_bb, out_e, tepsg)
                         } else { tile_bb }
                     } else { tile_bb };
-
-                    // Check disk cache
-                    if tile_cache {
-                        let mut all_cached = true;
-                        let mut cached_bands: Vec<Option<surtgis_core::Raster<f64>>> = Vec::with_capacity(n_bands);
-                        for href in &band_hrefs {
-                            match cache_read(&cog_cache_path(href, &bb)) {
-                                Some(r) => cached_bands.push(Some(r)),
-                                None => { all_cached = false; break; }
-                            }
-                        }
-                        if all_cached && cached_bands.len() == n_bands {
-                            let cached_mask = if !scl_href.is_empty() {
-                                cache_read(&cog_cache_path(&scl_href, &bb))
-                            } else { None };
-                            cached_results.push(Some((cached_bands, cached_mask)));
-                            continue;
-                        }
-                    }
-                    cached_results.push(None); // needs download
-                    tiles_to_download.push((ti, band_hrefs, scl_href, bb));
-                }
-
-                // Download missing tiles on the shared runtime, in chunks of `tile_concurrency`
-                // outer tiles. Each chunk fully resolves before the next starts so that decoded
-                // f64 rasters held in JoinHandles don't accumulate across the whole scene.
-                if !tiles_to_download.is_empty() {
-                    let downloaded = download_rt.block_on(async {
-                        use surtgis_cloud::{CogReader, CogReaderOptions};
-
-                        let mut results: Vec<(usize, Vec<Option<surtgis_core::Raster<f64>>>, Option<surtgis_core::Raster<f64>>)> = Vec::with_capacity(tiles_to_download.len());
-                        let mut remaining = tiles_to_download;
-                        while !remaining.is_empty() {
-                            let take_n = tile_concurrency.min(remaining.len());
-                            let chunk: Vec<_> = remaining.drain(..take_n).collect();
-
-                            let mut tile_handles: Vec<(usize, Vec<tokio::task::JoinHandle<Option<surtgis_core::Raster<f64>>>>, Option<tokio::task::JoinHandle<Option<surtgis_core::Raster<f64>>>>)> = Vec::with_capacity(chunk.len());
-
-                            for (ti, band_hrefs, scl_href, bb) in chunk {
-                                let mut band_handles = Vec::with_capacity(n_bands);
-                                for href in band_hrefs {
-                                    let bb = bb;
-                                    let do_cache = tile_cache;
-                                    band_handles.push(tokio::spawn(async move {
-                                        for attempt in 0..2u8 {
-                                            if attempt > 0 {
-                                                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                                            }
-                                            let mut reader = match CogReader::open(&href, CogReaderOptions::default()).await {
-                                                Ok(r) => r,
-                                                Err(e) => {
-                                                    let msg = e.to_string();
-                                                    if msg.contains("bbox does not intersect") { return None; }
-                                                    if attempt == 1 { eprintln!("    [cog] open FAILED: {}", msg); return None; }
-                                                    continue;
-                                                }
-                                            };
-                                            let nodata_val = reader.metadata().nodata.unwrap_or(0.0);
-                                            match reader.read_bbox::<f64>(&bb, None).await {
-                                                Ok(mut r) => {
-                                                    for val in r.data_mut().iter_mut() {
-                                                        if *val == nodata_val || *val == 0.0 { *val = f64::NAN; }
-                                                    }
-                                                    if do_cache { cache_write(&cog_cache_path(&href, &bb), &r); }
-                                                    return Some(r);
-                                                }
-                                                Err(e) => {
-                                                    let msg = e.to_string();
-                                                    if msg.contains("bbox does not intersect") { return None; }
-                                                    if attempt == 1 { return None; }
-                                                }
-                                            }
-                                        }
-                                        None
-                                    }));
-                                }
-                                let mask_handle = if !scl_href.is_empty() {
-                                    let bb = bb;
-                                    let do_cache = tile_cache;
-                                    Some(tokio::spawn(async move {
-                                        for attempt in 0..2u8 {
-                                            if attempt > 0 { tokio::time::sleep(std::time::Duration::from_secs(1)).await; }
-                                            let mut reader = match CogReader::open(&scl_href, CogReaderOptions::default()).await {
-                                                Ok(r) => r,
-                                                Err(_) if attempt == 0 => continue,
-                                                Err(_) => return None,
-                                            };
-                                            match reader.read_bbox::<f64>(&bb, None).await {
-                                                Ok(r) => {
-                                                    if do_cache { cache_write(&cog_cache_path(&scl_href, &bb), &r); }
-                                                    return Some(r);
-                                                }
-                                                Err(e) => {
-                                                    if !e.to_string().contains("bbox does not intersect") && attempt == 1 { return None; }
-                                                    if e.to_string().contains("bbox does not intersect") { return None; }
-                                                }
-                                            }
-                                        }
-                                        None
-                                    }))
-                                } else { None };
-                                tile_handles.push((ti, band_handles, mask_handle));
-                            }
-
-                            // Drain this chunk before starting the next one
-                            for (ti, band_handles, mask_handle) in tile_handles {
-                                let mut bands = Vec::with_capacity(n_bands);
-                                for h in band_handles { bands.push(h.await.ok().flatten()); }
-                                let mask = if let Some(h) = mask_handle { h.await.ok().flatten() } else { None };
-                                results.push((ti, bands, mask));
-                            }
-                        }
-                        results
-                    });
-
-                    // Merge downloaded results into cached_results
-                    for (ti, bands, mask) in downloaded {
-                        cached_results[ti] = Some((bands, mask));
-                    }
-                }
-
-                // Flatten: all tiles now have results
-                cached_results.into_iter()
-                    .map(|r| r.unwrap_or_else(|| (vec![None; n_bands], None)))
-                    .collect()
-            };
-
-            // Per-band tile collection. Each band keeps tiles independently:
-            //   - Band with data → include for that band
-            //   - Band without data (BBoxOutside or HTTP error) → skip for that band only
-            // This is permissive: bands may have different scene counts per pixel.
-            // The median composite handles this naturally (NaN is ignored).
-            let mut per_band_tiles: Vec<Vec<surtgis_core::Raster<f64>>> = (0..n_bands)
-                .map(|_| Vec::new())
+                    (tile.scl_href.clone(), bb)
+                })
                 .collect();
-            let mut scl_tiles: Vec<surtgis_core::Raster<f64>> = Vec::new();
-            let mut tiles_ok = 0usize;
-            let mut tiles_outside = 0usize;
-            let mut tiles_partial = 0usize;
 
-            for (band_data, mask_opt) in tile_results {
-                let n_some = band_data.iter().filter(|r| r.is_some()).count();
-                if n_some == 0 {
-                    tiles_outside += 1;
-                    continue; // Tile doesn't cover this strip (BBoxOutside for all bands)
-                }
-                if n_some < n_bands {
-                    tiles_partial += 1;
-                }
-                // Include each band that succeeded (don't discard all for one failure)
-                for (bi, raster_opt) in band_data.into_iter().enumerate() {
-                    if let Some(r) = raster_opt {
-                        per_band_tiles[bi].push(r);
-                    }
-                }
-                if let Some(m) = mask_opt {
-                    scl_tiles.push(m);
-                }
-                tiles_ok += 1;
-            }
+            let mask_rasters = download_tile_rasters_chunked(
+                &mask_tasks, use_cache, tile_concurrency, &download_rt,
+                /* zero_to_nan */ false,
+            );
+            let mask_tiles: Vec<surtgis_core::Raster<f64>> =
+                mask_rasters.into_iter().flatten().collect();
+            scene_masks.push(mosaic_tile_rasters(mask_tiles));
+        }
 
-            if is_first_strip || tiles_ok == 0 || tiles_partial > 0 {
-                eprintln!("  ℹ {}: tiles OK={} outside={} partial={} mask={}",
-                    scene.date, tiles_ok, tiles_outside, tiles_partial, scl_tiles.len());
-            }
+        // --- Phase B: Per-band outer loop (bounded per-band tile cache) ---
+        for bi in 0..n_bands {
+            let band_name = band_names[bi];
+            let mut scene_strips: Vec<ndarray::Array2<f64>> = Vec::with_capacity(n_scenes);
 
-            if tiles_ok == 0 {
-                continue;
-            }
-
-            // Unify CRS across tiles (per band + mask)
-            fn unify_crs(tiles: &mut Vec<surtgis_core::Raster<f64>>) {
-                if tiles.len() <= 1 { return; }
-                let target_epsg = tiles[0].crs().and_then(|c| c.epsg());
-                if let Some(target) = target_epsg {
-                    for i in 1..tiles.len() {
-                        if let Some(src_epsg) = tiles[i].crs().and_then(|c| c.epsg()) {
-                            if src_epsg != target {
-                                if let Some(reprojected) = surtgis_cloud::reproject::reproject_raster_utm(
-                                    &tiles[i], src_epsg, target,
-                                ) {
-                                    tiles[i] = reprojected;
-                                }
+            for (si, scene) in scenes.iter_mut().enumerate() {
+                // Refresh tokens if needed (cheap if fresh)
+                let token_age = scene.tiles.first().map(|t| t.signed_at.elapsed());
+                if token_age.map(|age| age > TOKEN_REFRESH_THRESHOLD).unwrap_or(false) {
+                    for tile in &mut scene.tiles {
+                        for (signed, original) in &mut tile.band_hrefs {
+                            if let Ok(h) = client.sign_asset_href(original, "") { *signed = h; }
+                        }
+                        if !tile.original_scl_href.is_empty() {
+                            if let Ok(h) = client.sign_asset_href(&tile.original_scl_href, "") {
+                                tile.scl_href = h;
                             }
                         }
+                        tile.signed_at = Instant::now();
                     }
                 }
-            }
 
-            for band_tiles in &mut per_band_tiles {
-                unify_crs(band_tiles);
-            }
-            if !scl_tiles.is_empty() {
-                unify_crs(&mut scl_tiles);
-            }
+                // Download tasks for THIS band of THIS scene
+                let band_tasks: Vec<(String, BBox)> = scene.tiles.iter()
+                    .filter_map(|tile| {
+                        let (signed, _) = tile.band_hrefs.get(bi)?;
+                        if signed.is_empty() { return None; }
+                        let bb = if let (Some(tepsg), Some(out_e)) = (tile.epsg, out_epsg_for_tiles) {
+                            if tepsg != out_e {
+                                reproject_bbox_between_crs(&tile_bb, out_e, tepsg)
+                            } else { tile_bb }
+                        } else { tile_bb };
+                        Some((signed.clone(), bb))
+                    })
+                    .collect();
 
-            // Mosaic mask tiles ONCE (shared across all bands)
-            let scl_m = if scl_tiles.is_empty() {
-                None
-            } else if scl_tiles.len() == 1 {
-                Some(scl_tiles.into_iter().next().unwrap())
-            } else {
-                let refs: Vec<&surtgis_core::Raster<f64>> = scl_tiles.iter().collect();
-                surtgis_core::mosaic(&refs, None).ok()
-            };
-
-            // Process each band: mosaic → cloud mask → resample → accumulate
-            for bi in 0..n_bands {
-                let data_tiles = std::mem::take(&mut per_band_tiles[bi]);
+                let band_rasters = download_tile_rasters_chunked(
+                    &band_tasks, use_cache, tile_concurrency, &download_rt,
+                    /* zero_to_nan */ true,
+                );
+                let data_tiles: Vec<surtgis_core::Raster<f64>> =
+                    band_rasters.into_iter().flatten().collect();
                 if data_tiles.is_empty() { continue; }
 
-                let data_m = if data_tiles.len() == 1 {
-                    data_tiles.into_iter().next().unwrap()
-                } else {
-                    let refs: Vec<&surtgis_core::Raster<f64>> = data_tiles.iter().collect();
-                    match surtgis_core::mosaic(&refs, None) {
-                        Ok(m) => m,
-                        Err(_) => continue,
-                    }
+                let data_m = match mosaic_tile_rasters(data_tiles) {
+                    Some(m) => m,
+                    None => continue,
                 };
 
-                // Apply shared cloud mask
-                let clean = if let Some(ref scl) = scl_m {
+                // Apply the mask we computed in Phase A (shared across bands)
+                let clean = if let Some(ref scl) = scene_masks[si] {
                     cloud_mask_strategy.mask(&data_m, scl).unwrap_or(data_m)
                 } else {
                     data_m
                 };
 
-                // Resample to output grid
+                // Resample to strip grid
                 let resampled = surtgis_core::resample_to_grid(
                     &clean, &strip_ref,
                     surtgis_core::ResampleMethod::Bilinear,
@@ -3042,14 +3008,16 @@ fn handle_multiband_composite(
 
                 let valid = resampled.data().iter().filter(|v| v.is_finite()).count();
                 if valid > 0 {
-                    band_scene_strips[bi].push(resampled.data().to_owned());
+                    scene_strips.push(resampled.data().to_owned());
                 }
-            }
-        } // end for scene
+            } // end for scene
 
-        // Compute median + fill for each band, copy into output buffer
-        for bi in 0..n_bands {
-            let scene_strips = &band_scene_strips[bi];
+            if strip_idx == 0 && (bi == 0 || bi == n_bands - 1) {
+                eprintln!("  band '{}': {} / {} scenes contributed data",
+                    band_name, scene_strips.len(), n_scenes);
+            }
+
+            // --- Median + temporal fill + spatial fill for this band ---
             let mut strip_out = ndarray::Array2::<f64>::from_elem(
                 (actual_rows, out_cols), f64::NAN,
             );
@@ -3057,17 +3025,15 @@ fn handle_multiband_composite(
             if !scene_strips.is_empty() {
                 let n = scene_strips.len();
 
-                // Sort by coverage for greedy fill
                 let mut coverage: Vec<(usize, usize)> = scene_strips.iter().enumerate()
                     .map(|(i, s)| (i, s.iter().filter(|v| v.is_finite()).count()))
                     .collect();
                 coverage.sort_by(|a, b| b.1.cmp(&a.1));
 
-                // Median
                 for r in 0..actual_rows {
                     for c in 0..out_cols {
                         let mut values: Vec<f64> = Vec::with_capacity(n);
-                        for strip in scene_strips {
+                        for strip in &scene_strips {
                             if r < strip.nrows() && c < strip.ncols() {
                                 let v = strip[[r, c]];
                                 if v.is_finite() { values.push(v); }
@@ -3085,7 +3051,6 @@ fn handle_multiband_composite(
                     }
                 }
 
-                // Temporal fill
                 let nan_before = strip_out.iter().filter(|v| !v.is_finite()).count();
                 if nan_before > 0 {
                     for &(scene_idx, _) in &coverage {
@@ -3105,13 +3070,10 @@ fn handle_multiband_composite(
                     }
                 }
 
-                // Spatial fill (3x3 iterative mean) — double-buffered to avoid
-                // cloning the entire strip every pass.
                 let mut nan_remaining = strip_out.iter().filter(|v| !v.is_finite()).count();
                 if nan_remaining > 0 && nan_remaining < strip_out.len() {
-                    let mut prev_buf = strip_out.clone(); // single allocation, reused
+                    let mut prev_buf = strip_out.clone();
                     for _pass in 0..20 {
-                        // Copy current strip_out into prev_buf (no new allocation)
                         prev_buf.assign(&strip_out);
                         let mut filled = 0usize;
                         for r in 0..actual_rows {
@@ -3144,20 +3106,22 @@ fn handle_multiband_composite(
                 }
             }
 
-            // Copy strip into output buffer at the correct row offset
+            // Copy to output buffer at the strip's row offset
             let buf = &mut band_buffers[bi];
             let offset = row_start * out_cols;
             if let Some(slice) = strip_out.as_slice() {
                 buf[offset..offset + actual_rows * out_cols].copy_from_slice(slice);
             }
+
+            // scene_strips drops here — all per-scene buffers for this band freed
         } // end for band
 
-        // Log strip summary for first band
-        let valid_b0 = band_scene_strips[0].len();
+        // Log strip completion
         if strip_idx == 0 || strip_idx == num_strips - 1 {
-            eprintln!("  Strip {}/{}: {} scenes contributed to {} bands",
-                strip_idx + 1, num_strips, valid_b0, n_bands);
+            eprintln!("  Strip {}/{}: done ({} bands × {} scenes)",
+                strip_idx + 1, num_strips, n_bands, n_scenes);
         }
+        // scene_masks drops here
     } // end for strip
 
     println!(); // newline after \r progress
