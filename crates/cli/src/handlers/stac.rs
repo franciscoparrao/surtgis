@@ -2394,6 +2394,23 @@ fn cache_write(path: &std::path::Path, raster: &surtgis_core::Raster<f64>) {
 // Multi-band composite: single-pass, shared STAC search + shared mask
 // ---------------------------------------------------------------------------
 
+/// Read current process RSS in MB by parsing /proc/self/status. Returns 0 on
+/// non-Linux or if the file isn't readable. Used for diagnostic logging at
+/// strip / phase / band-chunk transitions so we can localise any RAM growth
+/// to a specific phase of the pipeline.
+fn read_rss_mb() -> usize {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with("VmRSS:"))
+                .and_then(|l| l.split_whitespace().nth(1))
+                .and_then(|kb| kb.parse::<usize>().ok())
+                .map(|kb| kb / 1024)
+        })
+        .unwrap_or(0)
+}
+
 /// Download a batch of COG tile rasters concurrently, bounded by chunking.
 ///
 /// Only `tile_concurrency` tiles decode at a time, and each chunk fully
@@ -2883,6 +2900,14 @@ fn handle_multiband_composite(
         .map(|_| vec![f64::NAN; total_cells])
         .collect();
 
+    // Diagnostic: cumulative tile counter + initial RSS.
+    // Emits a `[ram]` line at every strip/phase/band-chunk transition so the
+    // owner can localise any linear RAM growth to a specific phase. The v0.6.24
+    // bug report described ~22 min stable then 1.3 GB/min linear growth; tagging
+    // transitions with RSS + tile counts lets us pinpoint where it starts.
+    let mut cumulative_tiles: usize = 0;
+    eprintln!("[ram] baseline before strip loop: RSS={} MB", read_rss_mb());
+
     // === Strip loop ===
     //
     // Structural refactor (v0.6.24): outer-band loop eliminates the per-scene
@@ -2929,8 +2954,12 @@ fn handle_multiband_composite(
             strip_bb.max_x + pad, strip_bb.max_y + pad,
         );
 
+        eprintln!("[ram] strip {}/{} start: RSS={} MB, tiles_cumulative={}",
+            strip_idx + 1, num_strips, read_rss_mb(), cumulative_tiles);
+
         // --- Phase A: Precompute mosaicked cloud masks per scene ---
         let mut scene_masks: Vec<Option<surtgis_core::Raster<f64>>> = Vec::with_capacity(n_scenes);
+        let mut phase_a_tiles = 0usize;
 
         for scene in &mut scenes {
             // Refresh SAS tokens if stale
@@ -2969,10 +2998,15 @@ fn handle_multiband_composite(
                 &mask_tasks, use_cache, tile_concurrency, &download_rt,
                 /* zero_to_nan */ false,
             );
+            phase_a_tiles += mask_tasks.len();
+            cumulative_tiles += mask_tasks.len();
             let mask_tiles: Vec<surtgis_core::Raster<f64>> =
                 mask_rasters.into_iter().flatten().collect();
             scene_masks.push(mosaic_tile_rasters(mask_tiles));
         }
+
+        eprintln!("[ram] strip {}/{} after Phase A (masks): RSS={} MB, phase_a_tiles={}, cumulative={}",
+            strip_idx + 1, num_strips, read_rss_mb(), phase_a_tiles, cumulative_tiles);
 
         // --- Phase B: Outer band-chunk loop (K bands processed per chunk) ---
         //
@@ -2987,6 +3021,9 @@ fn handle_multiband_composite(
             let chunk_end = (chunk_start + k).min(n_bands);
             let chunk_bands: Vec<usize> = (chunk_start..chunk_end).collect();
             let chunk_k = chunk_bands.len();
+
+            eprintln!("[ram] strip {}/{} chunk bands [{}..{}] start: RSS={} MB, cumulative={}",
+                strip_idx + 1, num_strips, chunk_start, chunk_end, read_rss_mb(), cumulative_tiles);
 
             // K scene_strips accumulators, one per band in the chunk
             let mut chunk_scene_strips: Vec<Vec<ndarray::Array2<f64>>> =
@@ -3031,6 +3068,7 @@ fn handle_multiband_composite(
                     &all_tasks, use_cache, tile_concurrency, &download_rt,
                     /* zero_to_nan */ true,
                 );
+                cumulative_tiles += all_tasks.len();
 
                 // Split results back by band index
                 let mut per_band: Vec<Vec<surtgis_core::Raster<f64>>> =
@@ -3168,6 +3206,9 @@ fn handle_multiband_composite(
                 }
                 // scene_strips for this band was already taken above and drops here
             }
+
+            eprintln!("[ram] strip {}/{} chunk bands [{}..{}] end: RSS={} MB, cumulative={}",
+                strip_idx + 1, num_strips, chunk_start, chunk_end, read_rss_mb(), cumulative_tiles);
 
             chunk_start = chunk_end;
             // chunk_scene_strips drops here — frees the K-band per-scene buffers

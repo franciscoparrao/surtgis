@@ -7,6 +7,14 @@ mod memory;
 mod stac_introspect;
 mod streaming;
 
+// mimalloc: global allocator. glibc malloc tends to hold freed memory in
+// fragmented heap arenas indefinitely under mixed-size alloc/free workloads,
+// which matches the v0.6.24 bug signature (linear RSS growth during long
+// stac composite runs after an initial stable phase). mimalloc returns
+// memory to the OS much more aggressively.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use anyhow::Result;
 use clap::Parser;
 
