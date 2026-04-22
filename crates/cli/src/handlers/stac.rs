@@ -866,6 +866,7 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             naming,
             cache,
             strip_rows: cli_strip_rows,
+            band_chunk_size,
             output,
         } => {
             // Multi-band support: --asset "red,nir,swir16,blue"
@@ -875,7 +876,8 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                 return handle_multiband_composite(
                     &catalog, &bbox, &collection, &assets,
                     &datetime, max_scenes,
-                    align_to.as_ref(), &output, &naming, cache, cli_strip_rows, compress,
+                    align_to.as_ref(), &output, &naming, cache, cli_strip_rows,
+                    band_chunk_size, compress,
                 );
             }
 
@@ -2438,17 +2440,33 @@ fn download_tile_rasters_chunked(
                 let zero_nan = zero_to_nan;
                 let href_cache = href.clone();
                 handles.push((idx, tokio::spawn(async move {
-                    for attempt in 0..2u8 {
+                    // Exponential backoff with jitter. Base 500ms × 2^attempt gives
+                    // 500ms, 1s, 2s, 4s across 4 attempts. Jitter desynchronises
+                    // retry waves so rate-limited catalogs don't get hit by a
+                    // synchronized wall of reopens after a 429. Rate-limit errors
+                    // (429) trigger longer sleep, transient 5xx shorter.
+                    const MAX_ATTEMPTS: u8 = 4;
+                    for attempt in 0..MAX_ATTEMPTS {
                         if attempt > 0 {
-                            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                            let base_ms: u64 = 500u64 << (attempt - 1);
+                            // Cheap jitter without adding a crate: low bits of the
+                            // monotonic clock are uncorrelated across tasks.
+                            let jitter_ms = (std::time::Instant::now().elapsed().subsec_nanos()
+                                as u64) % base_ms;
+                            tokio::time::sleep(std::time::Duration::from_millis(base_ms + jitter_ms)).await;
                         }
                         let mut reader = match CogReader::open(&href, CogReaderOptions::default()).await {
                             Ok(r) => r,
                             Err(e) => {
                                 let msg = e.to_string();
                                 if msg.contains("bbox does not intersect") { return None; }
-                                if attempt == 1 {
-                                    eprintln!("    [cog] open FAILED: {}", msg);
+                                if msg.contains(" 404") || msg.contains("NotFound") { return None; }
+                                // Rate limit — add an extra 2s on top of the base backoff
+                                if msg.contains(" 429") || msg.contains("TooManyRequests") {
+                                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                                }
+                                if attempt == MAX_ATTEMPTS - 1 {
+                                    eprintln!("    [cog] open FAILED after {} attempts: {}", MAX_ATTEMPTS, msg);
                                     return None;
                                 }
                                 continue;
@@ -2472,7 +2490,14 @@ fn download_tile_rasters_chunked(
                             Err(e) => {
                                 let msg = e.to_string();
                                 if msg.contains("bbox does not intersect") { return None; }
-                                if attempt == 1 { return None; }
+                                if msg.contains(" 404") || msg.contains("NotFound") { return None; }
+                                if msg.contains(" 429") || msg.contains("TooManyRequests") {
+                                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                                }
+                                if attempt == MAX_ATTEMPTS - 1 {
+                                    eprintln!("    [cog] read FAILED after {} attempts: {}", MAX_ATTEMPTS, msg);
+                                    return None;
+                                }
                             }
                         }
                     }
@@ -2536,6 +2561,7 @@ fn handle_multiband_composite(
     naming: &str,
     use_cache: bool,
     strip_rows_cfg: usize,
+    band_chunk_size: usize,
     compress: bool,
 ) -> Result<()> {
     use surtgis_cloud::reproject;
@@ -2786,8 +2812,10 @@ fn handle_multiband_composite(
         StacCatalog::EarthSearch | StacCatalog::Custom(_) => 1024_usize * 1024 * 8,
         StacCatalog::PlanetaryComputer => 512_usize * 512 * 8,
     };
-    // With outer-band-loop we only download 1 band's assets (or mask) at a time per scene
-    let concurrent_decode_bytes = tile_concurrency * tile_internal_bytes;
+    // Clamp band_chunk_size into [1, n_bands]. K=1 is minimum RAM; K=n_bands is minimum HTTP.
+    let k = band_chunk_size.clamp(1, n_bands.max(1));
+    // Concurrent decode now scales with K (we download K bands' assets per scene concurrently).
+    let concurrent_decode_bytes = tile_concurrency * (k + 1) * tile_internal_bytes;
 
     let budget_gb = std::env::var("SURTGIS_RAM_BUDGET_GB")
         .ok()
@@ -2797,9 +2825,10 @@ fn handle_multiband_composite(
     let global_budget_bytes = (budget_gb * 1e9) as usize;
     let output_buffer_bytes = n_bands.max(1) * total_cells.max(1) * 8;
 
+    // Scene strips and band working set scale with K (bands-in-flight).
     let per_row_coef = n_scenes.max(1) * mask_inflation
-        + n_scenes.max(1)
-        + band_inflation;
+        + k * n_scenes.max(1)
+        + k * band_inflation;
     let per_row_variable_bytes = out_cols.max(1) * 8 * per_row_coef;
 
     let variable_budget = global_budget_bytes
@@ -2812,8 +2841,8 @@ fn handle_multiband_composite(
     let output_gb = output_buffer_bytes as f64 / 1e9;
     let concurrent_gb = concurrent_decode_bytes as f64 / 1e9;
     let mask_cache_gb = (strip_rows * n_scenes * out_cols * 8 * mask_inflation) as f64 / 1e9;
-    let scene_strips_gb = (strip_rows * n_scenes * out_cols * 8) as f64 / 1e9;
-    let band_working_gb = (strip_rows * out_cols * 8 * band_inflation) as f64 / 1e9;
+    let scene_strips_gb = (strip_rows * n_scenes * out_cols * 8 * k) as f64 / 1e9;
+    let band_working_gb = (strip_rows * out_cols * 8 * band_inflation * k) as f64 / 1e9;
     let estimated_total_gb = output_gb + concurrent_gb + mask_cache_gb + scene_strips_gb + band_working_gb;
 
     if strip_rows < strip_rows_cfg {
@@ -2823,11 +2852,12 @@ fn handle_multiband_composite(
         );
     }
     eprintln!(
-        "  RAM budget ({:.1} GB target) — output: {:.1} GB | mask cache: {:.1} GB | scene strips: {:.1} GB | band working: {:.1} GB | decode: {:.1} GB (strip_rows={}) → ~{:.1} GB peak",
-        budget_gb, output_gb, mask_cache_gb, scene_strips_gb, band_working_gb, concurrent_gb, strip_rows, estimated_total_gb,
+        "  RAM budget ({:.1} GB target, band_chunk_size={}) — output: {:.1} GB | mask cache: {:.1} GB | scene strips: {:.1} GB | band working: {:.1} GB | decode: {:.1} GB (strip_rows={}) → ~{:.1} GB peak",
+        budget_gb, k, output_gb, mask_cache_gb, scene_strips_gb, band_working_gb, concurrent_gb, strip_rows, estimated_total_gb,
     );
     eprintln!(
-        "  (outer-band architecture: one band resident at a time; override with SURTGIS_RAM_BUDGET_GB=<N>)",
+        "  (outer-band, {}-band chunks; HTTP requests per scene = {}. Raise --band-chunk-size to reduce requests at higher RAM cost. Override budget with SURTGIS_RAM_BUDGET_GB=<N>)",
+        k, n_bands.div_ceil(k),
     );
     let num_strips = (out_rows + strip_rows - 1) / strip_rows;
 
@@ -2944,13 +2974,26 @@ fn handle_multiband_composite(
             scene_masks.push(mosaic_tile_rasters(mask_tiles));
         }
 
-        // --- Phase B: Per-band outer loop (bounded per-band tile cache) ---
-        for bi in 0..n_bands {
-            let band_name = band_names[bi];
-            let mut scene_strips: Vec<ndarray::Array2<f64>> = Vec::with_capacity(n_scenes);
+        // --- Phase B: Outer band-chunk loop (K bands processed per chunk) ---
+        //
+        // K bands' download tasks are concatenated into one download call so HTTP
+        // concurrency can pipeline across bands of the same scene. Results are split
+        // back out by band index before mosaicking. When K = n_bands this degenerates
+        // to the v0.6.19-style "all bands per scene" pattern but with the median/fill
+        // write happening inline per band chunk (so no per_band_tiles pile-up across
+        // the whole strip).
+        let mut chunk_start = 0usize;
+        while chunk_start < n_bands {
+            let chunk_end = (chunk_start + k).min(n_bands);
+            let chunk_bands: Vec<usize> = (chunk_start..chunk_end).collect();
+            let chunk_k = chunk_bands.len();
+
+            // K scene_strips accumulators, one per band in the chunk
+            let mut chunk_scene_strips: Vec<Vec<ndarray::Array2<f64>>> =
+                (0..chunk_k).map(|_| Vec::with_capacity(n_scenes)).collect();
 
             for (si, scene) in scenes.iter_mut().enumerate() {
-                // Refresh tokens if needed (cheap if fresh)
+                // Refresh tokens if stale (cheap if fresh)
                 let token_age = scene.tiles.first().map(|t| t.signed_at.elapsed());
                 if token_age.map(|age| age > TOKEN_REFRESH_THRESHOLD).unwrap_or(false) {
                     for tile in &mut scene.tiles {
@@ -2966,155 +3009,169 @@ fn handle_multiband_composite(
                     }
                 }
 
-                // Download tasks for THIS band of THIS scene
-                let band_tasks: Vec<(String, BBox)> = scene.tiles.iter()
-                    .filter_map(|tile| {
-                        let (signed, _) = tile.band_hrefs.get(bi)?;
-                        if signed.is_empty() { return None; }
+                // Build a flat download task list for the full chunk, plus a parallel
+                // index-into-chunk-bands vector so we can split results afterwards.
+                let mut all_tasks: Vec<(String, BBox)> = Vec::new();
+                let mut task_band_local: Vec<usize> = Vec::new();
+                for (bi_local, &bi) in chunk_bands.iter().enumerate() {
+                    for tile in &scene.tiles {
+                        let Some((signed, _)) = tile.band_hrefs.get(bi) else { continue };
+                        if signed.is_empty() { continue; }
                         let bb = if let (Some(tepsg), Some(out_e)) = (tile.epsg, out_epsg_for_tiles) {
                             if tepsg != out_e {
                                 reproject_bbox_between_crs(&tile_bb, out_e, tepsg)
                             } else { tile_bb }
                         } else { tile_bb };
-                        Some((signed.clone(), bb))
-                    })
-                    .collect();
+                        all_tasks.push((signed.clone(), bb));
+                        task_band_local.push(bi_local);
+                    }
+                }
 
-                let band_rasters = download_tile_rasters_chunked(
-                    &band_tasks, use_cache, tile_concurrency, &download_rt,
+                let all_rasters = download_tile_rasters_chunked(
+                    &all_tasks, use_cache, tile_concurrency, &download_rt,
                     /* zero_to_nan */ true,
                 );
-                let data_tiles: Vec<surtgis_core::Raster<f64>> =
-                    band_rasters.into_iter().flatten().collect();
-                if data_tiles.is_empty() { continue; }
 
-                let data_m = match mosaic_tile_rasters(data_tiles) {
-                    Some(m) => m,
-                    None => continue,
-                };
+                // Split results back by band index
+                let mut per_band: Vec<Vec<surtgis_core::Raster<f64>>> =
+                    (0..chunk_k).map(|_| Vec::new()).collect();
+                for (raster_opt, &bi_local) in all_rasters.into_iter().zip(task_band_local.iter()) {
+                    if let Some(r) = raster_opt {
+                        per_band[bi_local].push(r);
+                    }
+                }
 
-                // Apply the mask we computed in Phase A (shared across bands)
-                let clean = if let Some(ref scl) = scene_masks[si] {
-                    cloud_mask_strategy.mask(&data_m, scl).unwrap_or(data_m)
-                } else {
-                    data_m
-                };
-
-                // Resample to strip grid
-                let resampled = surtgis_core::resample_to_grid(
-                    &clean, &strip_ref,
-                    surtgis_core::ResampleMethod::Bilinear,
-                ).unwrap_or(clean);
-
-                let valid = resampled.data().iter().filter(|v| v.is_finite()).count();
-                if valid > 0 {
-                    scene_strips.push(resampled.data().to_owned());
+                for (bi_local, data_tiles) in per_band.into_iter().enumerate() {
+                    if data_tiles.is_empty() { continue; }
+                    let data_m = match mosaic_tile_rasters(data_tiles) {
+                        Some(m) => m,
+                        None => continue,
+                    };
+                    let clean = if let Some(ref scl) = scene_masks[si] {
+                        cloud_mask_strategy.mask(&data_m, scl).unwrap_or(data_m)
+                    } else {
+                        data_m
+                    };
+                    let resampled = surtgis_core::resample_to_grid(
+                        &clean, &strip_ref,
+                        surtgis_core::ResampleMethod::Bilinear,
+                    ).unwrap_or(clean);
+                    let valid = resampled.data().iter().filter(|v| v.is_finite()).count();
+                    if valid > 0 {
+                        chunk_scene_strips[bi_local].push(resampled.data().to_owned());
+                    }
                 }
             } // end for scene
 
-            if strip_idx == 0 && (bi == 0 || bi == n_bands - 1) {
-                eprintln!("  band '{}': {} / {} scenes contributed data",
-                    band_name, scene_strips.len(), n_scenes);
-            }
+            // --- Per-band median + fill + write (still inside the chunk loop) ---
+            for (bi_local, &bi) in chunk_bands.iter().enumerate() {
+                let band_name = band_names[bi];
+                let scene_strips = std::mem::take(&mut chunk_scene_strips[bi_local]);
 
-            // --- Median + temporal fill + spatial fill for this band ---
-            let mut strip_out = ndarray::Array2::<f64>::from_elem(
-                (actual_rows, out_cols), f64::NAN,
-            );
-
-            if !scene_strips.is_empty() {
-                let n = scene_strips.len();
-
-                let mut coverage: Vec<(usize, usize)> = scene_strips.iter().enumerate()
-                    .map(|(i, s)| (i, s.iter().filter(|v| v.is_finite()).count()))
-                    .collect();
-                coverage.sort_by(|a, b| b.1.cmp(&a.1));
-
-                for r in 0..actual_rows {
-                    for c in 0..out_cols {
-                        let mut values: Vec<f64> = Vec::with_capacity(n);
-                        for strip in &scene_strips {
-                            if r < strip.nrows() && c < strip.ncols() {
-                                let v = strip[[r, c]];
-                                if v.is_finite() { values.push(v); }
-                            }
-                        }
-                        if !values.is_empty() {
-                            values.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
-                            let mid = values.len() / 2;
-                            strip_out[[r, c]] = if values.len() % 2 == 0 {
-                                (values[mid - 1] + values[mid]) / 2.0
-                            } else {
-                                values[mid]
-                            };
-                        }
-                    }
+                if strip_idx == 0 && (bi == 0 || bi == n_bands - 1) {
+                    eprintln!("  band '{}': {} / {} scenes contributed data",
+                        band_name, scene_strips.len(), n_scenes);
                 }
 
-                let nan_before = strip_out.iter().filter(|v| !v.is_finite()).count();
-                if nan_before > 0 {
-                    for &(scene_idx, _) in &coverage {
-                        let strip = &scene_strips[scene_idx];
-                        for r in 0..actual_rows {
-                            for c in 0..out_cols {
-                                if !strip_out[[r, c]].is_finite()
-                                    && r < strip.nrows() && c < strip.ncols()
-                                {
+                let mut strip_out = ndarray::Array2::<f64>::from_elem(
+                    (actual_rows, out_cols), f64::NAN,
+                );
+
+                if !scene_strips.is_empty() {
+                    let n = scene_strips.len();
+
+                    let mut coverage: Vec<(usize, usize)> = scene_strips.iter().enumerate()
+                        .map(|(i, s)| (i, s.iter().filter(|v| v.is_finite()).count()))
+                        .collect();
+                    coverage.sort_by(|a, b| b.1.cmp(&a.1));
+
+                    for r in 0..actual_rows {
+                        for c in 0..out_cols {
+                            let mut values: Vec<f64> = Vec::with_capacity(n);
+                            for strip in &scene_strips {
+                                if r < strip.nrows() && c < strip.ncols() {
                                     let v = strip[[r, c]];
-                                    if v.is_finite() { strip_out[[r, c]] = v; }
+                                    if v.is_finite() { values.push(v); }
                                 }
                             }
+                            if !values.is_empty() {
+                                values.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+                                let mid = values.len() / 2;
+                                strip_out[[r, c]] = if values.len() % 2 == 0 {
+                                    (values[mid - 1] + values[mid]) / 2.0
+                                } else {
+                                    values[mid]
+                                };
+                            }
                         }
-                        let remaining = strip_out.iter().filter(|v| !v.is_finite()).count();
-                        if remaining == 0 { break; }
                     }
-                }
 
-                let mut nan_remaining = strip_out.iter().filter(|v| !v.is_finite()).count();
-                if nan_remaining > 0 && nan_remaining < strip_out.len() {
-                    let mut prev_buf = strip_out.clone();
-                    for _pass in 0..20 {
-                        prev_buf.assign(&strip_out);
-                        let mut filled = 0usize;
-                        for r in 0..actual_rows {
-                            for c in 0..out_cols {
-                                if prev_buf[[r, c]].is_finite() { continue; }
-                                let mut sum = 0.0;
-                                let mut cnt = 0u32;
-                                for dr in -1i32..=1 {
-                                    for dc in -1i32..=1 {
-                                        let nr = r as i32 + dr;
-                                        let nc = c as i32 + dc;
-                                        if nr >= 0 && nr < actual_rows as i32
-                                            && nc >= 0 && nc < out_cols as i32
-                                        {
-                                            let v = prev_buf[[nr as usize, nc as usize]];
-                                            if v.is_finite() { sum += v; cnt += 1; }
-                                        }
+                    let nan_before = strip_out.iter().filter(|v| !v.is_finite()).count();
+                    if nan_before > 0 {
+                        for &(scene_idx, _) in &coverage {
+                            let strip = &scene_strips[scene_idx];
+                            for r in 0..actual_rows {
+                                for c in 0..out_cols {
+                                    if !strip_out[[r, c]].is_finite()
+                                        && r < strip.nrows() && c < strip.ncols()
+                                    {
+                                        let v = strip[[r, c]];
+                                        if v.is_finite() { strip_out[[r, c]] = v; }
                                     }
                                 }
-                                if cnt >= 2 {
-                                    strip_out[[r, c]] = sum / cnt as f64;
-                                    filled += 1;
+                            }
+                            let remaining = strip_out.iter().filter(|v| !v.is_finite()).count();
+                            if remaining == 0 { break; }
+                        }
+                    }
+
+                    let mut nan_remaining = strip_out.iter().filter(|v| !v.is_finite()).count();
+                    if nan_remaining > 0 && nan_remaining < strip_out.len() {
+                        let mut prev_buf = strip_out.clone();
+                        for _pass in 0..20 {
+                            prev_buf.assign(&strip_out);
+                            let mut filled = 0usize;
+                            for r in 0..actual_rows {
+                                for c in 0..out_cols {
+                                    if prev_buf[[r, c]].is_finite() { continue; }
+                                    let mut sum = 0.0;
+                                    let mut cnt = 0u32;
+                                    for dr in -1i32..=1 {
+                                        for dc in -1i32..=1 {
+                                            let nr = r as i32 + dr;
+                                            let nc = c as i32 + dc;
+                                            if nr >= 0 && nr < actual_rows as i32
+                                                && nc >= 0 && nc < out_cols as i32
+                                            {
+                                                let v = prev_buf[[nr as usize, nc as usize]];
+                                                if v.is_finite() { sum += v; cnt += 1; }
+                                            }
+                                        }
+                                    }
+                                    if cnt >= 2 {
+                                        strip_out[[r, c]] = sum / cnt as f64;
+                                        filled += 1;
+                                    }
                                 }
                             }
+                            if filled == 0 { break; }
+                            nan_remaining = strip_out.iter().filter(|v| !v.is_finite()).count();
+                            if nan_remaining == 0 { break; }
                         }
-                        if filled == 0 { break; }
-                        nan_remaining = strip_out.iter().filter(|v| !v.is_finite()).count();
-                        if nan_remaining == 0 { break; }
                     }
                 }
+
+                let buf = &mut band_buffers[bi];
+                let offset = row_start * out_cols;
+                if let Some(slice) = strip_out.as_slice() {
+                    buf[offset..offset + actual_rows * out_cols].copy_from_slice(slice);
+                }
+                // scene_strips for this band was already taken above and drops here
             }
 
-            // Copy to output buffer at the strip's row offset
-            let buf = &mut band_buffers[bi];
-            let offset = row_start * out_cols;
-            if let Some(slice) = strip_out.as_slice() {
-                buf[offset..offset + actual_rows * out_cols].copy_from_slice(slice);
-            }
-
-            // scene_strips drops here — all per-scene buffers for this band freed
-        } // end for band
+            chunk_start = chunk_end;
+            // chunk_scene_strips drops here — frees the K-band per-scene buffers
+        } // end while chunk
 
         // Log strip completion
         if strip_idx == 0 || strip_idx == num_strips - 1 {

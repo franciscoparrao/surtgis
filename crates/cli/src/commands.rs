@@ -1497,6 +1497,11 @@ pub enum StacCommands {
         /// Rows per processing strip (larger = fewer HTTP requests but more RAM). Default: 512
         #[arg(long, default_value = "512")]
         strip_rows: usize,
+        /// Bands to download + process together per scene (RAM↔HTTP dial). Higher = fewer HTTP
+        /// requests (less rate-limit pressure) but more RAM per strip. 1 = minimum RAM (default).
+        /// For 38 GB hosts, 3-5 is comfortable with ES; for PC, up to n_bands is fine.
+        #[arg(long, default_value = "1")]
+        band_chunk_size: usize,
         /// Output GeoTIFF file
         output: PathBuf,
     },

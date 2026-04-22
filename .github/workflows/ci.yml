@@ -5,6 +5,10 @@ on:
     branches: [main, develop, "feature/*"]
   pull_request:
     branches: [main, develop]
+  schedule:
+    # 07:00 UTC daily for nightly RAM benchmark (net-dependent, not per-PR)
+    - cron: '0 7 * * *'
+  workflow_dispatch: {}
 
 env:
   CARGO_TERM_COLOR: always
@@ -146,3 +150,21 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Compile benchmarks
         run: cargo bench --no-run --package surtgis-algorithms
+
+  stac-ram-bench:
+    name: STAC composite RAM (nightly)
+    runs-on: ubuntu-latest
+    # Runs on schedule + manual dispatch only; net-dependent (Earth Search),
+    # would be flaky per-PR and redundant per-push on main.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build surtgis release
+        run: cargo build --release -p surtgis --bin surtgis
+      - name: Run RAM benchmark
+        env:
+          THRESHOLD_MB: "2000"
+        run: bash benchmarks/bench_stac_ram.sh
