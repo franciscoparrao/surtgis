@@ -1,89 +1,244 @@
 # Changelog
 
-All notable changes to SurtGIS will be documented in this file.
+All notable changes to SurtGIS are documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+Format follows [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/).
+Versioning follows [SemVer 2.0.0](https://semver.org/). The project is still in
+the `0.x` series, so minor versions may contain breaking changes; we try to
+call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.6.27] - 2026-04-23
 ### Added
+- `extract-patches` top-level CLI command for CNN training sets. Reads a
+  directory of aligned feature rasters (same discovery rules as `extract`) and
+  a vector of either points or polygons, writes `patches.npy`
+  (`[N, bands, H, W]` f32) + `labels.npy` (i64 or f32, auto-detected) +
+  `manifest.csv` + `meta.json`. Points mode: one patch centred on each point.
+  Polygons mode: grid sampling at `--stride` pixels with point-in-polygon test.
+  No new crate deps — NPY header hand-rolled, subsample via seeded
+  `DefaultHasher`.
 
-**Desktop GUI** (`surtgis-gui`)
-- egui-based desktop application with SAGA-style workspace layout
-- 6-panel dock layout: Algo Tree, Properties, Map Canvas, Layers, Output Log, Data Manager
-- 105 algorithms accessible from GUI across 9 categories
-- Tools menu with all algorithms organized by category
-- Scale bar, coordinate display, zoom controls
-- Basemap tiles via walkers (OpenStreetMap)
-- STAC catalog browser with search, bbox, date filters
-- 3D wireframe DEM visualization (isometric projection)
-- Tiled renderer for large rasters (LRU cache, 512x512 tiles)
-- Automatic colormap selection based on algorithm type
-
-**Algorithms** (`surtgis-algorithms`)
-- **Terrain** (30): slope, aspect, hillshade, curvature (plan/profile/tangential), TPI, TRI,
-  roughness, geomorphons, convergence index, TWI, SPI, STI, LS factor, relative heights,
-  wind exposition, sky view factor, contour lines, cost distance, and more
-- **Imagery** (22): NDVI, NDWI, SAVI, NDSI, NDBI, NDMI, MSAVI, EVI2, band math,
-  reclassify, histogram equalize, raster difference, change vector analysis, and more
-- **Hydrology** (18): fill sinks, flow direction (D8), flow accumulation, watershed,
-  stream network, strahler order, flow path length, isobasins, flood fill simulation,
-  stream power index, topographic wetness, and more
-- **Statistics** (11): focal mean/min/max/range/stddev/median/majority/diversity/percentile,
-  zonal statistics
-- **Morphology** (7): erosion, dilation, opening, closing, gradient, top-hat, black-hat
-- **Interpolation** (6): IDW, nearest neighbor, TIN, natural neighbor, spline, kriging
-- **Classification** (5): PCA, K-means, ISODATA, minimum distance, maximum likelihood
-- **Landscape** (3): Shannon diversity, Simpson index, patch density
-- **Texture** (3): Haralick GLCM (6 measures), Sobel edge, Laplacian
-
-**Colormap** (`surtgis-colormap`)
-- 8 color schemes: Terrain, Viridis, Magma, Grayscale, NDVI, BlueWhiteRed,
-  Geomorphons, Water, Accumulation
-- Auto parameter detection from raster statistics
-- PNG rendering with legend
-
-**Cloud** (`surtgis-cloud`)
-- Cloud Optimized GeoTIFF (COG) reader with HTTP range requests
-- STAC API client (search, pagination, asset download)
-- Support for Planetary Computer and Earth Search catalogs
-- Automatic WGS84-to-UTM bbox reprojection
-
-**WASM** (`surtgis-wasm`)
-- 33 algorithms compiled to WebAssembly
-- npm package (`surtgis`)
-- Web Worker integration for non-blocking computation
-
-**Python** (`surtgis-python`)
-- PyO3 bindings for core raster operations
-- GeoTIFF read/write via Python API
-
-**CLI** (`surtgis-cli`)
-- Command-line interface for all algorithms
-- GeoTIFF I/O, batch processing
-
-**Core** (`surtgis-core`)
-- `Raster<T>` generic raster type with nodata handling
-- GeoTransform with named fields
-- GeoTIFF reader/writer (TIFF + geospatial metadata)
-- Parallel computation via rayon (optional)
-
-**Cross-validation**
-- Automated comparison tests: SurtGIS vs GDAL 3.11 and GRASS 8.3
-- Validates slope, aspect, hillshade, flow accumulation, watershed results
-- Tolerance-based comparison with statistical summaries
-
+## [0.6.26] - 2026-04-22
 ### Fixed
-- Borrow checker error in ISODATA clustering (indexed loop instead of iterator)
-- GeoTransform field access (named fields instead of array indexing)
-- Error type conversion between surtgis_core::Error and anyhow::Error
-- All clippy warnings resolved across workspace
+- STAC composite long-run RSS leak on Earth Search. Root cause: glibc malloc
+  heap fragmentation under the mixed-size alloc/free pattern of decoded tile
+  rasters — live data was bounded but RSS grew ~1.3 GB/min indefinitely.
+  Resolved by switching to `mimalloc` as the global allocator for the CLI.
+### Added
+- `[ram]` diagnostic log lines at strip / phase / band-chunk transitions with
+  a cumulative tile counter, so future RAM issues self-localise to a phase
+  without requiring a rebuild with extra instrumentation.
+
+## [0.6.25] - 2026-04-22
+### Added
+- `--band-chunk-size K` flag for `stac composite`: RAM↔HTTP dial. K=1 is the
+  minimum-RAM default; higher K reduces HTTP request count at proportional RAM
+  cost. Budget model updated to account for K.
+- Exponential backoff with jitter in COG tile downloads: 4 attempts, base
+  500 ms × 2^attempt, differentiates 429 (extra 2 s) / 503 / 404.
+- Nightly CI job `stac-ram-bench` running `benchmarks/bench_stac_ram.sh`
+  against real Earth Search. Asserts peak RSS below threshold and checks for
+  monotonic-growth leak signature.
+- `docs/postmortems/2026-04-stac-composite-ram.md` documenting the full
+  v0.6.19 → v0.6.26 debugging arc.
+
+## [0.6.24] - 2026-04-22
+### Changed (structural)
+- `stac composite` refactored from scene-outer to band-outer loop. Cloud masks
+  (SCL / QA_PIXEL) are precomputed once per scene and reused across all bands;
+  each band then iterates scenes independently. Peak RAM no longer scales with
+  `n_bands`. Measured on Maule 7274×5725 × 10 bands × 42 dates: ~5 GB steady
+  state vs >30 GB on v0.6.19.
+### Fixed
+- The v0.6.19–23 empirical RAM budgets underestimated real peak by 50–700%.
+  v0.6.24 replaces them with a 5-component model (output + mask cache + scene
+  strips + band working + decode) that matches observed behaviour.
+
+## [0.6.23] - 2026-04-22
+### Changed
+- STAC composite RAM accounting adds a `per_scene_cache` term linear in
+  `strip_rows`. **Partial fix** — real peak still underestimated by ~53%
+  because the cache is near-constant in `strip_rows` (see v0.6.24).
+
+## [0.6.22] - 2026-04-22
+### Fixed
+- STAC composite RAM spike on Earth Search. ES uses 1024² COG internal tiles
+  vs 512² on Planetary Computer, producing ~4× larger decoded tile buffers.
+  Auto-capped `strip_rows` + chunked tile downloads. **Partial fix** — see
+  v0.6.24 for the structural resolution.
+
+## [0.6.21] - 2026-04-20
+### Added
+- TIFF floating-point predictor (`predictor=3`) support in COG reader. Enables
+  correct reads of Copernicus DEM GLO-30 and other float-predicted COGs.
+  Verified bit-exact against GDAL.
+- `pipeline susceptibility` auto-downloads DEM from STAC when given a
+  collection ID (`cop-dem-glo-30`, `cop-dem-glo-90`, `nasadem`, `3dep-seamless`).
+
+## [0.6.20] - 2026-04-20
+### Changed (performance)
+- `solar-radiation-annual` 7× faster in wall clock and 5× lower RAM.
+  Copiapó 45 M cells went from OOM on v0.6.19 to 67 s / 3.5 GB. Pre-computed
+  sun geometry outside the cell loop plus an `annual_only` path that drops
+  per-month buffers after accumulating into the annual total.
+### Fixed
+- CLI parser accepts negative latitudes: `--latitude -27.5` now parses
+  correctly (`allow_hyphen_values` on the argument).
+
+## [0.6.19] - 2026-04-17
+### Added
+- Top-level `extract` command (moved out from behind `--features ml`; no
+  longer requires `smelt-ml`).
+- `clip --bbox xmin,ymin,xmax,ymax` as an alternative to `--polygon`.
+- `terrain neighbours --stat <name>` for single-variable output (keeps the
+  previous directory-of-five-files behaviour when `--stat` is not given).
+- Python bindings: `extract_at_points` and `predict_raster` for integration
+  with XGBoost / scikit-learn / numpy pipelines.
+### Changed
+- `extract` auto-discovers `.tif` files not listed in `features.json`.
+- `--compress` flag unified across `pipeline` subcommands (removed per-command
+  override that silently conflicted).
+- `advanced-curvature --help` shows long-name aliases (`horizontal`,
+  `vertical`, `accumulation`, etc.) alongside the short codes.
+
+## [0.6.18] - 2026-04-17
+### Fixed
+- GDAL_NODATA TIFF tag (42113) is now read and written in the native GeoTIFF
+  I/O path. Prior versions silently ignored it and treated nodata values as
+  real data, corrupting downstream algorithms that depended on NaN propagation.
+### Changed (performance)
+- Gaussian smoothing: separable 1D row+column passes replace direct 2D
+  convolution. Complexity drops from O(n·k²) to O(n·k). ~150× speedup for
+  `sigma=50`.
+
+## [0.6.17] - 2026-04-15
+### Fixed
+- Per-catalog STAC page-size limits: Planetary Computer accepts 1000, Earth
+  Search caps at 250. Fixes 502 errors against ES when page > 250.
+
+## [0.6.16] - 2026-04-15
+### Changed
+- Shared tokio runtime across all strips (was one per tile). Eliminates
+  ~3,200 runtime creations per composite run and preserves HTTP connection
+  pools across tiles.
+- `--strip-rows` exposed as a CLI flag (was hardcoded).
+
+## [0.6.15] - 2026-04-14
+### Changed
+- Multi-orbit Sentinel-2 composite: dates are now selected by coverage-aware
+  ranking instead of pure chronological order, which produces denser coverage
+  for small `--max-scenes`.
+
+## [0.6.14] - 2026-04-14
+### Fixed
+- Landsat `QA_PIXEL`: fill pixels (bit 0) are now correctly excluded from
+  composites. Previously they were treated as valid, producing edge artefacts.
+
+## [0.6.13] - 2026-04-14
+### Added
+- 39 algorithms newly exposed in the CLI (coverage 55% → 78%). New command
+  groups: `classification`, `texture`, `statistics`, `interpolation` (with 5
+  methods: IDW, nearest, natural-neighbour, TPS, TIN), plus expansions to
+  existing terrain / hydrology / morphology groups.
+
+## [0.6.12] - 2026-04-14
+### Changed
+- HTTP retry in composites now operates at the per-band level rather than
+  per-tile. Reduces redundant retries and preserves scene-level consistency
+  when only one band of a scene fails.
+
+## [0.6.11] - 2026-04-13
+### Added
+- Error logging restored in the async download path (was silently swallowed
+  earlier). Per-strip diagnostic lines for OK / outside / partial / mask
+  counts.
+
+## [0.6.10] - 2026-04-13
+### Fixed
+- Planetary Computer STAC API 400 error when page size > 1000. Capped at 1000.
+
+## [0.6.9] - 2026-04-13
+### Fixed
+- `search_limit` cap in multi-band composite was ignored. User-supplied
+  values are now honoured.
+
+## [0.6.8] - 2026-04-13
+### Added
+- Generic STAC collection support. Any collection with appropriate asset keys
+  works (tested on WorldCover, custom DEMs, etc.) — previously restricted to
+  Sentinel-2 L2A and Landsat C2 L2.
+
+## [0.6.7] - 2026-04-13
+### Added
+- `tokio::spawn` parallelism for COG tile reads.
+- Local disk cache for COG tiles at `~/.cache/surtgis/cog/` (enable with
+  `--cache`). Fast re-runs across strips.
+
+## [0.6.6] - 2026-04-12
+### Changed
+- Multi-band composite: concurrent band downloads (was serial per tile).
+
+## [0.6.5] - 2026-04-12
+### Added
+- `--naming=asset` option for multi-band output files — writes `{band}.tif`
+  instead of `{stem}_{band}.tif`.
+### Changed
+- Reduced log verbosity for `BBoxOutside` tiles. Typical runs see hundreds of
+  these and the volume drowned out meaningful output.
+
+## [0.6.4] - 2026-04-12
+### Fixed
+- Empty strip in multi-band composite when every tile of a given strip
+  returned `BBoxOutside` for a band. Now handled without crashing.
+
+## [0.6.3] - 2026-04-11
+### Changed
+- Multi-band composite refactored to single-pass: shared STAC search + shared
+  cloud mask across bands. `N` bands is ~N× faster than running `N`
+  single-band composites back-to-back.
+
+## [0.6.2] - 2026-04-11
+### Fixed
+- SAS token expiration on long-running composites. Tokens are now re-signed
+  when within 30 minutes of expiry.
+- RFC 3339 datetime normalisation in STAC queries (trailing `Z` handling).
+
+## [0.6.1] - 2026-04-10
+### Fixed
+- Multi-UTM composite coverage: bbox is reprojected to each tile's native CRS
+  before the COG read. Previously, tiles in non-reference UTM zones returned
+  `BBoxOutside` and were silently dropped.
+
+## [0.6.0] - 2026-04-09
+### Added
+- Zarr reader (ERA5, TerraClimate) with Azure Blob + Planetary Computer auth.
+- NetCDF reader (CMIP6) with CF Conventions support.
+- GRIB2 reader (HRRR, ECMWF, GFS).
+- `CloudRasterReader` trait for format-agnostic access across COG / Zarr /
+  NetCDF / GRIB2.
+- `stac download-climate` CLI with temporal aggregation.
+- Atomic file writes for the write path (prevents corrupt partials on crash).
+- Index-parameter reproducibility via `indices_metadata.json` companion files.
+### Validated
+- 15 Chilean watersheds (3800 km span, Arica → Punta Arenas) on real ERA5,
+  CMIP6, and GFS data.
+- ~100% STAC format coverage: COG + Zarr + NetCDF + GRIB2.
+
+## [0.5.0] and earlier
+
+Release history before v0.6.0 covers the initial workspace bring-up
+(core, algorithms, parallel, cli, wasm, python, colormap, gui crates),
+the first ~100 algorithms across terrain / hydrology / imagery / morphology /
+landscape / classification / texture / statistics / interpolation /
+temporal / vector, the native GeoTIFF I/O path, WASM bindings, Python
+bindings via PyO3, the desktop GUI (`surtgis-gui`), and the first wave of
+cross-validation tests against GDAL 3.11 and GRASS 8.3.
 
 ## [0.0.1] - 2024-12-01
-
 ### Added
-- Initial project structure with workspace layout
-- Basic raster type and GeoTIFF support
-- First terrain algorithms (slope, aspect, hillshade)
-- Hydrology module (fill sinks, flow direction, flow accumulation)
+- Initial project structure with workspace layout.
+- Basic `Raster<T>` type and GeoTIFF support.
+- First terrain algorithms (slope, aspect, hillshade).
+- Hydrology module (fill sinks, flow direction, flow accumulation).
