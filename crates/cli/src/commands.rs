@@ -77,6 +77,38 @@ pub enum Commands {
         /// Output CSV file
         output: PathBuf,
     },
+    /// Extract raster patches centered on points or sampled from polygons for CNN training
+    ExtractPatches {
+        /// Directory with features.json and feature rasters (auto-discovers .tif if no json)
+        #[arg(long)]
+        features_dir: PathBuf,
+        /// Vector file with POINTS (.geojson, .shp, .gpkg). Mutually exclusive with --polygons.
+        #[arg(long, conflicts_with = "polygons")]
+        points: Option<PathBuf>,
+        /// Vector file with POLYGONS for grid-sampling. Mutually exclusive with --points.
+        #[arg(long, conflicts_with = "points")]
+        polygons: Option<PathBuf>,
+        /// Property name on the vector feature that carries the label
+        #[arg(long)]
+        label_col: String,
+        /// Patch side length in pixels (square). Default 256.
+        #[arg(long, default_value = "256")]
+        size: usize,
+        /// Grid stride in pixels when sampling polygons. Default = size (no overlap).
+        #[arg(long)]
+        stride: Option<usize>,
+        /// Skip patches where fraction of NaN pixels exceeds this threshold. Default 0.1.
+        #[arg(long, default_value = "0.1")]
+        skip_nan_threshold: f64,
+        /// Optional random subsample cap (uses deterministic seed)
+        #[arg(long)]
+        max_patches: Option<usize>,
+        /// Random seed used for subsampling. Default 42.
+        #[arg(long, default_value = "42")]
+        seed: u64,
+        /// Output directory (creates patches.npy, labels.npy, manifest.csv, meta.json)
+        output: PathBuf,
+    },
     /// Clip a raster by polygon or bounding box
     Clip {
         /// Input raster file

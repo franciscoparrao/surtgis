@@ -42,6 +42,13 @@ fn main() -> Result<()> {
         Commands::Morphology { algorithm } => handlers::morphology::handle(algorithm, compress)?,
         Commands::Landscape { algorithm } => handlers::landscape::handle(algorithm, compress)?,
         Commands::Extract { features_dir, points, target, output } => handlers::extract::handle(&features_dir, &points, &target, &output)?,
+        Commands::ExtractPatches {
+            features_dir, points, polygons, label_col, size, stride,
+            skip_nan_threshold, max_patches, seed, output,
+        } => handlers::extract_patches::handle(
+            &features_dir, points.as_deref(), polygons.as_deref(),
+            &label_col, size, stride, skip_nan_threshold, max_patches, seed, &output,
+        )?,
         Commands::Clip { input, polygon, bbox, output } => handlers::clip::handle_clip(input, polygon, bbox, output, compress, mem_limit_bytes)?,
         Commands::Rasterize { input, output, reference, attribute } => handlers::clip::handle_rasterize(input, output, reference, attribute, compress)?,
         Commands::Resample { input, output, reference, method } => handlers::clip::handle_resample(input, output, reference, method, compress)?,

@@ -7,6 +7,7 @@ pub mod mosaic;
 pub mod info;
 pub mod clip;
 pub mod extract;
+pub mod extract_patches;
 pub mod pipeline;
 pub mod temporal;
 pub mod interpolation;
