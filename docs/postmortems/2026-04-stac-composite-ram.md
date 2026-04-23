@@ -1,7 +1,7 @@
 # Post-mortem: STAC composite RAM blow-up on Earth Search
 
-**Affected:** `stac composite` multi-band on Earth Search, v0.6.19 – v0.6.23
-**Resolved in:** v0.6.24 (structural) + v0.6.25 (consolidation)
+**Affected:** `stac composite` multi-band on Earth Search, v0.6.19 – v0.6.24
+**Resolved in:** v0.6.24 (structural refactor, per-band RAM bounded) + v0.6.26 (glibc heap fragmentation)
 **Reporter:** postdoc session processing 15 Chilean watersheds
 **Date:** April 2026
 
@@ -14,7 +14,8 @@ A postdoc processing Sentinel-2 composites for Maule (7274×5725 px, 10 bands, 4
 | v0.6.19 | ~4.3 GB         | >30 GB    | >7×   |
 | v0.6.22 | 12.9 GB         | 20 GB     | +55%  |
 | v0.6.23 | 11.9 GB         | 18 GB     | +53%  |
-| v0.6.24 | 10 GB           | ~5 GB     | −50% (conservative) |
+| v0.6.24 | 10 GB (steady state) | ~5 GB for 22 min, then +1.3 GB/min linear growth to 14 GB | stable then leak |
+| v0.6.26 | 10 GB           | stable, completed run | ✓ fixed |
 
 ## The path we took
 
@@ -25,6 +26,31 @@ Initial auto-cap modelled only the scene accumulator (`strip_rows × n_bands × 
 ### v0.6.22 → v0.6.23: "the model is wrong-but-fixable"
 
 Budget still off by +55%. Hypothesis: the per-scene `per_band_tiles` cache (decoded f64 rasters held until each band's mosaic consumed them) wasn't modelled. We added a `per_scene_cache` term that scaled linearly with `strip_rows`, calibrated `per_scene_inflation = 130` from the v0.6.19 data point. Peak: 18 GB at `strip_rows=83`. Still +53% over budget.
+
+### v0.6.24: structural fix works, but exposes a second bug
+
+The band-outer refactor brought working-set RAM down to ~5 GB as modelled. But
+the postdoc reported a new pattern: ~22 min stable at 5 GB, then monotonic
+linear growth at ~1.3 GB/min until the watchdog killed the process at 14 GB.
+Qualitatively different from v0.6.22/23 (which grew from minute zero).
+
+### v0.6.24 → v0.6.26: glibc heap fragmentation
+
+1.3 GB/min ÷ ~55 tiles/min ≈ 24 MB per tile — almost exactly the size of a
+decoded f64 tile. Combined with the linear, never-stabilising pattern and the
+inflection point at end of Phase A (where the allocation pattern shifts from
+"download + mosaic small masks" to "download + mosaic + resample large
+per-band rasters"), the signature pointed at **glibc malloc heap
+fragmentation** rather than a real retention bug. glibc holds freed chunks in
+fragmented arenas indefinitely when the workload mixes medium-large
+allocations with different sizes.
+
+v0.6.26 shipped two defences simultaneously: (1) `mimalloc` as the global
+allocator (which returns memory to the OS much more aggressively), and (2)
+`[ram]` diagnostic log lines at strip / phase / band-chunk transitions so
+that if mimalloc didn't fix it, we'd have a precise trace of where growth
+starts. The postdoc's rerun on Maule ES was stable end-to-end. Fragmentation
+was the cause; no further code changes needed.
 
 ### v0.6.23 → v0.6.24: "the model is wrong-structurally"
 
@@ -39,6 +65,12 @@ What's near-constant in S? The per-scene tile cache is dominated by `n_bands × 
 The only way to eliminate this was architectural: **don't hold all 10 bands' tiles simultaneously**. We flipped the loop nesting from scene-outer/band-inner to band-outer/scene-inner, pre-computing cloud masks once per scene and sharing them across bands. Peak dropped to ~5 GB real.
 
 ## Lessons
+
+0. **The allocator matters.** Rust programs with lots of medium-large alloc/free
+   cycles can silently grow RSS even when live data is bounded, because glibc
+   malloc fragments and hoards. Switching to mimalloc (or jemalloc) often
+   resolves this with zero logic changes. For long-running CLI tools doing
+   streaming I/O, consider setting a non-glibc global allocator by default.
 
 1. **Two empirical points contradicting a linear model means the model is wrong, not the constants.** The temptation after v0.6.22 was to re-calibrate `per_scene_inflation`. We did — and it failed the same way. At that point the correct response is "our equation has the wrong shape", not "our equation has the wrong coefficient."
 
