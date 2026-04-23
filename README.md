@@ -8,22 +8,63 @@
 >
 > **🌐 Try it now**: [SurtGIS Web Demo](surtgis-demo/) — No installation, run in your browser!
 
-## Quick example
+## Quick start
+
+Install from crates.io:
 
 ```bash
 cargo install surtgis
+```
 
-# Download DEM + compute all terrain factors
-surtgis stac fetch-mosaic --collection cop-dem-glo-30 --bbox -70.5,-33.6,-70.2,-33.3 dem.tif
+End-to-end: download a cloud-free Sentinel-2 composite over a small
+Chilean bbox (5×5 km, one month) and compute NDVI. The example below
+takes ~65 seconds on a warm connection against Microsoft Planetary
+Computer and produces verifiable output.
+
+```bash
+# 1. Fetch red + NIR composite (3 cloud-free scenes, median, written as UTM EPSG:32719)
+surtgis stac composite \
+    --catalog pc \
+    --collection sentinel-2-l2a \
+    --asset "red,nir" \
+    --bbox=-71.0,-35.1,-70.95,-35.05 \
+    --datetime 2024-01-01/2024-01-31 \
+    --max-scenes 3 \
+    composite.tif
+
+# Writes composite_red.tif + composite_nir.tif
+
+# 2. Compute NDVI from the two bands
+surtgis imagery ndvi \
+    --red composite_red.tif \
+    --nir composite_nir.tif \
+    ndvi.tif
+
+# 3. Verify
+surtgis info ndvi.tif
+# → Dimensions: 467 x 564, CRS: EPSG:32719, Min: 0.03, Max: 0.69, Mean: 0.40
+```
+
+Other common one-liners (assume you already have a projected DEM):
+
+```bash
+# Terrain factors in a single pass (slope, aspect, hillshade, curvature, TPI, TRI, ...)
 surtgis terrain all dem.tif --outdir factors/ --compress
 
-# Cloud-free Sentinel-2 composite
-surtgis stac composite --collection sentinel-2-l2a --asset red \
-  --datetime 2024-01-01/2024-12-31 --bbox -70.5,-33.6,-70.2,-33.3 composite.tif
+# Clip a raster by a polygon or bbox
+surtgis clip factors/slope.tif --polygon watershed.gpkg slope_clipped.tif
+surtgis clip factors/slope.tif --bbox 317000,6114000,322000,6119000 slope_bbox.tif
 
-# Clip by watershed polygon
-surtgis clip --polygon watershed.shp factors/slope.tif slope_clipped.tif
+# Extract raster values at point locations (for tabular ML)
+surtgis extract --features-dir factors/ --points wells.gpkg \
+    --target water_depth samples.csv
+
+# Extract image patches for CNN training (points or polygons)
+surtgis extract-patches --features-dir factors/ --polygons land_use.gpkg \
+    --label-col class --size 256 patches_dir/
 ```
+
+See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
 ## Highlights
 
