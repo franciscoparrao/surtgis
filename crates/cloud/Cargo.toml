@@ -21,7 +21,7 @@ grib = ["dep:grib"]
 projections = ["dep:proj4rs"]
 
 [dependencies]
-surtgis-core = { version = "0.6.1", path = "../core", default-features = false }
+surtgis-core = { version = "0.7", path = "../core", default-features = false }
 thiserror.workspace = true
 serde.workspace = true
 ndarray.workspace = true

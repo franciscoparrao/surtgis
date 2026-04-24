@@ -9,6 +9,30 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-04-23
+
+First release with precompiled binaries and a consolidation pass over docs
+and distribution. Functionally identical to v0.6.28 — no new algorithms, no
+API changes — but polished for evaluation by users outside the original
+developer/postdoc feedback loop.
+
+### Added
+- **Precompiled binaries on GitHub Releases** for Linux x86_64, macOS arm64
+  (Apple Silicon), and Windows x86_64. Produced by
+  `.github/workflows/release.yml` on every `v*` tag push. Feature set:
+  `cloud,zarr,projections` (STAC, COG, climate-data zarr readers, UTM
+  reprojection). Users needing `netcdf` or `grib` can still
+  `cargo install surtgis --all-features`.
+- **Validated `Quick start` section** in README with a working end-to-end
+  command (STAC composite → NDVI, ~65 s against Microsoft Planetary
+  Computer) that a reader can paste verbatim.
+- **Full v0.6.x CHANGELOG** with Keep-a-Changelog-formatted Added / Changed /
+  Fixed sections for every release since 0.6.0.
+
+### Policy
+- From here on we pre-announce breaking changes one release before they
+  land, flagged under a `Breaking` heading in the CHANGELOG entry.
+
 ## [0.6.28] - 2026-04-23
 ### Added
 - COG reader now supports `s3://bucket/key` URLs by rewriting them to

@@ -24,10 +24,10 @@ projections = ["surtgis-cloud/projections", "dep:proj4rs"]
 ml = ["dep:smelt-ml"]
 
 [dependencies]
-surtgis-core = { version = "0.6.1", path = "../core", features = ["shapefile", "geopackage"] }
-surtgis-algorithms = { version = "0.6.1", path = "../algorithms" }
-surtgis-parallel = { version = "0.6.1", path = "../parallel" }
-surtgis-cloud = { version = "0.6.1", path = "../cloud", features = ["native"], optional = true }
+surtgis-core = { version = "0.7", path = "../core", features = ["shapefile", "geopackage"] }
+surtgis-algorithms = { version = "0.7", path = "../algorithms" }
+surtgis-parallel = { version = "0.7", path = "../parallel" }
+surtgis-cloud = { version = "0.7", path = "../cloud", features = ["native"], optional = true }
 clap.workspace = true
 anyhow.workspace = true
 tracing.workspace = true

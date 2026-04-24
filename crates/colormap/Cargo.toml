@@ -10,5 +10,5 @@ keywords = ["gis", "colormap", "visualization", "raster"]
 categories = ["science::geo", "graphics"]
 
 [dependencies]
-surtgis-core = { version = "0.6.1", path = "../core", default-features = false, features = [] }
+surtgis-core = { version = "0.7", path = "../core", default-features = false, features = [] }
 num-traits.workspace = true
