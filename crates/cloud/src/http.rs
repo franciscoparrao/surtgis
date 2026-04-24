@@ -3,7 +3,31 @@
 use crate::auth::CloudAuth;
 use crate::error::{CloudError, Result};
 use reqwest::Client;
+use std::borrow::Cow;
 use std::time::Duration;
+
+/// Translate `s3://bucket/key` into `https://bucket.s3.amazonaws.com/key` so
+/// anonymous public-bucket reads work through a standard HTTPS client.
+///
+/// Some STAC catalogs (notably Earth Search for the `cop-dem-glo-30`
+/// collection) return raw `s3://` hrefs instead of HTTPS. reqwest can't build
+/// a request from the `s3://` scheme directly — but AWS serves every public
+/// bucket on virtual-hosted-style HTTPS, and auto-redirects (307) from
+/// `s3.amazonaws.com` to the bucket's regional endpoint, so we don't need to
+/// know the region in advance. reqwest follows redirects by default.
+///
+/// Non-`s3://` URLs pass through unchanged.
+pub(crate) fn normalize_url(url: &str) -> Cow<'_, str> {
+    if let Some(rest) = url.strip_prefix("s3://") {
+        if let Some((bucket, key)) = rest.split_once('/') {
+            return Cow::Owned(format!(
+                "https://{}.s3.amazonaws.com/{}",
+                bucket, key
+            ));
+        }
+    }
+    Cow::Borrowed(url)
+}
 
 /// HTTP client for fetching byte ranges from remote files.
 pub struct HttpClient {
@@ -40,6 +64,8 @@ impl HttpClient {
         url: &str,
         auth: &dyn CloudAuth,
     ) -> Result<HeadInfo> {
+        let url_norm = normalize_url(url);
+        let url = url_norm.as_ref();
         let mut auth_headers = Vec::new();
         auth.sign_request(url, "HEAD", &mut auth_headers)?;
 
@@ -79,6 +105,8 @@ impl HttpClient {
         length: u64,
         auth: &dyn CloudAuth,
     ) -> Result<Vec<u8>> {
+        let url_norm = normalize_url(url);
+        let url = url_norm.as_ref();
         let mut auth_headers = Vec::new();
         auth.sign_request(url, "GET", &mut auth_headers)?;
 
@@ -309,4 +337,36 @@ fn coalesce_ranges(ranges: &[(u64, u64)], gap_tolerance: u64) -> Vec<CoalescedRa
     groups.push(current);
 
     groups
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_s3_scheme_to_https_virtual_hosted() {
+        let out = normalize_url("s3://copernicus-dem-30m/Copernicus_DSM_COG_10_S36_00_W071_00_DEM/Copernicus_DSM_COG_10_S36_00_W071_00_DEM.tif");
+        assert_eq!(
+            out.as_ref(),
+            "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_S36_00_W071_00_DEM/Copernicus_DSM_COG_10_S36_00_W071_00_DEM.tif"
+        );
+    }
+
+    #[test]
+    fn normalize_https_passes_through_unchanged() {
+        let url = "https://planetarycomputer.microsoft.com/api/stac/v1";
+        let out = normalize_url(url);
+        assert_eq!(out.as_ref(), url);
+        // Borrowed, not allocated
+        assert!(matches!(out, std::borrow::Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn normalize_malformed_s3_without_key_passes_through() {
+        // "s3://bucket" without a trailing key — leave as-is rather than
+        // producing a surprising URL. Caller will get a clearer reqwest error.
+        let url = "s3://mybucket";
+        let out = normalize_url(url);
+        assert_eq!(out.as_ref(), url);
+    }
 }

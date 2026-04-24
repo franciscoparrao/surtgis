@@ -9,6 +9,22 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.6.28] - 2026-04-23
+### Added
+- COG reader now supports `s3://bucket/key` URLs by rewriting them to
+  `https://bucket.s3.amazonaws.com/key` at the HTTP boundary. Earth Search
+  returns raw `s3://` hrefs for several collections (notably
+  `cop-dem-glo-30`), which previously failed with a "builder error" because
+  reqwest doesn't handle the `s3://` scheme directly. Anonymous public-bucket
+  reads now work through the default `--catalog es` path, and reqwest
+  auto-follows the 307 redirect to the bucket's regional endpoint so no
+  region config is needed.
+### Internal
+- New `Quick start` section in README with a validated end-to-end example
+  (STAC composite → NDVI, ~65s against Planetary Computer).
+- CHANGELOG.md rewritten with proper Keep-a-Changelog-formatted version
+  history for the full v0.6.x series.
+
 ## [0.6.27] - 2026-04-23
 ### Added
 - `extract-patches` top-level CLI command for CNN training sets. Reads a
