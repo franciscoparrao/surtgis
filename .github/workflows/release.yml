@@ -1,0 +1,157 @@
+name: Release binaries
+
+# Triggers on push of any `v*` tag (e.g. `v0.7.0`). Builds the `surtgis` CLI
+# binary on three platforms and attaches tarballs/zips to a GitHub Release,
+# with the body pulled from the matching CHANGELOG.md section.
+#
+# Typical workflow from the maintainer's side:
+#   git tag v0.7.0
+#   git push origin v0.7.0
+# and the release appears on GitHub a few minutes later.
+#
+# `workflow_dispatch` is also available for a manual run against an existing
+# tag — useful when you need to re-try after a transient CI failure without
+# re-tagging.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to (re)build a release for'
+        required: true
+        type: string
+
+permissions:
+  contents: write   # required for softprops/action-gh-release
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+            binary: surtgis
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
+            binary: surtgis
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+            binary: surtgis.exe
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # When triggered manually, check out the specified tag so the build
+          # matches the release being published. When triggered by a tag push,
+          # actions/checkout@v4 defaults to the tag's commit.
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}-release
+
+      - name: Build release binary
+        # Conservative feature set for the precompiled binary: covers the
+        # Quick start workflow (STAC / COG / imagery / terrain / hydrology /
+        # reprojection) without dragging in netcdf / grib, which need system
+        # libraries (libnetcdf, HDF5) that vary across platforms. Users who
+        # want those can still `cargo install surtgis --all-features`.
+        run: cargo build --release -p surtgis --bin surtgis --target ${{ matrix.target }} --no-default-features --features cloud,zarr,projections
+
+      - name: Compute version name
+        id: version
+        shell: bash
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "archive_base=surtgis-${TAG}-${{ matrix.target }}" >> "$GITHUB_OUTPUT"
+
+      - name: Package (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf "$GITHUB_WORKSPACE/${{ steps.version.outputs.archive_base }}.tar.gz" ${{ matrix.binary }}
+
+      - name: Package (zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "target/${{ matrix.target }}/release/${{ matrix.binary }}" -DestinationPath "${{ steps.version.outputs.archive_base }}.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.version.outputs.archive_base }}
+          path: |
+            ${{ steps.version.outputs.archive_base }}.tar.gz
+            ${{ steps.version.outputs.archive_base }}.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        shell: bash
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          # Grab the lines between "## [$VERSION]" and the next "## [" header.
+          # Skips the version heading itself so the release body doesn't echo it.
+          awk -v ver="$VERSION" '
+            /^## \[/ {
+              if (in_section) exit
+              if (index($0, "[" ver "]") > 0) { in_section=1; next }
+            }
+            in_section { print }
+          ' CHANGELOG.md > release_notes.md
+          if [ ! -s release_notes.md ]; then
+            echo "Release of surtgis $TAG." > release_notes.md
+            echo "" >> release_notes.md
+            echo "No matching CHANGELOG entry found." >> release_notes.md
+          fi
+          echo "--- Release notes ---"
+          cat release_notes.md
+
+      - name: Show artifacts
+        run: ls -la artifacts/
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: surtgis ${{ github.event.inputs.tag || github.ref_name }}
+          body_path: release_notes.md
+          files: artifacts/*
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
