@@ -48,6 +48,18 @@ jobs:
         env:
           BASE_URL: /surtgis/
 
+      # --- mdBook user guide, deployed as /book/ within the same Pages site ---
+      - name: Install mdBook
+        run: cargo install mdbook --locked --version '^0.5'
+
+      - name: Build user guide
+        run: mdbook build docs/book
+
+      - name: Merge book into Pages artifact
+        run: |
+          mkdir -p web/dist/book
+          cp -r docs/book/book/. web/dist/book/
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:

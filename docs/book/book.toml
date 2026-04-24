@@ -1,0 +1,36 @@
+[book]
+title = "SurtGIS"
+authors = ["Francisco Parra"]
+description = "High-performance geospatial analysis in Rust — user guide and reference"
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+create-missing = false
+
+[output.html]
+default-theme = "rust"
+preferred-dark-theme = "ayu"
+git-repository-url = "https://github.com/franciscoparrao/surtgis"
+edit-url-template = "https://github.com/franciscoparrao/surtgis/edit/main/docs/book/{path}"
+site-url = "/surtgis/book/"
+
+[output.html.search]
+enable = true
+limit-results = 30
+use-boolean-and = true
+boost-title = 2
+boost-hierarchy = 1
+boost-paragraph = 1
+expand = true
+heading-split-level = 3
+
+[output.html.playground]
+editable = false
+copy-js = true
+runnable = false
+
+[output.html.fold]
+enable = true
+level = 1
