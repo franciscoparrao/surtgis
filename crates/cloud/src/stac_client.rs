@@ -189,11 +189,23 @@ pub struct StacClient {
 }
 
 impl StacClient {
-    /// Create a new STAC client.
+    /// Create a new STAC client. See `HttpClient::new` for the rationale of
+    /// the connection-pool and HTTP/2 keepalive settings; STAC search shares
+    /// the same Azure/AWS endpoints as the tile fetches, so the tuning carries
+    /// over.
     pub fn new(catalog: StacCatalog, options: StacClientOptions) -> Result<Self> {
         let builder = reqwest::Client::builder();
         #[cfg(not(target_arch = "wasm32"))]
-        let builder = builder.timeout(options.request_timeout);
+        let builder = builder
+            .timeout(options.request_timeout)
+            .pool_max_idle_per_host(64)
+            .pool_idle_timeout(Some(std::time::Duration::from_secs(60)))
+            .tcp_nodelay(true)
+            .tcp_keepalive(Some(std::time::Duration::from_secs(30)))
+            .http2_adaptive_window(true)
+            .http2_keep_alive_interval(std::time::Duration::from_secs(30))
+            .http2_keep_alive_timeout(std::time::Duration::from_secs(10))
+            .http2_keep_alive_while_idle(true);
         let client = builder
             .build()
             .map_err(|e| CloudError::Network(format!("failed to build HTTP client: {e}")))?;

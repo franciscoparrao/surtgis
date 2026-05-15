@@ -45,11 +45,41 @@ pub struct HeadInfo {
 }
 
 impl HttpClient {
-    /// Create a new HTTP client.
+    /// Create a new HTTP client tuned for high-concurrency COG / STAC fetches.
+    ///
+    /// Notable settings (native targets only; WASM uses defaults):
+    /// - ALPN-negotiated HTTP/2 is enabled by default in reqwest; we add HTTP/2
+    ///   PING keepalives so stale connections to S3 / Azure Blob are detected
+    ///   before the next range request times out.
+    /// - Connection pool size is bumped to 64 idle per host with a 60 s idle
+    ///   timeout so concurrent tile fetches reuse warm sockets rather than
+    ///   redoing TLS each time. Reqwest's default keeps idle conns only for
+    ///   90 s but allows them to expire quickly under churn; the explicit
+    ///   `pool_max_idle_per_host` ensures we keep the persistent fleet
+    ///   regardless of churn.
+    /// - TCP_NODELAY disables Nagle's algorithm — small range-request packets
+    ///   should ship immediately rather than wait for ACK coalescing.
+    /// - TCP keepalive at 30 s catches half-open connections (NAT timeouts,
+    ///   mobile hotspots) without a request-level timeout firing first.
+    ///
+    /// These changes target the "compute in Chile, data in Azure" deployment
+    /// pattern documented in `BUG_RAM_V070_BUDGET_VS_REAL_MAULE_PC.md`, where
+    /// network RTT dominates wall-clock and connection reuse matters most.
     pub fn new(request_timeout: Duration, max_retries: u32) -> Result<Self> {
-        let client = Client::builder()
-            .timeout(request_timeout)
-            .build()?;
+        let builder = Client::builder().timeout(request_timeout);
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let builder = builder
+            .pool_max_idle_per_host(64)
+            .pool_idle_timeout(Some(Duration::from_secs(60)))
+            .tcp_nodelay(true)
+            .tcp_keepalive(Some(Duration::from_secs(30)))
+            .http2_adaptive_window(true)
+            .http2_keep_alive_interval(Duration::from_secs(30))
+            .http2_keep_alive_timeout(Duration::from_secs(10))
+            .http2_keep_alive_while_idle(true);
+
+        let client = builder.build()?;
 
         Ok(Self {
             client,

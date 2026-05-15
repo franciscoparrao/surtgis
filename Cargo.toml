@@ -13,7 +13,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.7.1"
+version = "0.7.2"
 edition = "2024"
 authors = ["Francisco Parra"]
 license = "MIT OR Apache-2.0"
@@ -53,7 +53,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Cloud / HTTP
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "http2"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "time"] }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 weezl = "0.1"

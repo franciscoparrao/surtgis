@@ -2868,13 +2868,17 @@ fn handle_multiband_composite(
     //
     // Override with `SURTGIS_RAM_BUDGET_GB` env var; default 16 GB.
     let stac_cat_for_budget = StacCatalog::from_str_or_url(catalog);
+    // tile_concurrency bumped in v0.7.2: HTTP/2 multiplexing now reuses one TCP
+    // connection per host across many parallel streams, so the old 8/16 limit
+    // was leaving network bandwidth on the table. Pool size in HttpClient is
+    // 64 idle per host, so 48 in-flight tiles fits comfortably with headroom.
     let (band_inflation, mask_inflation, tile_concurrency, catalog_label) = match stac_cat_for_budget {
         StacCatalog::EarthSearch =>
-            (14_usize, 4_usize, 8_usize, "Earth Search (1024² COGs, multi-UTM reprojection)"),
+            (14_usize, 4_usize, 32_usize, "Earth Search (1024² COGs, multi-UTM reprojection)"),
         StacCatalog::PlanetaryComputer =>
-            (8_usize, 2_usize, 16_usize, "Planetary Computer (512² COGs)"),
+            (8_usize, 2_usize, 48_usize, "Planetary Computer (512² COGs)"),
         StacCatalog::Custom(_) =>
-            (14_usize, 4_usize, 8_usize, "custom catalog"),
+            (14_usize, 4_usize, 32_usize, "custom catalog"),
     };
     let tile_internal_bytes = match stac_cat_for_budget {
         StacCatalog::EarthSearch | StacCatalog::Custom(_) => 1024_usize * 1024 * 8,

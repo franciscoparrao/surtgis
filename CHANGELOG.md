@@ -9,6 +9,41 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-05-15
+
+Network-layer optimisation pass for `stac composite`. First step toward
+closing the throughput gap with Planetary-Computer-Hub-native tooling
+(`stackstac + dask`) when running SurtGIS from a workstation that is *not*
+co-located with the data. On a Chile→Azure run the dominant cost is HTTP
+latency × number of tile fetches; bigger gains come from running the binary
+on the Hub itself, but this patch picks up the available headroom on the
+client side.
+
+### Changed
+- **HTTP client retuned** in `crates/cloud/src/http.rs` and
+  `stac_client.rs` for high-concurrency parallel fetches: 64 idle
+  connections per host with a 60 s pool idle timeout, TCP_NODELAY, TCP
+  keepalive at 30 s, HTTP/2 keepalive PINGs every 30 s with a 10 s timeout,
+  HTTP/2 adaptive flow-control window. Together they cut the per-tile
+  setup cost (TLS handshake, slow-start) for the long-running tile-fetch
+  pattern. Required adding `"http2"` to the workspace `reqwest` features.
+- **`tile_concurrency` defaults raised** to take advantage of HTTP/2
+  multiplexing over the kept-alive connections: Earth Search 8 → 32,
+  Planetary Computer 16 → 48, Custom 8 → 32. The pool size (64 per host)
+  leaves headroom over the new caps.
+
+### Notes for users
+- Wider tile_concurrency increases the transient `decode` budget term
+  (Planetary Computer: ~64 MB → ~192 MB worst case). Comfortably within
+  the recalibrated peak introduced by v0.7.1; the budget print accounts
+  for the new value automatically.
+- Outputs remain bit-identical to v0.7.1; this is purely a network-layer
+  patch.
+- The biggest single-machine speedup for the cross-continent deployment
+  remains running SurtGIS inside Planetary Computer Hub (compute next to
+  data); the changes here are the available improvement when that is not
+  possible.
+
 ## [0.7.1] - 2026-05-15
 
 Diagnostic and budget-calibration patch for `stac composite`, addressing the
