@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use surtgis_algorithms::imagery::{CloudMaskStrategy, S2SclMask, LandsatQaMask, NoCloudMask};
@@ -2411,6 +2412,57 @@ fn read_rss_mb() -> usize {
         .unwrap_or(0)
 }
 
+/// Background watchdog that samples /proc/self/status every `sample_interval`
+/// and tracks the maximum RSS seen since the last reset. Lets us report
+/// intra-chunk peaks that the boundary-only [ram] log lines miss.
+///
+/// Postdoc observed +815 MB undersample on Maule v0.7.0 (logged 12.3 GB vs
+/// real-time 13.1 GB during the same chunk) — see
+/// `BUG_RAM_V070_BUDGET_VS_REAL_MAULE_PC.md`. This addresses that gap.
+struct RssPeakTracker {
+    inner: Arc<RssPeakInner>,
+}
+
+struct RssPeakInner {
+    peak_mb: AtomicUsize,
+    stop: AtomicBool,
+}
+
+impl RssPeakTracker {
+    fn start(sample_interval: Duration) -> Self {
+        let inner = Arc::new(RssPeakInner {
+            peak_mb: AtomicUsize::new(read_rss_mb()),
+            stop: AtomicBool::new(false),
+        });
+        let clone = inner.clone();
+        std::thread::Builder::new()
+            .name("surtgis-rss-watchdog".into())
+            .spawn(move || {
+                while !clone.stop.load(Ordering::Relaxed) {
+                    let cur = read_rss_mb();
+                    clone.peak_mb.fetch_max(cur, Ordering::Relaxed);
+                    std::thread::sleep(sample_interval);
+                }
+            })
+            .ok();
+        Self { inner }
+    }
+
+    /// Atomically swap the tracked peak with the current RSS and return the
+    /// previous peak. Call at log boundaries so each report covers the window
+    /// since the previous call.
+    fn take_peak(&self) -> usize {
+        let cur = read_rss_mb();
+        self.inner.peak_mb.swap(cur, Ordering::Relaxed)
+    }
+}
+
+impl Drop for RssPeakTracker {
+    fn drop(&mut self) {
+        self.inner.stop.store(true, Ordering::Relaxed);
+    }
+}
+
 /// Download a batch of COG tile rasters concurrently, bounded by chunking.
 ///
 /// Only `tile_concurrency` tiles decode at a time, and each chunk fully
@@ -2799,21 +2851,20 @@ fn handle_multiband_composite(
     //   A) Output buffers (persistent): n_bands × total_cells × 8
     //   B) Cloud mask mosaics, one per scene held for the whole strip:
     //        n_scenes × S × out_cols × 8 × mask_inflation
-    //        (mask_inflation captures native resolution ratio + mosaic overhead)
     //   C) Per-band scene strips (just the active band):
     //        n_scenes × S × out_cols × 8
     //   D) Active-band mosaic working set (transient, one band mosaicked):
     //        S × out_cols × 8 × band_inflation
     //   E) Concurrent tile decode (fixed small):
     //        tile_concurrency × tile_internal_bytes (only 1 asset in flight at a time)
-    //
-    // Solve for S:
-    //   budget ≥ A + E + S × out_cols × 8 × (n_scenes × mask_inflation + n_scenes + band_inflation)
-    //
-    // Inflation constants from empirical COG output sizes at native resolution:
-    //   Sentinel-2 L2A on Earth Search (1024² COGs, multi-UTM reprojection): band_inflation≈14, mask_inflation≈4
-    //   Sentinel-2 L2A on Planetary Computer (512² COGs, mostly single UTM): band_inflation≈8, mask_inflation≈2
-    //   Landsat / other: conservative ES-like numbers
+    //   F) Empirical calibration (BUG_RAM_V070_BUDGET_VS_REAL_MAULE_PC, v0.7.1):
+    //        - Mask cache observed footprint is ~1.8× the nominal B term, due to
+    //          strip→strip transition double-tenancy and decoded-tile staging
+    //          that are not separately budgeted.
+    //        - mimalloc retains pages between strips, adding ~10% over the live
+    //          working set on systems with abundant free RAM.
+    //      We fold both into the headroom calculation and the printed peak so
+    //      users get a realistic number instead of the optimistic steady-state.
     //
     // Override with `SURTGIS_RAM_BUDGET_GB` env var; default 16 GB.
     let stac_cat_for_budget = StacCatalog::from_str_or_url(catalog);
@@ -2834,6 +2885,11 @@ fn handle_multiband_composite(
     // Concurrent decode now scales with K (we download K bands' assets per scene concurrently).
     let concurrent_decode_bytes = tile_concurrency * (k + 1) * tile_internal_bytes;
 
+    // Empirical calibration constants from Maule v0.7.0 corrida
+    // (predicted 8.1 GB vs observed 12.6 GB → +56% delta).
+    const MASK_INFLATION_CALIB: f64 = 1.8;
+    const ALLOC_OVERHEAD_FRAC: f64 = 0.10;
+
     let budget_gb = std::env::var("SURTGIS_RAM_BUDGET_GB")
         .ok()
         .and_then(|s| s.parse::<f64>().ok())
@@ -2842,25 +2898,42 @@ fn handle_multiband_composite(
     let global_budget_bytes = (budget_gb * 1e9) as usize;
     let output_buffer_bytes = n_bands.max(1) * total_cells.max(1) * 8;
 
-    // Scene strips and band working set scale with K (bands-in-flight).
-    let per_row_coef = n_scenes.max(1) * mask_inflation
-        + k * n_scenes.max(1)
-        + k * band_inflation;
-    let per_row_variable_bytes = out_cols.max(1) * 8 * per_row_coef;
+    // Calibrated per-row coefficient: mask cache term inflated by 1.8 to match
+    // observed footprint; scene-strip and band-working terms remain at nominal
+    // (they match observation per the postdoc analysis).
+    let per_row_calibrated_bytes = {
+        let mask_term =
+            (n_scenes.max(1) * mask_inflation) as f64 * MASK_INFLATION_CALIB;
+        let scene_term = (k * n_scenes.max(1)) as f64;
+        let band_term = (k * band_inflation) as f64;
+        ((mask_term + scene_term + band_term) * (out_cols.max(1) * 8) as f64) as usize
+    };
 
+    // Solve for S, accounting also for the allocator overhead that scales with
+    // the variable working set.
     let variable_budget = global_budget_bytes
         .saturating_sub(output_buffer_bytes)
         .saturating_sub(concurrent_decode_bytes)
         .max(64 * 1024 * 1024);
-    let auto_strip_rows = (variable_budget / per_row_variable_bytes.max(1)).clamp(8, 512);
+    // headroom_after_alloc_overhead = variable_budget / (1 + ALLOC_OVERHEAD_FRAC)
+    let headroom_for_variable_bytes =
+        (variable_budget as f64 / (1.0 + ALLOC_OVERHEAD_FRAC)) as usize;
+    let auto_strip_rows =
+        (headroom_for_variable_bytes / per_row_calibrated_bytes.max(1)).clamp(8, 512);
     let strip_rows = strip_rows_cfg.min(auto_strip_rows);
 
     let output_gb = output_buffer_bytes as f64 / 1e9;
     let concurrent_gb = concurrent_decode_bytes as f64 / 1e9;
-    let mask_cache_gb = (strip_rows * n_scenes * out_cols * 8 * mask_inflation) as f64 / 1e9;
+    let mask_cache_gb =
+        (strip_rows * n_scenes * out_cols * 8 * mask_inflation) as f64
+            * MASK_INFLATION_CALIB
+            / 1e9;
     let scene_strips_gb = (strip_rows * n_scenes * out_cols * 8 * k) as f64 / 1e9;
     let band_working_gb = (strip_rows * out_cols * 8 * band_inflation * k) as f64 / 1e9;
-    let estimated_total_gb = output_gb + concurrent_gb + mask_cache_gb + scene_strips_gb + band_working_gb;
+    let variable_gb = mask_cache_gb + scene_strips_gb + band_working_gb;
+    let alloc_overhead_gb = variable_gb * ALLOC_OVERHEAD_FRAC;
+    let estimated_total_gb =
+        output_gb + concurrent_gb + variable_gb + alloc_overhead_gb;
 
     if strip_rows < strip_rows_cfg {
         eprintln!(
@@ -2869,12 +2942,16 @@ fn handle_multiband_composite(
         );
     }
     eprintln!(
-        "  RAM budget ({:.1} GB target, band_chunk_size={}) — output: {:.1} GB | mask cache: {:.1} GB | scene strips: {:.1} GB | band working: {:.1} GB | decode: {:.1} GB (strip_rows={}) → ~{:.1} GB peak",
-        budget_gb, k, output_gb, mask_cache_gb, scene_strips_gb, band_working_gb, concurrent_gb, strip_rows, estimated_total_gb,
+        "  RAM budget ({:.1} GB target, band_chunk_size={}) — output: {:.1} GB | mask cache: {:.1} GB | scene strips: {:.1} GB | band working: {:.1} GB | decode: {:.1} GB | allocator overhead: {:.1} GB (strip_rows={}) → ~{:.1} GB peak",
+        budget_gb, k, output_gb, mask_cache_gb, scene_strips_gb, band_working_gb,
+        concurrent_gb, alloc_overhead_gb, strip_rows, estimated_total_gb,
     );
     eprintln!(
         "  (outer-band, {}-band chunks; HTTP requests per scene = {}. Raise --band-chunk-size to reduce requests at higher RAM cost. Override budget with SURTGIS_RAM_BUDGET_GB=<N>)",
         k, n_bands.div_ceil(k),
+    );
+    eprintln!(
+        "  Note: actual peak may be ±10% of estimate depending on system pressure (mimalloc retains more pages with abundant free RAM; kernel throttles allocations under memory pressure).",
     );
     let num_strips = (out_rows + strip_rows - 1) / strip_rows;
 
@@ -2907,6 +2984,11 @@ fn handle_multiband_composite(
     // transitions with RSS + tile counts lets us pinpoint where it starts.
     let mut cumulative_tiles: usize = 0;
     eprintln!("[ram] baseline before strip loop: RSS={} MB", read_rss_mb());
+
+    // Spawn a watchdog thread that samples RSS every 2 s so we can report the
+    // intra-chunk peak (not just the boundary RSS). Auto-stops on Drop at end
+    // of function. See BUG_RAM_V070_BUDGET_VS_REAL_MAULE_PC.md item #3.
+    let rss_peak = RssPeakTracker::start(Duration::from_secs(2));
 
     // === Strip loop ===
     //
@@ -3005,7 +3087,7 @@ fn handle_multiband_composite(
             scene_masks.push(mosaic_tile_rasters(mask_tiles));
         }
 
-        eprintln!("[ram] strip {}/{} after Phase A (masks): RSS={} MB, phase_a_tiles={}, cumulative={}",
+        eprintln!("[ram] strip {}/{} phase A masks loaded: RSS={} MB, phase_a_tiles={}, cumulative={}",
             strip_idx + 1, num_strips, read_rss_mb(), phase_a_tiles, cumulative_tiles);
 
         // --- Phase B: Outer band-chunk loop (K bands processed per chunk) ---
@@ -3207,8 +3289,19 @@ fn handle_multiband_composite(
                 // scene_strips for this band was already taken above and drops here
             }
 
-            eprintln!("[ram] strip {}/{} chunk bands [{}..{}] end: RSS={} MB, cumulative={}",
-                strip_idx + 1, num_strips, chunk_start, chunk_end, read_rss_mb(), cumulative_tiles);
+            let chunk_end_rss = read_rss_mb();
+            let chunk_peak = rss_peak.take_peak();
+            eprintln!(
+                "[ram] strip {}/{} chunk bands [{}..{}] end: RSS={} MB, peak_intra={} MB (Δ={:+} MB), cumulative={}",
+                strip_idx + 1,
+                num_strips,
+                chunk_start,
+                chunk_end,
+                chunk_end_rss,
+                chunk_peak,
+                chunk_peak as isize - chunk_end_rss as isize,
+                cumulative_tiles,
+            );
 
             chunk_start = chunk_end;
             // chunk_scene_strips drops here — frees the K-band per-scene buffers
@@ -3219,7 +3312,24 @@ fn handle_multiband_composite(
             eprintln!("  Strip {}/{}: done ({} bands × {} scenes)",
                 strip_idx + 1, num_strips, n_bands, n_scenes);
         }
-        // scene_masks drops here
+
+        // Explicit teardown of the per-strip mask cache so we can observe its
+        // contribution to the strip→strip transition delta. Without this
+        // explicit drop the mask cache lingers until the loop body's closing
+        // brace and the "after Phase A masks loaded" log line of the next
+        // strip captures the combined teardown+load behaviour, making it hard
+        // to tell which phase moved the RSS.
+        let rss_before_teardown = read_rss_mb();
+        drop(scene_masks);
+        let rss_after_teardown = read_rss_mb();
+        eprintln!(
+            "[ram] strip {}/{} phase A teardown: RSS={} MB → {} MB (Δ={:+} MB)",
+            strip_idx + 1,
+            num_strips,
+            rss_before_teardown,
+            rss_after_teardown,
+            rss_after_teardown as isize - rss_before_teardown as isize,
+        );
     } // end for strip
 
     println!(); // newline after \r progress

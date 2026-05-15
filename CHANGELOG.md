@@ -9,6 +9,47 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-05-15
+
+Diagnostic and budget-calibration patch for `stac composite`, addressing the
+items raised in `BUG_RAM_V070_BUDGET_VS_REAL_MAULE_PC.md` from the postdoc's
+15-cuencas pipeline. The structural refactor and allocator change from
+v0.6.24 / v0.6.26 are unchanged; this release is purely about making the
+budget print honest and the in-flight observability good enough to plan
+capacity on memory-pressured systems.
+
+### Changed
+- **STAC composite budget formula recalibrated.** The mask-cache term now
+  carries an empirical 1.8× inflation (postdoc observed real footprint of
+  ~5–6 GB on Maule PC vs the previously-modelled 3 GB), and a 10% allocator-
+  overhead term has been added on top of the variable working set. Both are
+  fed into the auto-cap calculation and into the printed peak so users get
+  a realistic figure (previously the print under-predicted observed peak by
+  ~56% on Maule PC).
+- **Budget print** now shows `allocator overhead: X.X GB` as a separate
+  component and closes with a note that actual peak may be ±10% of estimate
+  depending on system memory pressure.
+
+### Added
+- **Intra-chunk RSS watchdog.** A background thread samples `/proc/self/status`
+  every 2 s and tracks the maximum RSS since the last chunk boundary; chunk-
+  end log lines now include `peak_intra=NNNN MB (Δ=±M MB)` alongside the
+  point-in-time RSS. This catches transient peaks (postdoc observed +815 MB
+  undersample on Maule v0.7.0 — log reported 12.3 GB while real-time RSS
+  reached 13.1 GB during the same chunk).
+- **Phase A teardown log line.** Per-strip mask cache is now dropped
+  explicitly at the end of each strip iteration and bracketed by RSS reads,
+  emitting `phase A teardown: RSS=X MB → Y MB (Δ=±N MB)`. Together with the
+  renamed `phase A masks loaded` line this lets users separate the strip→
+  strip transition cost from the masks-loaded cost.
+
+### Notes for users
+- No algorithmic change; outputs are bit-identical to v0.7.0.
+- The recalibrated budget will produce smaller `auto_strip_rows` on tight
+  budgets (e.g. `SURTGIS_RAM_BUDGET_GB=8`), erring on the side of safety.
+  If a previous v0.7.0 run completed without OOM at strip_rows=N, that
+  configuration is still safe under v0.7.1 with the same budget.
+
 ## [0.7.0] - 2026-04-23
 
 First release with precompiled binaries and a consolidation pass over docs
