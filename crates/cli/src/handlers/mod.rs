@@ -21,5 +21,8 @@ pub mod cog;
 #[cfg(feature = "cloud")]
 pub mod stac;
 
+#[cfg(feature = "projections")]
+pub mod reproject;
+
 #[cfg(feature = "ml")]
 pub mod ml;

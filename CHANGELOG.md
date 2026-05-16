@@ -9,6 +9,40 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-05-16
+
+Closes the last operational gap that forced users to fall back to
+`gdalwarp` for raster reprojection. With `surtgis reproject`, the full
+SurtGIS pipeline (STAC composite → reproject → terrain analysis →
+output) now runs end-to-end without any system GDAL dependency.
+Roadmap axis B (see `ROADMAP.md`).
+
+### Added
+- **New `surtgis reproject` command** (under `projections` feature):
+  reprojects a GeoTIFF from any EPSG to any EPSG using proj4rs for the
+  coordinate transform and a Rayon-parallelised inverse-mapping for
+  per-pixel sampling.
+  - `--to EPSG:XXXX` (required): target CRS.
+  - `--from EPSG:XXXX` (optional): override the source CRS when the
+    input GeoTIFF doesn't carry one.
+  - `--method nearest|bilinear` (default bilinear): resampling kernel.
+  - `--pixel-size <X>` (optional): output pixel size in target CRS
+    units. Defaults to an auto-inferred value that preserves
+    approximate resolution.
+  - Smoke test reprojecting a 1000×1000 UTM 19S DEM → WGS84 takes
+    0.13 s on the i7-1270P benchmark machine; → Web Mercator
+    (1546×1550 output) takes 0.59 s.
+
+### Notes for users
+- The same-CRS case is short-circuited (input is copied to output
+  without resampling).
+- Cubic interpolation is not yet supported; nearest and bilinear cover
+  the common cases.
+- The output extent is computed from the source raster's corners plus
+  edge midpoints, which handles most projection deformations but may
+  underestimate for highly curved projections. Use `--pixel-size` and
+  ensure the extent fits if working with extreme cases.
+
 ## [0.7.3] - 2026-05-16
 
 Fixes the strip-pair even/odd peak-RAM pattern observed on the postdoc's

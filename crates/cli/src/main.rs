@@ -50,6 +50,9 @@ fn main() -> Result<()> {
             &label_col, size, stride, skip_nan_threshold, max_patches, seed, &output,
         )?,
         Commands::Clip { input, polygon, bbox, output } => handlers::clip::handle_clip(input, polygon, bbox, output, compress, mem_limit_bytes)?,
+        #[cfg(feature = "projections")]
+        Commands::Reproject { input, output, to, from, method, pixel_size } =>
+            handlers::reproject::handle(input, output, to, from, method, pixel_size, compress)?,
         Commands::Rasterize { input, output, reference, attribute } => handlers::clip::handle_rasterize(input, output, reference, attribute, compress)?,
         Commands::Resample { input, output, reference, method } => handlers::clip::handle_resample(input, output, reference, method, compress)?,
         Commands::Mosaic { input, output } => handlers::mosaic::handle(input, output, compress)?,

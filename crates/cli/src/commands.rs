@@ -122,6 +122,27 @@ pub enum Commands {
         /// Output file
         output: PathBuf,
     },
+    /// Reproject a raster from one CRS to another (native, no GDAL dependency)
+    #[cfg(feature = "projections")]
+    Reproject {
+        /// Input raster file (GeoTIFF)
+        input: PathBuf,
+        /// Output raster file (GeoTIFF)
+        output: PathBuf,
+        /// Target CRS (e.g. EPSG:32719 or just 32719)
+        #[arg(long)]
+        to: String,
+        /// Source CRS override (e.g. EPSG:4326); defaults to value embedded in input
+        #[arg(long)]
+        from: Option<String>,
+        /// Resampling method: nearest | bilinear (default)
+        #[arg(long, default_value = "bilinear")]
+        method: String,
+        /// Output pixel size in target CRS units; defaults to a sensible
+        /// auto-inferred value preserving approximate resolution
+        #[arg(long)]
+        pixel_size: Option<f64>,
+    },
     /// Rasterize a vector file to a raster grid (.geojson, .shp, .gpkg)
     Rasterize {
         /// Input vector file (.geojson, .shp, .gpkg)
