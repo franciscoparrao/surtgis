@@ -9,6 +9,43 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-05-16
+
+Fixes the strip-pair even/odd peak-RAM pattern observed on the postdoc's
+15-cuencas pipeline (`BUG_RAM_V070_BUDGET_VS_REAL_MAULE_PC.md` item #6),
+where even-numbered strips (2, 4, ...) reached +2.5 GB transient peak vs
+odd strips (1, 3, ...) at floor. Root cause confirmed by direct
+measurement (see `crates/cli/examples/test_mi_collect.rs`): mimalloc
+retains free'd pages in its per-thread free list and does not return
+them to the OS until a decay tick or until pressure triggers cleanup.
+`drop(scene_masks)` therefore appears as zero RSS reduction in
+`/proc/self/status`, and the next strip's allocations pile on top of the
+retained pages — producing the alternating pattern.
+
+### Fixed
+- **`stac composite`** now calls `mi_collect(true)` at the end of every
+  strip iteration, immediately after the explicit `drop(scene_masks)`.
+  This forces mimalloc to return abandoned segments to the OS so each
+  strip's baseline RSS is the true working set, not the working set plus
+  retained free pages. Expected peak reduction on Maule PC: ~13 GB →
+  ~10 GB (−23%). A new `[ram] mi_collect(true): RSS=X MB → Y MB` log
+  line at strip end reports the delta so users can verify the cleanup.
+
+### Added
+- `crates/cli/examples/test_mi_collect.rs`: reproducible 30-line test
+  that demonstrates the mimalloc retain-vs-collect behaviour outside
+  of the STAC composite codepath. Useful for future debugging if the
+  pattern reappears under different load.
+
+### Notes for users
+- This is purely a RAM-behaviour fix; outputs are bit-identical to
+  v0.7.2.
+- The next strip's Phase A re-allocates from the OS rather than reusing
+  warm mimalloc segments, costing a small amount of `mmap`/`madvise`
+  overhead on each strip boundary. On a multi-hour-per-strip workload
+  this is negligible compared to the peak-RAM benefit.
+- WASM target unaffected (the fix is gated with `cfg(not(wasm32))`).
+
 ## [0.7.2] - 2026-05-15
 
 Network-layer optimisation pass for `stac composite`. First step toward

@@ -3334,6 +3334,35 @@ fn handle_multiband_composite(
             rss_after_teardown,
             rss_after_teardown as isize - rss_before_teardown as isize,
         );
+
+        // Force mimalloc to return idle segments to the OS. Without this,
+        // pages free'd by the drop() above sit in mimalloc's per-thread free
+        // list and are not visible to /proc/self/status as freed RSS until
+        // the next decay tick OR until a large new allocation in the next
+        // strip triggers cleanup. The postdoc observed a strip-pair pattern
+        // (BUG_RAM_V070 item #6) where even-numbered strips peaked +2.5 GB
+        // higher than odd strips because the previous strip's pages were
+        // still retained as free segments. Forcing mi_collect on each strip
+        // boundary makes the steady-state per-strip baseline reset cleanly.
+        //
+        // Cost: the next strip's Phase A re-allocates from OS rather than
+        // reusing warm mimalloc segments. On a multi-hour-per-strip workload
+        // this overhead is negligible compared to the peak-RAM benefit.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // SAFETY: mi_collect is the public mimalloc API and is safe to
+            // call from any thread when mimalloc is the global allocator.
+            unsafe { libmimalloc_sys::mi_collect(true) };
+            let rss_after_collect = read_rss_mb();
+            eprintln!(
+                "[ram] strip {}/{} mi_collect(true): RSS={} MB → {} MB (Δ={:+} MB)",
+                strip_idx + 1,
+                num_strips,
+                rss_after_teardown,
+                rss_after_collect,
+                rss_after_collect as isize - rss_after_teardown as isize,
+            );
+        }
     } // end for strip
 
     println!(); // newline after \r progress
