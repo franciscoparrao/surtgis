@@ -1,10 +1,13 @@
 # SurtGIS
 
 **High-performance geospatial analysis in Rust.** A single CLI binary and a
-set of Rust crates that compute 250+ terrain, hydrology, imagery, morphology,
+set of Rust crates that compute 127 terrain, hydrology, imagery, morphology,
 interpolation, and classification algorithms — with native GeoTIFF I/O,
-streaming for rasters larger than RAM, and an end-to-end STAC composite
-pipeline for Planetary Computer and Earth Search.
+streaming for rasters larger than RAM, native CRS reprojection, and an
+end-to-end STAC composite pipeline for Planetary Computer and Earth Search.
+56 of the 127 algorithms also compile to WebAssembly and run in any modern
+browser without a server, including the complete Florinsky 14-curvature
+morphometric system.
 
 This book is the user guide. For the auto-generated API reference (for
 embedding SurtGIS as a library in Rust code), see
@@ -60,9 +63,19 @@ solve. Reference is authoritative. Explanation reasons. This is the
 
 ## Current status
 
-As of v0.7.0, SurtGIS is in production use on a 15-watershed Chilean
+As of v0.8.1, SurtGIS has been used end-to-end on a 15-watershed Chilean
 landslide-susceptibility pipeline (Sentinel-2 composites, 41 M-cell areas,
-60 labelled wells). No external users are known yet — feedback from people
-outside the original developer/postdoc loop is exactly what would take this
-from "works for one expert" to "works for a community". If that's you,
-please [open an issue](https://github.com/franciscoparrao/surtgis/issues).
+60 labelled wells). The accompanying paper is in major-revision at
+*Environmental Modelling & Software*. Recent releases focused on:
+v0.7.5 fixed a critical decoder bug for Planetary Computer COGs with
+`BitsPerSample=15` packed encoding; v0.7.4 added the native `reproject`
+command, removing the last dependency on `gdalwarp`; v0.8.x roughly
+doubled the WebAssembly surface, from 33 to 56 algorithms.
+
+No external users are known yet — feedback from people outside the
+original developer/postdoc loop is exactly what would take this from
+"works for one expert" to "works for a community". If that's you, please
+[open an issue](https://github.com/franciscoparrao/surtgis/issues) or
+try the [live demo](https://franciscoparrao.github.io/surtgis/) — it
+runs the 56 WebAssembly algorithms client-side, so your DEM never
+leaves your machine.

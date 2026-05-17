@@ -15,6 +15,7 @@ CLI-surface change.
 - [`surtgis extract`](./extract.md) — Extract raster values at point locations to CSV
 - [`surtgis extract-patches`](./extract-patches.md) — Extract raster patches centered on points or sampled from polygons for CNN training
 - [`surtgis clip`](./clip.md) — Clip a raster by polygon or bounding box
+- [`surtgis reproject`](./reproject.md) — Reproject a raster from one CRS to another (native, no GDAL dependency)
 - [`surtgis rasterize`](./rasterize.md) — Rasterize a vector file to a raster grid (.geojson, .shp, .gpkg)
 - [`surtgis resample`](./resample.md) — Resample a raster to match the grid of a reference raster
 - [`surtgis mosaic`](./mosaic.md) — Mosaic multiple rasters into one covering the union extent

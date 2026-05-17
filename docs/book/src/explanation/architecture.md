@@ -72,8 +72,12 @@ Trade-offs of this choice:
 
 **Wins:**
 - Single binary. Ship as precompiled. No `libgdal.so` version mismatch hell.
-- Works on WASM. Most of the algorithm library compiles to
-  `wasm32-unknown-unknown` because the I/O isn't platform-gated on GDAL.
+- Works on WASM. 56 of the 127 algorithms compile to
+  `wasm32-unknown-unknown` and run in any modern browser without a
+  server. This includes the full Florinsky 14-curvature system,
+  D8/MFD/D-infinity hydrology, 14 spectral indices, the focal-stats
+  suite, and basic morphology. The browser path is unique to SurtGIS
+  among comprehensive terrain libraries.
 - Cloud-optimised reads. The COG reader in `surtgis-cloud` issues HTTP range
   requests directly against the TIFF byte layout; no GDAL VSI layer in
   between.

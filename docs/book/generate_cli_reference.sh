@@ -45,6 +45,7 @@ TOP_COMMANDS=(
     extract
     extract-patches
     clip
+    reproject
     rasterize
     resample
     mosaic

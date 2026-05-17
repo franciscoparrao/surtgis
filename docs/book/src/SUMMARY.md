@@ -10,7 +10,7 @@
 
 # How-to guides
 
-- [Reproject between UTM zones](how-to/reproject-utms.md)
+- [Reproject a raster between CRSes](how-to/reproject-utms.md)
 - [Mosaic rasters in different CRSes](how-to/mosaic-crs.md)
 - [Cache COG tiles for fast re-runs](how-to/cog-cache.md)
 - [Tune the RAM budget](how-to/ram-budget.md)
