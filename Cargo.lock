@@ -1278,6 +1278,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "cty"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b365fabc795046672053e29c954733ec3b05e4be654ab130fe8f1f94d7051f35"
+
+[[package]]
 name = "cursor-icon"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3044,6 +3050,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2d1eacfa31c33ec25e873c136ba5669f00f9866d0688bea7be4d3f7e43067df6"
 dependencies = [
  "cc",
+ "cty",
 ]
 
 [[package]]
@@ -4370,6 +4377,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94f6cbe86ef3bf18998d9df6e0f3fc1050a8c5efa409bf712e661a4366e010fb"
 dependencies = [
  "once_cell",
+ "python3-dll-a",
  "target-lexicon",
 ]
 
@@ -4406,6 +4414,15 @@ dependencies = [
  "pyo3-build-config",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "python3-dll-a"
+version = "0.2.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d80ba7540edb18890d444c5aa8e1f1f99b1bdf26fb26ae383135325f4a36042b"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
@@ -5441,7 +5458,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "surtgis"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5449,9 +5466,11 @@ dependencies = [
  "csv",
  "geo",
  "indicatif",
+ "libmimalloc-sys",
  "mimalloc",
  "ndarray",
  "proj4rs",
+ "rayon",
  "reqwest",
  "serde",
  "serde_json",
@@ -5467,7 +5486,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-algorithms"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "approx",
@@ -5487,7 +5506,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-cloud"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "approx",
  "byteorder",
@@ -5518,7 +5537,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-colormap"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "num-traits",
  "surtgis-core",
@@ -5526,7 +5545,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-core"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "approx",
@@ -5547,7 +5566,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-gui"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -5568,7 +5587,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-parallel"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "criterion",
  "crossbeam",
@@ -5580,7 +5599,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-python"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "numpy",
  "pyo3",
@@ -5590,7 +5609,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-wasm"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "js-sys",
  "serde",

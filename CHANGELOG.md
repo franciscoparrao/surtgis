@@ -9,6 +9,64 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-05-17
+
+WASM expansion release. The browser-deployable surface grows from 33 to
+**56 algorithms** (70 % expansion), substantially strengthening SurtGIS's
+core differentiator: no other comprehensive terrain library runs
+client-side in a web browser. This is the WASM-side counterpart to
+roadmap axis A (see `ROADMAP.md`).
+
+Minor version bump because the public binding surface for
+`surtgis-wasm` grew incompatibly (new functions added; existing
+functions unchanged). Inter-crate version pins moved from `0.7` to
+`0.8` across the workspace; downstream Rust users who pin SurtGIS
+sub-crates will need to bump the requirement.
+
+### Added — Terrain (+5 new WASM bindings)
+
+- **`advanced_curvature`** — exposes all 14 Florinsky curvatures
+  (mean H, Gaussian K, unsphericity M, difference E, kmin, kmax, kh,
+  kv, khe, kve, ka, kr, rotor, Laplacian) in the browser. The paper's
+  headline contribution is now invocable from JavaScript. Aliases
+  accepted (`mean`/`H`, `gaussian`/`K`, etc.).
+- **`openness_positive`**, **`openness_negative`** — visibility-based
+  terrain indices for ridge/valley discrimination.
+- **`mrvbf`** — Multi-Resolution Valley Bottom Flatness (Gallant &
+  Dowling 2003).
+
+### Added — Hydrology (+3)
+
+- **`flow_accumulation_mfd_compute`** — MFD accumulation in one pass
+  from a DEM, with `MfdParams::default()`.
+- **`flow_direction_dinf_compute`** — D-infinity flow angle raster.
+- **`flow_accumulation_dinf_compute`** — D-infinity accumulation
+  (computed alongside the directions via `flow_dinf`).
+
+### Added — Imagery (+10)
+
+- **`mndwi`**, **`nbr`**, **`ndre`**, **`gndvi`**, **`ndbi`**, **`ndmi`**,
+  **`msavi`**, **`evi2`** — two-band spectral indices.
+- **`evi`** — three-band Enhanced Vegetation Index (NIR + Red + Blue).
+- **`bsi`** — four-band Bare Soil Index (SWIR + Red + NIR + Blue).
+
+### Added — Focal Statistics (+6)
+
+- **`focal_min`**, **`focal_max`**, **`focal_sum`**, **`focal_median`**,
+  **`focal_majority`**, **`focal_percentile`** complete the window-based
+  statistics suite (joining the existing mean, std, range).
+
+### Notes for users
+
+- Calling convention unchanged: GeoTIFF bytes in, GeoTIFF bytes out.
+- Solar radiation is intentionally not exposed via WASM in this
+  release: the native API requires pre-computed slope and aspect
+  rasters, which is awkward for the single-buffer in / single-buffer
+  out browser contract. Will revisit if there is demand.
+- The web demo at `https://franciscoparrao.github.io/surtgis/` does
+  not yet exercise all 56 functions; expanding the demo is the next
+  follow-up (axis A2 in `ROADMAP.md`).
+
 ## [0.7.5] - 2026-05-16
 
 **Critical correctness fix** for `stac composite` against Planetary

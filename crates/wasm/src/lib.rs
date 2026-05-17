@@ -9,7 +9,7 @@
 use wasm_bindgen::prelude::*;
 
 use surtgis_algorithms::terrain::{
-    aspect, hillshade, curvature,
+    aspect, hillshade, curvature, advanced_curvatures,
     slope as compute_slope,
     tpi as compute_tpi, tri as compute_tri,
     twi as compute_twi,
@@ -20,23 +20,33 @@ use surtgis_algorithms::terrain::{
     shape_index as compute_shape_index,
     curvedness as compute_curvedness,
     sky_view_factor as compute_svf,
+    positive_openness as compute_positive_openness,
+    negative_openness as compute_negative_openness,
+    mrvbf as compute_mrvbf,
     uncertainty as compute_uncertainty,
     ssa_2d as compute_ssa_2d,
     AspectOutput, HillshadeParams, SlopeParams, SlopeUnits,
-    CurvatureParams, CurvatureType, DerivativeMethod,
+    CurvatureParams, CurvatureType, DerivativeMethod, AdvancedCurvatureType,
     TpiParams, TriParams, GeomorphonParams, DevParams,
     MultiHillshadeParams, SvfParams,
+    OpennessParams, MrvbfParams,
     UncertaintyParams, Ssa2dParams,
 };
 use surtgis_algorithms::hydrology::{
     fill_sinks, flow_direction, flow_accumulation,
+    flow_accumulation_mfd, flow_direction_dinf, flow_dinf,
     priority_flood, hand as compute_hand,
-    FillSinksParams, PriorityFloodParams, HandParams,
+    FillSinksParams, PriorityFloodParams, HandParams, MfdParams,
 };
 use surtgis_algorithms::imagery::{
     ndvi as compute_ndvi, ndwi as compute_ndwi, savi as compute_savi,
+    mndwi as compute_mndwi, nbr as compute_nbr,
+    evi as compute_evi, bsi as compute_bsi,
+    ndre as compute_ndre, gndvi as compute_gndvi,
+    ndbi as compute_ndbi, ndmi as compute_ndmi,
+    msavi as compute_msavi, evi2 as compute_evi2,
     normalized_difference,
-    SaviParams,
+    SaviParams, EviParams,
 };
 use surtgis_algorithms::morphology::{
     erode as compute_erode, dilate as compute_dilate,
@@ -116,6 +126,42 @@ pub fn curvature_compute(tiff_bytes: &[u8], ctype: &str) -> Result<Vec<u8>, JsVa
         dem,
         CurvatureParams { curvature_type: ct, method: DerivativeMethod::EvansYoung, ..Default::default() }
     ))
+}
+
+/// Compute one of Florinsky's 14 curvatures from a DEM. `ctype` accepts:
+/// `mean_h`, `gaussian_k`, `unsphericity_m`, `difference_e`, `kmin`, `kmax`,
+/// `kh` (horizontal), `kv` (vertical), `khe` (horizontal excess), `kve`
+/// (vertical excess), `ka` (accumulation), `kr` (ring), `rotor`, `laplacian`.
+///
+/// SurtGIS is the only library that exposes the complete 14-curvature
+/// system from a single binary, and the only one that does it in the
+/// browser via WebAssembly. See paper §2.3.2 for definitions and
+/// references.
+#[wasm_bindgen]
+pub fn advanced_curvature(tiff_bytes: &[u8], ctype: &str) -> Result<Vec<u8>, JsValue> {
+    let ct = match ctype.to_lowercase().as_str() {
+        "mean_h" | "mean" | "h" => AdvancedCurvatureType::MeanH,
+        "gaussian_k" | "gaussian" | "k" => AdvancedCurvatureType::GaussianK,
+        "unsphericity_m" | "unsphericity" | "m" => AdvancedCurvatureType::UnsphericitytM,
+        "difference_e" | "difference" | "e" => AdvancedCurvatureType::DifferenceE,
+        "kmin" | "minimal" => AdvancedCurvatureType::MinimalKmin,
+        "kmax" | "maximal" => AdvancedCurvatureType::MaximalKmax,
+        "kh" | "horizontal" => AdvancedCurvatureType::HorizontalKh,
+        "kv" | "vertical" => AdvancedCurvatureType::VerticalKv,
+        "khe" | "horizontal_excess" => AdvancedCurvatureType::HorizontalExcessKhe,
+        "kve" | "vertical_excess" => AdvancedCurvatureType::VerticalExcessKve,
+        "ka" | "accumulation" => AdvancedCurvatureType::AccumulationKa,
+        "kr" | "ring" => AdvancedCurvatureType::RingKr,
+        "rotor" => AdvancedCurvatureType::Rotor,
+        "laplacian" => AdvancedCurvatureType::Laplacian,
+        other => {
+            return Err(JsValue::from_str(&format!(
+                "unknown advanced curvature type: '{}'. Valid: mean_h, gaussian_k, unsphericity_m, difference_e, kmin, kmax, kh, kv, khe, kve, ka, kr, rotor, laplacian",
+                other
+            )));
+        }
+    };
+    dem_op!(tiff_bytes, |dem: &_| advanced_curvatures(dem, ct))
 }
 
 /// Compute TPI (Topographic Position Index). `radius`: window radius in cells.
@@ -201,6 +247,37 @@ pub fn sky_view_factor(tiff_bytes: &[u8], n_dirs: usize, max_radius: usize) -> R
     ))
 }
 
+/// Positive openness — visibility of the sky above each cell across `n_dirs`
+/// directions out to `radius` cells. High values = exposed ridges/peaks.
+#[wasm_bindgen]
+pub fn openness_positive(tiff_bytes: &[u8], radius: usize, n_dirs: usize) -> Result<Vec<u8>, JsValue> {
+    dem_op!(tiff_bytes, |dem: &_| compute_positive_openness(
+        dem, OpennessParams { radius, directions: n_dirs }
+    ))
+}
+
+/// Negative openness — visibility of the ground below each cell. High values
+/// = concave hollows / valleys.
+#[wasm_bindgen]
+pub fn openness_negative(tiff_bytes: &[u8], radius: usize, n_dirs: usize) -> Result<Vec<u8>, JsValue> {
+    dem_op!(tiff_bytes, |dem: &_| compute_negative_openness(
+        dem, OpennessParams { radius, directions: n_dirs }
+    ))
+}
+
+/// MRVBF — Multi-Resolution Valley Bottom Flatness (Gallant & Dowling 2003).
+/// Returns only the MRVBF raster (companion MRRTF dropped); if you need both,
+/// expose via the native Rust API.
+#[wasm_bindgen]
+pub fn mrvbf(tiff_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
+    let dem = read_geotiff_from_buffer::<f64>(tiff_bytes, None)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let (mrvbf_raster, _mrrtf) = compute_mrvbf(&dem, MrvbfParams::default())
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    write_geotiff_to_buffer(&mrvbf_raster, None)
+        .map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
 /// Compute slope uncertainty (RMSE). `dem_rmse`: DEM vertical RMSE in meters.
 #[wasm_bindgen]
 pub fn uncertainty_slope(tiff_bytes: &[u8], dem_rmse: f64) -> Result<Vec<u8>, JsValue> {
@@ -248,6 +325,36 @@ pub fn flow_direction_d8(tiff_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
 }
 
 /// Compute flow accumulation from a D8 flow direction raster.
+/// Compute MFD (Multiple Flow Direction) accumulation directly from a DEM.
+/// Distributes flow proportionally to all downslope neighbors based on slope,
+/// better representing sheet flow on gentle terrain than D8.
+#[wasm_bindgen]
+pub fn flow_accumulation_mfd_compute(tiff_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
+    dem_op!(tiff_bytes, |dem: &_| flow_accumulation_mfd(
+        dem, MfdParams::default()
+    ))
+}
+
+/// Compute D-infinity flow direction angles (radians, 0 = East, CCW).
+/// NaN for nodata/pit cells. Reference implementation matches TauDEM.
+#[wasm_bindgen]
+pub fn flow_direction_dinf_compute(tiff_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
+    dem_op!(tiff_bytes, |dem: &_| flow_direction_dinf(dem))
+}
+
+/// Compute D-infinity flow accumulation (contributing area in cell counts).
+/// Internally computes the directions and the accumulation in one pass; if
+/// you need the angles separately, use `flow_direction_dinf_compute` first.
+#[wasm_bindgen]
+pub fn flow_accumulation_dinf_compute(tiff_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
+    let dem = read_geotiff_from_buffer::<f64>(tiff_bytes, None)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let result = flow_dinf(&dem)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    write_geotiff_to_buffer(&result.accumulation, None)
+        .map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
 #[wasm_bindgen]
 pub fn flow_accumulation_d8(fdir_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
     let fdir = read_geotiff_from_buffer::<u8>(fdir_bytes, None)
@@ -333,6 +440,105 @@ pub fn normalized_diff(a_bytes: &[u8], b_bytes: &[u8]) -> Result<Vec<u8>, JsValu
         .map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
+/// Helper: two-band spectral index. Loads the two GeoTIFFs, applies `f`, writes result.
+macro_rules! two_band_index {
+    ($a:expr, $b:expr, $f:expr) => {{
+        let a = read_geotiff_from_buffer::<f64>($a, None)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let b = read_geotiff_from_buffer::<f64>($b, None)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let result = ($f)(&a, &b)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        write_geotiff_to_buffer(&result, None)
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }};
+}
+
+/// MNDWI (Modified NDWI) from Green and SWIR bands.
+#[wasm_bindgen]
+pub fn mndwi(green_bytes: &[u8], swir_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
+    two_band_index!(green_bytes, swir_bytes, compute_mndwi)
+}
+
+/// NBR (Normalized Burn Ratio) from NIR and SWIR bands.
+#[wasm_bindgen]
+pub fn nbr(nir_bytes: &[u8], swir_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
+    two_band_index!(nir_bytes, swir_bytes, compute_nbr)
+}
+
+/// NDRE (Normalized Difference Red Edge) from NIR and Red Edge bands.
+#[wasm_bindgen]
+pub fn ndre(nir_bytes: &[u8], red_edge_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
+    two_band_index!(nir_bytes, red_edge_bytes, compute_ndre)
+}
+
+/// GNDVI (Green NDVI) from NIR and Green bands.
+#[wasm_bindgen]
+pub fn gndvi(nir_bytes: &[u8], green_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
+    two_band_index!(nir_bytes, green_bytes, compute_gndvi)
+}
+
+/// NDBI (Normalized Difference Built-up Index) from SWIR and NIR bands.
+#[wasm_bindgen]
+pub fn ndbi(swir_bytes: &[u8], nir_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
+    two_band_index!(swir_bytes, nir_bytes, compute_ndbi)
+}
+
+/// NDMI (Normalized Difference Moisture Index) from NIR and SWIR bands.
+#[wasm_bindgen]
+pub fn ndmi(nir_bytes: &[u8], swir_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
+    two_band_index!(nir_bytes, swir_bytes, compute_ndmi)
+}
+
+/// MSAVI (Modified SAVI) from NIR and Red bands. Auto-adjusts L factor.
+#[wasm_bindgen]
+pub fn msavi(nir_bytes: &[u8], red_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
+    two_band_index!(nir_bytes, red_bytes, compute_msavi)
+}
+
+/// EVI2 (Enhanced Vegetation Index, 2-band variant) from NIR and Red bands.
+#[wasm_bindgen]
+pub fn evi2(nir_bytes: &[u8], red_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
+    two_band_index!(nir_bytes, red_bytes, compute_evi2)
+}
+
+/// EVI (Enhanced Vegetation Index) from NIR, Red, and Blue bands.
+/// Uses default EVI coefficients (G=2.5, L=1, C1=6, C2=7.5).
+#[wasm_bindgen]
+pub fn evi(
+    nir_bytes: &[u8], red_bytes: &[u8], blue_bytes: &[u8],
+) -> Result<Vec<u8>, JsValue> {
+    let nir = read_geotiff_from_buffer::<f64>(nir_bytes, None)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let red = read_geotiff_from_buffer::<f64>(red_bytes, None)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let blue = read_geotiff_from_buffer::<f64>(blue_bytes, None)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let result = compute_evi(&nir, &red, &blue, EviParams::default())
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    write_geotiff_to_buffer(&result, None)
+        .map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+/// BSI (Bare Soil Index) from SWIR, Red, NIR, and Blue bands.
+#[wasm_bindgen]
+pub fn bsi(
+    swir_bytes: &[u8], red_bytes: &[u8], nir_bytes: &[u8], blue_bytes: &[u8],
+) -> Result<Vec<u8>, JsValue> {
+    let swir = read_geotiff_from_buffer::<f64>(swir_bytes, None)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let red = read_geotiff_from_buffer::<f64>(red_bytes, None)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let nir = read_geotiff_from_buffer::<f64>(nir_bytes, None)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let blue = read_geotiff_from_buffer::<f64>(blue_bytes, None)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let result = compute_bsi(&swir, &red, &nir, &blue)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    write_geotiff_to_buffer(&result, None)
+        .map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
 // ===========================================================================
 // Morphology
 // ===========================================================================
@@ -390,5 +596,55 @@ pub fn focal_std(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> {
 pub fn focal_range(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> {
     dem_op!(tiff_bytes, |dem: &_| focal_statistics(
         dem, FocalParams { statistic: FocalStatistic::Range, radius, circular: false }
+    ))
+}
+
+/// Focal minimum.
+#[wasm_bindgen]
+pub fn focal_min(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> {
+    dem_op!(tiff_bytes, |dem: &_| focal_statistics(
+        dem, FocalParams { statistic: FocalStatistic::Min, radius, circular: false }
+    ))
+}
+
+/// Focal maximum.
+#[wasm_bindgen]
+pub fn focal_max(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> {
+    dem_op!(tiff_bytes, |dem: &_| focal_statistics(
+        dem, FocalParams { statistic: FocalStatistic::Max, radius, circular: false }
+    ))
+}
+
+/// Focal sum.
+#[wasm_bindgen]
+pub fn focal_sum(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> {
+    dem_op!(tiff_bytes, |dem: &_| focal_statistics(
+        dem, FocalParams { statistic: FocalStatistic::Sum, radius, circular: false }
+    ))
+}
+
+/// Focal median.
+#[wasm_bindgen]
+pub fn focal_median(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> {
+    dem_op!(tiff_bytes, |dem: &_| focal_statistics(
+        dem, FocalParams { statistic: FocalStatistic::Median, radius, circular: false }
+    ))
+}
+
+/// Focal majority (mode). Useful for categorical rasters.
+#[wasm_bindgen]
+pub fn focal_majority(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> {
+    dem_op!(tiff_bytes, |dem: &_| focal_statistics(
+        dem, FocalParams { statistic: FocalStatistic::Majority, radius, circular: false }
+    ))
+}
+
+/// Focal percentile. `percentile` in [0, 100]; e.g. 50 = median, 25 = Q1.
+#[wasm_bindgen]
+pub fn focal_percentile(
+    tiff_bytes: &[u8], radius: usize, percentile: f64,
+) -> Result<Vec<u8>, JsValue> {
+    dem_op!(tiff_bytes, |dem: &_| focal_statistics(
+        dem, FocalParams { statistic: FocalStatistic::Percentile(percentile), radius, circular: false }
     ))
 }
