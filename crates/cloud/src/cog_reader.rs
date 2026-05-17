@@ -381,14 +381,24 @@ impl CogReader {
 
             let typed: Vec<T> = decompress::bytes_to_typed(&raw, bps, sf)?;
 
-            // Check if decompressed tile has expected size
+            // Check if decompressed tile has expected size. Prior to v0.7.5
+            // this was a warning and the partial buffer was silently copied
+            // into the output, producing the striping artefacts described in
+            // BUG_TILE_DECODE_BPS15_STRIPING.md. We now treat the mismatch as
+            // a hard error so the run aborts loudly instead of producing
+            // scientifically unusable composites.
             let expected_pixels = tw * th;
             if typed.len() != expected_pixels {
-                if tiles_written <= 3 {
-                    eprintln!("    [cog] tile({},{}) idx={} expected {} px, got {} (raw={} bytes, bps={} tw={} th={})",
-                        tr.tile_col, tr.tile_row, tr.tile_idx,
-                        expected_pixels, typed.len(), raw.len(), bps, tw, th);
-                }
+                eprintln!(
+                    "    [cog] FATAL tile({},{}) idx={} decoded {} px, expected {} (raw={} bytes, bps={} sf={} tw={} th={}).\
+                     \n          Aborting to prevent silent striping; see BUG_TILE_DECODE_BPS15_STRIPING.md.",
+                    tr.tile_col, tr.tile_row, tr.tile_idx,
+                    typed.len(), expected_pixels, raw.len(), bps, sf, tw, th,
+                );
+                return Err(crate::error::CloudError::Decompress(format!(
+                    "tile decode produced {} samples, expected {} (bps={} sf={} tw={} th={} raw_len={})",
+                    typed.len(), expected_pixels, bps, sf, tw, th, raw.len(),
+                )));
             }
 
             // Pixel bounds of this tile in full-image coordinates.

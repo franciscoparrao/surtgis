@@ -9,6 +9,51 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.7.5] - 2026-05-16
+
+**Critical correctness fix** for `stac composite` against Planetary
+Computer Sentinel-2 L2A. Previous releases produced silently striped
+outputs on basins where PC's COGs used `BitsPerSample=15` packed
+encoding (`BUG_TILE_DECODE_BPS15_STRIPING.md`). Outputs from v0.7.0–
+v0.7.4 should be re-validated against this release if Planetary Computer
+was the source.
+
+### Fixed
+- **COG decoder now correctly unpacks `bps=15` tiles.** Previously the
+  `(15, UNSIGNED_INT)` branch in `crates/cloud/src/decompress.rs` cast
+  the raw buffer as if samples were padded `u16`, which is the wrong
+  assumption — PC writes Sentinel-2 L2A red-edge bands (B05–B08, B8A,
+  B11, B12) at *packed* 15 bits/sample for ~6.25 % disk savings. The
+  cast produced only 245 760 samples per 512×512 tile (raw_len /
+  sizeof(u16)) instead of the required 262 144, silently dropping the
+  last 16 384 samples and producing rectangular striping when the
+  median composite couldn't wash out the pattern across scenes. New
+  `unpack_packed_to_u16` does proper MSB-first bit unpacking for any
+  `bps ∈ 9..=16` packed stream.
+- **Tile size mismatch is now a hard error** in `cog_reader.rs`. The
+  pre-fix code logged a warning ("expected N px, got M") and copied the
+  partial buffer into the output, producing the striping artefacts.
+  Now any decode that produces a different sample count than the tile
+  dimensions imply aborts the run with a clear error message pointing
+  to the bug report.
+
+### Added
+- Three unit tests in `decompress.rs`:
+  - Pack-then-unpack roundtrip with 16 hand-chosen 15-bit values.
+  - Tile-size invariant (491 520 bytes ⇒ 262 144 samples).
+  - Truncated buffer (not a clean multiple of bps bits) ⇒ error.
+
+### Notes for users
+- This is a correctness fix; v0.7.0–v0.7.4 outputs from Planetary
+  Computer composites have systematic 6.25 % decoding losses on
+  affected bands. Earth Search is unaffected (different COG encoding
+  pipeline that does not use `bps=15`).
+- The new hard-abort on size mismatch is intentional: silent partial
+  decode is far worse than a loud failure for scientific workflows.
+- Recommendation for the postdoc 15-cuencas pipeline: re-run any
+  basins previously processed with PC under v0.7.0–v0.7.4 once v0.7.5
+  wheels are published.
+
 ## [0.7.4] - 2026-05-16
 
 Closes the last operational gap that forced users to fall back to

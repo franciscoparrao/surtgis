@@ -243,8 +243,12 @@ pub fn bytes_to_typed<T: RasterElement>(
     match (bps, sf) {
         (8, sample_format::UNSIGNED_INT) => cast_slice::<u8, T>(raw),
         (8, sample_format::SIGNED_INT) => cast_from_bytes::<i8, T>(raw),
-        // 15-bit unsigned (Sentinel-2 L2A on Planetary Computer) — stored as u16
-        (15, sample_format::UNSIGNED_INT) => cast_from_le::<u16, T>(raw),
+        // 15-bit unsigned: tightly bit-packed (Sentinel-2 L2A on Planetary
+        // Computer uses this for some bands to save 6.25 % on disk). See
+        // BUG_TILE_DECODE_BPS15_STRIPING.md — previously this branch
+        // mis-treated the buffer as padded u16, dropping 6.25 % of the
+        // samples per tile and producing silent striping in composites.
+        (15, sample_format::UNSIGNED_INT) => unpack_packed_to_u16::<T>(raw, 15),
         (16, sample_format::UNSIGNED_INT) => cast_from_le::<u16, T>(raw),
         (16, sample_format::SIGNED_INT) => cast_from_le::<i16, T>(raw),
         (32, sample_format::UNSIGNED_INT) => cast_from_le::<u32, T>(raw),
@@ -253,6 +257,53 @@ pub fn bytes_to_typed<T: RasterElement>(
         (64, sample_format::FLOAT) => cast_from_le::<f64, T>(raw),
         _ => Err(CloudError::UnsupportedDataType { bps, sf }),
     }
+}
+
+/// Unpack a TIFF buffer of unsigned integer samples that are stored at a
+/// non-byte-aligned bit width (`bps` ∈ {9..=15}), packed MSB-first into the
+/// byte stream as per the TIFF 6.0 spec § "FillOrder = 1". Returns one value
+/// per sample, cast to `T`.
+///
+/// This matches GDAL and libtiff's behaviour on Planetary Computer Sentinel-2
+/// L2A COGs, which store some bands at `bps=15` packed (491520 bytes for a
+/// 512×512 tile rather than 524288 padded bytes).
+fn unpack_packed_to_u16<T: RasterElement>(raw: &[u8], bps: u32) -> Result<Vec<T>> {
+    if !(9..=16).contains(&bps) {
+        return Err(CloudError::Decompress(format!(
+            "unpack_packed_to_u16 called with unsupported bps={}", bps
+        )));
+    }
+    let total_bits = (raw.len() as u64) * 8;
+    if total_bits % (bps as u64) != 0 {
+        return Err(CloudError::Decompress(format!(
+            "raw data of {} bytes ({} bits) is not a clean multiple of {} bits per sample; \
+             tile is likely truncated or the encoder padded samples in an unsupported way",
+            raw.len(), total_bits, bps,
+        )));
+    }
+    let n_samples = (total_bits / bps as u64) as usize;
+    let mask: u32 = (1u32 << bps) - 1;
+
+    let mut result = Vec::with_capacity(n_samples);
+    let mut bit_pos: u64 = 0;
+    for _ in 0..n_samples {
+        let byte_offset = (bit_pos / 8) as usize;
+        let bit_in_byte = (bit_pos % 8) as u32;
+
+        // Read up to 3 bytes starting at byte_offset; for bps ≤ 16 plus any
+        // 0..7 bit offset, the sample fits within 24 consecutive bits.
+        let b0 = raw[byte_offset] as u32;
+        let b1 = if byte_offset + 1 < raw.len() { raw[byte_offset + 1] as u32 } else { 0 };
+        let b2 = if byte_offset + 2 < raw.len() { raw[byte_offset + 2] as u32 } else { 0 };
+        let window: u32 = (b0 << 16) | (b1 << 8) | b2;
+        let shift = 24 - bit_in_byte - bps;
+        let sample = ((window >> shift) & mask) as u16;
+
+        let f64_val = sample as f64;
+        result.push(NumCast::from(f64_val).unwrap_or(T::default_nodata()));
+        bit_pos += bps as u64;
+    }
+    Ok(result)
 }
 
 /// Cast a byte slice where each byte is one element.
@@ -418,5 +469,69 @@ mod tests {
         assert_eq!(result.len(), 3);
         assert!((result[0] - 100.0).abs() < 1e-6);
         assert!((result[1] - 200.0).abs() < 1e-6);
+    }
+
+    /// Pack 16 samples of 15 bits each into 30 bytes (240 bits) MSB-first,
+    /// then verify our unpacker recovers them. Regression test for
+    /// BUG_TILE_DECODE_BPS15_STRIPING.md.
+    #[test]
+    fn test_bytes_to_typed_packed_15bit() {
+        // 16 known samples, each fits in 15 bits (max 32767).
+        let samples: [u16; 16] = [
+            0, 1, 2, 0x7FFF, 0x4000, 0x2AAA, 0x5555, 0x1234,
+            0x4321, 0x6789, 0x0FFF, 0x7000, 0x3CCC, 0x1248, 0x5A5A, 0x2727,
+        ];
+
+        // Pack MSB-first: total bits = 16 × 15 = 240 → 30 bytes.
+        let mut bit_pos: u32 = 0;
+        let mut packed = vec![0u8; 30];
+        for &s in &samples {
+            for b in 0..15 {
+                // bit `b` of sample (MSB first within the 15 bits)
+                let bit_in_sample = 14 - b;
+                let bit_val = (s >> bit_in_sample) & 1;
+                let byte_off = (bit_pos / 8) as usize;
+                let bit_in_byte = 7 - (bit_pos % 8);
+                packed[byte_off] |= (bit_val as u8) << bit_in_byte;
+                bit_pos += 1;
+            }
+        }
+
+        let unpacked: Vec<f64> =
+            bytes_to_typed(&packed, 15, sample_format::UNSIGNED_INT).unwrap();
+        assert_eq!(unpacked.len(), 16, "unpacked length mismatch");
+        for (i, &expected) in samples.iter().enumerate() {
+            assert_eq!(
+                unpacked[i] as u16, expected,
+                "sample {i}: expected {expected}, got {}", unpacked[i] as u16,
+            );
+        }
+    }
+
+    /// 512×512 tile at bps=15 should produce exactly 262144 samples from
+    /// 491520 bytes (the value the postdoc's logs reported as `raw_len`).
+    /// Pre-fix, the (15, UNSIGNED_INT) branch cast as u16 and produced
+    /// 245760 samples — 6.25 % short.
+    #[test]
+    fn test_bytes_to_typed_15bit_pc_tile_size() {
+        let n_samples = 512 * 512;
+        let total_bits = n_samples * 15;
+        let raw_len = total_bits / 8;
+        assert_eq!(raw_len, 491520, "expected sentinel-2 tile raw_len");
+
+        let raw = vec![0xAAu8; raw_len];
+        let result: Vec<f64> =
+            bytes_to_typed(&raw, 15, sample_format::UNSIGNED_INT).unwrap();
+        assert_eq!(result.len(), n_samples, "must produce 262144 samples (got {})", result.len());
+    }
+
+    /// Truncated tile (raw_len not a clean multiple of bps bits) must fail
+    /// rather than silently returning a shorter buffer.
+    #[test]
+    fn test_bytes_to_typed_15bit_truncated_errors() {
+        // 100 bytes = 800 bits, not divisible by 15
+        let raw = vec![0u8; 100];
+        let result: Result<Vec<f64>> = bytes_to_typed(&raw, 15, sample_format::UNSIGNED_INT);
+        assert!(result.is_err(), "truncated 15-bit buffer should fail decode");
     }
 }
