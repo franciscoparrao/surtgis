@@ -14,12 +14,15 @@
   let azimuth = $state(315);
   let altitude = $state(45);
   let curvatureType = $state("general");
+  let advCurvatureType = $state("mean_h");
   let tpiRadius = $state(3);
   let geoFlatness = $state(1.0);
   let geoRadius = $state(10);
   let devRadius = $state(10);
   let svfDirs = $state(16);
   let svfRadius = $state(10);
+  let opennessRadius = $state(10);
+  let opennessDirs = $state(8);
   let demRmse = $state(1.0);
   let ssaWindow = $state(10);
   let ssaComponents = $state(3);
@@ -27,6 +30,7 @@
   let saviL = $state(0.5);
   let morphRadius = $state(1);
   let focalRadius = $state(3);
+  let focalPercentile = $state(50);
 
   // ── Collapsed groups ──
   let collapsed = $state({});
@@ -43,7 +47,8 @@
         { id: "aspect", label: "Aspect" },
         { id: "hillshade", label: "Hillshade" },
         { id: "multidirectional_hillshade", label: "Multi Hillshade" },
-        { id: "curvature", label: "Curvature" },
+        { id: "curvature", label: "Curvature (classical)" },
+        { id: "advanced_curvature", label: "Curvature (Florinsky 14)" },
         { id: "tpi", label: "TPI" },
         { id: "tri", label: "TRI" },
         { id: "twi", label: "TWI" },
@@ -54,6 +59,9 @@
         { id: "shape_index", label: "Shape Index" },
         { id: "curvedness", label: "Curvedness" },
         { id: "sky_view_factor", label: "Sky View Factor" },
+        { id: "openness_positive", label: "Openness (positive)" },
+        { id: "openness_negative", label: "Openness (negative)" },
+        { id: "mrvbf", label: "MRVBF" },
         { id: "uncertainty_slope", label: "Slope Uncertainty" },
         { id: "ssa_2d_denoise", label: "SSA-2D Denoise" },
       ],
@@ -64,7 +72,10 @@
         { id: "fill_sinks", label: "Fill Sinks" },
         { id: "priority_flood", label: "Priority Flood" },
         { id: "flow_direction_d8", label: "Flow Direction D8" },
-        { id: "flow_accumulation_d8", label: "Flow Accumulation" },
+        { id: "flow_accumulation_d8", label: "Flow Accumulation D8" },
+        { id: "flow_accumulation_mfd", label: "Flow Accumulation MFD" },
+        { id: "flow_direction_dinf", label: "Flow Direction D-∞" },
+        { id: "flow_accumulation_dinf", label: "Flow Accumulation D-∞" },
         { id: "hand", label: "HAND" },
       ],
     },
@@ -73,7 +84,17 @@
       algos: [
         { id: "ndvi", label: "NDVI" },
         { id: "ndwi", label: "NDWI" },
+        { id: "mndwi", label: "MNDWI" },
         { id: "savi", label: "SAVI" },
+        { id: "msavi", label: "MSAVI" },
+        { id: "evi", label: "EVI (3-band)" },
+        { id: "evi2", label: "EVI2" },
+        { id: "nbr", label: "NBR" },
+        { id: "ndre", label: "NDRE" },
+        { id: "gndvi", label: "GNDVI" },
+        { id: "ndbi", label: "NDBI" },
+        { id: "ndmi", label: "NDMI" },
+        { id: "bsi", label: "BSI (4-band)" },
         { id: "normalized_diff", label: "Norm. Difference" },
       ],
     },
@@ -92,6 +113,12 @@
         { id: "focal_mean", label: "Focal Mean" },
         { id: "focal_std", label: "Focal Std Dev" },
         { id: "focal_range", label: "Focal Range" },
+        { id: "focal_min", label: "Focal Min" },
+        { id: "focal_max", label: "Focal Max" },
+        { id: "focal_sum", label: "Focal Sum" },
+        { id: "focal_median", label: "Focal Median" },
+        { id: "focal_majority", label: "Focal Majority" },
+        { id: "focal_percentile", label: "Focal Percentile" },
       ],
     },
   ];
@@ -105,6 +132,7 @@
       params.altitude = Number(altitude);
     }
     if (id === "curvature") params.type = curvatureType;
+    if (id === "advanced_curvature") params.ctype = advCurvatureType;
     if (id === "tpi") params.radius = Number(tpiRadius);
     if (id === "geomorphons") {
       params.flatness = Number(geoFlatness);
@@ -115,6 +143,10 @@
       params.directions = Number(svfDirs);
       params.radius = Number(svfRadius);
     }
+    if (id === "openness_positive" || id === "openness_negative") {
+      params.radius = Number(opennessRadius);
+      params.directions = Number(opennessDirs);
+    }
     if (id === "uncertainty_slope") params.demRmse = Number(demRmse);
     if (id === "ssa_2d_denoise") {
       params.window = Number(ssaWindow);
@@ -124,6 +156,7 @@
     if (id === "savi") params.lFactor = Number(saviL);
     if (id.startsWith("morph_")) params.radius = Number(morphRadius);
     if (id.startsWith("focal_")) params.radius = Number(focalRadius);
+    if (id === "focal_percentile") params.percentile = Number(focalPercentile);
     onrun(id, params);
   }
 </script>
@@ -181,6 +214,46 @@
                 <option value="profile">Profile</option>
                 <option value="plan">Plan</option>
               </select>
+            {/if}
+
+            <!-- Advanced curvature (Florinsky 14) -->
+            {#if algo.id === "advanced_curvature"}
+              <select bind:value={advCurvatureType} disabled={disabled || processing}>
+                <option value="mean_h">Mean H</option>
+                <option value="gaussian_k">Gaussian K</option>
+                <option value="unsphericity_m">Unsphericity M</option>
+                <option value="difference_e">Difference E</option>
+                <option value="kmin">k_min</option>
+                <option value="kmax">k_max</option>
+                <option value="kh">Horizontal k_h</option>
+                <option value="kv">Vertical k_v</option>
+                <option value="khe">Horizontal excess k_he</option>
+                <option value="kve">Vertical excess k_ve</option>
+                <option value="ka">Accumulation K_a</option>
+                <option value="kr">Ring K_r</option>
+                <option value="rotor">Rotor</option>
+                <option value="laplacian">Laplacian</option>
+              </select>
+            {/if}
+
+            <!-- Openness params -->
+            {#if algo.id === "openness_positive" || algo.id === "openness_negative"}
+              <label class="param">
+                R
+                <input type="number" bind:value={opennessRadius} min="1" max="50" step="1" disabled={disabled || processing} />
+              </label>
+              <label class="param">
+                Dirs
+                <input type="number" bind:value={opennessDirs} min="4" max="32" step="4" disabled={disabled || processing} />
+              </label>
+            {/if}
+
+            <!-- Focal percentile param -->
+            {#if algo.id === "focal_percentile"}
+              <label class="param">
+                Q
+                <input type="number" bind:value={focalPercentile} min="0" max="100" step="5" disabled={disabled || processing} />
+              </label>
             {/if}
 
             <!-- TPI params -->

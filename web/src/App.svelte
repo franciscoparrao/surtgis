@@ -8,7 +8,8 @@
   let demBytes = $state(null);
   let demName = $state("");
   let demParsed = $state(null);
-  let secondBandBytes = $state(null);
+  /** Extra band buffers for multi-band indices. Indexed by position (band 2 = [0], 3 = [1], ...). */
+  let extraBands = $state([null, null, null]);
 
   let resultBytes = $state(null);
   let resultParsed = $state(null);
@@ -19,8 +20,49 @@
   let error = $state("");
   let wasmReady = $state(false);
 
-  /** Algorithms that require a second band */
-  const DUAL_BAND = new Set(["ndvi", "ndwi", "savi", "normalized_diff"]);
+  /**
+   * Per-algorithm definition of the additional band slots after the primary
+   * raster. Each entry is an array of label strings; UI renders one uploader
+   * per slot. Primary raster label is derived from the first entry's role
+   * (see PRIMARY_BAND_LABEL).
+   */
+  const MULTI_BAND_LABELS = {
+    // 2-band
+    ndvi: ["Red Band"],
+    ndwi: ["NIR Band"],
+    savi: ["Red Band"],
+    normalized_diff: ["Band B"],
+    mndwi: ["SWIR Band"],
+    nbr: ["SWIR Band"],
+    ndre: ["Red Edge Band"],
+    gndvi: ["Green Band"],
+    ndbi: ["NIR Band"],
+    ndmi: ["SWIR Band"],
+    msavi: ["Red Band"],
+    evi2: ["Red Band"],
+    // 3-band
+    evi: ["Red Band", "Blue Band"],
+    // 4-band
+    bsi: ["Red Band", "NIR Band", "Blue Band"],
+  };
+
+  /** Label for the primary uploader when the selected algo needs multiple bands. */
+  const PRIMARY_BAND_LABEL = {
+    ndvi: "NIR Band",
+    ndwi: "Green Band",
+    savi: "NIR Band",
+    normalized_diff: "Band A",
+    mndwi: "Green Band",
+    nbr: "NIR Band",
+    ndre: "NIR Band",
+    gndvi: "NIR Band",
+    ndbi: "SWIR Band",
+    ndmi: "NIR Band",
+    msavi: "NIR Band",
+    evi2: "NIR Band",
+    evi: "NIR Band",
+    bsi: "SWIR Band",
+  };
 
   const SCHEME_MAP = {
     // Terrain
@@ -29,6 +71,7 @@
     hillshade: "grayscale",
     multidirectional_hillshade: "grayscale",
     curvature: "blue_white_red",
+    advanced_curvature: "blue_white_red",
     tpi: "blue_white_red",
     tri: "terrain",
     twi: "water",
@@ -39,6 +82,9 @@
     shape_index: "blue_white_red",
     curvedness: "terrain",
     sky_view_factor: "grayscale",
+    openness_positive: "grayscale",
+    openness_negative: "grayscale",
+    mrvbf: "water",
     uncertainty_slope: "terrain",
     ssa_2d_denoise: "terrain",
     // Hydrology
@@ -46,12 +92,25 @@
     priority_flood: "terrain",
     flow_direction_d8: "terrain",
     flow_accumulation_d8: "accumulation",
+    flow_accumulation_mfd: "accumulation",
+    flow_direction_dinf: "terrain",
+    flow_accumulation_dinf: "accumulation",
     hand: "water",
     // Imagery
     ndvi: "ndvi",
     ndwi: "water",
     savi: "ndvi",
     normalized_diff: "divergent",
+    mndwi: "water",
+    nbr: "divergent",
+    ndre: "ndvi",
+    gndvi: "ndvi",
+    ndbi: "divergent",
+    ndmi: "water",
+    msavi: "ndvi",
+    evi2: "ndvi",
+    evi: "ndvi",
+    bsi: "divergent",
     // Morphology
     morph_erode: "terrain",
     morph_dilate: "terrain",
@@ -61,14 +120,12 @@
     focal_mean: "terrain",
     focal_std: "terrain",
     focal_range: "terrain",
-  };
-
-  /** Label shown above the second band uploader */
-  const SECOND_BAND_LABEL = {
-    ndvi: "Red Band",
-    ndwi: "NIR Band",
-    savi: "Red Band",
-    normalized_diff: "Band B",
+    focal_min: "terrain",
+    focal_max: "terrain",
+    focal_sum: "terrain",
+    focal_median: "terrain",
+    focal_majority: "terrain",
+    focal_percentile: "terrain",
   };
 
   $effect(() => {
@@ -91,8 +148,8 @@
     }
   }
 
-  function onSecondBandLoad({ bytes }) {
-    secondBandBytes = bytes;
+  function onExtraBandLoad(index, { bytes }) {
+    extraBands[index] = bytes;
   }
 
   async function onRun(algo, params) {
@@ -103,8 +160,9 @@
 
     try {
       const t0 = performance.now();
-      const band2 = DUAL_BAND.has(algo) ? secondBandBytes : undefined;
-      const out = await runAlgorithm(algo, demBytes, params, band2);
+      const slots = MULTI_BAND_LABELS[algo]?.length ?? 0;
+      const bands = extraBands.slice(0, slots).filter((b) => b !== null);
+      const out = await runAlgorithm(algo, demBytes, params, bands);
       elapsed = performance.now() - t0;
 
       resultBytes = out;
@@ -119,7 +177,10 @@
     }
   }
 
-  let needsSecondBand = $derived(DUAL_BAND.has(selectedAlgo));
+  let extraBandLabels = $derived(MULTI_BAND_LABELS[selectedAlgo] ?? []);
+  let primaryLabel = $derived(
+    PRIMARY_BAND_LABEL[selectedAlgo] ?? "DEM / Raster",
+  );
 </script>
 
 <div class="layout">
@@ -127,22 +188,22 @@
     <h1 class="logo">SurtGIS <span class="badge">WASM</span></h1>
 
     <section>
-      <h2>{needsSecondBand ? "NIR / Green Band" : "DEM / Raster"}</h2>
+      <h2>{primaryLabel}</h2>
       <FileUpload onload={onDemLoad} />
     </section>
 
-    {#if needsSecondBand}
+    {#each extraBandLabels as label, i (label + i)}
       <section>
-        <h2>{SECOND_BAND_LABEL[selectedAlgo] ?? "Second Band"}</h2>
+        <h2>{label}</h2>
         <FileUpload
-          onload={onSecondBandLoad}
-          label="Drop second band GeoTIFF"
+          onload={(payload) => onExtraBandLoad(i, payload)}
+          label={`Drop ${label} GeoTIFF`}
         />
       </section>
-    {/if}
+    {/each}
 
     <section>
-      <h2>Algorithms <span class="algo-count">33</span></h2>
+      <h2>Algorithms <span class="algo-count">56</span></h2>
       <AlgoPanel
         disabled={!demBytes || !wasmReady}
         {processing}

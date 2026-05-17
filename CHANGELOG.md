@@ -9,6 +9,45 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-05-17
+
+Web demo expansion (roadmap axis A2.b). Closes the loop on v0.8.0:
+the 23 new WASM functions that shipped in v0.8.0 are now exposed in
+the live demo at https://franciscoparrao.github.io/surtgis/. Users
+can now invoke Florinsky's 14 curvatures, MFD/D-∞ hydrology, and the
+expanded spectral-index suite directly from a browser without
+writing JavaScript.
+
+### Added — web demo (`web/`)
+
+- **Algorithm groups expanded** in `AlgoPanel.svelte` — 56 buttons
+  organised into Terrain (21), Hydrology (8), Imagery (14),
+  Morphology (4), Statistics (9). Headline new button:
+  *Curvature (Florinsky 14)* with a dropdown for the 14 types.
+- **Multi-band uploaders** in `App.svelte` — algorithms that need
+  more than two bands (EVI: 3, BSI: 4) now render extra `FileUpload`
+  slots automatically based on a `MULTI_BAND_LABELS` map. The
+  primary uploader label changes too (e.g. "NIR Band" for NDVI,
+  "SWIR Band" for BSI).
+- **New parameter controls**: Florinsky type selector (14 options),
+  openness directions + radius, focal percentile Q.
+- **`SCHEME_MAP` updated** with reasonable colour schemes for all
+  56 algorithms.
+
+### Changed
+
+- `runAlgorithm(name, demBytes, params, extraBands)` signature: the
+  4th argument is now an array of additional band buffers (was a
+  single optional `secondBand`). Lets EVI/BSI receive 2/3 extra
+  bands cleanly. App.svelte's caller updated to pass the array.
+
+### Notes
+
+- No binary change vs v0.8.0; the WASM `.wasm` produced by
+  `wasm-pack build` is bit-identical. Only the JS/CSS bundle changes.
+- The `pkg/` artifacts (wasm + JS wrappers) include all 56 exports
+  as a single TypeScript-typed surface.
+
 ## [0.8.0] - 2026-05-17
 
 WASM expansion release. The browser-deployable surface grows from 33 to
