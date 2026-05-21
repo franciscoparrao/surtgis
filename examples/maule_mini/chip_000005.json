@@ -1,0 +1,75 @@
+{
+  "type": "Feature",
+  "stac_version": "1.0.0",
+  "stac_extensions": [
+    "https://stac-extensions.github.io/ml-aoi/v0.2.0/schema.json"
+  ],
+  "id": "chip_000005",
+  "collection": "chips",
+  "bbox": [
+    -71.59991921629897,
+    -35.592309872840204,
+    -71.58532692802703,
+    -35.580389954965916
+  ],
+  "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+      [
+        [
+          -71.59991921629897,
+          -35.58078904725036
+        ],
+        [
+          -71.58581660401539,
+          -35.580389954965916
+        ],
+        [
+          -71.58532692802703,
+          -35.59191061197196
+        ],
+        [
+          -71.59943155343643,
+          -35.592309872840204
+        ],
+        [
+          -71.59991921629897,
+          -35.58078904725036
+        ]
+      ]
+    ]
+  },
+  "properties": {
+    "datetime": null,
+    "timestamps": [
+      "t_2025_01",
+      "t_2025_02"
+    ],
+    "ml-aoi:role": "label",
+    "ml-aoi:reference-grid": true,
+    "ml-aoi:label_class": 3
+  },
+  "assets": {
+    "data-chunk": {
+      "href": "../patches.zarr",
+      "type": "application/octet-stream",
+      "roles": [
+        "data-chunk",
+        "data"
+      ],
+      "title": "Patch tensor chip 5"
+    }
+  },
+  "links": [
+    {
+      "rel": "collection",
+      "href": "../collection.json",
+      "type": "application/json"
+    },
+    {
+      "rel": "self",
+      "href": "chip_000005.json",
+      "type": "application/json"
+    }
+  ]
+}

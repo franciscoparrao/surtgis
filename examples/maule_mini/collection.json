@@ -1,0 +1,218 @@
+{
+  "type": "Collection",
+  "stac_version": "1.0.0",
+  "stac_extensions": [
+    "https://stac-extensions.github.io/ml-aoi/v0.2.0/schema.json",
+    "https://stac-extensions.github.io/mlm/v1.4.0/schema.json"
+  ],
+  "id": "chips",
+  "title": "SurtGIS extract-patches output: 20 chips",
+  "description": "Training chips extracted by SurtGIS extract-patches v0.8.1 from /tmp/maule_mini/. 6 bands × 2 timestamps, tile 128x128, source mode points.",
+  "license": "proprietary",
+  "extent": {
+    "spatial": {
+      "bbox": [
+        [
+          -71.60052557704768,
+          -35.64652768434843,
+          -71.53538713774782,
+          -35.593340965343906
+        ]
+      ]
+    },
+    "temporal": {
+      "interval": [
+        [
+          "t_2025_01",
+          "t_2025_02"
+        ]
+      ]
+    }
+  },
+  "summaries": {
+    "bands": [
+      "B02",
+      "B03",
+      "B04",
+      "B05",
+      "B06",
+      "B07"
+    ],
+    "n_timestamps": 2,
+    "patch_size": 128
+  },
+  "properties": {
+    "mlm:framework": "pytorch",
+    "mlm:tasks": [
+      "regression",
+      "classification",
+      "segmentation"
+    ],
+    "mlm:input": [
+      {
+        "name": "prithvi-v2 input",
+        "bands": [
+          "B02",
+          "B03",
+          "B04",
+          "B05",
+          "B06",
+          "B07"
+        ],
+        "input": {
+          "shape": [
+            -1,
+            6,
+            2,
+            224,
+            224
+          ],
+          "dim_order": [
+            "batch",
+            "channel",
+            "time",
+            "height",
+            "width"
+          ],
+          "data_type": "float32"
+        },
+        "norm_by_channel": true,
+        "norm_type": "z-score",
+        "statistics": [
+          {
+            "mean": 1087.0,
+            "stddev": 2248.0
+          },
+          {
+            "mean": 1342.0,
+            "stddev": 2179.0
+          },
+          {
+            "mean": 1433.0,
+            "stddev": 2178.0
+          },
+          {
+            "mean": 2734.0,
+            "stddev": 1850.0
+          },
+          {
+            "mean": 1958.0,
+            "stddev": 1242.0
+          },
+          {
+            "mean": 1363.0,
+            "stddev": 1049.0
+          }
+        ],
+        "resize_type": "none"
+      }
+    ],
+    "mlm:model_target": "ibm-nasa-geospatial/Prithvi-EO-2.0-300M",
+    "mlm:source": "https://huggingface.co/ibm-nasa-geospatial/Prithvi-EO-2.0-300M",
+    "ml-aoi:tasks": [
+      "patch-classification"
+    ]
+  },
+  "links": [
+    {
+      "rel": "item",
+      "href": "items/chip_000000.json",
+      "type": "application/json"
+    },
+    {
+      "rel": "item",
+      "href": "items/chip_000001.json",
+      "type": "application/json"
+    },
+    {
+      "rel": "item",
+      "href": "items/chip_000002.json",
+      "type": "application/json"
+    },
+    {
+      "rel": "item",
+      "href": "items/chip_000003.json",
+      "type": "application/json"
+    },
+    {
+      "rel": "item",
+      "href": "items/chip_000004.json",
+      "type": "application/json"
+    },
+    {
+      "rel": "item",
+      "href": "items/chip_000005.json",
+      "type": "application/json"
+    },
+    {
+      "rel": "item",
+      "href": "items/chip_000006.json",
+      "type": "application/json"
+    },
+    {
+      "rel": "item",
+      "href": "items/chip_000007.json",
+      "type": "application/json"
+    },
+    {
+      "rel": "item",
+      "href": "items/chip_000008.json",
+      "type": "application/json"
+    },
+    {
+      "rel": "item",
+      "href": "items/chip_000009.json",
+      "type": "application/json"
+    },
+    {
+      "rel": "item",
+      "href": "items/chip_000010.json",
+      "type": "application/json"
+    },
+    {
+      "rel": "item",
+      "href": "items/chip_000011.json",
+      "type": "application/json"
+    },
+    {
+      "rel": "item",
+      "href": "items/chip_000012.json",
+      "type": "application/json"
+    },
+    {
+      "rel": "item",
+      "href": "items/chip_000013.json",
+      "type": "application/json"
+    },
+    {
+      "rel": "item",
+      "href": "items/chip_000014.json",
+      "type": "application/json"
+    },
+    {
+      "rel": "item",
+      "href": "items/chip_000015.json",
+      "type": "application/json"
+    },
+    {
+      "rel": "item",
+      "href": "items/chip_000016.json",
+      "type": "application/json"
+    },
+    {
+      "rel": "item",
+      "href": "items/chip_000017.json",
+      "type": "application/json"
+    },
+    {
+      "rel": "item",
+      "href": "items/chip_000018.json",
+      "type": "application/json"
+    },
+    {
+      "rel": "item",
+      "href": "items/chip_000019.json",
+      "type": "application/json"
+    }
+  ]
+}
