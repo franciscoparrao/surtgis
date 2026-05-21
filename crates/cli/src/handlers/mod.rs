@@ -2,6 +2,7 @@ pub mod classification;
 pub mod clip;
 pub mod extract;
 pub mod extract_patches;
+pub mod gfm_profiles;
 pub mod hydrology;
 pub mod imagery;
 pub mod info;
@@ -15,11 +16,13 @@ pub mod mosaic;
 // whole module to match cog/stac.
 #[cfg(feature = "cloud")]
 pub mod pipeline;
+pub mod stac_writer;
 pub mod statistics;
 pub mod temporal;
 pub mod terrain;
 pub mod texture;
 pub mod vector;
+pub mod zarr_writer;
 
 #[cfg(feature = "cloud")]
 pub mod cog;

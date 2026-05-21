@@ -9,6 +9,62 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+### Added — Geospatial Foundation Model (GFM) preprocessing
+
+- **`extract-patches --profile <name>`** preset that targets a specific
+  pre-trained foundation model. When set, the handler validates band
+  count, applies the model's published per-band z-score normalization
+  in place, and records full provenance (model target, band order, mean
+  and std arrays, source URL, unit convention) in `meta.json` under the
+  `gfm_profile` key. Supported profiles:
+  - `prithvi-v2` → `ibm-nasa-geospatial/Prithvi-EO-2.0-300M`. 6 bands
+    (B02, B03, B04, B05, B06, B07), tile 224×224, DN units (SR ×10000).
+  - `clay-v1.5` → `made-with-clay/Clay/v1.5`. 10 Sentinel-2 bands
+    (B02–B12 less B09, B10), tile 256×256, reflectance [0, 1].
+- **Multi-timestamp input** for temporal foundation models like Prithvi.
+  When `--features-dir` contains subdirectories (each with the same set
+  of band rasters), each subdir is treated as a timestamp and the output
+  tensor becomes `[N, C, T, H, W]` instead of `[N, C, H, W]`. Timestamp
+  order follows lexicographic sort of subdir names (use ISO dates for
+  natural ordering). Per-band z-score normalization runs across the full
+  T·H·W block of each band. `meta.json` reports `n_timestamps`,
+  `timestamps`, `tensor_layout`, and `tensor_shape`. Mixed mode (both
+  top-level .tifs and subdirs with .tifs) is rejected with a clear error.
+  Single-timestamp mode (top-level .tifs only) is preserved bit-for-bit
+  for backward compatibility.
+- New module `crates/cli/src/handlers/gfm_profiles.rs` with six unit
+  tests covering name aliases, spec consistency, z-score correctness,
+  NaN preservation, and the temporal-block normalization helper.
+- **`extract-patches --output-format {npy,zarr}`** chooses the tensor
+  serialisation. `npy` (default) is the existing single-file path; `zarr`
+  emits a chunked Zarr v2 directory at `patches.zarr/` with one chunk per
+  chip (`[1, C, (T,) H, W]`). Hand-written Zarr v2 writer at
+  `crates/cli/src/handlers/zarr_writer.rs` — no new crate dependencies.
+  `.zattrs` mirrors the meta.json keys so a Zarr-only consumer has full
+  context. Output is bit-for-bit readable by `zarr` Python (`zarr.open()`)
+  without any post-processing. Labels and manifest remain `.npy` / `.csv`.
+- **`extract-patches --emit-stac`** writes STAC ML-AOI Collection + Items
+  describing the chips as labelled training data. Output structure:
+  `<output>/stac/collection.json` + `<output>/stac/items/chip_NNNNNN.json`.
+  Each item declares `ml-aoi:role: label`, `ml-aoi:label_class` (int) or
+  `ml-aoi:label_value` (float), bbox + Polygon geometry, and asset href
+  pointing at the chip data. When a `--profile` is set, the Collection
+  embeds the [STAC MLM extension](https://github.com/stac-extensions/mlm)
+  declaring the target foundation model (e.g. `mlm:model_target:
+  ibm-nasa-geospatial/Prithvi-EO-2.0-300M`) plus a full `mlm:input`
+  descriptor with band order, tensor shape `[-1, C, T, H, W]`, dim_order,
+  data_type, and per-channel normalization statistics. Coords are
+  reprojected to WGS84 via proj4rs when the `projections` feature is
+  compiled (default precompiled binaries); when not, items fall back to
+  source-CRS coords stamped with `proj:epsg`. Hand-written STAC writer at
+  `crates/cli/src/handlers/stac_writer.rs` with one unit test; smoke
+  tested end-to-end with EPSG:32719 input verifying correct lon/lat
+  output.
+
+This is groundwork for axis G2 of the roadmap (GFM preprocessing
+pipeline). Subsequent releases will extend with configurable cloud masks
+per sensor (FMask / SCL / QA_PIXEL).
+
 ## [0.8.1] - 2026-05-17
 
 Web demo expansion (roadmap axis A2.b). Closes the loop on v0.8.0:

@@ -106,7 +106,26 @@ pub enum Commands {
         /// Random seed used for subsampling. Default 42.
         #[arg(long, default_value = "42")]
         seed: u64,
-        /// Output directory (creates patches.npy, labels.npy, manifest.csv, meta.json)
+        /// Geospatial Foundation Model profile to target. When set, applies
+        /// per-band z-score normalization using the model's published stats
+        /// and validates the band count. Use --size to override tile size.
+        /// Supported: prithvi-v2, clay-v1.5.
+        #[arg(long)]
+        profile: Option<String>,
+        /// Output format for the patch tensor: `npy` (single .npy file, default)
+        /// or `zarr` (chunked Zarr v2 directory, one chunk per chip). Labels
+        /// and manifest are always emitted as .npy / .csv regardless.
+        #[arg(long, default_value = "npy")]
+        output_format: String,
+        /// Emit STAC ML-AOI Collection + Items describing the chips as
+        /// labelled training data. Writes <output>/stac/collection.json
+        /// and <output>/stac/items/chip_NNNNNN.json. When a --profile is
+        /// also set, the Collection embeds the MLM extension declaring
+        /// the target foundation model.
+        #[arg(long)]
+        emit_stac: bool,
+        /// Output directory (creates patches.npy or patches.zarr/, plus
+        /// labels.npy, manifest.csv, meta.json, and optional stac/)
         output: PathBuf,
     },
     /// Clip a raster by polygon or bounding box

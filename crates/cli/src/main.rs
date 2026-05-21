@@ -67,6 +67,9 @@ fn main() -> Result<()> {
             skip_nan_threshold,
             max_patches,
             seed,
+            profile,
+            output_format,
+            emit_stac,
             output,
         } => handlers::extract_patches::handle(
             &features_dir,
@@ -78,6 +81,9 @@ fn main() -> Result<()> {
             skip_nan_threshold,
             max_patches,
             seed,
+            profile.as_deref(),
+            &output_format,
+            emit_stac,
             &output,
         )?,
         Commands::Clip {
