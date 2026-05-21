@@ -77,9 +77,14 @@ call them out under a `Breaking` heading when they happen.
     Existing Sentinel-2 SCL and SAR no-mask paths unchanged.
   - 2 new unit tests in `crates/algorithms/src/imagery/cloud_mask.rs`.
 
+- **New how-to guide**: `docs/book/src/how-to/gfm-prithvi-prep.md`
+  walks through the full pipeline from STAC bbox to a tensor ready to
+  fine-tune Prithvi-EO-2.0 or Clay v1.5. Frames the work against
+  InstaGeo's identified gap (no GFM ships preprocessing). Added to the
+  user-guide nav.
+
 This is groundwork for axis G2 of the roadmap (GFM preprocessing
-pipeline). Remaining axes: how-to guide for STAC→Prithvi end-to-end
-(#85), benchmark vs InstaGeo / raster-vision (#86).
+pipeline). Remaining axis: benchmark vs InstaGeo / raster-vision (#86).
 
 ## [0.8.1] - 2026-05-17
 
