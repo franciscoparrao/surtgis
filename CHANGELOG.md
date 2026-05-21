@@ -61,9 +61,25 @@ call them out under a `Breaking` heading when they happen.
   tested end-to-end with EPSG:32719 input verifying correct lon/lat
   output.
 
+- **HLS Fmask cloud-mask strategy** for the Harmonized Landsat-Sentinel
+  collection — the canonical input for NASA/IBM's Prithvi-EO-2.0. HLS
+  Fmask is a 16-bit bitmask with HLS-specific bit assignments (cloud is
+  bit 1, vs Landsat C2 QA_PIXEL where cloud is bit 3), so it needs its
+  own strategy rather than reusing `LandsatQaMask`.
+  - Default `HlsFmask::new()`: excludes cloud (bit 1), adjacent-to-cloud
+    (bit 2), and cloud shadow (bit 3). Keeps clear, cirrus, snow, water.
+  - `HlsFmask::strict()`: also excludes cirrus (bit 0) and snow (bit 4)
+    for downstream uses sensitive to cirrus contamination.
+  - `HlsFmask::with_bits(u16)`: arbitrary bit-set override.
+  - Auto-routing: `stac::create_cloud_mask_strategy()` now inspects the
+    asset name on a `CloudMaskType::Bitmask` and routes to `HlsFmask`
+    when it contains "fmask" (case-insensitive), else `LandsatQaMask`.
+    Existing Sentinel-2 SCL and SAR no-mask paths unchanged.
+  - 2 new unit tests in `crates/algorithms/src/imagery/cloud_mask.rs`.
+
 This is groundwork for axis G2 of the roadmap (GFM preprocessing
-pipeline). Subsequent releases will extend with configurable cloud masks
-per sensor (FMask / SCL / QA_PIXEL).
+pipeline). Remaining axes: how-to guide for STAC→Prithvi end-to-end
+(#85), benchmark vs InstaGeo / raster-vision (#86).
 
 ## [0.8.1] - 2026-05-17
 
