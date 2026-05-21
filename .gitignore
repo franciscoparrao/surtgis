@@ -55,3 +55,7 @@ __pycache__/
 /web/node_modules/
 docs/wos/*.bib
 docs/wos/analysis_results.json
+
+# GFM-prep benchmark intermediate outputs (regenerable, ~5GB per run)
+benchmarks/results/gfm_prep/synthetic_dataset/
+benchmarks/results/gfm_prep/run_*/
