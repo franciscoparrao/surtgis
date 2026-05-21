@@ -4,6 +4,14 @@ A minimal reproducible example for the [GFM prep how-to](../../docs/book/src/how
 fetches Sentinel-2 L2A from Earth Search, extracts Prithvi-EO-2.0-ready
 chips, emits STAC ML-AOI + MLM metadata.
 
+![Visual summary: 4 chips × 2 timestamps from the validated run](visual_summary.png)
+
+The figure above shows 8 of the 20 chips produced by the pipeline:
+four spatial chips at columns 0/5/10/15, each rendered for the January
+and February 2025 timestamps. Each chip is one training sample
+(128 × 128 px, 6 bands; only RGB shown for display). The full tensor
+shape is `[20 chips, 6 bands, 2 timestamps, 128, 128]`.
+
 **Scope**: ~5 km × 5 km bbox in the Maule region of Chile, 2 monthly
 timestamps (Jan & Feb 2025), 6 HLS-equivalent bands, 20 synthetic
 labelled points. Designed to validate the full pipeline against real
