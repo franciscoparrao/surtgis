@@ -40,11 +40,13 @@ pub fn init_zarr_v2_array(
     fill_value: serde_json::Value,
     attrs: &serde_json::Value,
 ) -> Result<()> {
-    assert_eq!(shape.len(), chunks.len(),
-        "shape and chunks must have the same rank");
+    assert_eq!(
+        shape.len(),
+        chunks.len(),
+        "shape and chunks must have the same rank"
+    );
 
-    fs::create_dir_all(dir)
-        .with_context(|| format!("Failed to create {}", dir.display()))?;
+    fs::create_dir_all(dir).with_context(|| format!("Failed to create {}", dir.display()))?;
 
     let zarray = serde_json::json!({
         "zarr_format": 2,

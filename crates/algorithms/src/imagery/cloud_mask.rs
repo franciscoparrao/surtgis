@@ -141,14 +141,18 @@ impl HlsFmask {
     /// Default: exclude cloud (bit 1), adjacent-to-cloud (bit 2), cloud shadow (bit 3).
     /// Cirrus (bit 0) kept; snow (bit 4) kept; water (bit 5) ignored.
     pub fn new() -> Self {
-        Self { exclude_bits: 0b0000_1110 }
+        Self {
+            exclude_bits: 0b0000_1110,
+        }
     }
 
     /// Conservative variant that also excludes cirrus and snow.
     /// Use this when downstream is sensitive to cirrus contamination or
     /// when snow is not a target class.
     pub fn strict() -> Self {
-        Self { exclude_bits: 0b0001_1111 }
+        Self {
+            exclude_bits: 0b0001_1111,
+        }
     }
 
     /// Custom excluded bits — see struct doc for the HLS bit layout.
@@ -158,7 +162,9 @@ impl HlsFmask {
 }
 
 impl Default for HlsFmask {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CloudMaskStrategy for HlsFmask {
@@ -502,13 +508,22 @@ mod tests {
         let d = result.data();
 
         assert!((d[[0, 0]] - 100.0).abs() < 1e-10, "clear should be kept");
-        assert!((d[[0, 1]] - 100.0).abs() < 1e-10, "cirrus alone should be kept by default");
+        assert!(
+            (d[[0, 1]] - 100.0).abs() < 1e-10,
+            "cirrus alone should be kept by default"
+        );
         assert!(d[[0, 2]].is_nan(), "cloud should be masked");
         assert!(d[[0, 3]].is_nan(), "adjacent-to-cloud should be masked");
         assert!(d[[1, 0]].is_nan(), "cloud shadow should be masked");
         assert!(d[[1, 1]].is_nan(), "cloud|adjacent|shadow should be masked");
-        assert!((d[[1, 2]] - 100.0).abs() < 1e-10, "snow should be kept by default");
-        assert!((d[[1, 3]] - 100.0).abs() < 1e-10, "water should be kept (informational)");
+        assert!(
+            (d[[1, 2]] - 100.0).abs() < 1e-10,
+            "snow should be kept by default"
+        );
+        assert!(
+            (d[[1, 3]] - 100.0).abs() < 1e-10,
+            "water should be kept (informational)"
+        );
     }
 
     #[test]
@@ -525,7 +540,10 @@ mod tests {
         assert!((d[[0, 0]] - 100.0).abs() < 1e-10, "clear should be kept");
         assert!(d[[0, 1]].is_nan(), "cirrus should be masked by strict()");
         assert!(d[[0, 2]].is_nan(), "snow should be masked by strict()");
-        assert!((d[[0, 3]] - 100.0).abs() < 1e-10, "water is never excluded (bit 5 not in mask)");
+        assert!(
+            (d[[0, 3]] - 100.0).abs() < 1e-10,
+            "water is never excluded (bit 5 not in mask)"
+        );
     }
 
     #[test]

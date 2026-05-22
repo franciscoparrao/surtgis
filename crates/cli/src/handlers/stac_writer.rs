@@ -64,7 +64,9 @@ pub struct CollectionInfo<'a> {
 #[cfg(feature = "projections")]
 fn to_wgs84(x: f64, y: f64, src_epsg: u32) -> Option<(f64, f64)> {
     use proj4rs::Proj;
-    if src_epsg == 4326 { return Some((x, y)); }
+    if src_epsg == 4326 {
+        return Some((x, y));
+    }
     let src = Proj::from_epsg_code(src_epsg as u16).ok()?;
     let dst = Proj::from_epsg_code(4326).ok()?;
     let mut pt = (x, y, 0.0_f64);
@@ -78,7 +80,9 @@ fn to_wgs84(x: f64, y: f64, src_epsg: u32) -> Option<(f64, f64)> {
 }
 
 #[cfg(not(feature = "projections"))]
-fn to_wgs84(_x: f64, _y: f64, _src_epsg: u32) -> Option<(f64, f64)> { None }
+fn to_wgs84(_x: f64, _y: f64, _src_epsg: u32) -> Option<(f64, f64)> {
+    None
+}
 
 /// Build the WGS84 bbox + Polygon geometry for a chip. Returns
 /// `(bbox_wgs84, polygon_coords_wgs84, in_source_crs)` — when reprojection
@@ -115,7 +119,10 @@ fn chip_geometry(
             for (x, y) in &corners_src {
                 match to_wgs84(*x, *y, epsg) {
                     Some(ll) => reproj.push(ll),
-                    None => { all_ok = false; break; }
+                    None => {
+                        all_ok = false;
+                        break;
+                    }
                 }
             }
             if all_ok && reproj.len() == 4 {
@@ -156,16 +163,26 @@ fn build_item(
     // datetime; use null and emit the temporal extent on the collection.
     props.insert("datetime".to_string(), serde_json::Value::Null);
     if timestamps.len() == 1 {
-        props.insert("timestamp_label".to_string(), serde_json::Value::String(timestamps[0].clone()));
+        props.insert(
+            "timestamp_label".to_string(),
+            serde_json::Value::String(timestamps[0].clone()),
+        );
     } else if timestamps.len() > 1 {
-        let arr: Vec<serde_json::Value> = timestamps.iter()
+        let arr: Vec<serde_json::Value> = timestamps
+            .iter()
             .map(|t| serde_json::Value::String(t.clone()))
             .collect();
         props.insert("timestamps".to_string(), serde_json::Value::Array(arr));
     }
     // ML-AOI extension: this chip is feature+label training data
-    props.insert("ml-aoi:role".to_string(), serde_json::Value::String("label".to_string()));
-    props.insert("ml-aoi:reference-grid".to_string(), serde_json::Value::Bool(true));
+    props.insert(
+        "ml-aoi:role".to_string(),
+        serde_json::Value::String("label".to_string()),
+    );
+    props.insert(
+        "ml-aoi:reference-grid".to_string(),
+        serde_json::Value::Bool(true),
+    );
     if let Some(v) = chip.label_int {
         props.insert("ml-aoi:label_class".to_string(), serde_json::json!(v));
     } else if let Some(v) = chip.label_float {
@@ -175,7 +192,10 @@ fn build_item(
         if let Some(epsg) = crs_epsg {
             props.insert("proj:epsg".to_string(), serde_json::json!(epsg));
         }
-        props.insert("ml-aoi:bbox_native_crs".to_string(), serde_json::Value::Bool(true));
+        props.insert(
+            "ml-aoi:bbox_native_crs".to_string(),
+            serde_json::Value::Bool(true),
+        );
     }
 
     let mut extensions = vec![MLAOI_SCHEMA.to_string()];
@@ -223,15 +243,22 @@ fn build_collection(info: &CollectionInfo, item_count: usize) -> serde_json::Val
         index: 0,
         center_row: info.grid_rows / 2,
         center_col: info.grid_cols / 2,
-        label_int: None, label_float: None,
-        asset_path: "", asset_role: "",
+        label_int: None,
+        label_float: None,
+        asset_path: "",
+        asset_role: "",
     };
     let chip_full = ChipInfo {
         center_row: info.grid_rows.saturating_sub(1),
         center_col: info.grid_cols.saturating_sub(1),
         ..dummy_chip
     };
-    let (bbox, _, _) = chip_geometry(&chip_full, info.grid_rows.max(info.grid_cols), info.gt, info.crs_epsg);
+    let (bbox, _, _) = chip_geometry(
+        &chip_full,
+        info.grid_rows.max(info.grid_cols),
+        info.gt,
+        info.crs_epsg,
+    );
 
     let mut props = serde_json::Map::new();
     if let Some(spec) = info.profile_spec {
@@ -249,14 +276,35 @@ fn build_collection(info: &CollectionInfo, item_count: usize) -> serde_json::Val
             "statistics": spec.band_norm.iter().map(|(m, s)| serde_json::json!({"mean": m, "stddev": s})).collect::<Vec<_>>(),
             "resize_type": "none",
         });
-        props.insert("mlm:framework".to_string(), serde_json::Value::String("pytorch".to_string()));
-        props.insert("mlm:tasks".to_string(), serde_json::json!(["regression", "classification", "segmentation"]));
-        props.insert("mlm:input".to_string(), serde_json::Value::Array(vec![input]));
-        props.insert("mlm:model_target".to_string(), serde_json::Value::String(spec.model_target.to_string()));
-        props.insert("mlm:source".to_string(), serde_json::Value::String(spec.source_url.to_string()));
+        props.insert(
+            "mlm:framework".to_string(),
+            serde_json::Value::String("pytorch".to_string()),
+        );
+        props.insert(
+            "mlm:tasks".to_string(),
+            serde_json::json!(["regression", "classification", "segmentation"]),
+        );
+        props.insert(
+            "mlm:input".to_string(),
+            serde_json::Value::Array(vec![input]),
+        );
+        props.insert(
+            "mlm:model_target".to_string(),
+            serde_json::Value::String(spec.model_target.to_string()),
+        );
+        props.insert(
+            "mlm:source".to_string(),
+            serde_json::Value::String(spec.source_url.to_string()),
+        );
     }
-    props.insert("ml-aoi:tasks".to_string(),
-        serde_json::json!([if info.source_mode == "points" { "patch-classification" } else { "patch-segmentation" }]));
+    props.insert(
+        "ml-aoi:tasks".to_string(),
+        serde_json::json!([if info.source_mode == "points" {
+            "patch-classification"
+        } else {
+            "patch-segmentation"
+        }]),
+    );
 
     serde_json::json!({
         "type": "Collection",
@@ -309,20 +357,32 @@ pub fn write_stac_output(
     let mut in_src_any = false;
     for chip in chips {
         let (bbox, polygon, in_src) = chip_geometry(
-            chip, collection_info.patch_size, collection_info.gt, collection_info.crs_epsg,
+            chip,
+            collection_info.patch_size,
+            collection_info.gt,
+            collection_info.crs_epsg,
         );
-        if in_src { in_src_any = true; }
+        if in_src {
+            in_src_any = true;
+        }
         let item = build_item(
-            collection_info.id, chip, bbox, polygon, in_src,
-            collection_info.crs_epsg, collection_info.timestamps,
+            collection_info.id,
+            chip,
+            bbox,
+            polygon,
+            in_src,
+            collection_info.crs_epsg,
+            collection_info.timestamps,
         );
         let path = items_dir.join(format!("chip_{:06}.json", chip.index));
         fs::write(&path, serde_json::to_string_pretty(&item)?)?;
     }
 
     if in_src_any {
-        eprintln!("  WARNING: STAC items emitted in source CRS coords (proj:epsg). \
-                   Build with --features projections for WGS84 reprojection.");
+        eprintln!(
+            "  WARNING: STAC items emitted in source CRS coords (proj:epsg). \
+                   Build with --features projections for WGS84 reprojection."
+        );
     }
 
     Ok(())
@@ -336,9 +396,13 @@ mod tests {
     fn chip_geometry_no_crs_returns_source_coords() {
         let gt = GeoTransform::new(100.0, 200.0, 10.0, -10.0);
         let chip = ChipInfo {
-            index: 0, center_row: 50, center_col: 50,
-            label_int: Some(1), label_float: None,
-            asset_path: "patches.npy", asset_role: "data",
+            index: 0,
+            center_row: 50,
+            center_col: 50,
+            label_int: Some(1),
+            label_float: None,
+            asset_path: "patches.npy",
+            asset_role: "data",
         };
         let (bbox, ring, in_src) = chip_geometry(&chip, 20, &gt, None);
         assert!(in_src);

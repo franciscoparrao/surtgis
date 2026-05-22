@@ -16,7 +16,7 @@
 //!     v1; patch centers in holes will still be accepted.
 
 use anyhow::{Context, Result};
-use geo::{Contains, BoundingRect};
+use geo::{BoundingRect, Contains};
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::hash::{Hash, Hasher};
@@ -24,8 +24,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use super::gfm_profiles::{apply_band_norm_block, GfmProfile};
-use super::stac_writer::{write_stac_output, ChipInfo, CollectionInfo};
+use super::gfm_profiles::{GfmProfile, apply_band_norm_block};
+use super::stac_writer::{ChipInfo, CollectionInfo, write_stac_output};
 use super::zarr_writer::{init_zarr_v2_array, write_chunk};
 
 /// Reproject a single (x, y) pair between two CRS. Returns `Ok(input)`
@@ -35,40 +35,59 @@ use super::zarr_writer::{init_zarr_v2_array, write_chunk};
 #[cfg(feature = "projections")]
 fn reproject_pt(x: f64, y: f64, src_epsg: u32, dst_epsg: u32) -> Result<(f64, f64)> {
     use proj4rs::Proj;
-    if src_epsg == dst_epsg { return Ok((x, y)); }
+    if src_epsg == dst_epsg {
+        return Ok((x, y));
+    }
     let src = Proj::from_epsg_code(src_epsg as u16)
         .map_err(|e| anyhow::anyhow!("Source CRS EPSG:{} not in proj4rs DB: {:?}", src_epsg, e))?;
     let dst = Proj::from_epsg_code(dst_epsg as u16)
         .map_err(|e| anyhow::anyhow!("Target CRS EPSG:{} not in proj4rs DB: {:?}", dst_epsg, e))?;
     // proj4rs expects radians for geographic source CRS.
-    let (in_x, in_y) = if src.is_latlong() { (x.to_radians(), y.to_radians()) } else { (x, y) };
+    let (in_x, in_y) = if src.is_latlong() {
+        (x.to_radians(), y.to_radians())
+    } else {
+        (x, y)
+    };
     let mut pt = (in_x, in_y, 0.0_f64);
     proj4rs::transform::transform(&src, &dst, &mut pt)
         .map_err(|e| anyhow::anyhow!("Reprojection {}->{} failed: {:?}", src_epsg, dst_epsg, e))?;
     // proj4rs returns radians for geographic destination CRS.
-    Ok(if dst.is_latlong() { (pt.0.to_degrees(), pt.1.to_degrees()) } else { (pt.0, pt.1) })
+    Ok(if dst.is_latlong() {
+        (pt.0.to_degrees(), pt.1.to_degrees())
+    } else {
+        (pt.0, pt.1)
+    })
 }
 
 #[cfg(not(feature = "projections"))]
 fn reproject_pt(x: f64, y: f64, src_epsg: u32, dst_epsg: u32) -> Result<(f64, f64)> {
-    if src_epsg == dst_epsg { return Ok((x, y)); }
+    if src_epsg == dst_epsg {
+        return Ok((x, y));
+    }
     anyhow::bail!(
         "Vector CRS (EPSG:{}) differs from raster CRS (EPSG:{}), but this build of \
          surtgis was compiled without the `projections` feature. Either rebuild with \
          `--features projections` or pre-reproject the vector to match the raster.",
-        src_epsg, dst_epsg,
+        src_epsg,
+        dst_epsg,
     );
 }
 
 /// Reproject all vertices of a Polygon (exterior ring + interior holes).
 fn reproject_polygon(p: &geo::Polygon<f64>, src: u32, dst: u32) -> Result<geo::Polygon<f64>> {
     use geo::Polygon;
-    let exterior: Vec<geo::Coord<f64>> = p.exterior().0.iter()
+    let exterior: Vec<geo::Coord<f64>> = p
+        .exterior()
+        .0
+        .iter()
         .map(|c| reproject_pt(c.x, c.y, src, dst).map(|(x, y)| geo::Coord { x, y }))
         .collect::<Result<Vec<_>>>()?;
-    let interiors: Vec<geo::LineString<f64>> = p.interiors().iter()
+    let interiors: Vec<geo::LineString<f64>> = p
+        .interiors()
+        .iter()
         .map(|ring| {
-            ring.0.iter()
+            ring.0
+                .iter()
                 .map(|c| reproject_pt(c.x, c.y, src, dst).map(|(x, y)| geo::Coord { x, y }))
                 .collect::<Result<Vec<_>>>()
                 .map(geo::LineString::new)
@@ -129,7 +148,9 @@ fn list_tifs_shallow(dir: &Path) -> Vec<PathBuf> {
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if !path.is_file() { continue; }
+            if !path.is_file() {
+                continue;
+            }
             if let Some(ext) = path.extension() {
                 if ext.eq_ignore_ascii_case("tif") || ext.eq_ignore_ascii_case("tiff") {
                     tifs.push(path);
@@ -147,7 +168,9 @@ fn list_subdirs(dir: &Path) -> Vec<PathBuf> {
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() { subs.push(path); }
+            if path.is_dir() {
+                subs.push(path);
+            }
         }
     }
     subs.sort();
@@ -167,8 +190,12 @@ struct RasterSet {
 }
 
 impl RasterSet {
-    fn n_timestamps(&self) -> usize { self.timestamps.len() }
-    fn n_bands(&self) -> usize { self.band_names.len() }
+    fn n_timestamps(&self) -> usize {
+        self.timestamps.len()
+    }
+    fn n_bands(&self) -> usize {
+        self.band_names.len()
+    }
 }
 
 /// Load one timestamp worth of feature rasters from `dir`. Honours an
@@ -184,12 +211,16 @@ fn load_single_timestamp(dir: &Path) -> Result<(Vec<String>, Vec<surtgis_core::R
     if features_json_path.exists() {
         let s = std::fs::read_to_string(&features_json_path)
             .with_context(|| format!("Failed to read {}", features_json_path.display()))?;
-        let meta: serde_json::Value = serde_json::from_str(&s)
-            .context("Failed to parse features.json")?;
+        let meta: serde_json::Value =
+            serde_json::from_str(&s).context("Failed to parse features.json")?;
         if let Some(entries) = meta["features"].as_array() {
             for entry in entries {
-                let name = entry["name"].as_str().context("Feature entry missing 'name'")?;
-                let file = entry["file"].as_str().context("Feature entry missing 'file'")?;
+                let name = entry["name"]
+                    .as_str()
+                    .context("Feature entry missing 'name'")?;
+                let file = entry["file"]
+                    .as_str()
+                    .context("Feature entry missing 'file'")?;
                 let p = dir.join(file);
                 if !p.exists() {
                     eprintln!("  WARNING: skipping missing raster: {}", p.display());
@@ -207,8 +238,12 @@ fn load_single_timestamp(dir: &Path) -> Result<(Vec<String>, Vec<surtgis_core::R
 
     for tif in list_tifs_shallow(dir) {
         let canonical = tif.canonicalize().unwrap_or_else(|_| tif.clone());
-        if loaded_paths.contains(&canonical) { continue; }
-        let name = tif.file_stem().map(|s| s.to_string_lossy().to_string())
+        if loaded_paths.contains(&canonical) {
+            continue;
+        }
+        let name = tif
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "unnamed".to_string());
         match surtgis_core::io::read_geotiff::<f64, _>(&tif, None) {
             Ok(r) => {
@@ -233,7 +268,8 @@ fn load_single_timestamp(dir: &Path) -> Result<(Vec<String>, Vec<surtgis_core::R
 fn load_raster_set(features_dir: &Path) -> Result<RasterSet> {
     let top_tifs = list_tifs_shallow(features_dir);
     let subdirs = list_subdirs(features_dir);
-    let subdirs_with_tifs: Vec<PathBuf> = subdirs.into_iter()
+    let subdirs_with_tifs: Vec<PathBuf> = subdirs
+        .into_iter()
         .filter(|d| !list_tifs_shallow(d).is_empty())
         .collect();
 
@@ -241,7 +277,8 @@ fn load_raster_set(features_dir: &Path) -> Result<RasterSet> {
         anyhow::bail!(
             "Mixed mode in {}: found both top-level .tif files and subdirectories \
              containing .tifs. For multi-timestamp input, move all top-level .tifs \
-             into a subdirectory.", features_dir.display(),
+             into a subdirectory.",
+            features_dir.display(),
         );
     }
 
@@ -263,11 +300,14 @@ fn load_raster_set(features_dir: &Path) -> Result<RasterSet> {
 
     // Multi-timestamp mode. Use the first subdir as the canonical band order.
     let mut timestamps: Vec<String> = Vec::with_capacity(subdirs_with_tifs.len());
-    let mut all_rasters: Vec<Vec<surtgis_core::Raster<f64>>> = Vec::with_capacity(subdirs_with_tifs.len());
+    let mut all_rasters: Vec<Vec<surtgis_core::Raster<f64>>> =
+        Vec::with_capacity(subdirs_with_tifs.len());
     let mut canonical_names: Vec<String> = Vec::new();
 
     for (ti, sub) in subdirs_with_tifs.iter().enumerate() {
-        let ts_name = sub.file_name().map(|s| s.to_string_lossy().to_string())
+        let ts_name = sub
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| format!("t{}", ti));
         let (names, rs) = load_single_timestamp(sub)
             .with_context(|| format!("Loading timestamp '{}'", ts_name))?;
@@ -280,7 +320,9 @@ fn load_raster_set(features_dir: &Path) -> Result<RasterSet> {
             anyhow::bail!(
                 "Band-name mismatch at timestamp '{}'. Expected {:?}, got {:?}. \
                  All timestamps must declare the same bands in the same order.",
-                ts_name, canonical_names, names,
+                ts_name,
+                canonical_names,
+                names,
             );
         }
         timestamps.push(ts_name);
@@ -298,7 +340,9 @@ fn load_raster_set(features_dir: &Path) -> Result<RasterSet> {
 /// + transform). Returns an error pointing at the first mismatch so the user
 /// can fix alignment.
 fn validate_raster_set_alignment(set: &RasterSet) -> Result<()> {
-    if set.rasters.is_empty() || set.rasters[0].is_empty() { return Ok(()); }
+    if set.rasters.is_empty() || set.rasters[0].is_empty() {
+        return Ok(());
+    }
     let (r0, c0) = set.rasters[0][0].shape();
     let gt0 = *set.rasters[0][0].transform();
     let tol = 1e-6;
@@ -309,7 +353,12 @@ fn validate_raster_set_alignment(set: &RasterSet) -> Result<()> {
             if ri != r0 || ci != c0 {
                 anyhow::bail!(
                     "Raster shape mismatch at timestamp[{}] band[{}]: expected {}x{}, got {}x{}",
-                    ti, bi, c0, r0, ci, ri,
+                    ti,
+                    bi,
+                    c0,
+                    r0,
+                    ci,
+                    ri,
                 );
             }
             if (gti.origin_x - gt0.origin_x).abs() > tol
@@ -320,7 +369,8 @@ fn validate_raster_set_alignment(set: &RasterSet) -> Result<()> {
                 anyhow::bail!(
                     "Raster transform mismatch at timestamp[{}] band[{}]. \
                      All rasters across all timestamps must share the same grid.",
-                    ti, bi,
+                    ti,
+                    bi,
                 );
             }
         }
@@ -337,7 +387,9 @@ fn extract_label(feat: &surtgis_core::vector::Feature, col: &str) -> Option<Labe
         AttributeValue::Bool(v) => Some(LabelValue::Int(if *v { 1 } else { 0 })),
         AttributeValue::String(s) => {
             // Try parse as int, then float; otherwise fail
-            s.parse::<i64>().ok().map(LabelValue::Int)
+            s.parse::<i64>()
+                .ok()
+                .map(LabelValue::Int)
                 .or_else(|| s.parse::<f64>().ok().map(LabelValue::Float))
         }
         AttributeValue::Null => None,
@@ -358,15 +410,20 @@ fn decide_label_kind(labels: &[LabelValue]) -> LabelKind {
 /// sorting by hash(seed, spec.source_idx, spec.center_row, spec.center_col).
 /// Equivalent in distribution to a seeded random subsample, no rand dep.
 fn subsample_deterministic(specs: Vec<PatchSpec>, cap: usize, seed: u64) -> Vec<PatchSpec> {
-    if specs.len() <= cap { return specs; }
-    let mut keyed: Vec<(u64, PatchSpec)> = specs.into_iter().map(|s| {
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        seed.hash(&mut h);
-        s.source_idx.hash(&mut h);
-        s.center_row.hash(&mut h);
-        s.center_col.hash(&mut h);
-        (h.finish(), s)
-    }).collect();
+    if specs.len() <= cap {
+        return specs;
+    }
+    let mut keyed: Vec<(u64, PatchSpec)> = specs
+        .into_iter()
+        .map(|s| {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            seed.hash(&mut h);
+            s.source_idx.hash(&mut h);
+            s.center_row.hash(&mut h);
+            s.center_col.hash(&mut h);
+            (h.finish(), s)
+        })
+        .collect();
     keyed.sort_unstable_by_key(|(k, _)| *k);
     keyed.into_iter().take(cap).map(|(_, s)| s).collect()
 }
@@ -392,7 +449,7 @@ fn write_npy_header(file: &mut File, shape: &[usize], dtype: &str) -> Result<()>
     let header_len = padded.len() as u16;
 
     file.write_all(b"\x93NUMPY")?;
-    file.write_all(&[1u8, 0u8])?;                    // version 1.0
+    file.write_all(&[1u8, 0u8])?; // version 1.0
     file.write_all(&header_len.to_le_bytes())?;
     file.write_all(padded.as_bytes())?;
     Ok(())
@@ -414,7 +471,10 @@ impl PatchOutputFormat {
         }
     }
     fn label(&self) -> &'static str {
-        match self { Self::Npy => "npy", Self::Zarr => "zarr" }
+        match self {
+            Self::Npy => "npy",
+            Self::Zarr => "zarr",
+        }
     }
 }
 
@@ -441,7 +501,9 @@ pub fn handle(
     if points.is_none() && polygons.is_none() {
         anyhow::bail!("Either --points or --polygons must be provided");
     }
-    if size == 0 { anyhow::bail!("--size must be > 0"); }
+    if size == 0 {
+        anyhow::bail!("--size must be > 0");
+    }
 
     let out_fmt = PatchOutputFormat::from_name(output_format)?;
 
@@ -455,22 +517,35 @@ pub fn handle(
     println!("SurtGIS Extract Patches");
     println!("=========================================");
     println!("  Features dir:  {}", features_dir.display());
-    if let Some(p) = points { println!("  Points:        {}", p.display()); }
-    if let Some(p) = polygons { println!("  Polygons:      {}", p.display()); }
+    if let Some(p) = points {
+        println!("  Points:        {}", p.display());
+    }
+    if let Some(p) = polygons {
+        println!("  Polygons:      {}", p.display());
+    }
     println!("  Label column:  {}", label_col);
     println!("  Patch size:    {}x{}", size, size);
     if let Some(spec) = &profile_spec {
         println!("  GFM profile:   {} → {}", spec.name, spec.model_target);
-        println!("                 expects {} bands, tile {}x{}, unit {}",
-            spec.bands_order.len(), spec.tile_size, spec.tile_size, spec.expected_unit);
+        println!(
+            "                 expects {} bands, tile {}x{}, unit {}",
+            spec.bands_order.len(),
+            spec.tile_size,
+            spec.tile_size,
+            spec.expected_unit
+        );
         if size != spec.tile_size {
-            eprintln!("  WARNING: --size {} does not match profile tile {} — model inputs will need resizing",
-                size, spec.tile_size);
+            eprintln!(
+                "  WARNING: --size {} does not match profile tile {} — model inputs will need resizing",
+                size, spec.tile_size
+            );
         }
     }
     println!("  Output dir:    {}", output.display());
     println!("  Tensor format: {}", out_fmt.label());
-    if emit_stac { println!("  STAC output:   on (ml-aoi + mlm)"); }
+    if emit_stac {
+        println!("  STAC output:   on (ml-aoi + mlm)");
+    }
     println!();
 
     // --- 1. Load + validate rasters ---
@@ -484,12 +559,16 @@ pub fn handle(
     let gt = *raster_set.rasters[0][0].transform();
     let crs_epsg = raster_set.rasters[0][0].crs().and_then(|c| c.epsg());
     if n_timestamps > 1 {
-        println!("Loaded {} timestamps × {} bands ({}x{} grid, pixel {:.3}x{:.3})",
-            n_timestamps, n_bands, cols, rows, gt.pixel_width, gt.pixel_height);
+        println!(
+            "Loaded {} timestamps × {} bands ({}x{} grid, pixel {:.3}x{:.3})",
+            n_timestamps, n_bands, cols, rows, gt.pixel_width, gt.pixel_height
+        );
         println!("  Timestamps: {}", timestamps_order.join(", "));
     } else {
-        println!("Loaded {} rasters ({}x{} grid, pixel {:.3}x{:.3})",
-            n_bands, cols, rows, gt.pixel_width, gt.pixel_height);
+        println!(
+            "Loaded {} rasters ({}x{} grid, pixel {:.3}x{:.3})",
+            n_bands, cols, rows, gt.pixel_width, gt.pixel_height
+        );
     }
 
     // If a GFM profile is set, validate that the band count matches what
@@ -500,13 +579,22 @@ pub fn handle(
             anyhow::bail!(
                 "Profile '{}' expects {} bands ({}), but {} feature rasters were loaded. \
                  Curate the features directory to contain exactly these bands in this order.",
-                spec.name, spec.bands_order.len(), spec.bands_order.join(", "), n_bands,
+                spec.name,
+                spec.bands_order.len(),
+                spec.bands_order.join(", "),
+                n_bands,
             );
         }
-        let mismatch: Vec<(usize, &str, &str)> = feature_names.iter().enumerate()
+        let mismatch: Vec<(usize, &str, &str)> = feature_names
+            .iter()
+            .enumerate()
             .zip(spec.bands_order.iter())
             .filter_map(|((i, got), want)| {
-                if got.eq_ignore_ascii_case(want) { None } else { Some((i, got.as_str(), *want)) }
+                if got.eq_ignore_ascii_case(want) {
+                    None
+                } else {
+                    Some((i, got.as_str(), *want))
+                }
             })
             .collect();
         if !mismatch.is_empty() {
@@ -533,16 +621,18 @@ pub fn handle(
     if need_reproject {
         println!(
             "  Reprojecting vector EPSG:{} → raster EPSG:{} on the fly (via proj4rs)",
-            points_crs, crs_epsg.unwrap(),
+            points_crs,
+            crs_epsg.unwrap(),
         );
     }
 
     if let Some(points_path) = points {
-        let fc = surtgis_core::vector::read_vector(points_path)
-            .context("Failed to read points")?;
+        let fc = surtgis_core::vector::read_vector(points_path).context("Failed to read points")?;
         println!("Points file has {} features", fc.len());
         for (idx, feat) in fc.iter().enumerate() {
-            let Some(geo::Geometry::Point(p)) = feat.geometry.as_ref() else { continue };
+            let Some(geo::Geometry::Point(p)) = feat.geometry.as_ref() else {
+                continue;
+            };
             let label = match extract_label(feat, label_col) {
                 Some(l) => l,
                 None => continue,
@@ -555,11 +645,15 @@ pub fn handle(
                     Ok(xy) => xy,
                     Err(_) => continue,
                 }
-            } else { (p.x(), p.y()) };
+            } else {
+                (p.x(), p.y())
+            };
             let (col_f, row_f) = canonical.geo_to_pixel(px, py);
             let col = col_f.floor() as isize;
             let row = row_f.floor() as isize;
-            if row < half as isize || col < half as isize { continue; }
+            if row < half as isize || col < half as isize {
+                continue;
+            }
             if (row as usize + (size - half)) > rows || (col as usize + (size - half)) > cols {
                 continue;
             }
@@ -571,15 +665,21 @@ pub fn handle(
             });
         }
     } else if let Some(polygons_path) = polygons {
-        let fc = surtgis_core::vector::read_vector(polygons_path)
-            .context("Failed to read polygons")?;
-        println!("Polygons file has {} features, grid stride = {}px", fc.len(), stride);
+        let fc =
+            surtgis_core::vector::read_vector(polygons_path).context("Failed to read polygons")?;
+        println!(
+            "Polygons file has {} features, grid stride = {}px",
+            fc.len(),
+            stride
+        );
         for (idx, feat) in fc.iter().enumerate() {
             let label = match extract_label(feat, label_col) {
                 Some(l) => l,
                 None => continue,
             };
-            let Some(geom) = feat.geometry.as_ref() else { continue };
+            let Some(geom) = feat.geometry.as_ref() else {
+                continue;
+            };
             // Flatten MultiPolygon and Polygon into a list of Polygon refs,
             // reprojecting each polygon's vertices to the raster CRS when needed.
             let polys: Vec<geo::Polygon<f64>> = match geom {
@@ -588,19 +688,28 @@ pub fn handle(
                 _ => continue,
             };
             let polys: Vec<geo::Polygon<f64>> = if need_reproject {
-                polys.iter()
+                polys
+                    .iter()
                     .map(|p| reproject_polygon(p, points_crs, crs_epsg.unwrap()))
                     .collect::<Result<Vec<_>>>()?
-            } else { polys };
+            } else {
+                polys
+            };
             for poly in &polys {
-                let Some(bb) = poly.bounding_rect() else { continue };
+                let Some(bb) = poly.bounding_rect() else {
+                    continue;
+                };
                 // Bbox in pixel space
                 let (cx0, ry0) = canonical.geo_to_pixel(bb.min().x, bb.max().y);
                 let (cx1, ry1) = canonical.geo_to_pixel(bb.max().x, bb.min().y);
                 let row_min = (ry0.floor() as isize).max(half as isize) as usize;
-                let row_max = (ry1.ceil() as isize).min((rows - (size - half)) as isize).max(0) as usize;
+                let row_max = (ry1.ceil() as isize)
+                    .min((rows - (size - half)) as isize)
+                    .max(0) as usize;
                 let col_min = (cx0.floor() as isize).max(half as isize) as usize;
-                let col_max = (cx1.ceil() as isize).min((cols - (size - half)) as isize).max(0) as usize;
+                let col_max = (cx1.ceil() as isize)
+                    .min((cols - (size - half)) as isize)
+                    .max(0) as usize;
                 let mut r = row_min;
                 while r <= row_max {
                     let mut c = col_min;
@@ -629,9 +738,14 @@ pub fn handle(
 
     let total_candidates = specs.len();
     if total_candidates == 0 {
-        anyhow::bail!("No patch candidates produced — check that the vector has the expected geometry type and that the label column exists");
+        anyhow::bail!(
+            "No patch candidates produced — check that the vector has the expected geometry type and that the label column exists"
+        );
     }
-    println!("Candidate patches before NaN/subsample: {}", total_candidates);
+    println!(
+        "Candidate patches before NaN/subsample: {}",
+        total_candidates
+    );
 
     // Optional subsample (deterministic).
     if let Some(cap) = max_patches {
@@ -662,7 +776,11 @@ pub fn handle(
     let est_total_bytes = specs.len() * patch_bytes;
     eprintln!(
         "Patch tensor estimate: {} patches × {} bands × {} timestamps × {}² × 4 bytes = {:.2} GB",
-        specs.len(), n_bands, n_timestamps, size, est_total_bytes as f64 / 1e9,
+        specs.len(),
+        n_bands,
+        n_timestamps,
+        size,
+        est_total_bytes as f64 / 1e9,
     );
 
     let mut kept: Vec<(PatchSpec, Vec<f32>)> = Vec::new();
@@ -713,8 +831,12 @@ pub fn handle(
     }
 
     let n = kept.len();
-    println!("After NaN threshold ({:.0}%): {} kept, {} skipped",
-        skip_nan_threshold * 100.0, n, nan_skipped);
+    println!(
+        "After NaN threshold ({:.0}%): {} kept, {} skipped",
+        skip_nan_threshold * 100.0,
+        n,
+        nan_skipped
+    );
     if n == 0 {
         anyhow::bail!("All candidate patches were filtered by NaN threshold");
     }
@@ -730,13 +852,18 @@ pub fn handle(
     match out_fmt {
         PatchOutputFormat::Npy => {
             let patches_path = output.join("patches.npy");
-            let mut f_patches = OpenOptions::new().create(true).write(true).truncate(true)
+            let mut f_patches = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
                 .open(&patches_path)
                 .with_context(|| format!("Failed to open {}", patches_path.display()))?;
             write_npy_header(&mut f_patches, &tensor_shape, "<f4")?;
             for (_, buf) in &kept {
                 let bytes: &[u8] = bytemuck_cast_f32_to_bytes(buf);
-                f_patches.write_all(bytes).context("Failed to write patch bytes")?;
+                f_patches
+                    .write_all(bytes)
+                    .context("Failed to write patch bytes")?;
             }
             f_patches.flush().ok();
         }
@@ -765,7 +892,10 @@ pub fn handle(
                 "gfm_model_target": profile_spec.as_ref().map(|s| s.model_target),
             });
             init_zarr_v2_array(
-                &zarr_dir, &tensor_shape, &chunk_shape, "<f4",
+                &zarr_dir,
+                &tensor_shape,
+                &chunk_shape,
+                "<f4",
                 serde_json::Value::String("NaN".to_string()),
                 &zarr_attrs,
             )?;
@@ -781,7 +911,10 @@ pub fn handle(
 
     // --- 7. Write labels.npy ---
     let labels_path = output.join("labels.npy");
-    let mut f_labels = OpenOptions::new().create(true).write(true).truncate(true)
+    let mut f_labels = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
         .open(&labels_path)
         .with_context(|| format!("Failed to open {}", labels_path.display()))?;
     write_npy_header(&mut f_labels, &[n], label_dtype)?;
@@ -812,7 +945,15 @@ pub fn handle(
     let manifest_path = output.join("manifest.csv");
     let mut csv_w = csv::Writer::from_path(&manifest_path)
         .with_context(|| format!("Failed to create {}", manifest_path.display()))?;
-    csv_w.write_record(&["idx", "label", "center_row", "center_col", "center_x", "center_y", "source_idx"])?;
+    csv_w.write_record(&[
+        "idx",
+        "label",
+        "center_row",
+        "center_col",
+        "center_x",
+        "center_y",
+        "source_idx",
+    ])?;
     for (i, (spec, _)) in kept.iter().enumerate() {
         let (x0, y0) = canonical.pixel_to_geo(spec.center_col, spec.center_row);
         let x = x0 + 0.5 * gt.pixel_width;
@@ -822,26 +963,31 @@ pub fn handle(
             LabelValue::Float(v) => format!("{}", v),
         };
         csv_w.write_record(&[
-            i.to_string(), label_str,
-            spec.center_row.to_string(), spec.center_col.to_string(),
-            format!("{}", x), format!("{}", y),
+            i.to_string(),
+            label_str,
+            spec.center_row.to_string(),
+            spec.center_col.to_string(),
+            format!("{}", x),
+            format!("{}", y),
             spec.source_idx.to_string(),
         ])?;
     }
     csv_w.flush().ok();
 
     // --- 9. Write meta.json ---
-    let profile_meta = profile_spec.as_ref().map(|spec| serde_json::json!({
-        "name": spec.name,
-        "model_target": spec.model_target,
-        "bands_order": spec.bands_order,
-        "tile_size": spec.tile_size,
-        "band_norm_mean": spec.band_norm.iter().map(|(m, _)| *m).collect::<Vec<_>>(),
-        "band_norm_std": spec.band_norm.iter().map(|(_, s)| *s).collect::<Vec<_>>(),
-        "expected_unit": spec.expected_unit,
-        "source_url": spec.source_url,
-        "normalization_applied": spec.band_norm.len() == n_bands,
-    }));
+    let profile_meta = profile_spec.as_ref().map(|spec| {
+        serde_json::json!({
+            "name": spec.name,
+            "model_target": spec.model_target,
+            "bands_order": spec.bands_order,
+            "tile_size": spec.tile_size,
+            "band_norm_mean": spec.band_norm.iter().map(|(m, _)| *m).collect::<Vec<_>>(),
+            "band_norm_std": spec.band_norm.iter().map(|(_, s)| *s).collect::<Vec<_>>(),
+            "expected_unit": spec.expected_unit,
+            "source_url": spec.source_url,
+            "normalization_applied": spec.band_norm.len() == n_bands,
+        })
+    });
 
     let shape_label = if n_timestamps > 1 {
         format!("[{}, {}, {}, {}, {}]", n, n_bands, n_timestamps, size, size)
@@ -873,7 +1019,10 @@ pub fn handle(
         "source_mode": if points.is_some() { "points" } else { "polygons" },
         "gfm_profile": profile_meta,
     });
-    std::fs::write(output.join("meta.json"), serde_json::to_string_pretty(&meta)?)?;
+    std::fs::write(
+        output.join("meta.json"),
+        serde_json::to_string_pretty(&meta)?,
+    )?;
 
     // --- 9b. Optional STAC output ---
     if emit_stac {
@@ -885,31 +1034,54 @@ pub fn handle(
             PatchOutputFormat::Npy => "data",
             PatchOutputFormat::Zarr => "data-chunk",
         };
-        let chips: Vec<ChipInfo> = kept.iter().enumerate().map(|(i, (spec, _))| ChipInfo {
-            index: i,
-            center_row: spec.center_row,
-            center_col: spec.center_col,
-            label_int: match spec.label_raw { LabelValue::Int(v) => Some(v), _ => None },
-            label_float: match spec.label_raw { LabelValue::Float(v) => Some(v), _ => None },
-            asset_path,
-            asset_role,
-        }).collect();
+        let chips: Vec<ChipInfo> = kept
+            .iter()
+            .enumerate()
+            .map(|(i, (spec, _))| ChipInfo {
+                index: i,
+                center_row: spec.center_row,
+                center_col: spec.center_col,
+                label_int: match spec.label_raw {
+                    LabelValue::Int(v) => Some(v),
+                    _ => None,
+                },
+                label_float: match spec.label_raw {
+                    LabelValue::Float(v) => Some(v),
+                    _ => None,
+                },
+                asset_path,
+                asset_role,
+            })
+            .collect();
 
-        let collection_id = output.file_name()
+        let collection_id = output
+            .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "surtgis-extract-patches".to_string());
         let description = format!(
             "Training chips extracted by SurtGIS extract-patches v{} from {}. \
              {} bands × {} timestamps, tile {}x{}, source mode {}.",
-            env!("CARGO_PKG_VERSION"), features_dir.display(),
-            n_bands, n_timestamps, size, size,
-            if points.is_some() { "points" } else { "polygons" },
+            env!("CARGO_PKG_VERSION"),
+            features_dir.display(),
+            n_bands,
+            n_timestamps,
+            size,
+            size,
+            if points.is_some() {
+                "points"
+            } else {
+                "polygons"
+            },
         );
         let coll = CollectionInfo {
             id: &collection_id,
             description: &description,
             license: "proprietary",
-            source_mode: if points.is_some() { "points" } else { "polygons" },
+            source_mode: if points.is_some() {
+                "points"
+            } else {
+                "polygons"
+            },
             patch_size: size,
             n_patches: n,
             n_bands,
@@ -922,8 +1094,7 @@ pub fn handle(
             grid_cols: cols,
             profile_spec: profile_spec.as_ref(),
         };
-        write_stac_output(output, &coll, &chips)
-            .context("Failed to write STAC output")?;
+        write_stac_output(output, &coll, &chips).context("Failed to write STAC output")?;
     }
 
     // --- 10. Summary ---
@@ -934,7 +1105,11 @@ pub fn handle(
     println!("  Patches:    {}", n);
     println!("  Bands:      {} ({})", n_bands, feature_names.join(", "));
     if n_timestamps > 1 {
-        println!("  Timestamps: {} ({})", n_timestamps, timestamps_order.join(", "));
+        println!(
+            "  Timestamps: {} ({})",
+            n_timestamps,
+            timestamps_order.join(", ")
+        );
     }
     println!("  Shape:      {} (<f4)", shape_label);
     println!("  Labels:     {} ({})", n, label_dtype);
@@ -942,21 +1117,40 @@ pub fn handle(
     println!("  Time:       {:.1}s", start.elapsed().as_secs_f64());
     println!();
     println!("Load in Python:");
-    let layout = if n_timestamps > 1 { "[N, C, T, H, W]" } else { "[N, C, H, W]" };
+    let layout = if n_timestamps > 1 {
+        "[N, C, T, H, W]"
+    } else {
+        "[N, C, H, W]"
+    };
     match out_fmt {
         PatchOutputFormat::Npy => {
             println!("  import numpy as np");
-            println!("  X = np.load('{}/patches.npy')  # {} f32", output.display(), layout);
+            println!(
+                "  X = np.load('{}/patches.npy')  # {} f32",
+                output.display(),
+                layout
+            );
         }
         PatchOutputFormat::Zarr => {
             println!("  import zarr");
-            println!("  X = zarr.open('{}/patches.zarr', mode='r')  # {} f32", output.display(), layout);
+            println!(
+                "  X = zarr.open('{}/patches.zarr', mode='r')  # {} f32",
+                output.display(),
+                layout
+            );
             println!("  X_np = X[:]   # fully materialise, or X[i:j] for lazy access");
         }
     }
     println!("  import numpy as np");
-    println!("  y = np.load('{}/labels.npy')   # [N] {}", output.display(),
-        if label_kind == LabelKind::Int { "i64" } else { "f32" });
+    println!(
+        "  y = np.load('{}/labels.npy')   # [N] {}",
+        output.display(),
+        if label_kind == LabelKind::Int {
+            "i64"
+        } else {
+            "f32"
+        }
+    );
 
     Ok(())
 }
@@ -966,13 +1160,13 @@ pub fn handle(
 /// any bit pattern is a valid f32; reading its bytes is always well-defined.
 fn bytemuck_cast_f32_to_bytes(s: &[f32]) -> &[u8] {
     // SAFETY: f32 is `Pod`-equivalent; 4-byte aligned reads as u8 are fine.
-    unsafe {
-        std::slice::from_raw_parts(s.as_ptr() as *const u8, std::mem::size_of_val(s))
-    }
+    unsafe { std::slice::from_raw_parts(s.as_ptr() as *const u8, std::mem::size_of_val(s)) }
 }
 
 #[allow(dead_code)]
-fn _hashmap_stub() -> HashMap<String, i64> { HashMap::new() } // avoid unused-import lint for HashMap
+fn _hashmap_stub() -> HashMap<String, i64> {
+    HashMap::new()
+} // avoid unused-import lint for HashMap
 
 #[cfg(test)]
 mod tests {
@@ -994,10 +1188,16 @@ mod tests {
         let (x, y) = reproject_pt(-71.6, -35.6, 4326, 32718).unwrap();
         // Generous tolerance — exact value depends on proj4rs's ellipsoid
         // params and we only care that it's in the right hemisphere/zone.
-        assert!((805_000.0..815_000.0).contains(&x),
-            "expected easting near 808 km, got {}", x);
-        assert!((6_050_000.0..6_060_000.0).contains(&y),
-            "expected northing near 6053 km, got {}", y);
+        assert!(
+            (805_000.0..815_000.0).contains(&x),
+            "expected easting near 808 km, got {}",
+            x
+        );
+        assert!(
+            (6_050_000.0..6_060_000.0).contains(&y),
+            "expected northing near 6053 km, got {}",
+            y
+        );
     }
 
     #[cfg(feature = "projections")]
@@ -1008,9 +1208,19 @@ mod tests {
         let (lon0, lat0) = (-71.595, -35.602);
         let (x, y) = reproject_pt(lon0, lat0, 4326, 32718).unwrap();
         let (lon1, lat1) = reproject_pt(x, y, 32718, 4326).unwrap();
-        assert!((lon1 - lon0).abs() < 1e-5,
-            "longitude drift: {} -> {} ({})", lon0, lon1, lon1 - lon0);
-        assert!((lat1 - lat0).abs() < 1e-5,
-            "latitude drift: {} -> {} ({})", lat0, lat1, lat1 - lat0);
+        assert!(
+            (lon1 - lon0).abs() < 1e-5,
+            "longitude drift: {} -> {} ({})",
+            lon0,
+            lon1,
+            lon1 - lon0
+        );
+        assert!(
+            (lat1 - lat0).abs() < 1e-5,
+            "latitude drift: {} -> {} ({})",
+            lat0,
+            lat1,
+            lat1 - lat0
+        );
     }
 }

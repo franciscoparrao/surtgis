@@ -24,7 +24,7 @@
 //! or stats; pass `--profile custom` and provide explicit `--norm-mean`
 //! and `--norm-std` to override.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GfmProfile {
@@ -140,10 +140,22 @@ mod tests {
 
     #[test]
     fn from_name_aliases() {
-        assert_eq!(GfmProfile::from_name("prithvi-v2").unwrap(), GfmProfile::PrithviV2);
-        assert_eq!(GfmProfile::from_name("prithvi").unwrap(), GfmProfile::PrithviV2);
-        assert_eq!(GfmProfile::from_name("PRITHVI-EO-2.0").unwrap(), GfmProfile::PrithviV2);
-        assert_eq!(GfmProfile::from_name("clay-v1.5").unwrap(), GfmProfile::ClayV15);
+        assert_eq!(
+            GfmProfile::from_name("prithvi-v2").unwrap(),
+            GfmProfile::PrithviV2
+        );
+        assert_eq!(
+            GfmProfile::from_name("prithvi").unwrap(),
+            GfmProfile::PrithviV2
+        );
+        assert_eq!(
+            GfmProfile::from_name("PRITHVI-EO-2.0").unwrap(),
+            GfmProfile::PrithviV2
+        );
+        assert_eq!(
+            GfmProfile::from_name("clay-v1.5").unwrap(),
+            GfmProfile::ClayV15
+        );
         assert_eq!(GfmProfile::from_name("Clay").unwrap(), GfmProfile::ClayV15);
         assert!(GfmProfile::from_name("bogus").is_err());
     }
@@ -187,8 +199,7 @@ mod tests {
         // contiguous z-score region rather than per-timestamp.
         let mut buf: Vec<f32> = vec![
             // band 0, t0
-            2.0, 3.0, 4.0, 5.0,
-            // band 0, t1
+            2.0, 3.0, 4.0, 5.0, // band 0, t1
             6.0, 7.0, 8.0, 9.0,
         ];
         let norm = vec![(2.0_f32, 1.0_f32)];
