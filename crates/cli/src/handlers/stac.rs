@@ -2569,6 +2569,7 @@ fn cache_write(path: &std::path::Path, raster: &surtgis_core::Raster<f64>) {
         path,
         Some(surtgis_core::io::GeoTiffOptions {
             compression: "DEFLATE".into(),
+            ..Default::default()
         }),
     );
 }
@@ -3751,6 +3752,7 @@ fn handle_multiband_composite(
     let opts = if compress {
         Some(surtgis_core::io::GeoTiffOptions {
             compression: "DEFLATE".into(),
+            ..Default::default()
         })
     } else {
         None

@@ -54,12 +54,16 @@ pub fn read_u8(path: &PathBuf) -> Result<surtgis_core::Raster<u8>> {
 }
 
 pub fn write_opts(compress: bool) -> GeoTiffOptions {
+    // GeoTiffOptions has different field sets between native and gdal feature
+    // paths. Start from Default and only override `compression` so the helper
+    // works under either feature configuration.
     GeoTiffOptions {
         compression: if compress {
             "deflate".to_string()
         } else {
             "NONE".to_string()
         },
+        ..Default::default()
     }
 }
 

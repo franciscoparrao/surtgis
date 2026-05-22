@@ -165,6 +165,7 @@ pub fn handle_susceptibility(
             if compress {
                 Some(surtgis_core::io::GeoTiffOptions {
                     compression: "DEFLATE".into(),
+                    ..Default::default()
                 })
             } else {
                 None

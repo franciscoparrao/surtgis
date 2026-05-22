@@ -9,6 +9,11 @@ pub mod interpolation;
 pub mod landscape;
 pub mod morphology;
 pub mod mosaic;
+// Pipeline workflows depend on STAC for input data acquisition; without
+// the cloud feature there's no useful pipeline operation available, and
+// compiling it triggers unresolved imports for super::stac. Gate the
+// whole module to match cog/stac.
+#[cfg(feature = "cloud")]
 pub mod pipeline;
 pub mod statistics;
 pub mod temporal;

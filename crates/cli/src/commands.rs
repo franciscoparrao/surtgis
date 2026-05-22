@@ -189,7 +189,8 @@ pub enum Commands {
         #[command(subcommand)]
         action: StacCommands,
     },
-    /// Pipeline: integrated workflows for specific use cases
+    /// Pipeline: integrated workflows for specific use cases (cloud feature only)
+    #[cfg(feature = "cloud")]
     Pipeline {
         #[command(subcommand)]
         action: PipelineCommands,

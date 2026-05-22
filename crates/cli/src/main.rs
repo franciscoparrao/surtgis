@@ -4,7 +4,12 @@ mod commands;
 mod handlers;
 mod helpers;
 mod memory;
+// streaming + stac_introspect import from surtgis_cloud unconditionally
+// and are consumed only by the cog/stac handlers (both cloud-gated).
+// Gate them too so --no-default-features builds cleanly.
+#[cfg(feature = "cloud")]
 mod stac_introspect;
+#[cfg(feature = "cloud")]
 mod streaming;
 
 // mimalloc: global allocator. glibc malloc tends to hold freed memory in
@@ -107,6 +112,7 @@ fn main() -> Result<()> {
         Commands::Cog { action } => handlers::cog::handle(action, compress)?,
         #[cfg(feature = "cloud")]
         Commands::Stac { action } => handlers::stac::handle(action, compress)?,
+        #[cfg(feature = "cloud")]
         Commands::Pipeline { action } => {
             handlers::pipeline::handle(action, compress, mem_limit_bytes)?
         }

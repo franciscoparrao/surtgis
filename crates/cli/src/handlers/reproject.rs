@@ -118,6 +118,7 @@ fn write_output(raster: &Raster<f64>, output: &Path, compress: bool) -> Result<(
     let opts = if compress {
         Some(GeoTiffOptions {
             compression: "DEFLATE".into(),
+            ..Default::default()
         })
     } else {
         None
