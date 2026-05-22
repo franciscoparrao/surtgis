@@ -124,6 +124,14 @@ pub enum Commands {
         /// the target foundation model.
         #[arg(long)]
         emit_stac: bool,
+        /// EPSG code of the input vector file (--points or --polygons).
+        /// Defaults to 4326 — the GeoJSON spec mandates WGS84 lon/lat,
+        /// and most shapefiles in the wild also use it. When the raster's
+        /// CRS differs, vector coordinates are reprojected on the fly via
+        /// proj4rs. Set explicitly when your vector is in projected
+        /// coords already (e.g. 32718 for UTM 18S) to skip reprojection.
+        #[arg(long, default_value = "4326")]
+        points_crs: u32,
         /// Output directory (creates patches.npy or patches.zarr/, plus
         /// labels.npy, manifest.csv, meta.json, and optional stac/)
         output: PathBuf,

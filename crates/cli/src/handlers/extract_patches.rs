@@ -27,6 +27,55 @@ use std::time::Instant;
 use super::gfm_profiles::{apply_band_norm_block, GfmProfile};
 use super::stac_writer::{write_stac_output, ChipInfo, CollectionInfo};
 use super::zarr_writer::{init_zarr_v2_array, write_chunk};
+
+/// Reproject a single (x, y) pair between two CRS. Returns `Ok(input)`
+/// when source and target match. Errors when the `projections` feature
+/// isn't compiled and the two CRS differ. Used to land WGS84 GeoJSON
+/// coords in the raster's CRS before pixel-space math.
+#[cfg(feature = "projections")]
+fn reproject_pt(x: f64, y: f64, src_epsg: u32, dst_epsg: u32) -> Result<(f64, f64)> {
+    use proj4rs::Proj;
+    if src_epsg == dst_epsg { return Ok((x, y)); }
+    let src = Proj::from_epsg_code(src_epsg as u16)
+        .map_err(|e| anyhow::anyhow!("Source CRS EPSG:{} not in proj4rs DB: {:?}", src_epsg, e))?;
+    let dst = Proj::from_epsg_code(dst_epsg as u16)
+        .map_err(|e| anyhow::anyhow!("Target CRS EPSG:{} not in proj4rs DB: {:?}", dst_epsg, e))?;
+    // proj4rs expects radians for geographic source CRS.
+    let (in_x, in_y) = if src.is_latlong() { (x.to_radians(), y.to_radians()) } else { (x, y) };
+    let mut pt = (in_x, in_y, 0.0_f64);
+    proj4rs::transform::transform(&src, &dst, &mut pt)
+        .map_err(|e| anyhow::anyhow!("Reprojection {}->{} failed: {:?}", src_epsg, dst_epsg, e))?;
+    // proj4rs returns radians for geographic destination CRS.
+    Ok(if dst.is_latlong() { (pt.0.to_degrees(), pt.1.to_degrees()) } else { (pt.0, pt.1) })
+}
+
+#[cfg(not(feature = "projections"))]
+fn reproject_pt(x: f64, y: f64, src_epsg: u32, dst_epsg: u32) -> Result<(f64, f64)> {
+    if src_epsg == dst_epsg { return Ok((x, y)); }
+    anyhow::bail!(
+        "Vector CRS (EPSG:{}) differs from raster CRS (EPSG:{}), but this build of \
+         surtgis was compiled without the `projections` feature. Either rebuild with \
+         `--features projections` or pre-reproject the vector to match the raster.",
+        src_epsg, dst_epsg,
+    );
+}
+
+/// Reproject all vertices of a Polygon (exterior ring + interior holes).
+fn reproject_polygon(p: &geo::Polygon<f64>, src: u32, dst: u32) -> Result<geo::Polygon<f64>> {
+    use geo::Polygon;
+    let exterior: Vec<geo::Coord<f64>> = p.exterior().0.iter()
+        .map(|c| reproject_pt(c.x, c.y, src, dst).map(|(x, y)| geo::Coord { x, y }))
+        .collect::<Result<Vec<_>>>()?;
+    let interiors: Vec<geo::LineString<f64>> = p.interiors().iter()
+        .map(|ring| {
+            ring.0.iter()
+                .map(|c| reproject_pt(c.x, c.y, src, dst).map(|(x, y)| geo::Coord { x, y }))
+                .collect::<Result<Vec<_>>>()
+                .map(geo::LineString::new)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Polygon::new(geo::LineString::new(exterior), interiors))
+}
 use surtgis_core::vector::AttributeValue;
 
 /// A patch center in pixel coordinates, with its label and origin metadata.
@@ -384,6 +433,7 @@ pub fn handle(
     profile: Option<&str>,
     output_format: &str,
     emit_stac: bool,
+    points_crs: u32,
     output: &Path,
 ) -> Result<()> {
     let start = Instant::now();
@@ -476,6 +526,17 @@ pub fn handle(
     // for geo↔pixel conversion. All other rasters are aligned to it.
     let canonical = &raster_set.rasters[0][0];
 
+    // Decide whether vector input needs reprojection to land in the raster's CRS.
+    // crs_epsg is None when the rasters have no embedded CRS, in which case we
+    // can't reproject anything sensibly — fall through and trust the user.
+    let need_reproject = matches!(crs_epsg, Some(raster_epsg) if raster_epsg != points_crs);
+    if need_reproject {
+        println!(
+            "  Reprojecting vector EPSG:{} → raster EPSG:{} on the fly (via proj4rs)",
+            points_crs, crs_epsg.unwrap(),
+        );
+    }
+
     if let Some(points_path) = points {
         let fc = surtgis_core::vector::read_vector(points_path)
             .context("Failed to read points")?;
@@ -486,7 +547,16 @@ pub fn handle(
                 Some(l) => l,
                 None => continue,
             };
-            let (col_f, row_f) = canonical.geo_to_pixel(p.x(), p.y());
+            // Reproject point to raster CRS if requested. If the projection
+            // fails (e.g. point is outside the source CRS's valid extent),
+            // skip it rather than abort the whole run.
+            let (px, py) = if need_reproject {
+                match reproject_pt(p.x(), p.y(), points_crs, crs_epsg.unwrap()) {
+                    Ok(xy) => xy,
+                    Err(_) => continue,
+                }
+            } else { (p.x(), p.y()) };
+            let (col_f, row_f) = canonical.geo_to_pixel(px, py);
             let col = col_f.floor() as isize;
             let row = row_f.floor() as isize;
             if row < half as isize || col < half as isize { continue; }
@@ -510,12 +580,18 @@ pub fn handle(
                 None => continue,
             };
             let Some(geom) = feat.geometry.as_ref() else { continue };
-            // Flatten MultiPolygon and Polygon into a list of Polygon refs
+            // Flatten MultiPolygon and Polygon into a list of Polygon refs,
+            // reprojecting each polygon's vertices to the raster CRS when needed.
             let polys: Vec<geo::Polygon<f64>> = match geom {
                 geo::Geometry::Polygon(p) => vec![p.clone()],
                 geo::Geometry::MultiPolygon(mp) => mp.0.clone(),
                 _ => continue,
             };
+            let polys: Vec<geo::Polygon<f64>> = if need_reproject {
+                polys.iter()
+                    .map(|p| reproject_polygon(p, points_crs, crs_epsg.unwrap()))
+                    .collect::<Result<Vec<_>>>()?
+            } else { polys };
             for poly in &polys {
                 let Some(bb) = poly.bounding_rect() else { continue };
                 // Bbox in pixel space
@@ -897,3 +973,44 @@ fn bytemuck_cast_f32_to_bytes(s: &[f32]) -> &[u8] {
 
 #[allow(dead_code)]
 fn _hashmap_stub() -> HashMap<String, i64> { HashMap::new() } // avoid unused-import lint for HashMap
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reproject_pt_identity_when_same_epsg() {
+        let (x, y) = reproject_pt(123.456, -78.9, 32718, 32718).unwrap();
+        assert_eq!(x, 123.456);
+        assert_eq!(y, -78.9);
+    }
+
+    #[cfg(feature = "projections")]
+    #[test]
+    fn reproject_pt_wgs84_to_utm18s_maule() {
+        // Known landmark: Maule region (-71.6 lon, -35.6 lat) lands in
+        // UTM 18S at roughly (808 km E, 6053 km N). Verify proj4rs gives
+        // values in that ballpark.
+        let (x, y) = reproject_pt(-71.6, -35.6, 4326, 32718).unwrap();
+        // Generous tolerance — exact value depends on proj4rs's ellipsoid
+        // params and we only care that it's in the right hemisphere/zone.
+        assert!((805_000.0..815_000.0).contains(&x),
+            "expected easting near 808 km, got {}", x);
+        assert!((6_050_000.0..6_060_000.0).contains(&y),
+            "expected northing near 6053 km, got {}", y);
+    }
+
+    #[cfg(feature = "projections")]
+    #[test]
+    fn reproject_pt_round_trip_preserves_position() {
+        // WGS84 → UTM 18S → back to WGS84 should land within ~1 m of input
+        // (proj4rs accumulates a small numerical error per transform).
+        let (lon0, lat0) = (-71.595, -35.602);
+        let (x, y) = reproject_pt(lon0, lat0, 4326, 32718).unwrap();
+        let (lon1, lat1) = reproject_pt(x, y, 32718, 4326).unwrap();
+        assert!((lon1 - lon0).abs() < 1e-5,
+            "longitude drift: {} -> {} ({})", lon0, lon1, lon1 - lon0);
+        assert!((lat1 - lat0).abs() < 1e-5,
+            "latitude drift: {} -> {} ({})", lat0, lat1, lat1 - lat0);
+    }
+}

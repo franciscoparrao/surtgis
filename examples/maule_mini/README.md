@@ -36,15 +36,17 @@ data without spending hours on a large run.
   takes 20-25 min per month over this bbox.
 - The Zarr/NPY tensor output.
 
-## ⚠ Known limitation (issue #87)
+## Auto-reprojection of vector input
 
-`extract-patches` does not currently auto-reproject input points from
-WGS84 to the raster's CRS. For the demo we reproject `labels.geojson`
-to UTM 18S (the CRS Earth Search returns for this bbox) before passing
-it. The Reproduce snippet below includes that step.
+The `--points-crs` flag declares the EPSG of the vector file
+(default 4326, the GeoJSON standard). If the raster's CRS differs,
+SurtGIS reprojects each point on the fly via proj4rs — no pyproj
+or external preprocessing needed. In this example the rasters are
+EPSG:32718 (UTM 18S, the zone Earth Search returned for the Maule
+bbox) and the labels are in WGS84; the pipeline handles the
+transformation transparently and prints a one-line confirmation:
 
-A follow-up adds auto-reprojection so users can pass WGS84 GeoJSON
-directly.
+    Reprojecting vector EPSG:4326 → raster EPSG:32718 on the fly (via proj4rs)
 
 ## Reproduce
 
@@ -67,24 +69,12 @@ for ts in t_2025_01 t_2025_02; do
     (cd out/$ts && for f in composite_*.tif; do mv "$f" "${f#composite_}"; done)
 done
 
-# 1c. Reproject labels to UTM 18S (the CRS Earth Search returns for
-#     this bbox). Future surtgis releases will auto-reproject — see
-#     issue #87.
-python3 - <<'PY'
-import json
-from pyproj import Transformer
-t = Transformer.from_crs("EPSG:4326", "EPSG:32718", always_xy=True)
-gj = json.load(open('labels.geojson'))
-for feat in gj["features"]:
-    lon, lat = feat["geometry"]["coordinates"]
-    feat["geometry"]["coordinates"] = list(t.transform(lon, lat))
-json.dump(gj, open('labels_utm.geojson', 'w'))
-PY
-
-# 2. Extract Prithvi-ready chips (fast: < 1 s on this dataset)
+# 2. Extract Prithvi-ready chips (fast: < 1 s on this dataset).
+#    Labels are in WGS84; --points-crs defaults to 4326 so they're
+#    reprojected to UTM 18S on the fly. No pyproj step needed.
 surtgis extract-patches \
     --features-dir out/ \
-    --points labels_utm.geojson \
+    --points labels.geojson \
     --label-col landslide_class \
     --profile prithvi-v2 \
     --size 128 \

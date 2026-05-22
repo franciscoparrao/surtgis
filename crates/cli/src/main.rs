@@ -70,6 +70,7 @@ fn main() -> Result<()> {
             profile,
             output_format,
             emit_stac,
+            points_crs,
             output,
         } => handlers::extract_patches::handle(
             &features_dir,
@@ -84,6 +85,7 @@ fn main() -> Result<()> {
             profile.as_deref(),
             &output_format,
             emit_stac,
+            points_crs,
             &output,
         )?,
         Commands::Clip {

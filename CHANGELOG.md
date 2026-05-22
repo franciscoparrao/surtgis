@@ -103,6 +103,19 @@ call them out under a `Breaking` heading when they happen.
     add STAC + cloud-fetch overhead that's orthogonal to the local hot
     loop measured here. Documented in the script headers.
 
+- **Auto-reprojection of vector input** in `extract-patches`. New
+  `--points-crs <EPSG>` flag declares the EPSG of the points/polygons
+  file (default 4326 — the GeoJSON spec mandates WGS84 lon/lat). When
+  the raster's CRS differs, SurtGIS reprojects each point on the fly
+  via proj4rs; polygons are reprojected vertex-by-vertex (exterior +
+  interior rings). Before this fix, users passing a standard WGS84
+  GeoJSON against a UTM raster got "No patch candidates produced"
+  because lon/lat coords were being treated as projected meters.
+  Validated end-to-end on the Maule mini example: 20/20 patches
+  extracted from WGS84 GeoJSON against EPSG:32718 rasters, bit-exact
+  match against the prior pyproj-preprocessed workflow. 3 unit tests
+  added (identity, WGS84→UTM 18S sanity, round-trip).
+
 This completes axis G2 of the roadmap (GFM preprocessing pipeline).
 
 ## [0.8.1] - 2026-05-17
