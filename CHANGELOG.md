@@ -9,6 +9,115 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+### Added — Geospatial Foundation Model (GFM) preprocessing
+
+- **`extract-patches --profile <name>`** preset that targets a specific
+  pre-trained foundation model. When set, the handler validates band
+  count, applies the model's published per-band z-score normalization
+  in place, and records full provenance (model target, band order, mean
+  and std arrays, source URL, unit convention) in `meta.json` under the
+  `gfm_profile` key. Supported profiles:
+  - `prithvi-v2` → `ibm-nasa-geospatial/Prithvi-EO-2.0-300M`. 6 bands
+    (B02, B03, B04, B05, B06, B07), tile 224×224, DN units (SR ×10000).
+  - `clay-v1.5` → `made-with-clay/Clay/v1.5`. 10 Sentinel-2 bands
+    (B02–B12 less B09, B10), tile 256×256, reflectance [0, 1].
+- **Multi-timestamp input** for temporal foundation models like Prithvi.
+  When `--features-dir` contains subdirectories (each with the same set
+  of band rasters), each subdir is treated as a timestamp and the output
+  tensor becomes `[N, C, T, H, W]` instead of `[N, C, H, W]`. Timestamp
+  order follows lexicographic sort of subdir names (use ISO dates for
+  natural ordering). Per-band z-score normalization runs across the full
+  T·H·W block of each band. `meta.json` reports `n_timestamps`,
+  `timestamps`, `tensor_layout`, and `tensor_shape`. Mixed mode (both
+  top-level .tifs and subdirs with .tifs) is rejected with a clear error.
+  Single-timestamp mode (top-level .tifs only) is preserved bit-for-bit
+  for backward compatibility.
+- New module `crates/cli/src/handlers/gfm_profiles.rs` with six unit
+  tests covering name aliases, spec consistency, z-score correctness,
+  NaN preservation, and the temporal-block normalization helper.
+- **`extract-patches --output-format {npy,zarr}`** chooses the tensor
+  serialisation. `npy` (default) is the existing single-file path; `zarr`
+  emits a chunked Zarr v2 directory at `patches.zarr/` with one chunk per
+  chip (`[1, C, (T,) H, W]`). Hand-written Zarr v2 writer at
+  `crates/cli/src/handlers/zarr_writer.rs` — no new crate dependencies.
+  `.zattrs` mirrors the meta.json keys so a Zarr-only consumer has full
+  context. Output is bit-for-bit readable by `zarr` Python (`zarr.open()`)
+  without any post-processing. Labels and manifest remain `.npy` / `.csv`.
+- **`extract-patches --emit-stac`** writes STAC ML-AOI Collection + Items
+  describing the chips as labelled training data. Output structure:
+  `<output>/stac/collection.json` + `<output>/stac/items/chip_NNNNNN.json`.
+  Each item declares `ml-aoi:role: label`, `ml-aoi:label_class` (int) or
+  `ml-aoi:label_value` (float), bbox + Polygon geometry, and asset href
+  pointing at the chip data. When a `--profile` is set, the Collection
+  embeds the [STAC MLM extension](https://github.com/stac-extensions/mlm)
+  declaring the target foundation model (e.g. `mlm:model_target:
+  ibm-nasa-geospatial/Prithvi-EO-2.0-300M`) plus a full `mlm:input`
+  descriptor with band order, tensor shape `[-1, C, T, H, W]`, dim_order,
+  data_type, and per-channel normalization statistics. Coords are
+  reprojected to WGS84 via proj4rs when the `projections` feature is
+  compiled (default precompiled binaries); when not, items fall back to
+  source-CRS coords stamped with `proj:epsg`. Hand-written STAC writer at
+  `crates/cli/src/handlers/stac_writer.rs` with one unit test; smoke
+  tested end-to-end with EPSG:32719 input verifying correct lon/lat
+  output.
+
+- **HLS Fmask cloud-mask strategy** for the Harmonized Landsat-Sentinel
+  collection — the canonical input for NASA/IBM's Prithvi-EO-2.0. HLS
+  Fmask is a 16-bit bitmask with HLS-specific bit assignments (cloud is
+  bit 1, vs Landsat C2 QA_PIXEL where cloud is bit 3), so it needs its
+  own strategy rather than reusing `LandsatQaMask`.
+  - Default `HlsFmask::new()`: excludes cloud (bit 1), adjacent-to-cloud
+    (bit 2), and cloud shadow (bit 3). Keeps clear, cirrus, snow, water.
+  - `HlsFmask::strict()`: also excludes cirrus (bit 0) and snow (bit 4)
+    for downstream uses sensitive to cirrus contamination.
+  - `HlsFmask::with_bits(u16)`: arbitrary bit-set override.
+  - Auto-routing: `stac::create_cloud_mask_strategy()` now inspects the
+    asset name on a `CloudMaskType::Bitmask` and routes to `HlsFmask`
+    when it contains "fmask" (case-insensitive), else `LandsatQaMask`.
+    Existing Sentinel-2 SCL and SAR no-mask paths unchanged.
+  - 2 new unit tests in `crates/algorithms/src/imagery/cloud_mask.rs`.
+
+- **New how-to guide**: `docs/book/src/how-to/gfm-prithvi-prep.md`
+  walks through the full pipeline from STAC bbox to a tensor ready to
+  fine-tune Prithvi-EO-2.0 or Clay v1.5. Frames the work against
+  InstaGeo's identified gap (no GFM ships preprocessing). Added to the
+  user-guide nav.
+
+- **GFM-prep benchmark harness** under `benchmarks/`:
+  - `gfm_prep_make_dataset.py` generates a synthetic Prithvi-shaped
+    dataset (6 HLS bands × T timestamps × G×G grid + N point labels).
+  - `bench_gfm_prep_py.py` is a reference Python implementation of
+    extract-patches (rasterio + numpy) with the same per-band z-score
+    convention. Used as the "stay in Python" baseline.
+  - `run_gfm_prep_bench.sh` orchestrates dataset generation, runs both
+    implementations BENCH_REPS times per --size, writes a tidy CSV at
+    `benchmarks/results/gfm_prep/timings.csv`.
+  - `plot_gfm_prep.R` renders a paper-grade figure to
+    `paper/figures/gfm_prep_throughput.pdf`.
+  - First reference run (grid=1024, T=3, N=200, tile=224, 3 reps):
+    SurtGIS mean 4.14s vs Python mean 6.36s — 1.54x speedup while
+    SurtGIS additionally processes 3 timestamps per chip (output
+    [N,C,T,H,W] vs Python's single-timestamp [N,C,H,W]). A like-for-like
+    single-timestamp comparison would widen the gap further.
+  - InstaGeo and raster-vision hooks intentionally out-of-scope: those
+    add STAC + cloud-fetch overhead that's orthogonal to the local hot
+    loop measured here. Documented in the script headers.
+
+- **Auto-reprojection of vector input** in `extract-patches`. New
+  `--points-crs <EPSG>` flag declares the EPSG of the points/polygons
+  file (default 4326 — the GeoJSON spec mandates WGS84 lon/lat). When
+  the raster's CRS differs, SurtGIS reprojects each point on the fly
+  via proj4rs; polygons are reprojected vertex-by-vertex (exterior +
+  interior rings). Before this fix, users passing a standard WGS84
+  GeoJSON against a UTM raster got "No patch candidates produced"
+  because lon/lat coords were being treated as projected meters.
+  Validated end-to-end on the Maule mini example: 20/20 patches
+  extracted from WGS84 GeoJSON against EPSG:32718 rasters, bit-exact
+  match against the prior pyproj-preprocessed workflow. 3 unit tests
+  added (identity, WGS84→UTM 18S sanity, round-trip).
+
+This completes axis G2 of the roadmap (GFM preprocessing pipeline).
+
 ## [0.8.1] - 2026-05-17
 
 Web demo expansion (roadmap axis A2.b). Closes the loop on v0.8.0:

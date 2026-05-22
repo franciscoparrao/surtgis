@@ -22,7 +22,8 @@ pub use change_detection::{
     raster_difference,
 };
 pub use cloud_mask::{
-    CloudMaskStrategy, LandsatQaMask, NoCloudMask, S2SclMask, SCL_VALID_DEFAULT, cloud_mask_scl,
+    CloudMaskStrategy, HlsFmask, LandsatQaMask, NoCloudMask, S2SclMask, SCL_VALID_DEFAULT,
+    cloud_mask_hls_fmask, cloud_mask_scl,
 };
 pub use composite::median_composite;
 pub use index_builder::index_builder;

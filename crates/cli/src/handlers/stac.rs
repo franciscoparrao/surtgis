@@ -7,7 +7,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use surtgis_algorithms::imagery::{CloudMaskStrategy, LandsatQaMask, NoCloudMask, S2SclMask};
+use surtgis_algorithms::imagery::{
+    CloudMaskStrategy, HlsFmask, LandsatQaMask, NoCloudMask, S2SclMask,
+};
 use surtgis_cloud::blocking::{CogReaderBlocking, StacClientBlocking};
 use surtgis_cloud::{
     BBox, CogReaderOptions, StacCatalog, StacClientOptions, StacItem, StacSearchParams,
@@ -91,8 +93,14 @@ impl CollectionProfile {
 ///
 /// Supports:
 /// - Categorical (e.g., Sentinel-2 SCL) → S2SclMask
-/// - Bitmask (e.g., Landsat QA_PIXEL) → LandsatQaMask
+/// - Bitmask with asset name "Fmask" (HLS S30/L30) → HlsFmask
+/// - Bitmask otherwise (Landsat C2 QA_PIXEL) → LandsatQaMask
 /// - None (e.g., SAR) → NoCloudMask
+///
+/// HLS Fmask and Landsat QA_PIXEL both ride the Bitmask variant but use
+/// different bit assignments (HLS cloud is bit 1; Landsat cloud is bit 3),
+/// so we route on the asset name. The HLS preprocessing convention is
+/// required by Prithvi-EO-2.0 downstream consumers.
 pub fn create_cloud_mask_strategy(mask_type: &CloudMaskType) -> Arc<dyn CloudMaskStrategy> {
     match mask_type {
         CloudMaskType::Categorical {
@@ -103,10 +111,12 @@ pub fn create_cloud_mask_strategy(mask_type: &CloudMaskType) -> Arc<dyn CloudMas
             // Can be extended to support other categorical formats
             Arc::new(S2SclMask::new())
         }
-        CloudMaskType::Bitmask { asset: _, bits: _ } => {
-            // For now, assume all bitmask masks are Landsat-like (QA_PIXEL)
-            // Can be extended to support other bitmask formats
-            Arc::new(LandsatQaMask::new())
+        CloudMaskType::Bitmask { asset, bits: _ } => {
+            if asset.eq_ignore_ascii_case("Fmask") || asset.to_lowercase().contains("fmask") {
+                Arc::new(HlsFmask::new())
+            } else {
+                Arc::new(LandsatQaMask::new())
+            }
         }
         CloudMaskType::None => Arc::new(NoCloudMask),
     }

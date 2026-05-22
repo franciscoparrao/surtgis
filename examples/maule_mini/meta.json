@@ -1,0 +1,65 @@
+{
+  "bands": [
+    "B02",
+    "B03",
+    "B04",
+    "B05",
+    "B06",
+    "B07"
+  ],
+  "patch_size": 128,
+  "n_patches": 20,
+  "n_timestamps": 2,
+  "timestamps": [
+    "t_2025_01",
+    "t_2025_02"
+  ],
+  "tensor_shape": "[20, 6, 2, 128, 128]",
+  "tensor_layout": "[N, C, T, H, W]",
+  "tensor_format": "zarr",
+  "label_dtype": "<i8",
+  "label_kind": "int",
+  "crs_epsg": 32718,
+  "pixel_width": 10.0,
+  "pixel_height": -10.0,
+  "grid_rows": 571,
+  "grid_cols": 472,
+  "candidates_before_filter": 20,
+  "nan_skipped": 0,
+  "nan_threshold": 0.1,
+  "seed": 42,
+  "max_patches": null,
+  "source_mode": "points",
+  "gfm_profile": {
+    "name": "prithvi-v2",
+    "model_target": "ibm-nasa-geospatial/Prithvi-EO-2.0-300M",
+    "bands_order": [
+      "B02",
+      "B03",
+      "B04",
+      "B05",
+      "B06",
+      "B07"
+    ],
+    "tile_size": 224,
+    "band_norm_mean": [
+      1087.0,
+      1342.0,
+      1433.0,
+      2734.0,
+      1958.0,
+      1363.0
+    ],
+    "band_norm_std": [
+      2248.0,
+      2179.0,
+      2178.0,
+      1850.0,
+      1242.0,
+      1049.0
+    ],
+    "expected_unit": "DN_sr_x10000",
+    "source_url": "https://huggingface.co/ibm-nasa-geospatial/Prithvi-EO-2.0-300M",
+    "normalization_applied": true
+  }
+}
