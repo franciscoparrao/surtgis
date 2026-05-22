@@ -3,8 +3,8 @@
 //! Raster algebra operations: apply mathematical functions to one or
 //! two rasters element-wise.
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -47,9 +47,10 @@ where
                     continue;
                 }
                 if let Some(nd) = nodata
-                    && (val - nd).abs() < f64::EPSILON {
-                        continue;
-                    }
+                    && (val - nd).abs() < f64::EPSILON
+                {
+                    continue;
+                }
 
                 *row_data_col = f(val);
             }
@@ -74,11 +75,7 @@ where
 /// * `a` - First raster
 /// * `b` - Second raster
 /// * `op` - Operation to apply
-pub fn band_math_binary(
-    a: &Raster<f64>,
-    b: &Raster<f64>,
-    op: BandMathOp,
-) -> Result<Raster<f64>> {
+pub fn band_math_binary(a: &Raster<f64>, b: &Raster<f64>, op: BandMathOp) -> Result<Raster<f64>> {
     if a.shape() != b.shape() {
         return Err(Error::SizeMismatch {
             er: a.rows(),
@@ -104,13 +101,15 @@ pub fn band_math_binary(
                     continue;
                 }
                 if let Some(nd) = nodata_a
-                    && (va - nd).abs() < f64::EPSILON {
-                        continue;
-                    }
+                    && (va - nd).abs() < f64::EPSILON
+                {
+                    continue;
+                }
                 if let Some(nd) = nodata_b
-                    && (vb - nd).abs() < f64::EPSILON {
-                        continue;
-                    }
+                    && (vb - nd).abs() < f64::EPSILON
+                {
+                    continue;
+                }
 
                 *row_data_col = match op {
                     BandMathOp::Add => va + vb,

@@ -20,11 +20,9 @@ use ndarray::Array2;
 use surtgis_core::raster::{GeoTransform, Raster};
 use surtgis_core::{Error, Result};
 
-use super::kriging::{ordinary_kriging, OrdinaryKrigingParams};
-use super::variogram::{
-    empirical_variogram, fit_best_variogram, FittedVariogram, VariogramParams,
-};
 use super::SamplePoint;
+use super::kriging::{OrdinaryKrigingParams, ordinary_kriging};
+use super::variogram::{FittedVariogram, VariogramParams, empirical_variogram, fit_best_variogram};
 
 /// Parameters for Regression Kriging interpolation
 #[derive(Debug, Clone)]
@@ -260,9 +258,7 @@ fn ols_fit(points: &[SamplePoint]) -> Result<Vec<f64>> {
     // [n    sx   sy ] [β₀]   [sz ]
     // [sx   sxx  sxy] [β₁] = [sxz]
     // [sy   sxy  syy] [β₂]   [syz]
-    let mut mat = [n, sx, sy,
-        sx, sxx, sxy,
-        sy, sxy, syy];
+    let mut mat = [n, sx, sy, sx, sxx, sxy, sy, sxy, syy];
     let mut rhs = [sz, sxz, syz];
 
     // Solve 3×3 system
@@ -321,21 +317,30 @@ mod tests {
         let mut points = Vec::with_capacity(n);
         let mut rng = seed;
         for _ in 0..n {
-            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let x = (rng >> 33) as f64 / (1u64 << 31) as f64 * 100.0;
-            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let y = (rng >> 33) as f64 / (1u64 << 31) as f64 * 100.0;
             // Strong trend + spatially correlated residual
-            let value = 3.0 * x + 2.0 * y + 50.0
-                + 10.0 * ((x / 20.0).sin() + (y / 20.0).sin());
-            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let value = 3.0 * x + 2.0 * y + 50.0 + 10.0 * ((x / 20.0).sin() + (y / 20.0).sin());
+            rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let noise = (rng >> 33) as f64 / (1u64 << 31) as f64 * 4.0 - 2.0;
             points.push(SamplePoint::new(x, y, value + noise));
         }
         points
     }
 
-    fn make_params(rows: usize, cols: usize, extent: (f64, f64, f64, f64)) -> RegressionKrigingParams {
+    fn make_params(
+        rows: usize,
+        cols: usize,
+        extent: (f64, f64, f64, f64),
+    ) -> RegressionKrigingParams {
         let (x_min, y_min, x_max, y_max) = extent;
         let x_res = (x_max - x_min) / cols as f64;
         let y_res = -(y_max - y_min) / rows as f64;
@@ -398,7 +403,11 @@ mod tests {
                 }
             }
         }
-        assert!(nan_count == 0, "Interior should have no NaN, got {}", nan_count);
+        assert!(
+            nan_count == 0,
+            "Interior should have no NaN, got {}",
+            nan_count
+        );
     }
 
     #[test]

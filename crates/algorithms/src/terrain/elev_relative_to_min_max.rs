@@ -8,8 +8,8 @@
 //!
 //! Reference: WhiteboxTools `ElevRelativeToMinMax`
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -30,8 +30,12 @@ pub fn elev_relative_to_min_max(dem: &Raster<f64>) -> Result<Raster<f64>> {
             if v.is_nan() || nodata.is_some_and(|nd| (v - nd).abs() < f64::EPSILON) {
                 continue;
             }
-            if v < global_min { global_min = v; }
-            if v > global_max { global_max = v; }
+            if v < global_min {
+                global_min = v;
+            }
+            if v > global_max {
+                global_max = v;
+            }
         }
     }
 
@@ -84,11 +88,19 @@ mod tests {
 
         // Min cell (0,0) = 0 → normalized = 0
         let v_min = result.get(0, 0).unwrap();
-        assert!((v_min - 0.0).abs() < 1e-10, "Min should be 0, got {}", v_min);
+        assert!(
+            (v_min - 0.0).abs() < 1e-10,
+            "Min should be 0, got {}",
+            v_min
+        );
 
         // Max cell (9,9) = 99 → normalized = 1
         let v_max = result.get(9, 9).unwrap();
-        assert!((v_max - 1.0).abs() < 1e-10, "Max should be 1, got {}", v_max);
+        assert!(
+            (v_max - 1.0).abs() < 1e-10,
+            "Max should be 1, got {}",
+            v_max
+        );
     }
 
     #[test]
@@ -98,7 +110,11 @@ mod tests {
 
         let result = elev_relative_to_min_max(&dem).unwrap();
         let v = result.get(2, 2).unwrap();
-        assert!((v - 0.0).abs() < 1e-10, "Flat DEM should yield 0, got {}", v);
+        assert!(
+            (v - 0.0).abs() < 1e-10,
+            "Flat DEM should yield 0, got {}",
+            v
+        );
     }
 
     #[test]
@@ -114,6 +130,10 @@ mod tests {
         let result = elev_relative_to_min_max(&dem).unwrap();
         // Row 2 = 200, range = [0, 400] → 200/400 = 0.5
         let v = result.get(2, 0).unwrap();
-        assert!((v - 0.5).abs() < 1e-10, "Mid-range should be 0.5, got {}", v);
+        assert!(
+            (v - 0.5).abs() < 1e-10,
+            "Mid-range should be 0.5, got {}",
+            v
+        );
     }
 }

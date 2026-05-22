@@ -22,11 +22,11 @@
 //! Reference: Koenderink, J.J. & van Doorn, A.J. (1992) "Surface shape and
 //! curvature scales" Image and Vision Computing, 10(8), 557-564.
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
+use std::f64::consts::PI;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
-use std::f64::consts::PI;
 
 /// Calculate shape index from a DEM
 ///
@@ -263,11 +263,7 @@ mod tests {
         let result = shape_index(&dem).unwrap();
         let val = result.get(10, 10).unwrap();
         // Saddle: kmax = 2, kmin = -2 → SI = (2/π)*atan(0) = 0
-        assert!(
-            val.abs() < 0.1,
-            "Saddle should have SI ~0, got {}",
-            val
-        );
+        assert!(val.abs() < 0.1, "Saddle should have SI ~0, got {}", val);
     }
 
     #[test]

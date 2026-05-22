@@ -48,9 +48,9 @@ fn predictor_undo_multi_row_resets_per_row() {
 
     undo_horizontal_differencing(&mut data, 3, 2);
 
-    let vals: Vec<u16> = (0..6).map(|i| {
-        u16::from_le_bytes([data[i * 2], data[i * 2 + 1]])
-    }).collect();
+    let vals: Vec<u16> = (0..6)
+        .map(|i| u16::from_le_bytes([data[i * 2], data[i * 2 + 1]]))
+        .collect();
 
     assert_eq!(vals, vec![1000, 1005, 1015, 2000, 2003, 2010]);
 }
@@ -97,8 +97,12 @@ mod network_tests {
     fn pc_client() -> StacClientBlocking {
         StacClientBlocking::new(
             StacCatalog::PlanetaryComputer,
-            StacClientOptions { max_items: 10, ..StacClientOptions::default() },
-        ).expect("Failed to create PC client")
+            StacClientOptions {
+                max_items: 10,
+                ..StacClientOptions::default()
+            },
+        )
+        .expect("Failed to create PC client")
     }
 
     #[test]
@@ -106,7 +110,12 @@ mod network_tests {
     fn cog_reader_s2_b04_values_in_reflectance_range() {
         let client = pc_client();
         let params = StacSearchParams::new()
-            .bbox(SANTIAGO_BBOX.0, SANTIAGO_BBOX.1, SANTIAGO_BBOX.2, SANTIAGO_BBOX.3)
+            .bbox(
+                SANTIAGO_BBOX.0,
+                SANTIAGO_BBOX.1,
+                SANTIAGO_BBOX.2,
+                SANTIAGO_BBOX.3,
+            )
             .datetime("2024-01-15/2024-01-20")
             .collections(&["sentinel-2-l2a"])
             .limit(1);
@@ -116,19 +125,30 @@ mod network_tests {
 
         let item = &items[0];
         let asset = item.asset("B04").expect("No B04");
-        let signed = client.sign_asset_href(&asset.href, item.collection.as_deref().unwrap_or(""))
+        let signed = client
+            .sign_asset_href(&asset.href, item.collection.as_deref().unwrap_or(""))
             .expect("signing failed");
 
-        let bbox = BBox::new(SANTIAGO_BBOX.0, SANTIAGO_BBOX.1, SANTIAGO_BBOX.2, SANTIAGO_BBOX.3);
+        let bbox = BBox::new(
+            SANTIAGO_BBOX.0,
+            SANTIAGO_BBOX.1,
+            SANTIAGO_BBOX.2,
+            SANTIAGO_BBOX.3,
+        );
         let cog_bbox = {
             use surtgis_cloud::reproject;
-            let meta_reader = CogReaderBlocking::open(&signed, CogReaderOptions::default()).unwrap();
+            let meta_reader =
+                CogReaderBlocking::open(&signed, CogReaderOptions::default()).unwrap();
             let meta = meta_reader.metadata();
             if let Some(epsg) = meta.crs.as_ref().and_then(|c| c.epsg()) {
                 if !reproject::is_wgs84(epsg) {
                     reproject::reproject_bbox_to_cog(&bbox, epsg)
-                } else { bbox }
-            } else { bbox }
+                } else {
+                    bbox
+                }
+            } else {
+                bbox
+            }
         };
 
         let mut reader = CogReaderBlocking::open(&signed, CogReaderOptions::default()).unwrap();
@@ -136,14 +156,25 @@ mod network_tests {
         let (rows, cols) = raster.shape();
         assert!(rows > 0 && cols > 0);
 
-        let valid: Vec<f64> = raster.data().iter()
-            .filter(|v| v.is_finite() && **v > 0.0).copied().collect();
+        let valid: Vec<f64> = raster
+            .data()
+            .iter()
+            .filter(|v| v.is_finite() && **v > 0.0)
+            .copied()
+            .collect();
         assert!(!valid.is_empty(), "No valid pixels");
 
         let max = valid.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
         let mean = valid.iter().sum::<f64>() / valid.len() as f64;
 
-        eprintln!("COG B04: {}x{}, {} valid, max={:.0}, mean={:.0}", rows, cols, valid.len(), max, mean);
+        eprintln!(
+            "COG B04: {}x{}, {} valid, max={:.0}, mean={:.0}",
+            rows,
+            cols,
+            valid.len(),
+            max,
+            mean
+        );
 
         // CRITICAL: predictor=2 must produce values in reflectance range
         // Some pixels can be >10000 (saturated, snow) but mean must be reasonable
@@ -172,7 +203,12 @@ mod network_tests {
     fn sas_signing_with_retry() {
         let client = pc_client();
         let params = StacSearchParams::new()
-            .bbox(SANTIAGO_BBOX.0, SANTIAGO_BBOX.1, SANTIAGO_BBOX.2, SANTIAGO_BBOX.3)
+            .bbox(
+                SANTIAGO_BBOX.0,
+                SANTIAGO_BBOX.1,
+                SANTIAGO_BBOX.2,
+                SANTIAGO_BBOX.3,
+            )
             .datetime("2024-01-15/2024-01-20")
             .collections(&["sentinel-2-l2a"])
             .limit(1);
@@ -183,7 +219,8 @@ mod network_tests {
 
         for key in &["B04", "B03", "B02", "SCL"] {
             if let Some(asset) = item.asset(key) {
-                let result = client.sign_asset_href(&asset.href, item.collection.as_deref().unwrap_or(""));
+                let result =
+                    client.sign_asset_href(&asset.href, item.collection.as_deref().unwrap_or(""));
                 assert!(result.is_ok(), "Signing {} failed: {:?}", key, result.err());
             }
         }

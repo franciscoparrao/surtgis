@@ -20,7 +20,12 @@ pub enum Error {
     },
 
     #[error("Raster size mismatch: expected ({er}, {ec}), got ({ar}, {ac})")]
-    SizeMismatch { er: usize, ec: usize, ar: usize, ac: usize },
+    SizeMismatch {
+        er: usize,
+        ec: usize,
+        ar: usize,
+        ac: usize,
+    },
 
     #[error("CRS mismatch: {0} vs {1}")]
     CrsMismatch(String, String),

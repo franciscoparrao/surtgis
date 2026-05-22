@@ -11,8 +11,8 @@
 //! Reference: Florinsky, I.V. (2025) "Digital Terrain Analysis" 3rd ed.,
 //! Chapter 8, Eq. 8.1
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 

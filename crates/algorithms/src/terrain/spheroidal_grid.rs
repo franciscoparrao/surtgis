@@ -14,14 +14,13 @@
 //! Florinsky, I.V. (2025). Digital Terrain Analysis. §4.3, Ch. 16.
 //! Vincenty, T. (1975). Direct and inverse solutions of geodesics.
 
+use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
-use ndarray::Array2;
-use crate::maybe_rayon::*;
-
 
 /// WGS84 ellipsoid parameters
-const WGS84_A: f64 = 6_378_137.0;         // semi-major axis (m)
+const WGS84_A: f64 = 6_378_137.0; // semi-major axis (m)
 const WGS84_F: f64 = 1.0 / 298.257_223_563; // flattening
 
 /// Parameters for spheroidal grid computations
@@ -87,7 +86,11 @@ pub fn cell_dimensions(
     let dy = m * d_lat.to_radians();
     let area = dx.abs() * dy.abs();
 
-    CellDimensions { dx: dx.abs(), dy: dy.abs(), area }
+    CellDimensions {
+        dx: dx.abs(),
+        dy: dy.abs(),
+        area,
+    }
 }
 
 /// Compute cell dimension rasters for a geographic DEM.
@@ -113,7 +116,8 @@ pub fn geographic_cell_sizes(
     if pixel_w > 1.0 {
         return Err(Error::Algorithm(
             "DEM appears to be in projected coordinates (pixel width > 1°). \
-             Use this function only with geographic (lon/lat) DEMs.".into()
+             Use this function only with geographic (lon/lat) DEMs."
+                .into(),
         ));
     }
 
@@ -140,12 +144,12 @@ pub fn geographic_cell_sizes(
         .collect();
 
     let mut dx_raster = dem.with_same_meta::<f64>(rows, cols);
-    *dx_raster.data_mut() = Array2::from_shape_vec((rows, cols), dx_data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *dx_raster.data_mut() =
+        Array2::from_shape_vec((rows, cols), dx_data).map_err(|e| Error::Other(e.to_string()))?;
 
     let mut dy_raster = dem.with_same_meta::<f64>(rows, cols);
-    *dy_raster.data_mut() = Array2::from_shape_vec((rows, cols), dy_data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *dy_raster.data_mut() =
+        Array2::from_shape_vec((rows, cols), dy_data).map_err(|e| Error::Other(e.to_string()))?;
 
     Ok((dx_raster, dy_raster))
 }
@@ -160,8 +164,10 @@ pub fn geographic_cell_sizes(
 /// # Returns
 /// Distance in meters
 pub fn vincenty_distance(
-    lat1: f64, lon1: f64,
-    lat2: f64, lon2: f64,
+    lat1: f64,
+    lon1: f64,
+    lat2: f64,
+    lon2: f64,
     params: &SpheroidalParams,
 ) -> f64 {
     let a = params.semi_major;
@@ -184,7 +190,8 @@ pub fn vincenty_distance(
         let cos_lambda = lambda.cos();
 
         let sin_sigma = ((cos_u2 * sin_lambda).powi(2)
-            + (cos_u1 * sin_u2 - sin_u1 * cos_u2 * cos_lambda).powi(2)).sqrt();
+            + (cos_u1 * sin_u2 - sin_u1 * cos_u2 * cos_lambda).powi(2))
+        .sqrt();
 
         if sin_sigma < 1e-15 {
             return 0.0; // Co-incident points
@@ -204,24 +211,32 @@ pub fn vincenty_distance(
 
         let c = f / 16.0 * cos2_alpha * (4.0 + f * (4.0 - 3.0 * cos2_alpha));
         let lambda_prev = lambda;
-        lambda = l + (1.0 - c) * f * sin_alpha
-            * (sigma + c * sin_sigma
-                * (cos_2sigma_m + c * cos_sigma
-                    * (-1.0 + 2.0 * cos_2sigma_m * cos_2sigma_m)));
+        lambda = l
+            + (1.0 - c)
+                * f
+                * sin_alpha
+                * (sigma
+                    + c * sin_sigma
+                        * (cos_2sigma_m
+                            + c * cos_sigma * (-1.0 + 2.0 * cos_2sigma_m * cos_2sigma_m)));
 
         if (lambda - lambda_prev).abs() < 1e-12 {
             // Converged
             let u2_val = cos2_alpha * (a * a - b * b) / (b * b);
-            let big_a = 1.0 + u2_val / 16384.0
-                * (4096.0 + u2_val * (-768.0 + u2_val * (320.0 - 175.0 * u2_val)));
-            let big_b = u2_val / 1024.0
-                * (256.0 + u2_val * (-128.0 + u2_val * (74.0 - 47.0 * u2_val)));
-            let delta_sigma = big_b * sin_sigma
-                * (cos_2sigma_m + big_b / 4.0
-                    * (cos_sigma * (-1.0 + 2.0 * cos_2sigma_m * cos_2sigma_m)
-                        - big_b / 6.0 * cos_2sigma_m
-                            * (-3.0 + 4.0 * sin_sigma * sin_sigma)
-                            * (-3.0 + 4.0 * cos_2sigma_m * cos_2sigma_m)));
+            let big_a = 1.0
+                + u2_val / 16384.0
+                    * (4096.0 + u2_val * (-768.0 + u2_val * (320.0 - 175.0 * u2_val)));
+            let big_b =
+                u2_val / 1024.0 * (256.0 + u2_val * (-128.0 + u2_val * (74.0 - 47.0 * u2_val)));
+            let delta_sigma = big_b
+                * sin_sigma
+                * (cos_2sigma_m
+                    + big_b / 4.0
+                        * (cos_sigma * (-1.0 + 2.0 * cos_2sigma_m * cos_2sigma_m)
+                            - big_b / 6.0
+                                * cos_2sigma_m
+                                * (-3.0 + 4.0 * sin_sigma * sin_sigma)
+                                * (-3.0 + 4.0 * cos_2sigma_m * cos_2sigma_m)));
 
             return b * big_a * (sigma - delta_sigma);
         }
@@ -229,7 +244,8 @@ pub fn vincenty_distance(
 
     // Failed to converge (antipodal points) — use spherical approximation
     a * (sin_u1 * sin_u2 + cos_u1 * cos_u2 * l.cos())
-        .clamp(-1.0, 1.0).acos()
+        .clamp(-1.0, 1.0)
+        .acos()
 }
 
 /// Compute slope on a geographic (spheroidal) grid using variable cell sizes.
@@ -243,10 +259,7 @@ pub fn vincenty_distance(
 ///
 /// # Returns
 /// Raster<f64> with slope in radians
-pub fn slope_geographic(
-    dem: &Raster<f64>,
-    params: SpheroidalParams,
-) -> Result<Raster<f64>> {
+pub fn slope_geographic(dem: &Raster<f64>, params: SpheroidalParams) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
     let tf = dem.transform();
 
@@ -307,24 +320,46 @@ mod tests {
 
     #[test]
     fn test_cell_dimensions_equator() {
-        let dims = cell_dimensions(0.0, 1.0 / 3600.0, 1.0 / 3600.0, &SpheroidalParams::default());
+        let dims = cell_dimensions(
+            0.0,
+            1.0 / 3600.0,
+            1.0 / 3600.0,
+            &SpheroidalParams::default(),
+        );
         // 1 arcsecond at equator ≈ 30.87m (E-W) and ≈ 30.72m (N-S)
-        assert!(dims.dx > 29.0 && dims.dx < 32.0,
-            "Equator 1\" dx should be ~30.87m, got {:.2}", dims.dx);
-        assert!(dims.dy > 29.0 && dims.dy < 32.0,
-            "Equator 1\" dy should be ~30.72m, got {:.2}", dims.dy);
+        assert!(
+            dims.dx > 29.0 && dims.dx < 32.0,
+            "Equator 1\" dx should be ~30.87m, got {:.2}",
+            dims.dx
+        );
+        assert!(
+            dims.dy > 29.0 && dims.dy < 32.0,
+            "Equator 1\" dy should be ~30.72m, got {:.2}",
+            dims.dy
+        );
     }
 
     #[test]
     fn test_cell_dimensions_latitude_60() {
         // At 60°N, dx should be ~half of equator (cos(60°) = 0.5)
-        let eq = cell_dimensions(0.0, 1.0 / 3600.0, 1.0 / 3600.0, &SpheroidalParams::default());
-        let at60 = cell_dimensions(60.0, 1.0 / 3600.0, 1.0 / 3600.0, &SpheroidalParams::default());
+        let eq = cell_dimensions(
+            0.0,
+            1.0 / 3600.0,
+            1.0 / 3600.0,
+            &SpheroidalParams::default(),
+        );
+        let at60 = cell_dimensions(
+            60.0,
+            1.0 / 3600.0,
+            1.0 / 3600.0,
+            &SpheroidalParams::default(),
+        );
 
         let ratio = at60.dx / eq.dx;
         assert!(
             (ratio - 0.5).abs() < 0.02,
-            "dx ratio at 60° should be ~0.5, got {:.4}", ratio
+            "dx ratio at 60° should be ~0.5, got {:.4}",
+            ratio
         );
         // dy should be similar (slightly larger due to oblate spheroid)
         assert!(
@@ -337,22 +372,27 @@ mod tests {
     fn test_vincenty_known_distance() {
         // London (51.5°N, 0°W) to Paris (48.85°N, 2.35°E)
         let d = vincenty_distance(
-            51.5_f64.to_radians(), 0.0,
-            48.85_f64.to_radians(), 2.35_f64.to_radians(),
+            51.5_f64.to_radians(),
+            0.0,
+            48.85_f64.to_radians(),
+            2.35_f64.to_radians(),
             &SpheroidalParams::default(),
         );
         // Known distance ≈ 340 km
         assert!(
             (d / 1000.0 - 340.0).abs() < 10.0,
-            "London-Paris should be ~340km, got {:.1}km", d / 1000.0
+            "London-Paris should be ~340km, got {:.1}km",
+            d / 1000.0
         );
     }
 
     #[test]
     fn test_vincenty_zero_distance() {
         let d = vincenty_distance(
-            45.0_f64.to_radians(), 10.0_f64.to_radians(),
-            45.0_f64.to_radians(), 10.0_f64.to_radians(),
+            45.0_f64.to_radians(),
+            10.0_f64.to_radians(),
+            45.0_f64.to_radians(),
+            10.0_f64.to_radians(),
             &SpheroidalParams::default(),
         );
         assert!(d < 0.001, "Same point should have 0 distance, got {}", d);
@@ -378,7 +418,8 @@ mod tests {
         assert!(
             center_slope > 0.01 && center_slope < 1.0,
             "Geographic slope should be reasonable, got {:.4} rad ({:.1}°)",
-            center_slope, center_slope.to_degrees()
+            center_slope,
+            center_slope.to_degrees()
         );
     }
 
@@ -394,9 +435,15 @@ mod tests {
         let dy_val = dy.get(2, 2).unwrap();
 
         // At ~45°N, 1 arcsecond ≈ 21.8m (E-W) and 30.8m (N-S)
-        assert!(dx_val > 15.0 && dx_val < 30.0,
-            "dx at 45°N should be ~21m, got {:.2}", dx_val);
-        assert!(dy_val > 28.0 && dy_val < 33.0,
-            "dy at 45°N should be ~30.8m, got {:.2}", dy_val);
+        assert!(
+            dx_val > 15.0 && dx_val < 30.0,
+            "dx at 45°N should be ~21m, got {:.2}",
+            dx_val
+        );
+        assert!(
+            dy_val > 28.0 && dy_val < 33.0,
+            "dy at 45°N should be ~30.8m, got {:.2}",
+            dy_val
+        );
     }
 }

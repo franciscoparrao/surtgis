@@ -23,8 +23,8 @@
 //! Reference: Florinsky, I.V. (2025) "Digital Terrain Analysis" 3rd ed.,
 //! Chapter 2: Morphometric Variables
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -222,10 +222,8 @@ pub fn all_curvatures(dem: &Raster<f64>) -> Result<AllCurvatures> {
                 let laplacian = r + t;
 
                 *row_data_col = [
-                    mean_h, gauss_k, m_val, e_val,
-                    kmin, kmax, kh, kv,
-                    khe, kve, ka, kr,
-                    rot, laplacian,
+                    mean_h, gauss_k, m_val, e_val, kmin, kmax, kh, kv, khe, kve, ka, kr, rot,
+                    laplacian,
                 ];
             }
 
@@ -244,8 +242,8 @@ pub fn all_curvatures(dem: &Raster<f64>) -> Result<AllCurvatures> {
     let make_raster = |data: Vec<f64>| -> Result<Raster<f64>> {
         let mut output = dem.with_same_meta::<f64>(rows, cols);
         output.set_nodata(Some(f64::NAN));
-        *output.data_mut() = Array2::from_shape_vec((rows, cols), data)
-            .map_err(|e| Error::Other(e.to_string()))?;
+        *output.data_mut() =
+            Array2::from_shape_vec((rows, cols), data).map_err(|e| Error::Other(e.to_string()))?;
         Ok(output)
     };
 
@@ -305,8 +303,15 @@ pub struct AllCurvatures {
 #[inline]
 fn compute_curvature(
     curv_type: AdvancedCurvatureType,
-    p: f64, q: f64, r: f64, s: f64, t: f64,
-    p2: f64, q2: f64, p2q2: f64, w: f64,
+    p: f64,
+    q: f64,
+    r: f64,
+    s: f64,
+    t: f64,
+    p2: f64,
+    q2: f64,
+    p2q2: f64,
+    w: f64,
 ) -> f64 {
     let w_sqrt = w.sqrt();
     let w_32 = w * w_sqrt;
@@ -315,14 +320,12 @@ fn compute_curvature(
         AdvancedCurvatureType::MeanH => {
             -((1.0 + q2) * r - 2.0 * p * q * s + (1.0 + p2) * t) / (2.0 * w_32)
         }
-        AdvancedCurvatureType::GaussianK => {
-            (r * t - s * s) / (w * w)
-        }
-        AdvancedCurvatureType::Laplacian => {
-            r + t
-        }
+        AdvancedCurvatureType::GaussianK => (r * t - s * s) / (w * w),
+        AdvancedCurvatureType::Laplacian => r + t,
         AdvancedCurvatureType::Rotor => {
-            if p2q2 < 1e-20 { return 0.0; }
+            if p2q2 < 1e-20 {
+                return 0.0;
+            }
             ((p2 - q2) * s - p * q * (r - t)) / p2q2.powf(1.5)
         }
         _ => {
@@ -437,11 +440,7 @@ mod tests {
         let result = advanced_curvatures(&dem, AdvancedCurvatureType::GaussianK).unwrap();
         let val = result.get(10, 10).unwrap();
         // Saddle: r=2, t=-2, s=0 → K = 2*(-2)-0 = -4
-        assert!(
-            val < 0.0,
-            "Expected K < 0 for saddle, got {}",
-            val
-        );
+        assert!(val < 0.0, "Expected K < 0 for saddle, got {}", val);
     }
 
     #[test]
@@ -463,11 +462,7 @@ mod tests {
         let result = advanced_curvatures(&dem, AdvancedCurvatureType::UnsphericitytM).unwrap();
         let val = result.get(10, 10).unwrap();
         // Saddle: very non-spherical → M > 0
-        assert!(
-            val > 0.0,
-            "Expected M > 0 for saddle, got {}",
-            val
-        );
+        assert!(val > 0.0, "Expected M > 0 for saddle, got {}", val);
     }
 
     #[test]
@@ -516,7 +511,10 @@ mod tests {
             assert!(
                 (ka - (k_off + kr)).abs() < 0.1,
                 "Ka ({}) should equal K ({}) + Kr ({}) = {}",
-                ka, k_off, kr, k_off + kr
+                ka,
+                k_off,
+                kr,
+                k_off + kr
             );
         }
     }
@@ -535,7 +533,10 @@ mod tests {
                     assert!(
                         (ka - (k + kr)).abs() < 0.01,
                         "Ka ≠ K + Kr at ({},{}): {} vs {}",
-                        row, col, ka, k + kr
+                        row,
+                        col,
+                        ka,
+                        k + kr
                     );
                 }
             }
@@ -550,14 +551,8 @@ mod tests {
         let m = all.unsphericity_m.get(10, 10).unwrap();
         let kmin = all.minimal_kmin.get(10, 10).unwrap();
         let kmax = all.maximal_kmax.get(10, 10).unwrap();
-        assert!(
-            (kmin - (h - m)).abs() < 1e-10,
-            "kmin should equal H-M"
-        );
-        assert!(
-            (kmax - (h + m)).abs() < 1e-10,
-            "kmax should equal H+M"
-        );
+        assert!((kmin - (h - m)).abs() < 1e-10, "kmin should equal H-M");
+        assert!((kmax - (h + m)).abs() < 1e-10, "kmax should equal H+M");
     }
 
     #[test]
@@ -569,10 +564,22 @@ mod tests {
                 let khe = all.horizontal_excess_khe.get(row, col).unwrap();
                 let kve = all.vertical_excess_kve.get(row, col).unwrap();
                 if !khe.is_nan() {
-                    assert!(khe >= -1e-10, "khe should be ≥ 0, got {} at ({},{})", khe, row, col);
+                    assert!(
+                        khe >= -1e-10,
+                        "khe should be ≥ 0, got {} at ({},{})",
+                        khe,
+                        row,
+                        col
+                    );
                 }
                 if !kve.is_nan() {
-                    assert!(kve >= -1e-10, "kve should be ≥ 0, got {} at ({},{})", kve, row, col);
+                    assert!(
+                        kve >= -1e-10,
+                        "kve should be ≥ 0, got {} at ({},{})",
+                        kve,
+                        row,
+                        col
+                    );
                 }
             }
         }

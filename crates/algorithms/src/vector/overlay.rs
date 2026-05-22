@@ -82,7 +82,9 @@ fn overlay(a: &FeatureCollection, b: &FeatureCollection, op: OverlayOp) -> Featu
     let mut out = FeatureCollection::new();
 
     for feature in &a.features {
-        let Some(geom) = &feature.geometry else { continue };
+        let Some(geom) = &feature.geometry else {
+            continue;
+        };
         let a_polys = geometry_to_polygons(geom);
 
         for a_poly in &a_polys {

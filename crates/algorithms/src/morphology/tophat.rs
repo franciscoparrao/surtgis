@@ -5,8 +5,8 @@
 //! - **Black-hat**: closing - original. Extracts small dark features on a
 //!   bright background.
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Algorithm, Error, Result};
 
@@ -15,13 +15,11 @@ use super::element::StructuringElement;
 use super::opening::opening;
 
 /// Parameters for top-hat transform
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct TopHatParams {
     /// Structuring element shape
     pub element: StructuringElement,
 }
-
 
 /// Top-hat (white top-hat) algorithm
 #[derive(Debug, Clone, Default)]
@@ -47,13 +45,11 @@ impl Algorithm for TopHat {
 }
 
 /// Parameters for black-hat transform
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct BlackHatParams {
     /// Structuring element shape
     pub element: StructuringElement,
 }
-
 
 /// Black-hat algorithm
 #[derive(Debug, Clone, Default)]
@@ -110,8 +106,8 @@ pub fn top_hat(raster: &Raster<f64>, element: &StructuringElement) -> Result<Ras
 
     let mut output = raster.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() =
-        Array2::from_shape_vec((rows, cols), output_data).map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() = Array2::from_shape_vec((rows, cols), output_data)
+        .map_err(|e| Error::Other(e.to_string()))?;
     Ok(output)
 }
 
@@ -147,8 +143,8 @@ pub fn black_hat(raster: &Raster<f64>, element: &StructuringElement) -> Result<R
 
     let mut output = raster.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() =
-        Array2::from_shape_vec((rows, cols), output_data).map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() = Array2::from_shape_vec((rows, cols), output_data)
+        .map_err(|e| Error::Other(e.to_string()))?;
     Ok(output)
 }
 
@@ -197,7 +193,9 @@ mod tests {
         let mut raster = make_raster(11, 11, 0.0);
         for row in 0..11 {
             for col in 0..11 {
-                raster.set(row, col, ((row * 7 + col * 3) % 20) as f64).unwrap();
+                raster
+                    .set(row, col, ((row * 7 + col * 3) % 20) as f64)
+                    .unwrap();
             }
         }
 
@@ -252,7 +250,9 @@ mod tests {
         let mut raster = make_raster(11, 11, 0.0);
         for row in 0..11 {
             for col in 0..11 {
-                raster.set(row, col, ((row * 7 + col * 3) % 20) as f64).unwrap();
+                raster
+                    .set(row, col, ((row * 7 + col * 3) % 20) as f64)
+                    .unwrap();
             }
         }
 

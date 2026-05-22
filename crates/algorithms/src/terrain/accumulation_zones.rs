@@ -17,12 +17,12 @@
 //! Reference: Florinsky, I.V. (2025) "Digital Terrain Analysis" 3rd ed.,
 //! Chapter 2.
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
-use super::curvature::{curvature, CurvatureParams, CurvatureType};
+use super::curvature::{CurvatureParams, CurvatureType, curvature};
 
 /// Zone classification codes
 pub const ZONE_ACCUMULATION: f64 = 1.0;
@@ -112,10 +112,7 @@ mod tests {
         let result = accumulation_zones(&dem).unwrap();
         // Check that we get valid zone codes for interior cells
         let val = result.get(10, 10).unwrap();
-        assert!(
-            !val.is_nan(),
-            "Interior cell should have a zone code"
-        );
+        assert!(!val.is_nan(), "Interior cell should have a zone code");
         assert!(
             val >= 1.0 && val <= 4.0,
             "Zone code should be 1-4, got {}",

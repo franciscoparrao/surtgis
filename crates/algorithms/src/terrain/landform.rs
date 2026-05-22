@@ -25,13 +25,13 @@
 //! Reference: Weiss, A. (2001) "Topographic Position and Landforms Analysis"
 //!            Jenness, J. (2006) "Topographic Position Index extension for ArcView"
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Algorithm, Error, Result};
 
-use crate::terrain::slope::{slope, SlopeParams, SlopeUnits};
-use crate::terrain::tpi::{tpi, TpiParams};
+use crate::terrain::slope::{SlopeParams, SlopeUnits, slope};
+use crate::terrain::tpi::{TpiParams, tpi};
 
 /// Landform class codes
 pub mod class {
@@ -109,14 +109,27 @@ pub fn landform_classification(dem: &Raster<f64>, params: LandformParams) -> Res
     let (rows, cols) = dem.shape();
 
     // Step 1: Compute TPI at two scales
-    let tpi_small = tpi(dem, TpiParams { radius: params.small_radius })?;
-    let tpi_large = tpi(dem, TpiParams { radius: params.large_radius })?;
+    let tpi_small = tpi(
+        dem,
+        TpiParams {
+            radius: params.small_radius,
+        },
+    )?;
+    let tpi_large = tpi(
+        dem,
+        TpiParams {
+            radius: params.large_radius,
+        },
+    )?;
 
     // Step 2: Compute slope in degrees
-    let slope_deg = slope(dem, SlopeParams {
-        units: SlopeUnits::Degrees,
-        z_factor: 1.0,
-    })?;
+    let slope_deg = slope(
+        dem,
+        SlopeParams {
+            units: SlopeUnits::Degrees,
+            z_factor: 1.0,
+        },
+    )?;
 
     // Step 3: Standardize TPI values (z-score)
     let (small_mean, small_std) = mean_std(&tpi_small);
@@ -246,19 +259,20 @@ mod tests {
     #[test]
     fn test_landform_classification_runs() {
         let dem = mountain_dem();
-        let result = landform_classification(&dem, LandformParams {
-            small_radius: 2,
-            large_radius: 5,
-            tpi_threshold: 1.0,
-            slope_threshold: 6.0,
-        }).unwrap();
+        let result = landform_classification(
+            &dem,
+            LandformParams {
+                small_radius: 2,
+                large_radius: 5,
+                tpi_threshold: 1.0,
+                slope_threshold: 6.0,
+            },
+        )
+        .unwrap();
 
         // Peak should be a high-TPI class (ridge or upper slope)
         let peak_class = result.get(25, 25).unwrap();
-        assert!(
-            !peak_class.is_nan(),
-            "Peak should have a class, got NaN"
-        );
+        assert!(!peak_class.is_nan(), "Peak should have a class, got NaN");
         assert!(
             peak_class >= 1.0 && peak_class <= 11.0,
             "Class should be 1-11, got {}",
@@ -271,19 +285,20 @@ mod tests {
         let mut dem = Raster::filled(50, 50, 100.0);
         dem.set_transform(GeoTransform::new(0.0, 50.0, 1.0, -1.0));
 
-        let result = landform_classification(&dem, LandformParams {
-            small_radius: 2,
-            large_radius: 5,
-            tpi_threshold: 1.0,
-            slope_threshold: 6.0,
-        }).unwrap();
+        let result = landform_classification(
+            &dem,
+            LandformParams {
+                small_radius: 2,
+                large_radius: 5,
+                tpi_threshold: 1.0,
+                slope_threshold: 6.0,
+            },
+        )
+        .unwrap();
 
         // Flat surface → plain (class 6)
         let center = result.get(25, 25).unwrap();
-        assert!(
-            !center.is_nan(),
-            "Center should have a class"
-        );
+        assert!(!center.is_nan(), "Center should have a class");
         assert!(
             (center - class::PLAIN).abs() < 0.1,
             "Flat surface should be PLAIN (6), got {}",
@@ -294,12 +309,16 @@ mod tests {
     #[test]
     fn test_landform_all_classes_valid() {
         let dem = mountain_dem();
-        let result = landform_classification(&dem, LandformParams {
-            small_radius: 2,
-            large_radius: 5,
-            tpi_threshold: 0.5,
-            slope_threshold: 10.0,
-        }).unwrap();
+        let result = landform_classification(
+            &dem,
+            LandformParams {
+                small_radius: 2,
+                large_radius: 5,
+                tpi_threshold: 0.5,
+                slope_threshold: 10.0,
+            },
+        )
+        .unwrap();
 
         // All valid cells should have class codes 1–11
         for r in 0..50 {
@@ -309,7 +328,9 @@ mod tests {
                     assert!(
                         v >= 1.0 && v <= 11.0,
                         "Invalid class {} at ({}, {})",
-                        v, r, c
+                        v,
+                        r,
+                        c
                     );
                 }
             }

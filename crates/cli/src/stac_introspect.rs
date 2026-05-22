@@ -21,11 +21,11 @@ pub struct StacCollectionSchema {
 /// Information about a single band in the collection
 #[derive(Debug, Clone)]
 pub struct BandInfo {
-    pub asset_key: String,                // "B04", "SR_B4", "VV", etc.
-    pub band_type: BandType,              // Red, NIR, Thermal, etc.
-    pub wavelength_um: Option<f64>,       // 0.665 for red, 0.842 for NIR
-    pub resolution_m: Option<f64>,        // band-specific resolution
-    pub description: Option<String>,      // From STAC metadata
+    pub asset_key: String,           // "B04", "SR_B4", "VV", etc.
+    pub band_type: BandType,         // Red, NIR, Thermal, etc.
+    pub wavelength_um: Option<f64>,  // 0.665 for red, 0.842 for NIR
+    pub resolution_m: Option<f64>,   // band-specific resolution
+    pub description: Option<String>, // From STAC metadata
 }
 
 /// Automatically detected band type from asset key
@@ -78,10 +78,7 @@ pub enum CloudMaskType {
 
 impl StacCollectionSchema {
     /// Introspect a STAC collection from its first item
-    pub fn from_stac_item(
-        collection_name: &str,
-        item: &StacItem,
-    ) -> Result<Self> {
+    pub fn from_stac_item(collection_name: &str, item: &StacItem) -> Result<Self> {
         let available_bands = Self::detect_bands(item)?;
         let cloud_mask_info = Self::detect_cloud_mask(item, &available_bands);
         let (crs_epsg, resolution_m) = Self::extract_crs_and_resolution(item)?;
@@ -168,7 +165,10 @@ impl StacCollectionSchema {
         // We'll check for SAR via band detection instead
 
         // Check if any band is SAR
-        if available_bands.iter().any(|b| matches!(b.band_type, BandType::Sar(_))) {
+        if available_bands
+            .iter()
+            .any(|b| matches!(b.band_type, BandType::Sar(_)))
+        {
             return (None, CloudMaskType::None);
         }
 
@@ -189,18 +189,22 @@ impl StacCollectionSchema {
         let query_lower = query.to_lowercase();
 
         // Exact asset key match
-        if let Some(band) = self.available_bands.iter().find(|b| {
-            b.asset_key.to_lowercase() == query_lower
-        }) {
+        if let Some(band) = self
+            .available_bands
+            .iter()
+            .find(|b| b.asset_key.to_lowercase() == query_lower)
+        {
             return Some(band);
         }
 
         // Type name match (red, nir, thermal, etc.)
         let query_type = detect_band_type_from_name(&query_lower);
         if query_type != BandType::Unknown {
-            if let Some(band) = self.available_bands.iter().find(|b| {
-                b.band_type == query_type
-            }) {
+            if let Some(band) = self
+                .available_bands
+                .iter()
+                .find(|b| b.band_type == query_type)
+            {
                 return Some(band);
             }
         }
@@ -320,14 +324,8 @@ mod tests {
 
     #[test]
     fn test_detect_band_type_sar() {
-        assert_eq!(
-            detect_band_type_from_name("VV"),
-            BandType::Sar(SarPol::VV)
-        );
-        assert_eq!(
-            detect_band_type_from_name("VH"),
-            BandType::Sar(SarPol::VH)
-        );
+        assert_eq!(detect_band_type_from_name("VV"), BandType::Sar(SarPol::VV));
+        assert_eq!(detect_band_type_from_name("VH"), BandType::Sar(SarPol::VH));
     }
 
     #[test]
@@ -354,7 +352,13 @@ mod tests {
             asset: "SCL".to_string(),
             num_classes: 12,
         };
-        assert_eq!(scl, CloudMaskType::Categorical { asset: "SCL".to_string(), num_classes: 12 });
+        assert_eq!(
+            scl,
+            CloudMaskType::Categorical {
+                asset: "SCL".to_string(),
+                num_classes: 12
+            }
+        );
     }
 
     #[test]
@@ -368,14 +372,8 @@ mod tests {
 
     #[test]
     fn test_sar_band_type_equality() {
-        assert_eq!(
-            detect_band_type_from_name("vv"),
-            BandType::Sar(SarPol::VV)
-        );
-        assert_eq!(
-            detect_band_type_from_name("VV"),
-            BandType::Sar(SarPol::VV)
-        );
+        assert_eq!(detect_band_type_from_name("vv"), BandType::Sar(SarPol::VV));
+        assert_eq!(detect_band_type_from_name("VV"), BandType::Sar(SarPol::VV));
     }
 
     #[test]
@@ -403,7 +401,10 @@ mod tests {
 
     #[test]
     fn test_unknown_band_type() {
-        assert_eq!(detect_band_type_from_name("unknown_band"), BandType::Unknown);
+        assert_eq!(
+            detect_band_type_from_name("unknown_band"),
+            BandType::Unknown
+        );
         assert_eq!(detect_band_type_from_name("xyz"), BandType::Unknown);
         assert_eq!(detect_band_type_from_name(""), BandType::Unknown);
     }
@@ -424,8 +425,8 @@ mod tests {
     #[test]
     fn test_eo_band_common_names() {
         // Test EO-specific naming patterns
-        assert_eq!(detect_band_type_from_name("nir08"), BandType::Nir);  // S2 narrow NIR
-        assert_eq!(detect_band_type_from_name("swir16"), BandType::Swir1);  // S2 SWIR naming
+        assert_eq!(detect_band_type_from_name("nir08"), BandType::Nir); // S2 narrow NIR
+        assert_eq!(detect_band_type_from_name("swir16"), BandType::Swir1); // S2 SWIR naming
         assert_eq!(detect_band_type_from_name("swir22"), BandType::Swir2);
     }
 
@@ -438,7 +439,10 @@ mod tests {
 
         // French
         assert_eq!(detect_band_type_from_name("rouge"), BandType::Red);
-        assert_eq!(detect_band_type_from_name("proche_infrarouge"), BandType::Nir);
+        assert_eq!(
+            detect_band_type_from_name("proche_infrarouge"),
+            BandType::Nir
+        );
     }
 
     #[test]

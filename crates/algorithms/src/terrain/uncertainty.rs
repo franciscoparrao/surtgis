@@ -13,9 +13,9 @@
 //! Florinsky, I.V. (2025). Digital Terrain Analysis in Soil Science and
 //! Geology, Ch. 5: Errors of Digital Terrain Modeling.
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
 use crate::terrain::derivatives::{evans_young, extract_window};
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -223,26 +223,17 @@ fn aspect_uncertainty(p: f64, q: f64, cs: f64, mz2: f64) -> f64 {
 ///
 /// We use numerical differentiation of H with respect to each z_i
 /// via the finite-difference approach: perturb each z_i, recompute H.
-fn general_curvature_uncertainty(
-    p: f64, q: f64, r: f64, s: f64, t: f64,
-    cs: f64, mz2: f64,
-) -> f64 {
+fn general_curvature_uncertainty(p: f64, q: f64, r: f64, s: f64, t: f64, cs: f64, mz2: f64) -> f64 {
     curvature_uncertainty_generic(p, q, r, s, t, cs, mz2, CurvatureType::General)
 }
 
 /// Profile curvature RMSE.
-fn profile_curvature_uncertainty(
-    p: f64, q: f64, r: f64, s: f64, t: f64,
-    cs: f64, mz2: f64,
-) -> f64 {
+fn profile_curvature_uncertainty(p: f64, q: f64, r: f64, s: f64, t: f64, cs: f64, mz2: f64) -> f64 {
     curvature_uncertainty_generic(p, q, r, s, t, cs, mz2, CurvatureType::Profile)
 }
 
 /// Plan curvature RMSE.
-fn plan_curvature_uncertainty(
-    p: f64, q: f64, r: f64, s: f64, t: f64,
-    cs: f64, mz2: f64,
-) -> f64 {
+fn plan_curvature_uncertainty(p: f64, q: f64, r: f64, s: f64, t: f64, cs: f64, mz2: f64) -> f64 {
     curvature_uncertainty_generic(p, q, r, s, t, cs, mz2, CurvatureType::Plan)
 }
 
@@ -259,8 +250,13 @@ enum CurvatureType {
 /// compute ∂K/∂zᵢ = (∂K/∂p)(∂p/∂zᵢ) + (∂K/∂q)(∂q/∂zᵢ) + ... for r,s,t.
 #[allow(clippy::too_many_arguments)]
 fn curvature_uncertainty_generic(
-    p: f64, q: f64, r: f64, s: f64, t: f64,
-    cs: f64, mz2: f64,
+    p: f64,
+    q: f64,
+    r: f64,
+    s: f64,
+    t: f64,
+    cs: f64,
+    mz2: f64,
     ctype: CurvatureType,
 ) -> f64 {
     let h6 = 6.0 * cs;
@@ -323,11 +319,9 @@ fn curvature_partials_general(p: f64, q: f64, r: f64, s: f64, t: f64) -> (f64, f
     let dh_dt = -(1.0 + p2) / (2.0 * w32);
 
     // ∂H/∂p = -(-2qs + 2pt) / (2·w^(3/2)) + 3p·num / (2·w^(5/2))
-    let dh_dp = -(-2.0 * q * s + 2.0 * p * t) / (2.0 * w32)
-        + 3.0 * p * num / (2.0 * w52);
+    let dh_dp = -(-2.0 * q * s + 2.0 * p * t) / (2.0 * w32) + 3.0 * p * num / (2.0 * w52);
     // ∂H/∂q = -(2qr - 2ps) / (2·w^(3/2)) + 3q·num / (2·w^(5/2))
-    let dh_dq = -(2.0 * q * r - 2.0 * p * s) / (2.0 * w32)
-        + 3.0 * q * num / (2.0 * w52);
+    let dh_dq = -(2.0 * q * r - 2.0 * p * s) / (2.0 * w32) + 3.0 * q * num / (2.0 * w52);
 
     (dh_dp, dh_dq, dh_dr, dh_ds, dh_dt)
 }
@@ -362,7 +356,9 @@ fn curvature_partials_profile(p: f64, q: f64, r: f64, s: f64, t: f64) -> (f64, f
         let pp2 = pp * pp;
         let qq2 = qq * qq;
         let pq2 = pp2 + qq2;
-        if pq2 < 1e-30 { return 0.0; }
+        if pq2 < 1e-30 {
+            return 0.0;
+        }
         let ww = 1.0 + pq2;
         -(pp2 * r + 2.0 * pp * qq * s + qq2 * t) / (pq2 * ww * ww.sqrt())
     };
@@ -403,7 +399,9 @@ fn curvature_partials_plan(p: f64, q: f64, r: f64, s: f64, t: f64) -> (f64, f64,
         let pp2 = pp * pp;
         let qq2 = qq * qq;
         let pq2 = pp2 + qq2;
-        if pq2 < 1e-30 { return 0.0; }
+        if pq2 < 1e-30 {
+            return 0.0;
+        }
         let ww = 1.0 + pq2;
         -(qq2 * r - 2.0 * pp * qq * s + pp2 * t) / (pq2 * ww.sqrt())
     };
@@ -429,11 +427,19 @@ mod tests {
 
         // Slope RMSE on flat should be positive (uncertainty exists even on flat)
         let s = result.slope_rmse.get(5, 5).unwrap();
-        assert!(s > 0.0 && s < 1.0, "Flat terrain slope RMSE should be small, got {:.6}", s);
+        assert!(
+            s > 0.0 && s < 1.0,
+            "Flat terrain slope RMSE should be small, got {:.6}",
+            s
+        );
 
         // Curvature RMSE should be finite
         let gc = result.general_curvature_rmse.get(5, 5).unwrap();
-        assert!(gc.is_finite() && gc >= 0.0, "Curvature RMSE should be finite, got {:.6}", gc);
+        assert!(
+            gc.is_finite() && gc >= 0.0,
+            "Curvature RMSE should be finite, got {:.6}",
+            gc
+        );
     }
 
     #[test]
@@ -450,11 +456,19 @@ mod tests {
         let result = uncertainty(&dem, UncertaintyParams { dem_rmse: 1.0 }).unwrap();
 
         let s = result.slope_rmse.get(5, 5).unwrap();
-        assert!(s > 0.0 && s.is_finite(), "Slope RMSE should be positive, got {:.6}", s);
+        assert!(
+            s > 0.0 && s.is_finite(),
+            "Slope RMSE should be positive, got {:.6}",
+            s
+        );
 
         // Aspect RMSE should be defined (slope > 0)
         let a = result.aspect_rmse.get(5, 5).unwrap();
-        assert!(a.is_finite() && a >= 0.0, "Aspect RMSE should be finite, got {:.6}", a);
+        assert!(
+            a.is_finite() && a >= 0.0,
+            "Aspect RMSE should be finite, got {:.6}",
+            a
+        );
     }
 
     #[test]
@@ -464,7 +478,8 @@ mod tests {
         dem.set_transform(GeoTransform::new(0.0, 11.0, 10.0, -10.0));
         for row in 0..11 {
             for col in 0..11 {
-                dem.set(row, col, row as f64 * 5.0 + col as f64 * 3.0).unwrap();
+                dem.set(row, col, row as f64 * 5.0 + col as f64 * 3.0)
+                    .unwrap();
             }
         }
 
@@ -477,7 +492,8 @@ mod tests {
         assert!(
             s2 > s1,
             "Higher DEM RMSE should give higher slope RMSE: {:.6} vs {:.6}",
-            s1, s2
+            s1,
+            s2
         );
     }
 
@@ -532,6 +548,10 @@ mod tests {
 
         // Interior cells should have defined uncertainty
         let gc = result.general_curvature_rmse.get(10, 10).unwrap();
-        assert!(gc.is_finite() && gc > 0.0, "Bowl curvature RMSE should be positive, got {:.8}", gc);
+        assert!(
+            gc.is_finite() && gc > 0.0,
+            "Bowl curvature RMSE should be positive, got {:.8}",
+            gc
+        );
     }
 }

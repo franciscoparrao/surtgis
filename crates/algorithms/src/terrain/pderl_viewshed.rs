@@ -134,9 +134,7 @@ pub fn viewshed_pderl(dem: &Raster<f64>, params: PderlViewshedParams) -> Result<
 
         // Interpolate reference angle from neighbors closer to observer
         // Use the two neighbors along the LoS (bilinear interpolation along the ray)
-        let reference = interpolate_ref_angle(
-            &ref_angle, obs_r, obs_c, row, col, rows, cols,
-        );
+        let reference = interpolate_ref_angle(&ref_angle, obs_r, obs_c, row, col, rows, cols);
 
         // Update reference angle at this cell
         // The reference angle is the max of:
@@ -162,9 +160,12 @@ pub fn viewshed_pderl(dem: &Raster<f64>, params: PderlViewshedParams) -> Result<
 /// along the line of sight.
 fn interpolate_ref_angle(
     ref_angle: &Array2<f64>,
-    obs_r: usize, obs_c: usize,
-    target_r: usize, target_c: usize,
-    rows: usize, cols: usize,
+    obs_r: usize,
+    obs_c: usize,
+    target_r: usize,
+    target_c: usize,
+    rows: usize,
+    cols: usize,
 ) -> f64 {
     let dr = target_r as f64 - obs_r as f64;
     let dc = target_c as f64 - obs_c as f64;
@@ -222,12 +223,16 @@ mod tests {
         let mut dem = Raster::filled(21, 21, 100.0_f64);
         dem.set_transform(GeoTransform::new(0.0, 21.0, 10.0, -10.0));
 
-        let result = viewshed_pderl(&dem, PderlViewshedParams {
-            observer_row: 10,
-            observer_col: 10,
-            observer_height: 1.7,
-            ..Default::default()
-        }).unwrap();
+        let result = viewshed_pderl(
+            &dem,
+            PderlViewshedParams {
+                observer_row: 10,
+                observer_col: 10,
+                observer_height: 1.7,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         // On flat terrain, everything should be visible
         let mut visible = 0;
@@ -242,7 +247,8 @@ mod tests {
         assert!(
             visible > rows * cols * 8 / 10,
             "Flat terrain should have >80% visible, got {}/{}",
-            visible, rows * cols
+            visible,
+            rows * cols
         );
     }
 
@@ -256,12 +262,16 @@ mod tests {
             dem.set(5, col, 500.0).unwrap();
         }
 
-        let result = viewshed_pderl(&dem, PderlViewshedParams {
-            observer_row: 10,
-            observer_col: 10,
-            observer_height: 1.7,
-            ..Default::default()
-        }).unwrap();
+        let result = viewshed_pderl(
+            &dem,
+            PderlViewshedParams {
+                observer_row: 10,
+                observer_col: 10,
+                observer_height: 1.7,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         // Cells beyond the wall (rows 0-4) should be mostly hidden
         let mut hidden_beyond = 0;
@@ -284,11 +294,15 @@ mod tests {
         let mut dem = Raster::filled(11, 11, 100.0_f64);
         dem.set_transform(GeoTransform::new(0.0, 11.0, 10.0, -10.0));
 
-        let result = viewshed_pderl(&dem, PderlViewshedParams {
-            observer_row: 5,
-            observer_col: 5,
-            ..Default::default()
-        }).unwrap();
+        let result = viewshed_pderl(
+            &dem,
+            PderlViewshedParams {
+                observer_row: 5,
+                observer_col: 5,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         assert_eq!(result.get(5, 5).unwrap(), 1, "Observer should be visible");
     }
@@ -298,26 +312,44 @@ mod tests {
         let mut dem = Raster::filled(21, 21, 100.0_f64);
         dem.set_transform(GeoTransform::new(0.0, 21.0, 10.0, -10.0));
 
-        let result = viewshed_pderl(&dem, PderlViewshedParams {
-            observer_row: 10,
-            observer_col: 10,
-            max_radius: 3,
-            ..Default::default()
-        }).unwrap();
+        let result = viewshed_pderl(
+            &dem,
+            PderlViewshedParams {
+                observer_row: 10,
+                observer_col: 10,
+                max_radius: 3,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         // Cells beyond radius 3 should not be visible
-        assert_eq!(result.get(0, 0).unwrap(), 0, "Cell beyond max_radius should be hidden");
+        assert_eq!(
+            result.get(0, 0).unwrap(),
+            0,
+            "Cell beyond max_radius should be hidden"
+        );
         // Close cells should be visible
-        assert_eq!(result.get(10, 12).unwrap(), 1, "Close cell should be visible");
+        assert_eq!(
+            result.get(10, 12).unwrap(),
+            1,
+            "Close cell should be visible"
+        );
     }
 
     #[test]
     fn test_pderl_invalid_observer() {
         let dem = Raster::filled(5, 5, 100.0_f64);
-        assert!(viewshed_pderl(&dem, PderlViewshedParams {
-            observer_row: 10,
-            observer_col: 10,
-            ..Default::default()
-        }).is_err());
+        assert!(
+            viewshed_pderl(
+                &dem,
+                PderlViewshedParams {
+                    observer_row: 10,
+                    observer_col: 10,
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
     }
 }

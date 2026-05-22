@@ -87,10 +87,8 @@ pub fn show_map_canvas(
     let img_rect = Rect::from_min_size(img_origin, img_size);
 
     // Interaction area
-    let (response, painter) = ui.allocate_painter(
-        Vec2::new(available.x, fit_h),
-        Sense::click_and_drag(),
-    );
+    let (response, painter) =
+        ui.allocate_painter(Vec2::new(available.x, fit_h), Sense::click_and_drag());
 
     // Background
     painter.rect_filled(response.rect, 0.0, Color32::from_gray(30));
@@ -111,7 +109,8 @@ pub fn show_map_canvas(
         // Zoom towards cursor position
         if let Some(cursor) = response.hover_pos() {
             let ratio = new_zoom / state.zoom;
-            state.offset = cursor.to_vec2() - ratio * (cursor.to_vec2() - state.offset - center.to_vec2())
+            state.offset = cursor.to_vec2()
+                - ratio * (cursor.to_vec2() - state.offset - center.to_vec2())
                 - center.to_vec2();
             // Simplified: just adjust offset proportionally
             state.offset.x *= ratio;
@@ -161,9 +160,7 @@ pub fn show_map_canvas(
     );
     painter.rect_filled(status_rect, 0.0, Color32::from_gray(40));
 
-    let status_text = if let (Some((gx, gy)), Some(val)) =
-        (state.cursor_geo, &state.cursor_value)
-    {
+    let status_text = if let (Some((gx, gy)), Some(val)) = (state.cursor_geo, &state.cursor_value) {
         format!(
             "X: {:.6}  Y: {:.6}  |  Value: {}  |  Zoom: {:.0}%  |  {}x{}",
             gx,
@@ -293,11 +290,7 @@ fn draw_scale_bar(
 }
 
 /// Ensure the RGBA cache and texture are up to date.
-fn ensure_texture(
-    dataset: &mut Dataset,
-    texture: &mut Option<TextureHandle>,
-    ctx: &egui::Context,
-) {
+fn ensure_texture(dataset: &mut Dataset, texture: &mut Option<TextureHandle>, ctx: &egui::Context) {
     if dataset.rgba_cache.is_none() {
         let rgba = match &dataset.raster {
             DatasetRaster::F64(r) => {
@@ -321,11 +314,7 @@ fn ensure_texture(
     {
         let (rows, cols) = (dataset.raster.rows(), dataset.raster.cols());
         let image = egui::ColorImage::from_rgba_unmultiplied([cols, rows], rgba);
-        *texture = Some(ctx.load_texture(
-            &dataset.name,
-            image,
-            egui::TextureOptions::NEAREST,
-        ));
+        *texture = Some(ctx.load_texture(&dataset.name, image, egui::TextureOptions::NEAREST));
     }
 }
 

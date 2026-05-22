@@ -19,8 +19,8 @@
 //!   calculate it and how to use it. *Hydrological Processes*, 9, 161–182.
 
 use ndarray::Array2;
-use surtgis_core::raster::Raster;
 use surtgis_core::Result;
+use surtgis_core::raster::Raster;
 
 /// D8 neighbor offsets matching direction encoding (1=E, 2=NE, ..., 8=SE)
 const D8_OFFSETS: [(isize, isize); 8] = [
@@ -36,16 +36,19 @@ const D8_OFFSETS: [(isize, isize); 8] = [
 
 /// Distance factors for each D8 direction (1.0 cardinal, sqrt(2) diagonal)
 const D8_DIST: [f64; 8] = [
-    1.0, std::f64::consts::SQRT_2, 1.0, std::f64::consts::SQRT_2,
-    1.0, std::f64::consts::SQRT_2, 1.0, std::f64::consts::SQRT_2,
+    1.0,
+    std::f64::consts::SQRT_2,
+    1.0,
+    std::f64::consts::SQRT_2,
+    1.0,
+    std::f64::consts::SQRT_2,
+    1.0,
+    std::f64::consts::SQRT_2,
 ];
 
 /// Contour lengths for each D8 direction (Quinn et al. 1991, Table 1).
 /// Cardinal: 0.5 * cell_size, Diagonal: 0.354 * cell_size (≈ 0.5/√2)
-const CONTOUR_FRACTION: [f64; 8] = [
-    0.5, 0.354, 0.5, 0.354,
-    0.5, 0.354, 0.5, 0.354,
-];
+const CONTOUR_FRACTION: [f64; 8] = [0.5, 0.354, 0.5, 0.354, 0.5, 0.354, 0.5, 0.354];
 
 /// Parameters for MFD flow accumulation
 #[derive(Debug, Clone)]
@@ -92,8 +95,7 @@ pub fn flow_accumulation_mfd(dem: &Raster<f64>, params: MfdParams) -> Result<Ras
     for row in 0..rows {
         for col in 0..cols {
             let z = unsafe { dem.get_unchecked(row, col) };
-            let is_nd = z.is_nan()
-                || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
+            let is_nd = z.is_nan() || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
             if !is_nd {
                 cells.push((row, col, z));
             }
@@ -110,8 +112,7 @@ pub fn flow_accumulation_mfd(dem: &Raster<f64>, params: MfdParams) -> Result<Ras
     for row in 0..rows {
         for col in 0..cols {
             let z = unsafe { dem.get_unchecked(row, col) };
-            let is_nd = z.is_nan()
-                || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
+            let is_nd = z.is_nan() || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
             if is_nd {
                 accumulation[(row, col)] = 0.0;
             }
@@ -139,9 +140,10 @@ pub fn flow_accumulation_mfd(dem: &Raster<f64>, params: MfdParams) -> Result<Ras
                 continue;
             }
             if let Some(nd) = nodata
-                && (nz - nd).abs() < f64::EPSILON {
-                    continue;
-                }
+                && (nz - nd).abs() < f64::EPSILON
+            {
+                continue;
+            }
 
             // Only consider downslope neighbors
             let drop = z - nz;
@@ -182,8 +184,7 @@ pub fn flow_accumulation_mfd(dem: &Raster<f64>, params: MfdParams) -> Result<Ras
     for row in 0..rows {
         for col in 0..cols {
             let z = unsafe { dem.get_unchecked(row, col) };
-            let is_nd = z.is_nan()
-                || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
+            let is_nd = z.is_nan() || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
             if !is_nd {
                 accumulation[(row, col)] -= 1.0;
                 // Clamp to 0 (floating point rounding)
@@ -204,9 +205,9 @@ pub fn flow_accumulation_mfd(dem: &Raster<f64>, params: MfdParams) -> Result<Ras
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hydrology::fill_sinks::{fill_sinks, FillSinksParams};
-    use crate::hydrology::flow_direction::flow_direction;
+    use crate::hydrology::fill_sinks::{FillSinksParams, fill_sinks};
     use crate::hydrology::flow_accumulation::flow_accumulation;
+    use crate::hydrology::flow_direction::flow_direction;
     use surtgis_core::GeoTransform;
 
     #[test]
@@ -266,18 +267,21 @@ mod tests {
 
         // D8 peak (max accumulation) should be >= MFD peak
         // because D8 concentrates all flow in single cells
-        let d8_max = (0..rows).flat_map(|r| (0..cols).map(move |c| (r, c)))
+        let d8_max = (0..rows)
+            .flat_map(|r| (0..cols).map(move |c| (r, c)))
             .map(|(r, c)| d8_acc.get(r, c).unwrap())
             .fold(0.0_f64, f64::max);
 
-        let mfd_max = (0..rows).flat_map(|r| (0..cols).map(move |c| (r, c)))
+        let mfd_max = (0..rows)
+            .flat_map(|r| (0..cols).map(move |c| (r, c)))
             .map(|(r, c)| mfd_acc.get(r, c).unwrap())
             .fold(0.0_f64, f64::max);
 
         assert!(
             d8_max >= mfd_max - 1.0,
             "D8 max should be >= MFD max (more concentrated): d8={}, mfd={}",
-            d8_max, mfd_max
+            d8_max,
+            mfd_max
         );
 
         // MFD bottom row should have more non-zero cells than D8
@@ -292,7 +296,8 @@ mod tests {
         assert!(
             mfd_nonzero >= d8_nonzero,
             "MFD should have flow in more cells: d8_nonzero={}, mfd_nonzero={}",
-            d8_nonzero, mfd_nonzero
+            d8_nonzero,
+            mfd_nonzero
         );
     }
 
@@ -350,7 +355,8 @@ mod tests {
         dem.set_transform(GeoTransform::new(0.0, 5.0, 1.0, -1.0));
         for row in 0..5 {
             for col in 0..5 {
-                dem.set(row, col, (5 - row) as f64 * 10.0 + col as f64).unwrap();
+                dem.set(row, col, (5 - row) as f64 * 10.0 + col as f64)
+                    .unwrap();
             }
         }
 
@@ -358,18 +364,21 @@ mod tests {
         let high_p = flow_accumulation_mfd(&dem, MfdParams { exponent: 5.0 }).unwrap();
 
         // With low exponent, flow is more distributed → max accumulation is lower
-        let low_max = (0..5).flat_map(|r| (0..5).map(move |c| (r, c)))
+        let low_max = (0..5)
+            .flat_map(|r| (0..5).map(move |c| (r, c)))
             .map(|(r, c)| low_p.get(r, c).unwrap())
             .fold(0.0_f64, f64::max);
 
-        let high_max = (0..5).flat_map(|r| (0..5).map(move |c| (r, c)))
+        let high_max = (0..5)
+            .flat_map(|r| (0..5).map(move |c| (r, c)))
             .map(|(r, c)| high_p.get(r, c).unwrap())
             .fold(0.0_f64, f64::max);
 
         assert!(
             high_max >= low_max - 0.5,
             "Higher exponent should concentrate flow more: low_max={}, high_max={}",
-            low_max, high_max
+            low_max,
+            high_max
         );
     }
 }

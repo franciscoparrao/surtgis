@@ -37,20 +37,23 @@ impl PartialOrd for State {
 impl Ord for State {
     fn cmp(&self, other: &Self) -> Ordering {
         // Reverse order for min-heap
-        other.cost.partial_cmp(&self.cost).unwrap_or(Ordering::Equal)
+        other
+            .cost
+            .partial_cmp(&self.cost)
+            .unwrap_or(Ordering::Equal)
     }
 }
 
 /// 8-connected neighbor offsets with their distance multipliers.
 const NEIGHBORS: [(isize, isize, f64); 8] = [
     (-1, -1, std::f64::consts::SQRT_2),
-    (-1,  0, 1.0),
-    (-1,  1, std::f64::consts::SQRT_2),
-    ( 0, -1, 1.0),
-    ( 0,  1, 1.0),
-    ( 1, -1, std::f64::consts::SQRT_2),
-    ( 1,  0, 1.0),
-    ( 1,  1, std::f64::consts::SQRT_2),
+    (-1, 0, 1.0),
+    (-1, 1, std::f64::consts::SQRT_2),
+    (0, -1, 1.0),
+    (0, 1, 1.0),
+    (1, -1, std::f64::consts::SQRT_2),
+    (1, 0, 1.0),
+    (1, 1, std::f64::consts::SQRT_2),
 ];
 
 /// Compute accumulated cost distance from source cells.
@@ -95,14 +98,20 @@ pub fn cost_distance(
     };
 
     if sources.is_empty() {
-        return Err(Error::Algorithm("No source cells found for cost distance".into()));
+        return Err(Error::Algorithm(
+            "No source cells found for cost distance".into(),
+        ));
     }
 
     // Initialize sources
     for &(r, c) in &sources {
         if r < rows && c < cols {
             dist[r * cols + c] = 0.0;
-            heap.push(State { cost: 0.0, row: r, col: c });
+            heap.push(State {
+                cost: 0.0,
+                row: r,
+                col: c,
+            });
         }
     }
 
@@ -137,7 +146,11 @@ pub fn cost_distance(
 
             if new_cost < dist[nr * cols + nc] {
                 dist[nr * cols + nc] = new_cost;
-                heap.push(State { cost: new_cost, row: nr, col: nc });
+                heap.push(State {
+                    cost: new_cost,
+                    row: nr,
+                    col: nc,
+                });
             }
         }
     }
@@ -151,8 +164,8 @@ pub fn cost_distance(
 
     let mut output = cost_surface.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() = Array2::from_shape_vec((rows, cols), dist)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() =
+        Array2::from_shape_vec((rows, cols), dist).map_err(|e| Error::Other(e.to_string()))?;
 
     Ok(output)
 }
@@ -171,9 +184,13 @@ mod tests {
     #[test]
     fn test_cost_distance_basic() {
         let r = uniform_cost(10, 10, 1.0);
-        let result = cost_distance(&r, CostDistanceParams {
-            sources: vec![(0, 0)],
-        }).unwrap();
+        let result = cost_distance(
+            &r,
+            CostDistanceParams {
+                sources: vec![(0, 0)],
+            },
+        )
+        .unwrap();
 
         // Source cell should be 0
         let v00 = result.get(0, 0).unwrap();
@@ -181,12 +198,19 @@ mod tests {
 
         // Adjacent cell (0,1): avg_cost=1.0, distance=1.0 → 1.0
         let v01 = result.get(0, 1).unwrap();
-        assert!((v01 - 1.0).abs() < 1e-10, "Adjacent should be 1.0, got {}", v01);
+        assert!(
+            (v01 - 1.0).abs() < 1e-10,
+            "Adjacent should be 1.0, got {}",
+            v01
+        );
 
         // Diagonal cell (1,1): avg_cost=1.0, distance=sqrt(2) → sqrt(2)
         let v11 = result.get(1, 1).unwrap();
-        assert!((v11 - std::f64::consts::SQRT_2).abs() < 1e-10,
-            "Diagonal should be sqrt(2), got {}", v11);
+        assert!(
+            (v11 - std::f64::consts::SQRT_2).abs() < 1e-10,
+            "Diagonal should be sqrt(2), got {}",
+            v11
+        );
     }
 
     #[test]
@@ -197,9 +221,13 @@ mod tests {
             r.set(row, 2, f64::NAN).unwrap();
         }
 
-        let result = cost_distance(&r, CostDistanceParams {
-            sources: vec![(2, 0)],
-        }).unwrap();
+        let result = cost_distance(
+            &r,
+            CostDistanceParams {
+                sources: vec![(2, 0)],
+            },
+        )
+        .unwrap();
 
         // Cell beyond barrier should be unreachable (NaN)
         let v = result.get(2, 4).unwrap();

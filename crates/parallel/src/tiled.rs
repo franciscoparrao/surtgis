@@ -20,7 +20,13 @@ pub struct Tile {
 
 impl Tile {
     /// Create a new tile
-    pub fn new(row_offset: usize, col_offset: usize, rows: usize, cols: usize, overlap: usize) -> Self {
+    pub fn new(
+        row_offset: usize,
+        col_offset: usize,
+        rows: usize,
+        cols: usize,
+        overlap: usize,
+    ) -> Self {
         Self {
             row_offset,
             col_offset,
@@ -52,10 +58,7 @@ impl Tile {
 
     /// Convert tile-local coordinates to source raster coordinates
     pub fn to_source_coords(&self, local_row: usize, local_col: usize) -> (usize, usize) {
-        (
-            self.row_offset + local_row,
-            self.col_offset + local_col,
-        )
+        (self.row_offset + local_row, self.col_offset + local_col)
     }
 }
 
@@ -72,12 +75,7 @@ pub struct TileIterator {
 
 impl TileIterator {
     /// Create a new tile iterator
-    pub fn new(
-        total_rows: usize,
-        total_cols: usize,
-        tile_size: usize,
-        overlap: usize,
-    ) -> Self {
+    pub fn new(total_rows: usize, total_cols: usize, tile_size: usize, overlap: usize) -> Self {
         Self {
             total_rows,
             total_cols,
@@ -155,12 +153,8 @@ impl TiledProcessor {
     ///
     /// The function receives (row, col, value, neighbors) where neighbors
     /// is a closure to access neighboring cells safely.
-    pub fn process<T, U, F>(
-        &self,
-        input: &Raster<T>,
-        output: &mut Raster<U>,
-        f: F,
-    ) where
+    pub fn process<T, U, F>(&self, input: &Raster<T>, output: &mut Raster<U>, f: F)
+    where
         T: RasterElement,
         U: RasterElement,
         F: Fn(usize, usize, T, &dyn Fn(isize, isize) -> Option<T>) -> U + Sync + Send,

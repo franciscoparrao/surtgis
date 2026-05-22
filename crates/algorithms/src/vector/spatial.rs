@@ -1,9 +1,8 @@
 //! Spatial operations: convex hull, centroid, bounding box, dissolve
 
 use geo::{
-    BoundingRect, Centroid as GeoCentroid, ConvexHull as GeoConvexHull,
-    Coord, Geometry, LineString, MultiPoint,
-    Point, Polygon,
+    BoundingRect, Centroid as GeoCentroid, ConvexHull as GeoConvexHull, Coord, Geometry,
+    LineString, MultiPoint, Point, Polygon,
 };
 use std::collections::HashMap;
 
@@ -18,7 +17,12 @@ pub struct BoundingBox {
 
 impl BoundingBox {
     pub fn new(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> Self {
-        Self { min_x, min_y, max_x, max_y }
+        Self {
+            min_x,
+            min_y,
+            max_x,
+            max_y,
+        }
     }
 
     pub fn width(&self) -> f64 {
@@ -34,7 +38,10 @@ impl BoundingBox {
     }
 
     pub fn center(&self) -> (f64, f64) {
-        ((self.min_x + self.max_x) / 2.0, (self.min_y + self.max_y) / 2.0)
+        (
+            (self.min_x + self.max_x) / 2.0,
+            (self.min_y + self.max_y) / 2.0,
+        )
     }
 
     pub fn contains_point(&self, x: f64, y: f64) -> bool {
@@ -101,22 +108,36 @@ pub fn convex_hull(geom: &Geometry<f64>) -> Polygon<f64> {
         Geometry::MultiLineString(mls) => mls.convex_hull(),
         Geometry::GeometryCollection(gc) => {
             // Collect all coordinates
-            let points: Vec<Coord<f64>> = gc
-                .0
-                .iter()
-                .filter_map(bounding_box)
-                .flat_map(|bb| {
-                    vec![
-                        Coord { x: bb.min_x, y: bb.min_y },
-                        Coord { x: bb.max_x, y: bb.max_y },
-                        Coord { x: bb.min_x, y: bb.max_y },
-                        Coord { x: bb.max_x, y: bb.min_y },
-                    ]
-                })
-                .collect();
+            let points: Vec<Coord<f64>> =
+                gc.0.iter()
+                    .filter_map(bounding_box)
+                    .flat_map(|bb| {
+                        vec![
+                            Coord {
+                                x: bb.min_x,
+                                y: bb.min_y,
+                            },
+                            Coord {
+                                x: bb.max_x,
+                                y: bb.max_y,
+                            },
+                            Coord {
+                                x: bb.min_x,
+                                y: bb.max_y,
+                            },
+                            Coord {
+                                x: bb.max_x,
+                                y: bb.min_y,
+                            },
+                        ]
+                    })
+                    .collect();
 
             let mp = MultiPoint::from(
-                points.into_iter().map(|c| Point::new(c.x, c.y)).collect::<Vec<_>>()
+                points
+                    .into_iter()
+                    .map(|c| Point::new(c.x, c.y))
+                    .collect::<Vec<_>>(),
             );
             mp.convex_hull()
         }
@@ -155,7 +176,10 @@ pub fn dissolve(features: &[(String, Polygon<f64>)]) -> HashMap<String, Polygon<
                 .collect();
 
             let mp = MultiPoint::from(
-                all_coords.into_iter().map(|c| Point::new(c.x, c.y)).collect::<Vec<_>>()
+                all_coords
+                    .into_iter()
+                    .map(|c| Point::new(c.x, c.y))
+                    .collect::<Vec<_>>(),
             );
             let hull = mp.convex_hull();
 
@@ -268,9 +292,7 @@ mod tests {
 
     #[test]
     fn test_dissolve_single_group() {
-        let features = vec![
-            ("forest".to_string(), sample_polygon()),
-        ];
+        let features = vec![("forest".to_string(), sample_polygon())];
 
         let result = dissolve(&features);
         assert_eq!(result.len(), 1);
@@ -280,15 +302,33 @@ mod tests {
     #[test]
     fn test_dissolve_multiple_groups() {
         let poly1 = Polygon::new(
-            LineString::from(vec![(0.0, 0.0), (5.0, 0.0), (5.0, 5.0), (0.0, 5.0), (0.0, 0.0)]),
+            LineString::from(vec![
+                (0.0, 0.0),
+                (5.0, 0.0),
+                (5.0, 5.0),
+                (0.0, 5.0),
+                (0.0, 0.0),
+            ]),
             vec![],
         );
         let poly2 = Polygon::new(
-            LineString::from(vec![(5.0, 0.0), (10.0, 0.0), (10.0, 5.0), (5.0, 5.0), (5.0, 0.0)]),
+            LineString::from(vec![
+                (5.0, 0.0),
+                (10.0, 0.0),
+                (10.0, 5.0),
+                (5.0, 5.0),
+                (5.0, 0.0),
+            ]),
             vec![],
         );
         let poly3 = Polygon::new(
-            LineString::from(vec![(20.0, 20.0), (25.0, 20.0), (25.0, 25.0), (20.0, 25.0), (20.0, 20.0)]),
+            LineString::from(vec![
+                (20.0, 20.0),
+                (25.0, 20.0),
+                (25.0, 25.0),
+                (20.0, 25.0),
+                (20.0, 20.0),
+            ]),
             vec![],
         );
 

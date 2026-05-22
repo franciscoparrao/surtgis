@@ -11,9 +11,9 @@
 //!
 //! Uses the Priority-Flood algorithm (Barnes 2014) for depression filling.
 
-use ndarray::Array2;
+use crate::hydrology::{PriorityFloodParams, priority_flood};
 use crate::maybe_rayon::*;
-use crate::hydrology::{priority_flood, PriorityFloodParams};
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -77,7 +77,13 @@ mod tests {
             for c in 0..10 {
                 let v = result.get(r, c).unwrap();
                 if !v.is_nan() {
-                    assert!(v.abs() < 1e-10, "No-pit DEM should have 0 depth, got {} at ({},{})", v, r, c);
+                    assert!(
+                        v.abs() < 1e-10,
+                        "No-pit DEM should have 0 depth, got {} at ({},{})",
+                        v,
+                        r,
+                        c
+                    );
                 }
             }
         }
@@ -93,7 +99,11 @@ mod tests {
         let result = elev_above_pit(&dem).unwrap();
         let pit_depth = result.get(2, 2).unwrap();
         // Filled should be 10 (surrounding), original is 5, depth = 5
-        assert!((pit_depth - 5.0).abs() < 1e-10, "Pit depth should be 5, got {}", pit_depth);
+        assert!(
+            (pit_depth - 5.0).abs() < 1e-10,
+            "Pit depth should be 5, got {}",
+            pit_depth
+        );
     }
 
     #[test]
@@ -105,7 +115,8 @@ mod tests {
             for c in 0..10 {
                 let x = c as f64 - 5.0;
                 let y = r as f64 - 5.0;
-                dem.set(r, c, x * x + y * y + (x * 3.0).sin() * 5.0).unwrap();
+                dem.set(r, c, x * x + y * y + (x * 3.0).sin() * 5.0)
+                    .unwrap();
             }
         }
 
@@ -114,7 +125,13 @@ mod tests {
             for c in 0..10 {
                 let v = result.get(r, c).unwrap();
                 if !v.is_nan() {
-                    assert!(v >= -1e-10, "Depth should be >= 0, got {} at ({},{})", v, r, c);
+                    assert!(
+                        v >= -1e-10,
+                        "Depth should be >= 0, got {} at ({},{})",
+                        v,
+                        r,
+                        c
+                    );
                 }
             }
         }

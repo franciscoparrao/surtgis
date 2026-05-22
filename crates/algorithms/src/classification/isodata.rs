@@ -3,8 +3,8 @@
 //! Iterative Self-Organizing Data Analysis Technique. Extends K-means
 //! with automatic split and merge of clusters based on statistical criteria.
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -71,7 +71,9 @@ pub fn isodata(raster: &Raster<f64>, params: IsodataParams) -> Result<Raster<f64
     }
 
     if values.len() < params.initial_k {
-        return Err(Error::Algorithm("Not enough valid pixels for ISODATA".into()));
+        return Err(Error::Algorithm(
+            "Not enough valid pixels for ISODATA".into(),
+        ));
     }
 
     // Initialize centroids evenly
@@ -166,7 +168,9 @@ pub fn isodata(raster: &Raster<f64>, params: IsodataParams) -> Result<Raster<f64
                 }
                 if count > 2 * params.min_samples {
                     let std_dev = (sq_sum / count as f64).sqrt();
-                    if std_dev > params.max_std_dev && new_centroids.len() + to_split.len() < params.max_k {
+                    if std_dev > params.max_std_dev
+                        && new_centroids.len() + to_split.len() < params.max_k
+                    {
                         to_split.push((ki, std_dev));
                     }
                 }
@@ -184,10 +188,14 @@ pub fn isodata(raster: &Raster<f64>, params: IsodataParams) -> Result<Raster<f64
             let mut final_centroids = Vec::new();
 
             for i in 0..new_centroids.len() {
-                if merged[i] { continue; }
+                if merged[i] {
+                    continue;
+                }
                 let mut merge_with = None;
                 for j in (i + 1)..new_centroids.len() {
-                    if merged[j] { continue; }
+                    if merged[j] {
+                        continue;
+                    }
                     if (new_centroids[i] - new_centroids[j]).abs() < params.min_merge_distance {
                         merge_with = Some(j);
                         break;
@@ -205,7 +213,9 @@ pub fn isodata(raster: &Raster<f64>, params: IsodataParams) -> Result<Raster<f64
 
         // Check convergence
         let max_shift = if centroids.len() == new_centroids.len() {
-            centroids.iter().zip(&new_centroids)
+            centroids
+                .iter()
+                .zip(&new_centroids)
                 .map(|(a, b)| (a - b).abs())
                 .fold(0.0_f64, f64::max)
         } else {
@@ -243,8 +253,8 @@ pub fn isodata(raster: &Raster<f64>, params: IsodataParams) -> Result<Raster<f64
 
     let mut output = raster.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() = Array2::from_shape_vec((rows, cols), data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() =
+        Array2::from_shape_vec((rows, cols), data).map_err(|e| Error::Other(e.to_string()))?;
 
     let _ = k; // suppress unused warning
     Ok(output)
@@ -266,17 +276,24 @@ mod tests {
             }
         }
 
-        let result = isodata(&r, IsodataParams {
-            initial_k: 3,
-            min_k: 2,
-            max_k: 5,
-            ..Default::default()
-        }).unwrap();
+        let result = isodata(
+            &r,
+            IsodataParams {
+                initial_k: 3,
+                min_k: 2,
+                max_k: 5,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let top = result.get(0, 0).unwrap();
         let bottom = result.get(19, 0).unwrap();
         assert!(top.is_finite());
         assert!(bottom.is_finite());
-        assert!(top != bottom, "Distinct groups should have different labels");
+        assert!(
+            top != bottom,
+            "Distinct groups should have different labels"
+        );
     }
 }

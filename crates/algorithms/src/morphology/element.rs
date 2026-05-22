@@ -29,7 +29,9 @@ impl StructuringElement {
     /// Validate the structuring element, returning an error for invalid configurations
     pub fn validate(&self) -> Result<()> {
         match self {
-            StructuringElement::Square(r) | StructuringElement::Cross(r) | StructuringElement::Disk(r) => {
+            StructuringElement::Square(r)
+            | StructuringElement::Cross(r)
+            | StructuringElement::Disk(r) => {
                 if *r == 0 {
                     return Err(Error::InvalidParameter {
                         name: "radius",
@@ -82,12 +84,8 @@ impl StructuringElement {
     /// Compute (dr, dc) offsets relative to center for all active cells
     pub fn offsets(&self) -> Vec<(isize, isize)> {
         match self {
-            StructuringElement::Square(r) => {
-                Neighborhood::Square(*r).offsets()
-            }
-            StructuringElement::Disk(r) => {
-                Neighborhood::Circle(*r).offsets()
-            }
+            StructuringElement::Square(r) => Neighborhood::Square(*r).offsets(),
+            StructuringElement::Disk(r) => Neighborhood::Circle(*r).offsets(),
             StructuringElement::Cross(r) => {
                 let r = *r as isize;
                 let mut offsets = Vec::new();
@@ -105,9 +103,8 @@ impl StructuringElement {
                 for (r, row) in mask.iter().enumerate() {
                     for (c, &active) in row.iter().enumerate() {
                         if active {
-                            offsets.push(
-                                (r as isize - center as isize, c as isize - center as isize),
-                            );
+                            offsets
+                                .push((r as isize - center as isize, c as isize - center as isize));
                         }
                     }
                 }
@@ -171,10 +168,10 @@ mod tests {
         let offsets = se.offsets();
         assert_eq!(offsets.len(), 5);
         assert!(offsets.contains(&(-1, -1))); // top-left
-        assert!(offsets.contains(&(0, -1)));  // mid-left
-        assert!(offsets.contains(&(1, -1)));  // bottom-left
-        assert!(offsets.contains(&(1, 0)));   // bottom-center
-        assert!(offsets.contains(&(1, 1)));   // bottom-right
+        assert!(offsets.contains(&(0, -1))); // mid-left
+        assert!(offsets.contains(&(1, -1))); // bottom-left
+        assert!(offsets.contains(&(1, 0))); // bottom-center
+        assert!(offsets.contains(&(1, 1))); // bottom-right
     }
 
     #[test]
@@ -186,10 +183,7 @@ mod tests {
 
     #[test]
     fn test_validate_even_custom() {
-        let mask = vec![
-            vec![true, false],
-            vec![false, true],
-        ];
+        let mask = vec![vec![true, false], vec![false, true]];
         assert!(StructuringElement::Custom(mask).validate().is_err());
     }
 

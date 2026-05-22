@@ -2,8 +2,8 @@
 
 use egui::Ui;
 
-use crate::state::workspace::Workspace;
 use crate::state::DatasetId;
+use crate::state::workspace::Workspace;
 
 /// Actions returned from the layers panel.
 pub enum LayerAction {
@@ -40,7 +40,9 @@ pub fn show_layers(ui: &mut Ui, workspace: &Workspace) -> LayerAction {
             let order: Vec<DatasetId> = workspace.layer_order().iter().copied().rev().collect();
 
             for id in order {
-                let Some(ds) = workspace.get(id) else { continue };
+                let Some(ds) = workspace.get(id) else {
+                    continue;
+                };
 
                 let is_active = active == Some(id);
 

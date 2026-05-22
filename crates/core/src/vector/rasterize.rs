@@ -219,26 +219,11 @@ mod tests {
     fn rect_polygon(x_min: f64, y_min: f64, x_max: f64, y_max: f64) -> Polygon<f64> {
         Polygon::new(
             geo_types::LineString::new(vec![
-                Coord {
-                    x: x_min,
-                    y: y_min,
-                },
-                Coord {
-                    x: x_max,
-                    y: y_min,
-                },
-                Coord {
-                    x: x_max,
-                    y: y_max,
-                },
-                Coord {
-                    x: x_min,
-                    y: y_max,
-                },
-                Coord {
-                    x: x_min,
-                    y: y_min,
-                },
+                Coord { x: x_min, y: y_min },
+                Coord { x: x_max, y: y_min },
+                Coord { x: x_max, y: y_max },
+                Coord { x: x_min, y: y_max },
+                Coord { x: x_min, y: y_min },
             ]),
             vec![],
         )

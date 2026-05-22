@@ -62,13 +62,18 @@ pub fn vegetation_phenology(
 ) -> Result<PhenologyResult> {
     let n = rasters.len();
     if n < 6 {
-        return Err(Error::Other("phenology requires at least 6 time steps".into()));
+        return Err(Error::Other(
+            "phenology requires at least 6 time steps".into(),
+        ));
     }
     let (rows, cols) = rasters[0].shape();
     for r in rasters.iter().skip(1) {
         if r.shape() != (rows, cols) {
             return Err(Error::SizeMismatch {
-                er: rows, ec: cols, ar: r.rows(), ac: r.cols(),
+                er: rows,
+                ec: cols,
+                ar: r.rows(),
+                ac: r.cols(),
             });
         }
     }
@@ -77,7 +82,9 @@ pub fn vegetation_phenology(
         Some(t) => {
             if t.len() != n {
                 return Err(Error::Other(format!(
-                    "times length {} != raster count {}", t.len(), n
+                    "times length {} != raster count {}",
+                    t.len(),
+                    n
                 )));
             }
             t.to_vec()
@@ -99,99 +106,116 @@ pub fn vegetation_phenology(
         0
     };
 
-    sos_flat.par_chunks_mut(cols)
+    sos_flat
+        .par_chunks_mut(cols)
         .zip(eos_flat.par_chunks_mut(cols))
         .zip(peak_flat.par_chunks_mut(cols))
         .zip(peak_time_flat.par_chunks_mut(cols))
         .zip(amp_flat.par_chunks_mut(cols))
         .zip(len_flat.par_chunks_mut(cols))
         .enumerate()
-        .for_each(|(row, (((((sos_row, eos_row), peak_row), pt_row), amp_row), len_row))| {
-            let mut series = vec![f64::NAN; n];
-            let mut smoothed = vec![0.0f64; n];
+        .for_each(
+            |(row, (((((sos_row, eos_row), peak_row), pt_row), amp_row), len_row))| {
+                let mut series = vec![f64::NAN; n];
+                let mut smoothed = vec![0.0f64; n];
 
-            for col in 0..cols {
-                // Collect time series for this pixel
-                let mut valid_count = 0;
-                for (i, r) in rasters.iter().enumerate() {
-                    let v = unsafe { r.get_unchecked(row, col) };
-                    series[i] = v;
-                    if v.is_finite() { valid_count += 1; }
-                }
-
-                if valid_count < 4 {
-                    continue;
-                }
-
-                // Simple gap-fill: linear interpolation of NaN gaps
-                gap_fill_linear(&mut series);
-
-                // Smooth
-                if smooth_w > 0 {
-                    moving_average(&series, &mut smoothed, smooth_w);
-                } else {
-                    smoothed.copy_from_slice(&series);
-                }
-
-                // Find base (minimum) and peak (maximum)
-                let mut base = f64::INFINITY;
-                let mut peak_val = f64::NEG_INFINITY;
-                let mut peak_idx = 0;
-                for (i, &v) in smoothed.iter().enumerate() {
-                    if !v.is_finite() { continue; }
-                    if v < base { base = v; }
-                    if v > peak_val { peak_val = v; peak_idx = i; }
-                }
-
-                if !base.is_finite() || !peak_val.is_finite() || peak_val <= base {
-                    continue;
-                }
-
-                let amplitude = peak_val - base;
-                let threshold_val = base + amplitude * params.threshold;
-
-                // SOS: first crossing above threshold before peak
-                let mut sos_idx = None;
-                for i in 0..peak_idx {
-                    if smoothed[i].is_finite() && smoothed[i] >= threshold_val {
-                        // Interpolate between i-1 and i
-                        if i > 0 && smoothed[i - 1].is_finite() && smoothed[i - 1] < threshold_val {
-                            let frac = (threshold_val - smoothed[i - 1]) / (smoothed[i] - smoothed[i - 1]);
-                            sos_idx = Some(t_vals[i - 1] + frac * (t_vals[i] - t_vals[i - 1]));
-                        } else {
-                            sos_idx = Some(t_vals[i]);
+                for col in 0..cols {
+                    // Collect time series for this pixel
+                    let mut valid_count = 0;
+                    for (i, r) in rasters.iter().enumerate() {
+                        let v = unsafe { r.get_unchecked(row, col) };
+                        series[i] = v;
+                        if v.is_finite() {
+                            valid_count += 1;
                         }
-                        break;
                     }
-                }
 
-                // EOS: first crossing below threshold after peak
-                let mut eos_idx = None;
-                for i in (peak_idx + 1)..n {
-                    if smoothed[i].is_finite() && smoothed[i] <= threshold_val {
-                        if smoothed[i - 1].is_finite() && smoothed[i - 1] > threshold_val {
-                            let frac = (smoothed[i - 1] - threshold_val) / (smoothed[i - 1] - smoothed[i]);
-                            eos_idx = Some(t_vals[i - 1] + frac * (t_vals[i] - t_vals[i - 1]));
-                        } else {
-                            eos_idx = Some(t_vals[i]);
+                    if valid_count < 4 {
+                        continue;
+                    }
+
+                    // Simple gap-fill: linear interpolation of NaN gaps
+                    gap_fill_linear(&mut series);
+
+                    // Smooth
+                    if smooth_w > 0 {
+                        moving_average(&series, &mut smoothed, smooth_w);
+                    } else {
+                        smoothed.copy_from_slice(&series);
+                    }
+
+                    // Find base (minimum) and peak (maximum)
+                    let mut base = f64::INFINITY;
+                    let mut peak_val = f64::NEG_INFINITY;
+                    let mut peak_idx = 0;
+                    for (i, &v) in smoothed.iter().enumerate() {
+                        if !v.is_finite() {
+                            continue;
                         }
-                        break;
+                        if v < base {
+                            base = v;
+                        }
+                        if v > peak_val {
+                            peak_val = v;
+                            peak_idx = i;
+                        }
+                    }
+
+                    if !base.is_finite() || !peak_val.is_finite() || peak_val <= base {
+                        continue;
+                    }
+
+                    let amplitude = peak_val - base;
+                    let threshold_val = base + amplitude * params.threshold;
+
+                    // SOS: first crossing above threshold before peak
+                    let mut sos_idx = None;
+                    for i in 0..peak_idx {
+                        if smoothed[i].is_finite() && smoothed[i] >= threshold_val {
+                            // Interpolate between i-1 and i
+                            if i > 0
+                                && smoothed[i - 1].is_finite()
+                                && smoothed[i - 1] < threshold_val
+                            {
+                                let frac = (threshold_val - smoothed[i - 1])
+                                    / (smoothed[i] - smoothed[i - 1]);
+                                sos_idx = Some(t_vals[i - 1] + frac * (t_vals[i] - t_vals[i - 1]));
+                            } else {
+                                sos_idx = Some(t_vals[i]);
+                            }
+                            break;
+                        }
+                    }
+
+                    // EOS: first crossing below threshold after peak
+                    let mut eos_idx = None;
+                    for i in (peak_idx + 1)..n {
+                        if smoothed[i].is_finite() && smoothed[i] <= threshold_val {
+                            if smoothed[i - 1].is_finite() && smoothed[i - 1] > threshold_val {
+                                let frac = (smoothed[i - 1] - threshold_val)
+                                    / (smoothed[i - 1] - smoothed[i]);
+                                eos_idx = Some(t_vals[i - 1] + frac * (t_vals[i] - t_vals[i - 1]));
+                            } else {
+                                eos_idx = Some(t_vals[i]);
+                            }
+                            break;
+                        }
+                    }
+
+                    peak_row[col] = peak_val;
+                    pt_row[col] = t_vals[peak_idx];
+                    amp_row[col] = amplitude;
+
+                    if let Some(sos) = sos_idx {
+                        sos_row[col] = sos;
+                        if let Some(eos) = eos_idx {
+                            eos_row[col] = eos;
+                            len_row[col] = eos - sos;
+                        }
                     }
                 }
-
-                peak_row[col] = peak_val;
-                pt_row[col] = t_vals[peak_idx];
-                amp_row[col] = amplitude;
-
-                if let Some(sos) = sos_idx {
-                    sos_row[col] = sos;
-                    if let Some(eos) = eos_idx {
-                        eos_row[col] = eos;
-                        len_row[col] = eos - sos;
-                    }
-                }
-            }
-        });
+            },
+        );
 
     let make_raster = |flat: Vec<f64>| {
         let arr = Array2::from_shape_vec((rows, cols), flat).unwrap();
@@ -228,7 +252,11 @@ fn gap_fill_linear(series: &mut [f64]) {
             let end = i;
 
             // Get bounding values
-            let left = if start > 0 { series[start - 1] } else { f64::NAN };
+            let left = if start > 0 {
+                series[start - 1]
+            } else {
+                f64::NAN
+            };
             let right = if end < n { series[end] } else { f64::NAN };
 
             if left.is_finite() && right.is_finite() {
@@ -239,9 +267,13 @@ fn gap_fill_linear(series: &mut [f64]) {
                     series[j] = left + frac * (right - left);
                 }
             } else if left.is_finite() {
-                for j in start..end { series[j] = left; }
+                for j in start..end {
+                    series[j] = left;
+                }
             } else if right.is_finite() {
-                for j in start..end { series[j] = right; }
+                for j in start..end {
+                    series[j] = right;
+                }
             }
         } else {
             i += 1;
@@ -264,7 +296,11 @@ fn moving_average(input: &[f64], output: &mut [f64], window: usize) {
                 count += 1;
             }
         }
-        output[i] = if count > 0 { sum / count as f64 } else { f64::NAN };
+        output[i] = if count > 0 {
+            sum / count as f64
+        } else {
+            f64::NAN
+        };
     }
 }
 
@@ -285,13 +321,18 @@ mod tests {
     fn test_phenology_bell_curve() {
         // Simulate a growing season: low → high → low
         // DOY: 30, 60, 90, 120, 150, 180, 210, 240, 270, 300
-        let doys = vec![30.0, 60.0, 90.0, 120.0, 150.0, 180.0, 210.0, 240.0, 270.0, 300.0];
+        let doys = vec![
+            30.0, 60.0, 90.0, 120.0, 150.0, 180.0, 210.0, 240.0, 270.0, 300.0,
+        ];
         let ndvi = vec![0.1, 0.15, 0.3, 0.55, 0.8, 0.75, 0.5, 0.25, 0.12, 0.1];
 
         let rasters: Vec<Raster<f64>> = ndvi.iter().map(|&v| make_raster(v)).collect();
         let refs: Vec<&Raster<f64>> = rasters.iter().collect();
 
-        let params = PhenologyParams { threshold: 0.5, smooth_window: 0 };
+        let params = PhenologyParams {
+            threshold: 0.5,
+            smooth_window: 0,
+        };
         let result = vegetation_phenology(&refs, Some(&doys), &params).unwrap();
 
         let peak = result.peak.data()[[0, 0]];
@@ -300,7 +341,11 @@ mod tests {
         let sos = result.sos.data()[[0, 0]];
         let eos = result.eos.data()[[0, 0]];
 
-        assert!((peak - 0.8).abs() < 1e-10, "peak should be 0.8, got {}", peak);
+        assert!(
+            (peak - 0.8).abs() < 1e-10,
+            "peak should be 0.8, got {}",
+            peak
+        );
         assert!((peak_time - 150.0).abs() < 1e-10, "peak at DOY 150");
         assert!((amp - 0.7).abs() < 1e-10, "amplitude = 0.8 - 0.1 = 0.7");
         assert!(sos.is_finite(), "SOS should be defined");
@@ -320,10 +365,16 @@ mod tests {
         let rasters: Vec<Raster<f64>> = ndvi.iter().map(|&v| make_raster(v)).collect();
         let refs: Vec<&Raster<f64>> = rasters.iter().collect();
 
-        let params = PhenologyParams { threshold: 0.5, smooth_window: 0 };
+        let params = PhenologyParams {
+            threshold: 0.5,
+            smooth_window: 0,
+        };
         let result = vegetation_phenology(&refs, Some(&doys), &params).unwrap();
 
-        assert!(result.peak.data()[[0, 0]].is_finite(), "should handle NaN gaps");
+        assert!(
+            result.peak.data()[[0, 0]].is_finite(),
+            "should handle NaN gaps"
+        );
     }
 
     #[test]

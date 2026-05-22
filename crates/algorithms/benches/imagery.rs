@@ -1,7 +1,7 @@
 //! Benchmarks for imagery algorithms
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use surtgis_algorithms::imagery::{band_math_binary, ndvi, BandMathOp};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use surtgis_algorithms::imagery::{BandMathOp, band_math_binary, ndvi};
 use surtgis_core::{GeoTransform, Raster};
 
 fn create_band(size: usize, base: f64) -> Raster<f64> {

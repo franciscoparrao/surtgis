@@ -15,8 +15,8 @@
 //! Reference: WhiteboxTools `SphericalStdDevOfNormals`
 //! Fisher, Lewis & Embleton (1987) Statistical Analysis of Spherical Data
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -34,10 +34,7 @@ impl Default for SphericalStdDevParams {
 }
 
 /// Compute spherical standard deviation of surface normals.
-pub fn spherical_std_dev(
-    dem: &Raster<f64>,
-    params: SphericalStdDevParams,
-) -> Result<Raster<f64>> {
+pub fn spherical_std_dev(dem: &Raster<f64>, params: SphericalStdDevParams) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
     let r = params.radius as isize;
     let nodata = dem.nodata();
@@ -51,17 +48,17 @@ pub fn spherical_std_dev(
 
             for (col, out) in row_data.iter_mut().enumerate() {
                 let center = unsafe { dem.get_unchecked(row, col) };
-                if center.is_nan()
-                    || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON)
-                {
+                if center.is_nan() || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON) {
                     continue;
                 }
 
                 let ri = row as isize;
                 let ci = col as isize;
                 let border = r + 1;
-                if ri < border || ri >= rows as isize - border
-                    || ci < border || ci >= cols as isize - border
+                if ri < border
+                    || ri >= rows as isize - border
+                    || ci < border
+                    || ci >= cols as isize - border
                 {
                     continue;
                 }
@@ -77,9 +74,7 @@ pub fn spherical_std_dev(
                         let nc = (ci + dc) as usize;
 
                         let nv = unsafe { dem.get_unchecked(nr, nc) };
-                        if nv.is_nan()
-                            || nodata.is_some_and(|nd| (nv - nd).abs() < f64::EPSILON)
-                        {
+                        if nv.is_nan() || nodata.is_some_and(|nd| (nv - nd).abs() < f64::EPSILON) {
                             continue;
                         }
                         if nr == 0 || nr >= rows - 1 || nc == 0 || nc >= cols - 1 {
@@ -87,14 +82,16 @@ pub fn spherical_std_dev(
                         }
 
                         let z = |r: usize, c: usize| unsafe { dem.get_unchecked(r, c) };
-                        let dzdx = (
-                            z(nr - 1, nc + 1) + 2.0 * z(nr, nc + 1) + z(nr + 1, nc + 1)
-                            - z(nr - 1, nc - 1) - 2.0 * z(nr, nc - 1) - z(nr + 1, nc - 1)
-                        ) / (8.0 * cell_size);
-                        let dzdy = (
-                            z(nr + 1, nc - 1) + 2.0 * z(nr + 1, nc) + z(nr + 1, nc + 1)
-                            - z(nr - 1, nc - 1) - 2.0 * z(nr - 1, nc) - z(nr - 1, nc + 1)
-                        ) / (8.0 * cell_size);
+                        let dzdx = (z(nr - 1, nc + 1) + 2.0 * z(nr, nc + 1) + z(nr + 1, nc + 1)
+                            - z(nr - 1, nc - 1)
+                            - 2.0 * z(nr, nc - 1)
+                            - z(nr + 1, nc - 1))
+                            / (8.0 * cell_size);
+                        let dzdy = (z(nr + 1, nc - 1) + 2.0 * z(nr + 1, nc) + z(nr + 1, nc + 1)
+                            - z(nr - 1, nc - 1)
+                            - 2.0 * z(nr - 1, nc)
+                            - z(nr - 1, nc + 1))
+                            / (8.0 * cell_size);
 
                         let nx = -dzdx;
                         let ny = -dzdy;
@@ -113,7 +110,8 @@ pub fn spherical_std_dev(
                 }
 
                 let n = count as f64;
-                let r_bar = ((sum_nx / n).powi(2) + (sum_ny / n).powi(2) + (sum_nz / n).powi(2)).sqrt();
+                let r_bar =
+                    ((sum_nx / n).powi(2) + (sum_ny / n).powi(2) + (sum_nz / n).powi(2)).sqrt();
 
                 if r_bar >= 1.0 {
                     // Perfect alignment
@@ -180,8 +178,7 @@ impl surtgis_core::WindowAlgorithm for SphericalStdDevStreaming {
                 }
 
                 let center = input[[ir, c]];
-                if center.is_nan()
-                    || nodata.map_or(false, |nd| (center - nd).abs() < f64::EPSILON)
+                if center.is_nan() || nodata.map_or(false, |nd| (center - nd).abs() < f64::EPSILON)
                 {
                     output[[row, c]] = f64::NAN;
                     continue;
@@ -198,8 +195,7 @@ impl surtgis_core::WindowAlgorithm for SphericalStdDevStreaming {
                         let nc = (c as isize + dc) as usize;
 
                         let nv = input[[nr, nc]];
-                        if nv.is_nan()
-                            || nodata.map_or(false, |nd| (nv - nd).abs() < f64::EPSILON)
+                        if nv.is_nan() || nodata.map_or(false, |nd| (nv - nd).abs() < f64::EPSILON)
                         {
                             continue;
                         }
@@ -207,14 +203,20 @@ impl surtgis_core::WindowAlgorithm for SphericalStdDevStreaming {
                             continue;
                         }
 
-                        let dzdx = (
-                            input[[nr - 1, nc + 1]] + 2.0 * input[[nr, nc + 1]] + input[[nr + 1, nc + 1]]
-                            - input[[nr - 1, nc - 1]] - 2.0 * input[[nr, nc - 1]] - input[[nr + 1, nc - 1]]
-                        ) / 8.0;
-                        let dzdy = (
-                            input[[nr + 1, nc - 1]] + 2.0 * input[[nr + 1, nc]] + input[[nr + 1, nc + 1]]
-                            - input[[nr - 1, nc - 1]] - 2.0 * input[[nr - 1, nc]] - input[[nr - 1, nc + 1]]
-                        ) / 8.0;
+                        let dzdx = (input[[nr - 1, nc + 1]]
+                            + 2.0 * input[[nr, nc + 1]]
+                            + input[[nr + 1, nc + 1]]
+                            - input[[nr - 1, nc - 1]]
+                            - 2.0 * input[[nr, nc - 1]]
+                            - input[[nr + 1, nc - 1]])
+                            / 8.0;
+                        let dzdy = (input[[nr + 1, nc - 1]]
+                            + 2.0 * input[[nr + 1, nc]]
+                            + input[[nr + 1, nc + 1]]
+                            - input[[nr - 1, nc - 1]]
+                            - 2.0 * input[[nr - 1, nc]]
+                            - input[[nr - 1, nc + 1]])
+                            / 8.0;
 
                         let nx = -dzdx;
                         let ny = -dzdy;
@@ -234,7 +236,8 @@ impl surtgis_core::WindowAlgorithm for SphericalStdDevStreaming {
                 }
 
                 let n = count as f64;
-                let r_bar = ((sum_nx / n).powi(2) + (sum_ny / n).powi(2) + (sum_nz / n).powi(2)).sqrt();
+                let r_bar =
+                    ((sum_nx / n).powi(2) + (sum_ny / n).powi(2) + (sum_nz / n).powi(2)).sqrt();
 
                 if r_bar >= 1.0 {
                     output[[row, c]] = 0.0;

@@ -24,10 +24,10 @@
 //! - Slope RMSE < 0.5° vs GDAL and GRASS
 //! - Aspect RMSE < 1.0° vs GDAL and GRASS (angular distance)
 
-use surtgis_algorithms::terrain::{aspect, slope, AspectOutput, SlopeParams, SlopeUnits};
+use std::path::{Path, PathBuf};
+use surtgis_algorithms::terrain::{AspectOutput, SlopeParams, SlopeUnits, aspect, slope};
 use surtgis_core::io::read_geotiff;
 use surtgis_core::raster::Raster;
-use std::path::{Path, PathBuf};
 
 // ── Fixture paths (relative to workspace root) ────────────────────────
 
@@ -167,14 +167,19 @@ fn slope_vs_gdal() {
 
     let surtgis_out = slope(
         &dem,
-        SlopeParams { units: SlopeUnits::Degrees, z_factor: 1.0 },
+        SlopeParams {
+            units: SlopeUnits::Degrees,
+            z_factor: 1.0,
+        },
     )
     .expect("surtgis slope failed");
 
     eprintln!("\n── Slope: SurtGIS vs GDAL (Horn, UTM) ──");
     let stats = compare_rasters(
-        &surtgis_out, &gdal_ref,
-        is_slope_nodata, is_gdal_nodata,
+        &surtgis_out,
+        &gdal_ref,
+        is_slope_nodata,
+        is_gdal_nodata,
         false,
     );
     print_stats("slope vs GDAL", &stats);
@@ -194,14 +199,19 @@ fn slope_vs_grass() {
 
     let surtgis_out = slope(
         &dem,
-        SlopeParams { units: SlopeUnits::Degrees, z_factor: 1.0 },
+        SlopeParams {
+            units: SlopeUnits::Degrees,
+            z_factor: 1.0,
+        },
     )
     .expect("surtgis slope failed");
 
     eprintln!("\n── Slope: SurtGIS vs GRASS (Horn, UTM) ──");
     let stats = compare_rasters(
-        &surtgis_out, &grass_ref,
-        is_slope_nodata, is_grass_nodata,
+        &surtgis_out,
+        &grass_ref,
+        is_slope_nodata,
+        is_grass_nodata,
         false,
     );
     print_stats("slope vs GRASS", &stats);
@@ -225,8 +235,10 @@ fn aspect_vs_gdal() {
 
     eprintln!("\n── Aspect: SurtGIS vs GDAL (Horn, UTM) ──");
     let stats = compare_rasters(
-        &surtgis_out, &gdal_ref,
-        is_aspect_nodata_surtgis, is_gdal_aspect_nodata,
+        &surtgis_out,
+        &gdal_ref,
+        is_aspect_nodata_surtgis,
+        is_gdal_aspect_nodata,
         true,
     );
     print_stats("aspect vs GDAL", &stats);
@@ -248,8 +260,10 @@ fn aspect_vs_grass() {
 
     eprintln!("\n── Aspect: SurtGIS vs GRASS (Horn -n, UTM) ──");
     let stats = compare_rasters(
-        &surtgis_out, &grass_ref,
-        is_aspect_nodata_surtgis, is_grass_aspect_nodata,
+        &surtgis_out,
+        &grass_ref,
+        is_aspect_nodata_surtgis,
+        is_grass_aspect_nodata,
         true,
     );
     print_stats("aspect vs GRASS", &stats);
@@ -271,8 +285,10 @@ fn control_gdal_vs_grass_slope() {
 
     eprintln!("\n── Control: GDAL vs GRASS slope ──");
     let stats = compare_rasters(
-        &gdal_ref, &grass_ref,
-        is_gdal_nodata, is_grass_nodata,
+        &gdal_ref,
+        &grass_ref,
+        is_gdal_nodata,
+        is_grass_nodata,
         false,
     );
     print_stats("GDAL vs GRASS slope", &stats);
@@ -291,8 +307,10 @@ fn control_gdal_vs_grass_aspect() {
 
     eprintln!("\n── Control: GDAL vs GRASS aspect ──");
     let stats = compare_rasters(
-        &gdal_ref, &grass_ref,
-        is_gdal_aspect_nodata, is_grass_aspect_nodata,
+        &gdal_ref,
+        &grass_ref,
+        is_gdal_aspect_nodata,
+        is_grass_aspect_nodata,
         true,
     );
     print_stats("GDAL vs GRASS aspect", &stats);

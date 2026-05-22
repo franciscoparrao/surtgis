@@ -13,8 +13,8 @@
 //!
 //! Reference: WhiteboxTools `PercentElevRange`
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -47,9 +47,7 @@ pub fn percent_elev_range(
 
             for (col, out) in row_data.iter_mut().enumerate() {
                 let center = unsafe { dem.get_unchecked(row, col) };
-                if center.is_nan()
-                    || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON)
-                {
+                if center.is_nan() || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON) {
                     continue;
                 }
 
@@ -67,11 +65,13 @@ pub fn percent_elev_range(
                         let nr = (ri + dr) as usize;
                         let nc = (ci + dc) as usize;
                         let nv = unsafe { dem.get_unchecked(nr, nc) };
-                        if !nv.is_nan()
-                            && nodata.is_none_or(|nd| (nv - nd).abs() >= f64::EPSILON)
-                        {
-                            if nv < local_min { local_min = nv; }
-                            if nv > local_max { local_max = nv; }
+                        if !nv.is_nan() && nodata.is_none_or(|nd| (nv - nd).abs() >= f64::EPSILON) {
+                            if nv < local_min {
+                                local_min = nv;
+                            }
+                            if nv > local_max {
+                                local_max = nv;
+                            }
                         }
                     }
                 }
@@ -144,8 +144,7 @@ impl surtgis_core::WindowAlgorithm for PercentElevRangeStreaming {
                 }
 
                 let center = input[[ir, c]];
-                if center.is_nan()
-                    || nodata.map_or(false, |nd| (center - nd).abs() < f64::EPSILON)
+                if center.is_nan() || nodata.map_or(false, |nd| (center - nd).abs() < f64::EPSILON)
                 {
                     output[[r, c]] = f64::NAN;
                     continue;
@@ -160,11 +159,14 @@ impl surtgis_core::WindowAlgorithm for PercentElevRangeStreaming {
                         let nr = (ir as isize + dr) as usize;
                         let nc = (ci + dc) as usize;
                         let nv = input[[nr, nc]];
-                        if !nv.is_nan()
-                            && nodata.map_or(true, |nd| (nv - nd).abs() >= f64::EPSILON)
+                        if !nv.is_nan() && nodata.map_or(true, |nd| (nv - nd).abs() >= f64::EPSILON)
                         {
-                            if nv < local_min { local_min = nv; }
-                            if nv > local_max { local_max = nv; }
+                            if nv < local_min {
+                                local_min = nv;
+                            }
+                            if nv > local_max {
+                                local_max = nv;
+                            }
                         }
                     }
                 }
@@ -204,7 +206,11 @@ mod tests {
         let result = percent_elev_range(&dem, PercentElevRangeParams { radius: 1 }).unwrap();
         let val = result.get(3, 3).unwrap();
         // center=100, min=50, max=100, (100-50)/(100-50)*100 = 100%
-        assert!((val - 100.0).abs() < 1e-10, "Peak should be 100%, got {}", val);
+        assert!(
+            (val - 100.0).abs() < 1e-10,
+            "Peak should be 100%, got {}",
+            val
+        );
     }
 
     #[test]
@@ -216,7 +222,11 @@ mod tests {
         let result = percent_elev_range(&dem, PercentElevRangeParams { radius: 1 }).unwrap();
         let val = result.get(3, 3).unwrap();
         // center=50, min=50, max=100, (50-50)/(100-50)*100 = 0%
-        assert!((val - 0.0).abs() < 1e-10, "Valley should be 0%, got {}", val);
+        assert!(
+            (val - 0.0).abs() < 1e-10,
+            "Valley should be 0%, got {}",
+            val
+        );
     }
 
     #[test]
@@ -233,6 +243,10 @@ mod tests {
         let result = percent_elev_range(&dem, PercentElevRangeParams { radius: 2 }).unwrap();
         let val = result.get(3, 3).unwrap();
         // center=30, min=10, max=50, (30-10)/(50-10)*100 = 50%
-        assert!((val - 50.0).abs() < 1e-10, "Midpoint should be 50%, got {}", val);
+        assert!(
+            (val - 50.0).abs() < 1e-10,
+            "Midpoint should be 50%, got {}",
+            val
+        );
     }
 }

@@ -19,9 +19,9 @@
 //! Reference: Pennock, Zebarth & De Jong (1987) "Landform classification
 //! and soil distribution in hummocky terrain, Saskatchewan"
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
-use crate::terrain::{slope, curvature, SlopeParams, SlopeUnits, CurvatureParams, CurvatureType};
+use crate::terrain::{CurvatureParams, CurvatureType, SlopeParams, SlopeUnits, curvature, slope};
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -63,17 +63,29 @@ pub fn pennock(dem: &Raster<f64>, params: PennockParams) -> Result<Raster<f64>> 
     let (rows, cols) = dem.shape();
 
     // Compute inputs
-    let slp = slope(dem, SlopeParams { units: SlopeUnits::Degrees, z_factor: 1.0 })?;
-    let prof = curvature(dem, CurvatureParams {
-        curvature_type: CurvatureType::Profile,
-        z_factor: 1.0,
-        ..CurvatureParams::default()
-    })?;
-    let plan = curvature(dem, CurvatureParams {
-        curvature_type: CurvatureType::Plan,
-        z_factor: 1.0,
-        ..CurvatureParams::default()
-    })?;
+    let slp = slope(
+        dem,
+        SlopeParams {
+            units: SlopeUnits::Degrees,
+            z_factor: 1.0,
+        },
+    )?;
+    let prof = curvature(
+        dem,
+        CurvatureParams {
+            curvature_type: CurvatureType::Profile,
+            z_factor: 1.0,
+            ..CurvatureParams::default()
+        },
+    )?;
+    let plan = curvature(
+        dem,
+        CurvatureParams {
+            curvature_type: CurvatureType::Plan,
+            z_factor: 1.0,
+            ..CurvatureParams::default()
+        },
+    )?;
 
     let nodata = dem.nodata();
     let st = params.slope_threshold;
@@ -103,16 +115,25 @@ pub fn pennock(dem: &Raster<f64>, params: PennockParams) -> Result<Raster<f64>> 
                     PENNOCK_LEVEL
                 } else if pc > pct {
                     // Convex profile = shoulder
-                    if plc > plct { PENNOCK_DIV_SHOULDER }
-                    else { PENNOCK_CONV_SHOULDER }
+                    if plc > plct {
+                        PENNOCK_DIV_SHOULDER
+                    } else {
+                        PENNOCK_CONV_SHOULDER
+                    }
                 } else if pc < -pct {
                     // Concave profile = footslope
-                    if plc > plct { PENNOCK_DIV_FOOTSLOPE }
-                    else { PENNOCK_CONV_FOOTSLOPE }
+                    if plc > plct {
+                        PENNOCK_DIV_FOOTSLOPE
+                    } else {
+                        PENNOCK_CONV_FOOTSLOPE
+                    }
                 } else {
                     // Linear profile = backslope
-                    if plc > plct { PENNOCK_DIV_BACKSLOPE }
-                    else { PENNOCK_CONV_BACKSLOPE }
+                    if plc > plct {
+                        PENNOCK_DIV_BACKSLOPE
+                    } else {
+                        PENNOCK_CONV_BACKSLOPE
+                    }
                 };
 
                 row_data[col] = class as f64;
@@ -143,8 +164,11 @@ mod tests {
         let result = pennock(&dem, PennockParams::default()).unwrap();
         let v = result.get(5, 5).unwrap();
         if !v.is_nan() {
-            assert!((v - PENNOCK_LEVEL as f64).abs() < 0.5,
-                "Flat DEM should be Level (1), got {}", v);
+            assert!(
+                (v - PENNOCK_LEVEL as f64).abs() < 0.5,
+                "Flat DEM should be Level (1), got {}",
+                v
+            );
         }
     }
 
@@ -156,7 +180,8 @@ mod tests {
             for c in 0..20 {
                 let x = c as f64 - 10.0;
                 let y = r as f64 - 10.0;
-                dem.set(r, c, 500.0 - x * x - y * y + (x * 0.5).sin() * 20.0).unwrap();
+                dem.set(r, c, 500.0 - x * x - y * y + (x * 0.5).sin() * 20.0)
+                    .unwrap();
             }
         }
 
@@ -165,8 +190,13 @@ mod tests {
             for c in 0..20 {
                 let v = result.get(r, c).unwrap();
                 if !v.is_nan() {
-                    assert!(v >= 1.0 && v <= 7.0,
-                        "Class should be 1-7, got {} at ({},{})", v, r, c);
+                    assert!(
+                        v >= 1.0 && v <= 7.0,
+                        "Class should be 1-7, got {} at ({},{})",
+                        v,
+                        r,
+                        c
+                    );
                 }
             }
         }

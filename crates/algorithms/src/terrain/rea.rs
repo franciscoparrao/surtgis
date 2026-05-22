@@ -17,8 +17,7 @@ use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
 /// Morphometric variable to evaluate across scales
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum ReaVariable {
     /// Slope magnitude (default)
     #[default]
@@ -28,7 +27,6 @@ pub enum ReaVariable {
     /// Profile curvature (kv)
     ProfileCurvature,
 }
-
 
 /// Parameters for REA analysis
 #[derive(Debug, Clone)]
@@ -120,7 +118,10 @@ fn aggregate_dem(dem: &Raster<f64>, factor: usize) -> Raster<f64> {
     let tf = dem.transform();
     let new_cs = tf.cell_size().abs() * factor as f64;
     out.set_transform(surtgis_core::raster::GeoTransform::new(
-        tf.origin_x, tf.origin_y, new_cs, -new_cs,
+        tf.origin_x,
+        tf.origin_y,
+        new_cs,
+        -new_cs,
     ));
     out.set_nodata(Some(f64::NAN));
     *out.data_mut() = agg_data;
@@ -145,9 +146,14 @@ fn compute_slope(dem: &Raster<f64>) -> Array2<f64> {
             let z8 = data[[r + 1, c]];
             let z9 = data[[r + 1, c + 1]];
 
-            if z1.is_nan() || z2.is_nan() || z3.is_nan()
-                || z4.is_nan() || z6.is_nan()
-                || z7.is_nan() || z8.is_nan() || z9.is_nan()
+            if z1.is_nan()
+                || z2.is_nan()
+                || z3.is_nan()
+                || z4.is_nan()
+                || z6.is_nan()
+                || z7.is_nan()
+                || z8.is_nan()
+                || z9.is_nan()
             {
                 continue;
             }
@@ -181,9 +187,15 @@ fn compute_curvature(dem: &Raster<f64>, curvature_type: ReaVariable) -> Array2<f
             let z8 = data[[r + 1, c]];
             let z9 = data[[r + 1, c + 1]];
 
-            if z1.is_nan() || z2.is_nan() || z3.is_nan()
-                || z4.is_nan() || z5.is_nan() || z6.is_nan()
-                || z7.is_nan() || z8.is_nan() || z9.is_nan()
+            if z1.is_nan()
+                || z2.is_nan()
+                || z3.is_nan()
+                || z4.is_nan()
+                || z5.is_nan()
+                || z6.is_nan()
+                || z7.is_nan()
+                || z8.is_nan()
+                || z9.is_nan()
             {
                 continue;
             }
@@ -202,8 +214,7 @@ fn compute_curvature(dem: &Raster<f64>, curvature_type: ReaVariable) -> Array2<f
                     if pq < 1e-15 {
                         0.0
                     } else {
-                        -(t_d * p * p - 2.0 * s_d * p * q + r_d * q * q)
-                            / (pq * (1.0 + pq).sqrt())
+                        -(t_d * p * p - 2.0 * s_d * p * q + r_d * q * q) / (pq * (1.0 + pq).sqrt())
                     }
                 }
                 ReaVariable::ProfileCurvature => {
@@ -225,7 +236,12 @@ fn compute_curvature(dem: &Raster<f64>, curvature_type: ReaVariable) -> Array2<f
 }
 
 /// Expand a coarse-resolution array back to fine resolution using nearest-neighbor.
-fn expand_to_fine(coarse: &Array2<f64>, factor: usize, fine_rows: usize, fine_cols: usize) -> Array2<f64> {
+fn expand_to_fine(
+    coarse: &Array2<f64>,
+    factor: usize,
+    fine_rows: usize,
+    fine_cols: usize,
+) -> Array2<f64> {
     let mut fine = Array2::from_elem((fine_rows, fine_cols), f64::NAN);
     let (cr, cc) = coarse.dim();
 
@@ -463,53 +479,77 @@ mod tests {
     #[test]
     fn test_rea_correlation_decreases() {
         let dem = complex_dem(128, 128);
-        let result = rea_analysis(&dem, ReaParams {
-            scale_factors: vec![1, 2, 4, 8, 16],
-            ..Default::default()
-        }).unwrap();
+        let result = rea_analysis(
+            &dem,
+            ReaParams {
+                scale_factors: vec![1, 2, 4, 8, 16],
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         // Correlation should generally decrease with coarser resolution
-        let corrs: Vec<f64> = result.scales.iter()
+        let corrs: Vec<f64> = result
+            .scales
+            .iter()
             .filter(|s| !s.correlation.is_nan())
             .map(|s| s.correlation)
             .collect();
 
         assert!(corrs.len() >= 3, "Should have at least 3 valid scales");
-        assert!(corrs[0] > corrs[corrs.len() - 1],
+        assert!(
+            corrs[0] > corrs[corrs.len() - 1],
             "Correlation should decrease: first={:.3}, last={:.3}",
-            corrs[0], corrs[corrs.len() - 1]);
+            corrs[0],
+            corrs[corrs.len() - 1]
+        );
     }
 
     #[test]
     fn test_rea_identifies_rea_cell_size() {
         let dem = complex_dem(128, 128);
-        let result = rea_analysis(&dem, ReaParams {
-            scale_factors: vec![1, 2, 4, 8, 16, 32],
-            correlation_threshold: 0.5,
-            ..Default::default()
-        }).unwrap();
+        let result = rea_analysis(
+            &dem,
+            ReaParams {
+                scale_factors: vec![1, 2, 4, 8, 16, 32],
+                correlation_threshold: 0.5,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         // With a low threshold, some scale should qualify
-        assert!(result.rea_cell_size.is_some(),
-            "Should find REA with threshold 0.5");
+        assert!(
+            result.rea_cell_size.is_some(),
+            "Should find REA with threshold 0.5"
+        );
     }
 
     #[test]
     fn test_rea_curvature() {
         let dem = complex_dem(64, 64);
-        let result = rea_analysis(&dem, ReaParams {
-            scale_factors: vec![1, 2, 4, 8],
-            variable: ReaVariable::PlanCurvature,
-            ..Default::default()
-        }).unwrap();
+        let result = rea_analysis(
+            &dem,
+            ReaParams {
+                scale_factors: vec![1, 2, 4, 8],
+                variable: ReaVariable::PlanCurvature,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         assert!(!result.scales.is_empty());
         // Plan curvature should also degrade with resolution
-        let first_corr = result.scales.iter()
+        let first_corr = result
+            .scales
+            .iter()
             .find(|s| s.scale_factor > 1 && !s.correlation.is_nan())
             .map(|s| s.correlation)
             .unwrap_or(1.0);
-        assert!(first_corr < 1.0, "Curvature should degrade at coarser scales");
+        assert!(
+            first_corr < 1.0,
+            "Curvature should degrade at coarser scales"
+        );
     }
 
     #[test]
@@ -532,7 +572,8 @@ mod tests {
         assert!(
             (actual - expected).abs() < 1e-10,
             "Aggregated value should be mean: expected={}, got={}",
-            expected, actual
+            expected,
+            actual
         );
     }
 }

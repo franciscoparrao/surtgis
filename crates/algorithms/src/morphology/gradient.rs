@@ -3,8 +3,8 @@
 //! Highlights edges and boundaries by computing the difference between
 //! the dilation and erosion of the input. The result is always non-negative.
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Algorithm, Error, Result};
 
@@ -13,13 +13,11 @@ use super::element::StructuringElement;
 use super::erode::erode;
 
 /// Parameters for morphological gradient
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct GradientParams {
     /// Structuring element shape
     pub element: StructuringElement,
 }
-
 
 /// Morphological gradient algorithm
 #[derive(Debug, Clone, Default)]
@@ -77,8 +75,8 @@ pub fn gradient(raster: &Raster<f64>, element: &StructuringElement) -> Result<Ra
 
     let mut output = raster.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() =
-        Array2::from_shape_vec((rows, cols), output_data).map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() = Array2::from_shape_vec((rows, cols), output_data)
+        .map_err(|e| Error::Other(e.to_string()))?;
     Ok(output)
 }
 
@@ -138,7 +136,9 @@ mod tests {
         // Random-ish values
         for row in 0..9 {
             for col in 0..9 {
-                raster.set(row, col, ((row * 7 + col * 3) % 20) as f64).unwrap();
+                raster
+                    .set(row, col, ((row * 7 + col * 3) % 20) as f64)
+                    .unwrap();
             }
         }
 

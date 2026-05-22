@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use ndarray::Array2;
 
-use surtgis_core::raster::{GeoTransform, Raster};
 use surtgis_core::CRS;
+use surtgis_core::raster::{GeoTransform, Raster};
 
 use crate::error::{CloudError, Result};
 use crate::tile_index::BBox;
@@ -92,10 +92,8 @@ impl NetCdfReader {
             .map_err(|e| CloudError::NetCdf(format!("failed to open {}: {e}", path.display())))?;
 
         // List available variables
-        let available_variables: Vec<String> = file
-            .variables()
-            .map(|v| v.name().to_string())
-            .collect();
+        let available_variables: Vec<String> =
+            file.variables().map(|v| v.name().to_string()).collect();
 
         // Open target variable
         let var = file.variable(variable).ok_or_else(|| {
@@ -107,7 +105,11 @@ impl NetCdfReader {
         })?;
 
         // Get dimensions
-        let dimension_names: Vec<String> = var.dimensions().iter().map(|d| d.name().to_string()).collect();
+        let dimension_names: Vec<String> = var
+            .dimensions()
+            .iter()
+            .map(|d| d.name().to_string())
+            .collect();
         let shape: Vec<usize> = var.dimensions().iter().map(|d| d.len()).collect();
 
         // Build CF metadata from variable attributes
@@ -116,12 +118,12 @@ impl NetCdfReader {
         let cf = CfMetadata::from_zarr_attributes(&array_attrs, &group_attrs, &dimension_names);
 
         // Identify coordinate dimensions
-        let lat_dim = cf.lat_dim.ok_or_else(|| {
-            CloudError::NetCdf("cannot identify latitude dimension".into())
-        })?;
-        let lon_dim = cf.lon_dim.ok_or_else(|| {
-            CloudError::NetCdf("cannot identify longitude dimension".into())
-        })?;
+        let lat_dim = cf
+            .lat_dim
+            .ok_or_else(|| CloudError::NetCdf("cannot identify latitude dimension".into()))?;
+        let lon_dim = cf
+            .lon_dim
+            .ok_or_else(|| CloudError::NetCdf("cannot identify longitude dimension".into()))?;
 
         // Read coordinate arrays
         let raw_lat = read_coord(&file, &dimension_names[lat_dim], &["latitude", "lat", "y"])?;
@@ -143,7 +145,8 @@ impl NetCdfReader {
             let raw_time = read_coord(&file, time_name, &["time", "t"]).unwrap_or_default();
             if !raw_time.is_empty() {
                 // Get time CF metadata from the time variable itself
-                let time_cf = file.variable(time_name)
+                let time_cf = file
+                    .variable(time_name)
                     .or_else(|| file.variable("time"))
                     .map(|tv| {
                         let ta = extract_attributes(&tv);
@@ -194,9 +197,9 @@ impl NetCdfReader {
     pub fn read_bbox(&self, bbox: &BBox, time: &TimeReduction) -> Result<Raster<f64>> {
         let file = netcdf::open(&self.path)
             .map_err(|e| CloudError::NetCdf(format!("failed to reopen: {e}")))?;
-        let var = file.variable(&self.variable).ok_or_else(|| {
-            CloudError::NetCdf(format!("variable '{}' gone", self.variable))
-        })?;
+        let var = file
+            .variable(&self.variable)
+            .ok_or_else(|| CloudError::NetCdf(format!("variable '{}' gone", self.variable)))?;
 
         let (lat_start, lat_end) = self.lat_range_for_bbox(bbox)?;
         let (lon_start, lon_end) = self.lon_range_for_bbox(bbox)?;
@@ -220,7 +223,10 @@ impl NetCdfReader {
             let mut buf = vec![0f32; time_count * lat_size * lon_size];
             var.get_values_into(
                 buf.as_mut_slice(),
-                ([time_start, lat_start, lon_start], [time_count, lat_size, lon_size]),
+                (
+                    [time_start, lat_start, lon_start],
+                    [time_count, lat_size, lon_size],
+                ),
             )
             .map_err(|e| CloudError::NetCdf(format!("read failed: {e}")))?;
             buf.iter().map(|&v| v as f64).collect::<Vec<f64>>()
@@ -241,7 +247,14 @@ impl NetCdfReader {
         };
 
         // Reduce 3D to 2D
-        let data_2d = reduce_to_2d(&values, time_count, lat_size, lon_size, time, self.cf.fill_value)?;
+        let data_2d = reduce_to_2d(
+            &values,
+            time_count,
+            lat_size,
+            lon_size,
+            time,
+            self.cf.fill_value,
+        )?;
 
         // Flip if lat was originally descending
         let data_2d = if self.lat_descending {
@@ -257,7 +270,10 @@ impl NetCdfReader {
         let sub_lat = &self.lat_coords[lat_start..lat_end];
         let sub_lon_raw = &self.lon_coords[lon_start..lon_end];
         let sub_lon: Vec<f64> = if self.lon_0_360 {
-            sub_lon_raw.iter().map(|&v| if v > 180.0 { v - 360.0 } else { v }).collect()
+            sub_lon_raw
+                .iter()
+                .map(|&v| if v > 180.0 { v - 360.0 } else { v })
+                .collect()
         } else {
             sub_lon_raw.to_vec()
         };
@@ -278,8 +294,8 @@ impl NetCdfReader {
 
     /// List all variables in a NetCDF file.
     pub fn list_variables(path: &Path) -> Result<Vec<String>> {
-        let file = netcdf::open(path)
-            .map_err(|e| CloudError::NetCdf(format!("failed to open: {e}")))?;
+        let file =
+            netcdf::open(path).map_err(|e| CloudError::NetCdf(format!("failed to open: {e}")))?;
         Ok(file.variables().map(|v| v.name().to_string()).collect())
     }
 
@@ -302,8 +318,16 @@ impl NetCdfReader {
     fn lon_range_for_bbox(&self, bbox: &BBox) -> Result<(usize, usize)> {
         // Convert bbox lon to file convention if needed
         let (min_x, max_x) = if self.lon_0_360 {
-            let min = if bbox.min_x < 0.0 { bbox.min_x + 360.0 } else { bbox.min_x };
-            let max = if bbox.max_x < 0.0 { bbox.max_x + 360.0 } else { bbox.max_x };
+            let min = if bbox.min_x < 0.0 {
+                bbox.min_x + 360.0
+            } else {
+                bbox.min_x
+            };
+            let max = if bbox.max_x < 0.0 {
+                bbox.max_x + 360.0
+            } else {
+                bbox.max_x
+            };
             (min, max)
         } else {
             (bbox.min_x, bbox.max_x)
@@ -443,7 +467,10 @@ fn normalise_longitude(lon: Vec<f64>) -> Vec<f64> {
     if lon.is_empty() || !lon.iter().any(|&v| v > 180.0) {
         return lon;
     }
-    let mut out: Vec<f64> = lon.iter().map(|&v| if v > 180.0 { v - 360.0 } else { v }).collect();
+    let mut out: Vec<f64> = lon
+        .iter()
+        .map(|&v| if v > 180.0 { v - 360.0 } else { v })
+        .collect();
     out.sort_by(|a, b| a.partial_cmp(b).unwrap());
     out
 }
@@ -468,10 +495,15 @@ fn find_nearest(coords: &[f64], value: f64) -> usize {
     match coords.binary_search_by(|c| c.partial_cmp(&value).unwrap()) {
         Ok(i) => i,
         Err(i) => {
-            if i == 0 { 0 }
-            else if i >= coords.len() { coords.len() - 1 }
-            else if (coords[i] - value).abs() < (coords[i - 1] - value).abs() { i }
-            else { i - 1 }
+            if i == 0 {
+                0
+            } else if i >= coords.len() {
+                coords.len() - 1
+            } else if (coords[i] - value).abs() < (coords[i - 1] - value).abs() {
+                i
+            } else {
+                i - 1
+            }
         }
     }
 }
@@ -501,7 +533,9 @@ fn unpack_data(mut data: Array2<f64>, cf: &CfMetadata) -> Array2<f64> {
         return data;
     }
     data.mapv_inplace(|v| {
-        if cf.is_fill(v) { return f64::NAN; }
+        if cf.is_fill(v) {
+            return f64::NAN;
+        }
         cf.unpack_value(v)
     });
     data
@@ -549,7 +583,9 @@ fn reduce_to_2d(
                             AggMethod::Mean => valid.iter().sum::<f64>() / valid.len() as f64,
                             AggMethod::Sum => valid.iter().sum(),
                             AggMethod::Min => valid.iter().copied().fold(f64::INFINITY, f64::min),
-                            AggMethod::Max => valid.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+                            AggMethod::Max => {
+                                valid.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+                            }
                         }
                     };
                 }

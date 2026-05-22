@@ -109,8 +109,8 @@ impl Default for IdwParams {
 /// Stretches coordinates perpendicular to the major axis direction.
 fn aniso_dist_sq(dx: f64, dy: f64, cos_a: f64, sin_a: f64, ratio_inv: f64) -> f64 {
     // Rotate into aligned frame
-    let u = dx * cos_a + dy * sin_a;   // along major axis
-    let v = -dx * sin_a + dy * cos_a;  // along minor axis
+    let u = dx * cos_a + dy * sin_a; // along major axis
+    let v = -dx * sin_a + dy * cos_a; // along minor axis
     // Stretch minor axis → makes distant points along minor seem farther
     u * u + (v * ratio_inv) * (v * ratio_inv)
 }
@@ -160,14 +160,20 @@ pub fn idw(points: &[SamplePoint], params: IdwParams) -> Result<Raster<f64>> {
             ap.d_ref.unwrap_or_else(|| {
                 // Auto: mean nearest-neighbor distance among sample points
                 let n = points.len();
-                if n < 2 { return 1.0; }
-                let sum: f64 = points.iter().map(|p| {
-                    points.iter()
-                        .filter(|q| (q.x - p.x).abs() > 1e-15 || (q.y - p.y).abs() > 1e-15)
-                        .map(|q| p.dist_sq(q.x, q.y))
-                        .fold(f64::MAX, f64::min)
-                        .sqrt()
-                }).sum();
+                if n < 2 {
+                    return 1.0;
+                }
+                let sum: f64 = points
+                    .iter()
+                    .map(|p| {
+                        points
+                            .iter()
+                            .filter(|q| (q.x - p.x).abs() > 1e-15 || (q.y - p.y).abs() > 1e-15)
+                            .map(|q| p.dist_sq(q.x, q.y))
+                            .fold(f64::MAX, f64::min)
+                            .sqrt()
+                    })
+                    .sum();
                 (sum / n as f64).max(1e-10)
             })
         }
@@ -205,9 +211,10 @@ pub fn idw(points: &[SamplePoint], params: IdwParams) -> Result<Raster<f64>> {
 
                     // Check max radius
                     if let Some(max_sq) = max_radius_sq
-                        && dsq > max_sq {
-                            continue;
-                        }
+                        && dsq > max_sq
+                    {
+                        continue;
+                    }
 
                     candidates.push((dsq, pt.value));
                 }
@@ -222,8 +229,8 @@ pub fn idw(points: &[SamplePoint], params: IdwParams) -> Result<Raster<f64>> {
                 }
 
                 // Sort by distance if limiting points or adaptive
-                let need_sort = (use_max_points && candidates.len() > max_points)
-                    || adaptive.is_some();
+                let need_sort =
+                    (use_max_points && candidates.len() > max_points) || adaptive.is_some();
                 if need_sort {
                     candidates.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
                 }
@@ -234,9 +241,11 @@ pub fn idw(points: &[SamplePoint], params: IdwParams) -> Result<Raster<f64>> {
                 // Determine effective power (adaptive or fixed)
                 let eff_power = if let Some(ref ap) = adaptive {
                     let k = ap.k.min(candidates.len());
-                    let d_mean: f64 = candidates[..k].iter()
+                    let d_mean: f64 = candidates[..k]
+                        .iter()
                         .map(|(dsq, _)| dsq.sqrt())
-                        .sum::<f64>() / k as f64;
+                        .sum::<f64>()
+                        / k as f64;
                     let p_local = power * (d_mean / d_ref).powf(ap.alpha);
                     p_local.clamp(ap.min_power, ap.max_power)
                 } else {
@@ -276,10 +285,10 @@ mod tests {
 
     fn sample_points() -> Vec<SamplePoint> {
         vec![
-            SamplePoint::new(0.5, 9.5, 10.0),  // top-left
-            SamplePoint::new(9.5, 9.5, 20.0),  // top-right
-            SamplePoint::new(0.5, 0.5, 30.0),  // bottom-left
-            SamplePoint::new(9.5, 0.5, 40.0),  // bottom-right
+            SamplePoint::new(0.5, 9.5, 10.0), // top-left
+            SamplePoint::new(9.5, 9.5, 20.0), // top-right
+            SamplePoint::new(0.5, 0.5, 30.0), // bottom-left
+            SamplePoint::new(9.5, 0.5, 40.0), // bottom-right
         ]
     }
 
@@ -379,15 +388,23 @@ mod tests {
     fn test_idw_power_effect() {
         let points = sample_points();
 
-        let low_power = idw(&points, IdwParams {
-            power: 1.0,
-            ..default_params()
-        }).unwrap();
+        let low_power = idw(
+            &points,
+            IdwParams {
+                power: 1.0,
+                ..default_params()
+            },
+        )
+        .unwrap();
 
-        let high_power = idw(&points, IdwParams {
-            power: 4.0,
-            ..default_params()
-        }).unwrap();
+        let high_power = idw(
+            &points,
+            IdwParams {
+                power: 4.0,
+                ..default_params()
+            },
+        )
+        .unwrap();
 
         // With higher power, values near sample points should be closer
         // to the sample value (sharper falloff)
@@ -414,16 +431,24 @@ mod tests {
         // Adaptive power should produce different results than fixed
         let points = sample_points();
 
-        let fixed = idw(&points, IdwParams {
-            power: 2.0,
-            ..default_params()
-        }).unwrap();
+        let fixed = idw(
+            &points,
+            IdwParams {
+                power: 2.0,
+                ..default_params()
+            },
+        )
+        .unwrap();
 
-        let adaptive = idw(&points, IdwParams {
-            power: 2.0,
-            adaptive: Some(AdaptivePower::default()),
-            ..default_params()
-        }).unwrap();
+        let adaptive = idw(
+            &points,
+            IdwParams {
+                power: 2.0,
+                adaptive: Some(AdaptivePower::default()),
+                ..default_params()
+            },
+        )
+        .unwrap();
 
         // Values should differ (adaptive adjusts power per cell)
         let f_center = fixed.get(5, 5).unwrap();
@@ -452,15 +477,20 @@ mod tests {
         ];
 
         // Isotropic: center should be ~50 (equidistant from all 4)
-        let iso = idw(&points, IdwParams {
-            ..default_params()
-        }).unwrap();
+        let iso = idw(&points, IdwParams { ..default_params() }).unwrap();
 
         // Anisotropic along x-axis: east-west points (100.0) should dominate
-        let aniso = idw(&points, IdwParams {
-            anisotropy: Some(Anisotropy { angle: 0.0, ratio: 0.3 }),
-            ..default_params()
-        }).unwrap();
+        let aniso = idw(
+            &points,
+            IdwParams {
+                anisotropy: Some(Anisotropy {
+                    angle: 0.0,
+                    ratio: 0.3,
+                }),
+                ..default_params()
+            },
+        )
+        .unwrap();
 
         let iso_center = iso.get(5, 5).unwrap();
         let aniso_center = aniso.get(5, 5).unwrap();
@@ -469,7 +499,8 @@ mod tests {
         assert!(
             aniso_center > iso_center,
             "Anisotropic along x should weight E-W points more: iso={:.1}, aniso={:.1}",
-            iso_center, aniso_center
+            iso_center,
+            aniso_center
         );
     }
 
@@ -478,10 +509,17 @@ mod tests {
         let points = sample_points();
 
         let iso = idw(&points, default_params()).unwrap();
-        let aniso_1 = idw(&points, IdwParams {
-            anisotropy: Some(Anisotropy { angle: 0.5, ratio: 1.0 }),
-            ..default_params()
-        }).unwrap();
+        let aniso_1 = idw(
+            &points,
+            IdwParams {
+                anisotropy: Some(Anisotropy {
+                    angle: 0.5,
+                    ratio: 1.0,
+                }),
+                ..default_params()
+            },
+        )
+        .unwrap();
 
         // ratio=1.0 should be identical to isotropic
         let v1 = iso.get(3, 7).unwrap();
@@ -489,7 +527,8 @@ mod tests {
         assert!(
             (v1 - v2).abs() < 1e-10,
             "Ratio 1.0 should be isotropic: {} vs {}",
-            v1, v2
+            v1,
+            v2
         );
     }
 
@@ -505,7 +544,9 @@ mod tests {
                 assert!(
                     (val - 42.0).abs() < 1e-6,
                     "Single point IDW should be 42.0 everywhere, got {} at ({}, {})",
-                    val, row, col
+                    val,
+                    row,
+                    col
                 );
             }
         }

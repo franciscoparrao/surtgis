@@ -84,7 +84,12 @@ pub fn mosaic<T: RasterElement>(
         if pw_diff > tol || ph_diff > tol {
             return Err(Error::Other(format!(
                 "Cell size mismatch: tile 0 has ({:.6}, {:.6}), tile {} has ({:.6}, {:.6}) (tolerance: {:.1}%)",
-                pw0, ph0, i, gt.pixel_width, gt.pixel_height.abs(), tol * 100.0
+                pw0,
+                ph0,
+                i,
+                gt.pixel_width,
+                gt.pixel_height.abs(),
+                tol * 100.0
             )));
         }
     }
@@ -186,7 +191,13 @@ mod tests {
     use super::*;
     use ndarray::Array2;
 
-    fn make_tile(rows: usize, cols: usize, value: f64, origin_x: f64, origin_y: f64) -> Raster<f64> {
+    fn make_tile(
+        rows: usize,
+        cols: usize,
+        value: f64,
+        origin_x: f64,
+        origin_y: f64,
+    ) -> Raster<f64> {
         let arr = Array2::from_elem((rows, cols), value);
         let mut r = Raster::from_array(arr);
         r.set_transform(GeoTransform::new(origin_x, origin_y, 10.0, -10.0));
@@ -214,7 +225,7 @@ mod tests {
 
         let result = mosaic(&[&t1, &t2], None).unwrap();
         assert_eq!(result.shape(), (20, 10));
-        assert!((result.get(0, 0).unwrap() - 1.0).abs() < 1e-10);  // top tile
+        assert!((result.get(0, 0).unwrap() - 1.0).abs() < 1e-10); // top tile
         assert!((result.get(10, 0).unwrap() - 2.0).abs() < 1e-10); // bottom tile
     }
 
@@ -226,8 +237,8 @@ mod tests {
 
         let result = mosaic(&[&t1, &t2], None).unwrap();
         assert_eq!(result.shape(), (10, 15));
-        assert!((result.get(0, 0).unwrap() - 1.0).abs() < 1e-10);  // t1 only
-        assert!((result.get(0, 5).unwrap() - 2.0).abs() < 1e-10);  // overlap: t2 wins
+        assert!((result.get(0, 0).unwrap() - 1.0).abs() < 1e-10); // t1 only
+        assert!((result.get(0, 5).unwrap() - 2.0).abs() < 1e-10); // overlap: t2 wins
         assert!((result.get(0, 10).unwrap() - 2.0).abs() < 1e-10); // t2 only
     }
 
@@ -271,17 +282,17 @@ mod tests {
     #[test]
     fn test_mosaic_four_tiles_grid() {
         // 2x2 grid of 5x5 tiles
-        let tl = make_tile(5, 5, 1.0, 0.0, 100.0);   // top-left
-        let tr = make_tile(5, 5, 2.0, 50.0, 100.0);   // top-right
-        let bl = make_tile(5, 5, 3.0, 0.0, 50.0);     // bottom-left
-        let br = make_tile(5, 5, 4.0, 50.0, 50.0);    // bottom-right
+        let tl = make_tile(5, 5, 1.0, 0.0, 100.0); // top-left
+        let tr = make_tile(5, 5, 2.0, 50.0, 100.0); // top-right
+        let bl = make_tile(5, 5, 3.0, 0.0, 50.0); // bottom-left
+        let br = make_tile(5, 5, 4.0, 50.0, 50.0); // bottom-right
 
         let result = mosaic(&[&tl, &tr, &bl, &br], None).unwrap();
         assert_eq!(result.shape(), (10, 10));
-        assert!((result.get(0, 0).unwrap() - 1.0).abs() < 1e-10);  // top-left
-        assert!((result.get(0, 5).unwrap() - 2.0).abs() < 1e-10);  // top-right
-        assert!((result.get(5, 0).unwrap() - 3.0).abs() < 1e-10);  // bottom-left
-        assert!((result.get(5, 5).unwrap() - 4.0).abs() < 1e-10);  // bottom-right
+        assert!((result.get(0, 0).unwrap() - 1.0).abs() < 1e-10); // top-left
+        assert!((result.get(0, 5).unwrap() - 2.0).abs() < 1e-10); // top-right
+        assert!((result.get(5, 0).unwrap() - 3.0).abs() < 1e-10); // bottom-left
+        assert!((result.get(5, 5).unwrap() - 4.0).abs() < 1e-10); // bottom-right
     }
 
     #[test]

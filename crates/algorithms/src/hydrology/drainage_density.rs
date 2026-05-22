@@ -81,11 +81,9 @@ pub fn drainage_density(
                         if nc < 0 || nc >= cols as isize {
                             continue;
                         }
-                        let val =
-                            unsafe { stream_network.get_unchecked(nr as usize, nc as usize) };
+                        let val = unsafe { stream_network.get_unchecked(nr as usize, nc as usize) };
 
-                        if val.is_nan()
-                            || nodata.is_some_and(|nd| (val - nd).abs() < f64::EPSILON)
+                        if val.is_nan() || nodata.is_some_and(|nd| (val - nd).abs() < f64::EPSILON)
                         {
                             continue;
                         }
@@ -100,8 +98,7 @@ pub fn drainage_density(
 
                 if window_cells > 0 {
                     // DD = stream_cells / (window_cells * cell_size)
-                    row_data[col] =
-                        stream_cells as f64 / (window_cells as f64 * cell_size);
+                    row_data[col] = stream_cells as f64 / (window_cells as f64 * cell_size);
                 }
             }
             row_data

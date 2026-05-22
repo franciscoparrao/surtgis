@@ -20,17 +20,17 @@ pub mod vector;
 
 pub use crs::CRS;
 pub use error::{Error, Result};
-pub use mosaic::{mosaic, MosaicOptions};
+pub use mosaic::{MosaicOptions, mosaic};
 pub use raster::{GeoTransform, Raster, RasterElement};
-pub use resample::{resample_to_grid, ResampleMethod};
+pub use resample::{ResampleMethod, resample_to_grid};
 pub use streaming::{StripProcessor, WindowAlgorithm};
 
 /// Prelude for convenient imports
 pub mod prelude {
+    pub use crate::Algorithm;
     pub use crate::crs::CRS;
     pub use crate::error::{Error, Result};
     pub use crate::raster::{GeoTransform, Raster, RasterElement};
-    pub use crate::Algorithm;
 }
 
 /// Core trait for all algorithms in SurtGis.
@@ -53,10 +53,17 @@ pub trait Algorithm {
     fn description(&self) -> &'static str;
 
     /// Execute the algorithm
-    fn execute(&self, input: Self::Input, params: Self::Params) -> std::result::Result<Self::Output, Self::Error>;
+    fn execute(
+        &self,
+        input: Self::Input,
+        params: Self::Params,
+    ) -> std::result::Result<Self::Output, Self::Error>;
 
     /// Execute with default parameters
-    fn execute_default(&self, input: Self::Input) -> std::result::Result<Self::Output, Self::Error> {
+    fn execute_default(
+        &self,
+        input: Self::Input,
+    ) -> std::result::Result<Self::Output, Self::Error> {
         self.execute(input, Self::Params::default())
     }
 }

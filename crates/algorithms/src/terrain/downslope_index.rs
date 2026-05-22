@@ -10,9 +10,9 @@
 //! Reference: Hjerdt, K.N., et al. (2004) "A new topographic index to
 //! quantify downslope controls on local drainage"
 
-use ndarray::Array2;
+use crate::hydrology::{PriorityFloodParams, priority_flood};
 use crate::maybe_rayon::*;
-use crate::hydrology::{priority_flood, PriorityFloodParams};
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -31,16 +31,26 @@ impl Default for DownslopeIndexParams {
 
 /// 8-connected neighbor offsets
 const D8_OFFSETS: [(isize, isize); 8] = [
-    (-1, -1), (-1, 0), (-1, 1),
-    (0, -1),           (0, 1),
-    (1, -1),  (1, 0),  (1, 1),
+    (-1, -1),
+    (-1, 0),
+    (-1, 1),
+    (0, -1),
+    (0, 1),
+    (1, -1),
+    (1, 0),
+    (1, 1),
 ];
 
 /// Distance factor for each offset (1.0 for cardinal, sqrt(2) for diagonal)
 const D8_DIST: [f64; 8] = [
-    std::f64::consts::SQRT_2, 1.0, std::f64::consts::SQRT_2,
-    1.0,                           1.0,
-    std::f64::consts::SQRT_2, 1.0, std::f64::consts::SQRT_2,
+    std::f64::consts::SQRT_2,
+    1.0,
+    std::f64::consts::SQRT_2,
+    1.0,
+    1.0,
+    std::f64::consts::SQRT_2,
+    1.0,
+    std::f64::consts::SQRT_2,
 ];
 
 /// Compute downslope index.
@@ -48,10 +58,7 @@ const D8_DIST: [f64; 8] = [
 /// Follows the steepest descent path on a hydrologically filled DEM
 /// until the cumulative elevation drop (from the original DEM) exceeds
 /// the threshold. Reports the horizontal distance in map units (meters).
-pub fn downslope_index(
-    dem: &Raster<f64>,
-    params: DownslopeIndexParams,
-) -> Result<Raster<f64>> {
+pub fn downslope_index(dem: &Raster<f64>, params: DownslopeIndexParams) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
     let drop_threshold = params.drop;
     let nodata = dem.nodata();
@@ -171,7 +178,11 @@ mod tests {
 
         let result = downslope_index(&dem, DownslopeIndexParams { drop: 2.0 }).unwrap();
         let v = result.get(10, 10).unwrap();
-        assert!(v >= 3.0, "Gentle slope should need more distance, got {}", v);
+        assert!(
+            v >= 3.0,
+            "Gentle slope should need more distance, got {}",
+            v
+        );
     }
 
     #[test]
@@ -191,7 +202,13 @@ mod tests {
             for c in 0..15 {
                 let v = result.get(r, c).unwrap();
                 if !v.is_nan() {
-                    assert!(v >= 0.0, "Distance should be >= 0, got {} at ({},{})", v, r, c);
+                    assert!(
+                        v >= 0.0,
+                        "Distance should be >= 0, got {} at ({},{})",
+                        v,
+                        r,
+                        c
+                    );
                 }
             }
         }

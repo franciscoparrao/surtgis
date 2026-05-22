@@ -56,16 +56,14 @@ impl CfMetadata {
         let lat_dim = Self::find_dim(dimension_names, &["latitude", "lat", "y"]);
         let lon_dim = Self::find_dim(dimension_names, &["longitude", "lon", "x"]);
 
-        let time_units = Self::get_str(array_attrs, "units")
-            .filter(|u| u.contains("since"));
+        let time_units = Self::get_str(array_attrs, "units").filter(|u| u.contains("since"));
         let time_calendar = Self::get_str(array_attrs, "calendar");
 
         let fill_value = Self::get_f64(array_attrs, "_FillValue");
         let scale_factor = Self::get_f64(array_attrs, "scale_factor");
         let add_offset = Self::get_f64(array_attrs, "add_offset");
 
-        let units = Self::get_str(array_attrs, "units")
-            .filter(|u| !u.contains("since"));
+        let units = Self::get_str(array_attrs, "units").filter(|u| !u.contains("since"));
         let long_name = Self::get_str(array_attrs, "long_name");
 
         Self {
@@ -87,9 +85,10 @@ impl CfMetadata {
     /// Parses the `units` attribute format: `"{unit} since {reference_datetime}"`
     /// where unit is `hours`, `days`, `seconds`, or `minutes`.
     pub fn decode_time(&self, raw_values: &[f64]) -> Result<Vec<DateTime<Utc>>> {
-        let units_str = self.time_units.as_deref().ok_or_else(|| {
-            CloudError::ZarrCfError("no time units attribute found".into())
-        })?;
+        let units_str = self
+            .time_units
+            .as_deref()
+            .ok_or_else(|| CloudError::ZarrCfError("no time units attribute found".into()))?;
 
         let (unit, reference) = parse_time_units(units_str)?;
 
@@ -139,13 +138,16 @@ impl CfMetadata {
     }
 
     fn get_str(attrs: &serde_json::Value, key: &str) -> Option<String> {
-        attrs.get(key).and_then(|v| v.as_str()).map(|s| s.to_string())
+        attrs
+            .get(key)
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
     }
 
     fn get_f64(attrs: &serde_json::Value, key: &str) -> Option<f64> {
-        attrs.get(key).and_then(|v| {
-            v.as_f64().or_else(|| v.as_i64().map(|i| i as f64))
-        })
+        attrs
+            .get(key)
+            .and_then(|v| v.as_f64().or_else(|| v.as_i64().map(|i| i as f64)))
     }
 }
 
@@ -299,9 +301,18 @@ mod tests {
         // 120 years * 365.25 * 24 ≈ 1,052,856 -- but let's use exact
         let raw = vec![0.0, 24.0, 48.0];
         let decoded = cf.decode_time(&raw).unwrap();
-        assert_eq!(decoded[0], DateTime::parse_from_rfc3339("1900-01-01T00:00:00Z").unwrap());
-        assert_eq!(decoded[1], DateTime::parse_from_rfc3339("1900-01-02T00:00:00Z").unwrap());
-        assert_eq!(decoded[2], DateTime::parse_from_rfc3339("1900-01-03T00:00:00Z").unwrap());
+        assert_eq!(
+            decoded[0],
+            DateTime::parse_from_rfc3339("1900-01-01T00:00:00Z").unwrap()
+        );
+        assert_eq!(
+            decoded[1],
+            DateTime::parse_from_rfc3339("1900-01-02T00:00:00Z").unwrap()
+        );
+        assert_eq!(
+            decoded[2],
+            DateTime::parse_from_rfc3339("1900-01-03T00:00:00Z").unwrap()
+        );
     }
 
     #[test]
@@ -321,8 +332,14 @@ mod tests {
 
         let raw = vec![0.0, 365.0];
         let decoded = cf.decode_time(&raw).unwrap();
-        assert_eq!(decoded[0], DateTime::parse_from_rfc3339("1950-01-01T00:00:00Z").unwrap());
-        assert_eq!(decoded[1], DateTime::parse_from_rfc3339("1951-01-01T00:00:00Z").unwrap());
+        assert_eq!(
+            decoded[0],
+            DateTime::parse_from_rfc3339("1950-01-01T00:00:00Z").unwrap()
+        );
+        assert_eq!(
+            decoded[1],
+            DateTime::parse_from_rfc3339("1951-01-01T00:00:00Z").unwrap()
+        );
     }
 
     #[test]
@@ -399,9 +416,18 @@ mod tests {
     #[test]
     fn test_parse_reference_datetime_formats() {
         let expected = DateTime::parse_from_rfc3339("1900-01-01T00:00:00Z").unwrap();
-        assert_eq!(parse_reference_datetime("1900-01-01 00:00:00.0").unwrap(), expected);
-        assert_eq!(parse_reference_datetime("1900-01-01 00:00:00").unwrap(), expected);
-        assert_eq!(parse_reference_datetime("1900-01-01T00:00:00").unwrap(), expected);
+        assert_eq!(
+            parse_reference_datetime("1900-01-01 00:00:00.0").unwrap(),
+            expected
+        );
+        assert_eq!(
+            parse_reference_datetime("1900-01-01 00:00:00").unwrap(),
+            expected
+        );
+        assert_eq!(
+            parse_reference_datetime("1900-01-01T00:00:00").unwrap(),
+            expected
+        );
         assert_eq!(parse_reference_datetime("1900-01-01").unwrap(), expected);
     }
 

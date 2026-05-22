@@ -3,11 +3,9 @@
 
 #[cfg(test)]
 mod tests {
-    use surtgis_algorithms::imagery::{
-        CloudMaskStrategy, S2SclMask, LandsatQaMask, NoCloudMask,
-    };
-    use surtgis_core::Raster;
     use std::sync::Arc;
+    use surtgis_algorithms::imagery::{CloudMaskStrategy, LandsatQaMask, NoCloudMask, S2SclMask};
+    use surtgis_core::Raster;
 
     /// Test S2SclMask strategy with synthetic data
     #[test]

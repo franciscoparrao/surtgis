@@ -15,8 +15,8 @@
 //! let rgba = raster_to_rgba(&raster, &params);
 //! ```
 
-mod scheme;
 mod render;
+mod scheme;
 
+pub use render::{ColormapParams, auto_params, raster_to_rgba};
 pub use scheme::{ColorScheme, ColorStop, Rgb, evaluate};
-pub use render::{raster_to_rgba, auto_params, ColormapParams};

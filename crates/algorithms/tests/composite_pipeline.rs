@@ -25,7 +25,11 @@ fn cloud_mask_scl_class_0_passes_through() {
     let result = mask.mask(&data, &scl).expect("mask failed");
 
     let valid = result.data().iter().filter(|v| v.is_finite()).count();
-    assert_eq!(valid, 100, "SCL=0 should pass through, got {} valid of 100", valid);
+    assert_eq!(
+        valid, 100,
+        "SCL=0 should pass through, got {} valid of 100",
+        valid
+    );
 }
 
 #[test]
@@ -80,7 +84,11 @@ fn cloud_mask_scl_mixed_classes() {
     // Classes that should pass: 0, 4, 5, 0, 6, 11 = 6 pixels
     // Classes that should fail: 8, 9, 3, 7 = 4 pixels
     let valid = result.data().iter().filter(|v| v.is_finite()).count();
-    assert_eq!(valid, 6, "Expected 6 valid pixels (0,4,5,0,6,11), got {}", valid);
+    assert_eq!(
+        valid, 6,
+        "Expected 6 valid pixels (0,4,5,0,6,11), got {}",
+        valid
+    );
 }
 
 #[test]
@@ -100,7 +108,11 @@ fn cloud_mask_scl_different_resolution() {
 
     // All should pass (SCL rescaled from 5x5 to 10x10 via nearest neighbor)
     let valid = result.data().iter().filter(|v| v.is_finite()).count();
-    assert_eq!(valid, 100, "Multi-res SCL should work: got {} valid of 100", valid);
+    assert_eq!(
+        valid, 100,
+        "Multi-res SCL should work: got {} valid of 100",
+        valid
+    );
 }
 
 // =========================================================================
@@ -118,9 +130,9 @@ fn resample_10m_to_30m_basic() {
     let mut reference = Raster::from_array(ref_arr);
     reference.set_transform(GeoTransform::new(0.0, 60.0, 30.0, -30.0));
 
-    let result = surtgis_core::resample_to_grid(
-        &src, &reference, surtgis_core::ResampleMethod::Bilinear,
-    ).expect("resample failed");
+    let result =
+        surtgis_core::resample_to_grid(&src, &reference, surtgis_core::ResampleMethod::Bilinear)
+            .expect("resample failed");
 
     assert_eq!(result.shape(), (2, 2));
 
@@ -128,8 +140,13 @@ fn resample_10m_to_30m_basic() {
     for r in 0..2 {
         for c in 0..2 {
             let v = result.data()[[r, c]];
-            assert!(v.is_finite() && (v - 3000.0).abs() < 1.0,
-                "pixel ({},{}) = {}, expected ~3000", r, c, v);
+            assert!(
+                v.is_finite() && (v - 3000.0).abs() < 1.0,
+                "pixel ({},{}) = {}, expected ~3000",
+                r,
+                c,
+                v
+            );
         }
     }
 }
@@ -149,11 +166,14 @@ fn resample_nan_tolerant() {
     let mut reference = Raster::from_array(ref_arr);
     reference.set_transform(GeoTransform::new(0.0, 60.0, 30.0, -30.0));
 
-    let result = surtgis_core::resample_to_grid(
-        &src, &reference, surtgis_core::ResampleMethod::Bilinear,
-    ).expect("resample failed");
+    let result =
+        surtgis_core::resample_to_grid(&src, &reference, surtgis_core::ResampleMethod::Bilinear)
+            .expect("resample failed");
 
     // Pixel (0,1) has some NaN neighbors but should still produce a value
     let v01 = result.data()[[0, 1]];
-    assert!(v01.is_finite(), "NaN-tolerant bilinear should handle partial NaN neighbors");
+    assert!(
+        v01.is_finite(),
+        "NaN-tolerant bilinear should handle partial NaN neighbors"
+    );
 }

@@ -11,8 +11,8 @@
 //! ```
 //! 0 = pit/flat (no outflow), 1-8 = direction to steepest neighbor
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Algorithm, Error, Result};
 
@@ -31,8 +31,14 @@ const D8_OFFSETS: [(isize, isize); 8] = [
 
 /// Distance factors for each D8 direction
 const D8_DIST: [f64; 8] = [
-    1.0, std::f64::consts::SQRT_2, 1.0, std::f64::consts::SQRT_2,
-    1.0, std::f64::consts::SQRT_2, 1.0, std::f64::consts::SQRT_2,
+    1.0,
+    std::f64::consts::SQRT_2,
+    1.0,
+    std::f64::consts::SQRT_2,
+    1.0,
+    std::f64::consts::SQRT_2,
+    1.0,
+    std::f64::consts::SQRT_2,
 ];
 
 /// Flow direction algorithm (D8)
@@ -95,9 +101,10 @@ pub fn flow_direction(dem: &Raster<f64>) -> Result<Raster<u8>> {
                     continue;
                 }
                 if let Some(nd) = nodata
-                    && (center - nd).abs() < f64::EPSILON {
-                        continue;
-                    }
+                    && (center - nd).abs() < f64::EPSILON
+                {
+                    continue;
+                }
 
                 let mut max_drop = 0.0_f64;
                 let mut best_dir: u8 = 0;
@@ -116,9 +123,10 @@ pub fn flow_direction(dem: &Raster<f64>) -> Result<Raster<u8>> {
                         continue;
                     }
                     if let Some(nd) = nodata
-                        && (neighbor - nd).abs() < f64::EPSILON {
-                            continue;
-                        }
+                        && (neighbor - nd).abs() < f64::EPSILON
+                    {
+                        continue;
+                    }
 
                     // Drop = (center - neighbor) / distance
                     let distance = D8_DIST[idx] * cell_size;

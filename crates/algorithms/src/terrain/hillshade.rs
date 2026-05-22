@@ -3,11 +3,11 @@
 //! Creates a shaded relief visualization from a DEM based on
 //! illumination angle and direction.
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
+use std::f64::consts::PI;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Algorithm, Error, Result};
-use std::f64::consts::PI;
 
 /// Parameters for hillshade calculation
 #[derive(Debug, Clone)]
@@ -25,8 +25,8 @@ pub struct HillshadeParams {
 impl Default for HillshadeParams {
     fn default() -> Self {
         Self {
-            azimuth: 315.0,   // NW illumination (standard)
-            altitude: 45.0,   // 45° above horizon
+            azimuth: 315.0, // NW illumination (standard)
+            altitude: 45.0, // 45° above horizon
             z_factor: 1.0,
             normalized: false,
         }
@@ -231,9 +231,7 @@ impl surtgis_core::WindowAlgorithm for HillshadeStreaming {
                 }
 
                 let e = input[[ir, c]];
-                if e.is_nan()
-                    || nodata.map_or(false, |nd| (e - nd).abs() < f64::EPSILON)
-                {
+                if e.is_nan() || nodata.map_or(false, |nd| (e - nd).abs() < f64::EPSILON) {
                     output[[r, c]] = f64::NAN;
                     continue;
                 }
@@ -263,11 +261,7 @@ impl surtgis_core::WindowAlgorithm for HillshadeStreaming {
                     0.0 // Flat
                 } else {
                     let asp = (-dz_dy).atan2(-dz_dx);
-                    if asp < 0.0 {
-                        2.0 * PI + asp
-                    } else {
-                        asp
-                    }
+                    if asp < 0.0 { 2.0 * PI + asp } else { asp }
                 };
 
                 // Hillshade formula

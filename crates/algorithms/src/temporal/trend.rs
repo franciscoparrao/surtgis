@@ -35,13 +35,18 @@ pub struct MannKendallResult {
 
 fn validate_series(rasters: &[&Raster<f64>]) -> Result<(usize, usize)> {
     if rasters.len() < 3 {
-        return Err(Error::Other("trend analysis requires at least 3 time steps".into()));
+        return Err(Error::Other(
+            "trend analysis requires at least 3 time steps".into(),
+        ));
     }
     let (rows, cols) = rasters[0].shape();
     for r in rasters.iter().skip(1) {
         if r.shape() != (rows, cols) {
             return Err(Error::SizeMismatch {
-                er: rows, ec: cols, ar: r.rows(), ac: r.cols(),
+                er: rows,
+                ec: cols,
+                ar: r.rows(),
+                ac: r.cols(),
             });
         }
     }
@@ -64,7 +69,9 @@ pub fn linear_trend(rasters: &[&Raster<f64>], times: Option<&[f64]>) -> Result<L
         Some(t) => {
             if t.len() != n {
                 return Err(Error::Other(format!(
-                    "times length {} != raster count {}", t.len(), n
+                    "times length {} != raster count {}",
+                    t.len(),
+                    n
                 )));
             }
             t.to_vec()
@@ -78,7 +85,8 @@ pub fn linear_trend(rasters: &[&Raster<f64>], times: Option<&[f64]>) -> Result<L
     let mut r2_flat = vec![f64::NAN; total];
     let mut pval_flat = vec![f64::NAN; total];
 
-    slope_flat.par_chunks_mut(cols)
+    slope_flat
+        .par_chunks_mut(cols)
         .zip(intercept_flat.par_chunks_mut(cols))
         .zip(r2_flat.par_chunks_mut(cols))
         .zip(pval_flat.par_chunks_mut(cols))
@@ -123,7 +131,11 @@ pub fn linear_trend(rasters: &[&Raster<f64>], times: Option<&[f64]>) -> Result<L
 
                 let b = ss_ty / ss_tt;
                 let a = y_mean - b * t_mean;
-                let r2 = if ss_yy > 1e-30 { (ss_ty * ss_ty) / (ss_tt * ss_yy) } else { 0.0 };
+                let r2 = if ss_yy > 1e-30 {
+                    (ss_ty * ss_ty) / (ss_tt * ss_yy)
+                } else {
+                    0.0
+                };
 
                 slope_row[col] = b;
                 intercept_row[col] = a;
@@ -182,7 +194,8 @@ pub fn mann_kendall(rasters: &[&Raster<f64>]) -> Result<MannKendallResult> {
     let mut trend_flat = vec![f64::NAN; total];
     let mut sens_flat = vec![f64::NAN; total];
 
-    tau_flat.par_chunks_mut(cols)
+    tau_flat
+        .par_chunks_mut(cols)
         .zip(pval_flat.par_chunks_mut(cols))
         .zip(trend_flat.par_chunks_mut(cols))
         .zip(sens_flat.par_chunks_mut(cols))
@@ -208,12 +221,19 @@ pub fn mann_kendall(rasters: &[&Raster<f64>]) -> Result<MannKendallResult> {
                 let mut slopes = Vec::new();
                 let k = vals.len();
                 for i in 0..k {
-                    if !vals[i].is_finite() { continue; }
+                    if !vals[i].is_finite() {
+                        continue;
+                    }
                     for j in (i + 1)..k {
-                        if !vals[j].is_finite() { continue; }
+                        if !vals[j].is_finite() {
+                            continue;
+                        }
                         let diff = vals[j] - vals[i];
-                        if diff > 0.0 { s += 1; }
-                        else if diff < 0.0 { s -= 1; }
+                        if diff > 0.0 {
+                            s += 1;
+                        } else if diff < 0.0 {
+                            s -= 1;
+                        }
                         slopes.push(diff / (j - i) as f64);
                     }
                 }
@@ -286,7 +306,8 @@ pub fn sens_slope(rasters: &[&Raster<f64>]) -> Result<Raster<f64>> {
     let n = rasters.len();
     let mut out = Array2::<f64>::from_elem((rows, cols), f64::NAN);
 
-    out.as_slice_mut().unwrap()
+    out.as_slice_mut()
+        .unwrap()
         .par_chunks_mut(cols)
         .enumerate()
         .for_each(|(row, out_row)| {
@@ -295,10 +316,14 @@ pub fn sens_slope(rasters: &[&Raster<f64>]) -> Result<Raster<f64>> {
                 slopes.clear();
                 for i in 0..n {
                     let vi = unsafe { rasters[i].get_unchecked(row, col) };
-                    if !vi.is_finite() { continue; }
+                    if !vi.is_finite() {
+                        continue;
+                    }
                     for j in (i + 1)..n {
                         let vj = unsafe { rasters[j].get_unchecked(row, col) };
-                        if !vj.is_finite() { continue; }
+                        if !vj.is_finite() {
+                            continue;
+                        }
                         slopes.push((vj - vi) / (j - i) as f64);
                     }
                 }
@@ -342,22 +367,26 @@ fn t_test_pvalue(t_abs: f64, df: u32) -> f64 {
 
 /// Standard normal CDF approximation (Abramowitz & Stegun 26.2.17).
 fn normal_cdf(x: f64) -> f64 {
-    if x.is_nan() { return f64::NAN; }
+    if x.is_nan() {
+        return f64::NAN;
+    }
     let t = 1.0 / (1.0 + 0.2316419 * x.abs());
     let d = 0.3989422804014327; // 1/√(2π)
-    let p = d * (-x * x / 2.0).exp()
+    let p = d
+        * (-x * x / 2.0).exp()
         * (t * (0.319381530
-            + t * (-0.356563782
-                + t * (1.781477937
-                    + t * (-1.821255978
-                        + t * 1.330274429)))));
+            + t * (-0.356563782 + t * (1.781477937 + t * (-1.821255978 + t * 1.330274429)))));
     if x >= 0.0 { 1.0 - p } else { p }
 }
 
 /// Regularized incomplete beta function I_x(a, b) via continued fraction.
 fn regularized_incomplete_beta(x: f64, a: f64, b: f64) -> f64 {
-    if x <= 0.0 { return 0.0; }
-    if x >= 1.0 { return 1.0; }
+    if x <= 0.0 {
+        return 0.0;
+    }
+    if x >= 1.0 {
+        return 1.0;
+    }
 
     // Use continued fraction (Lentz's method)
     let ln_beta = ln_gamma(a) + ln_gamma(b) - ln_gamma(a + b);
@@ -366,7 +395,9 @@ fn regularized_incomplete_beta(x: f64, a: f64, b: f64) -> f64 {
     // Continued fraction for I_x(a, b)
     let mut c = 1.0;
     let mut d = 1.0 - (a + b) * x / (a + 1.0);
-    if d.abs() < 1e-30 { d = 1e-30; }
+    if d.abs() < 1e-30 {
+        d = 1e-30;
+    }
     d = 1.0 / d;
     let mut f = d;
 
@@ -376,18 +407,26 @@ fn regularized_incomplete_beta(x: f64, a: f64, b: f64) -> f64 {
         // Even step
         let num_even = mf * (b - mf) * x / ((a + 2.0 * mf - 1.0) * (a + 2.0 * mf));
         d = 1.0 + num_even * d;
-        if d.abs() < 1e-30 { d = 1e-30; }
+        if d.abs() < 1e-30 {
+            d = 1e-30;
+        }
         c = 1.0 + num_even / c;
-        if c.abs() < 1e-30 { c = 1e-30; }
+        if c.abs() < 1e-30 {
+            c = 1e-30;
+        }
         d = 1.0 / d;
         f *= c * d;
 
         // Odd step
         let num_odd = -(a + mf) * (a + b + mf) * x / ((a + 2.0 * mf) * (a + 2.0 * mf + 1.0));
         d = 1.0 + num_odd * d;
-        if d.abs() < 1e-30 { d = 1e-30; }
+        if d.abs() < 1e-30 {
+            d = 1e-30;
+        }
         c = 1.0 + num_odd / c;
-        if c.abs() < 1e-30 { c = 1e-30; }
+        if c.abs() < 1e-30 {
+            c = 1e-30;
+        }
         d = 1.0 / d;
         let delta = c * d;
         f *= delta;
@@ -436,15 +475,23 @@ mod tests {
     #[test]
     fn test_linear_trend_perfect() {
         // y = 2*t + 10 → slope=2, intercept=10, R²=1
-        let rasters: Vec<Raster<f64>> = (0..5).map(|t| make_raster(vec![10.0 + 2.0 * t as f64])).collect();
+        let rasters: Vec<Raster<f64>> = (0..5)
+            .map(|t| make_raster(vec![10.0 + 2.0 * t as f64]))
+            .collect();
         let refs: Vec<&Raster<f64>> = rasters.iter().collect();
 
         let result = linear_trend(&refs, None).unwrap();
 
         assert!((result.slope.data()[[0, 0]] - 2.0).abs() < 1e-8, "slope");
-        assert!((result.intercept.data()[[0, 0]] - 10.0).abs() < 1e-8, "intercept");
+        assert!(
+            (result.intercept.data()[[0, 0]] - 10.0).abs() < 1e-8,
+            "intercept"
+        );
         assert!((result.r_squared.data()[[0, 0]] - 1.0).abs() < 1e-8, "R²");
-        assert!(result.p_value.data()[[0, 0]] < 0.001, "p-value should be very small");
+        assert!(
+            result.p_value.data()[[0, 0]] < 0.001,
+            "p-value should be very small"
+        );
     }
 
     #[test]
@@ -459,26 +506,45 @@ mod tests {
 
     #[test]
     fn test_mann_kendall_increasing() {
-        let rasters: Vec<Raster<f64>> = (0..10).map(|t| make_raster(vec![t as f64 * 3.0 + 5.0])).collect();
+        let rasters: Vec<Raster<f64>> = (0..10)
+            .map(|t| make_raster(vec![t as f64 * 3.0 + 5.0]))
+            .collect();
         let refs: Vec<&Raster<f64>> = rasters.iter().collect();
 
         let result = mann_kendall(&refs).unwrap();
 
-        assert!((result.tau.data()[[0, 0]] - 1.0).abs() < 1e-10, "perfect increasing → tau=1");
+        assert!(
+            (result.tau.data()[[0, 0]] - 1.0).abs() < 1e-10,
+            "perfect increasing → tau=1"
+        );
         assert!(result.p_value.data()[[0, 0]] < 0.05, "significant trend");
-        assert!((result.trend.data()[[0, 0]] - 1.0).abs() < 1e-10, "increasing");
-        assert!((result.sens_slope.data()[[0, 0]] - 3.0).abs() < 1e-10, "Sen's slope=3");
+        assert!(
+            (result.trend.data()[[0, 0]] - 1.0).abs() < 1e-10,
+            "increasing"
+        );
+        assert!(
+            (result.sens_slope.data()[[0, 0]] - 3.0).abs() < 1e-10,
+            "Sen's slope=3"
+        );
     }
 
     #[test]
     fn test_mann_kendall_decreasing() {
-        let rasters: Vec<Raster<f64>> = (0..10).map(|t| make_raster(vec![100.0 - t as f64 * 5.0])).collect();
+        let rasters: Vec<Raster<f64>> = (0..10)
+            .map(|t| make_raster(vec![100.0 - t as f64 * 5.0]))
+            .collect();
         let refs: Vec<&Raster<f64>> = rasters.iter().collect();
 
         let result = mann_kendall(&refs).unwrap();
 
-        assert!((result.tau.data()[[0, 0]] - (-1.0)).abs() < 1e-10, "perfect decreasing → tau=-1");
-        assert!((result.trend.data()[[0, 0]] - (-1.0)).abs() < 1e-10, "decreasing");
+        assert!(
+            (result.tau.data()[[0, 0]] - (-1.0)).abs() < 1e-10,
+            "perfect decreasing → tau=-1"
+        );
+        assert!(
+            (result.trend.data()[[0, 0]] - (-1.0)).abs() < 1e-10,
+            "decreasing"
+        );
     }
 
     #[test]

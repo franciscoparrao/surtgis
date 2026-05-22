@@ -17,9 +17,11 @@ pub mod overlay;
 mod simplify;
 mod spatial;
 
-pub use buffer::{buffer_geometry, buffer_points, BufferParams};
-pub use clip::{clip_by_rect, ClipRect};
+pub use buffer::{BufferParams, buffer_geometry, buffer_points};
+pub use clip::{ClipRect, clip_by_rect};
 pub use measurements::{area, length, perimeter};
-pub use simplify::{simplify_dp, simplify_vw, SimplifyParams};
-pub use spatial::{bounding_box, centroid, convex_hull, dissolve, BoundingBox};
-pub use overlay::{intersection, union, difference, symmetric_difference, dissolve as dissolve_overlay};
+pub use overlay::{
+    difference, dissolve as dissolve_overlay, intersection, symmetric_difference, union,
+};
+pub use simplify::{SimplifyParams, simplify_dp, simplify_vw};
+pub use spatial::{BoundingBox, bounding_box, centroid, convex_hull, dissolve};

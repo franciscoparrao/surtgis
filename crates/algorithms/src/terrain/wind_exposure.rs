@@ -4,8 +4,8 @@
 //! Topex = sum of angles to horizon in specified directions.
 //! Based on the Forestry Commission (UK) topographic exposure method.
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -65,21 +65,25 @@ pub fn wind_exposure(dem: &Raster<f64>, params: WindExposureParams) -> Result<Ra
 
             if let Some(wind_dir) = params.wind_direction {
                 let mut diff = (azimuth_deg - wind_dir).abs();
-                if diff > 180.0 { diff = 360.0 - diff; }
+                if diff > 180.0 {
+                    diff = 360.0 - diff;
+                }
                 if diff > params.wind_window {
                     return None;
                 }
             }
 
             // Azimuth: 0=N, 90=E, etc.
-            let dc = azimuth_rad.sin();  // East component
+            let dc = azimuth_rad.sin(); // East component
             let dr = -azimuth_rad.cos(); // North component (negative row = north)
             Some((dr, dc, azimuth_deg))
         })
         .collect();
 
     if dir_vectors.is_empty() {
-        return Err(Error::Algorithm("No directions selected for wind exposure".into()));
+        return Err(Error::Algorithm(
+            "No directions selected for wind exposure".into(),
+        ));
     }
 
     let output_data: Vec<f64> = (0..rows)
@@ -113,8 +117,11 @@ pub fn wind_exposure(dem: &Raster<f64>, params: WindExposureParams) -> Result<Ra
                             break;
                         }
 
-                        let dist = ((fr - row as f64).powi(2) + (fc - col as f64).powi(2)).sqrt() * cell_size;
-                        if dist < f64::EPSILON { continue; }
+                        let dist = ((fr - row as f64).powi(2) + (fc - col as f64).powi(2)).sqrt()
+                            * cell_size;
+                        if dist < f64::EPSILON {
+                            continue;
+                        }
 
                         let angle = ((z - z0) / dist).atan().to_degrees();
                         if angle > max_angle {
@@ -173,7 +180,11 @@ mod tests {
 
         let result = wind_exposure(&dem, WindExposureParams::default()).unwrap();
         let center = result.get(10, 10).unwrap();
-        assert!(center > 0.0, "Valley center should be sheltered (positive), got {}", center);
+        assert!(
+            center > 0.0,
+            "Valley center should be sheltered (positive), got {}",
+            center
+        );
     }
 
     #[test]
@@ -185,13 +196,18 @@ mod tests {
             for col in 0..21 {
                 let dx = col as f64 - 10.0;
                 let dy = row as f64 - 10.0;
-                dem.set(row, col, 100.0 - (dx * dx + dy * dy).sqrt() * 5.0).unwrap();
+                dem.set(row, col, 100.0 - (dx * dx + dy * dy).sqrt() * 5.0)
+                    .unwrap();
             }
         }
 
         let result = wind_exposure(&dem, WindExposureParams::default()).unwrap();
         let center = result.get(10, 10).unwrap();
-        assert!(center <= 0.1, "Peak should be exposed (≤0 topex), got {}", center);
+        assert!(
+            center <= 0.1,
+            "Peak should be exposed (≤0 topex), got {}",
+            center
+        );
     }
 
     #[test]
@@ -199,11 +215,15 @@ mod tests {
         let mut dem = Raster::filled(21, 21, 100.0_f64);
         dem.set_transform(GeoTransform::new(0.0, 21.0, 1.0, -1.0));
 
-        let result = wind_exposure(&dem, WindExposureParams {
-            wind_direction: Some(270.0), // West wind
-            wind_window: 45.0,
-            ..Default::default()
-        }).unwrap();
+        let result = wind_exposure(
+            &dem,
+            WindExposureParams {
+                wind_direction: Some(270.0), // West wind
+                wind_window: 45.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let v = result.get(10, 10).unwrap();
         assert!(!v.is_nan());
     }

@@ -3,21 +3,19 @@
 //! Replaces each pixel with the maximum value in its structuring element
 //! neighborhood. Enlarges bright regions and shrinks dark regions.
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Algorithm, Error, Result};
 
 use super::element::StructuringElement;
 
 /// Parameters for morphological dilation
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct DilateParams {
     /// Structuring element shape
     pub element: StructuringElement,
 }
-
 
 /// Dilation algorithm
 #[derive(Debug, Clone, Default)]

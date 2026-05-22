@@ -57,8 +57,10 @@ pub fn zonal_statistics(
 
     if rows_v != rows_z || cols_v != cols_z {
         return Err(Error::SizeMismatch {
-            er: rows_v, ec: cols_v,
-            ar: rows_z, ac: cols_z,
+            er: rows_v,
+            ec: cols_v,
+            ar: rows_z,
+            ac: cols_z,
         });
     }
 
@@ -103,17 +105,20 @@ pub fn zonal_statistics(
             vals[count / 2]
         };
 
-        results.insert(zone_id, ZonalResult {
+        results.insert(
             zone_id,
-            count,
-            sum,
-            mean,
-            std_dev,
-            min,
-            max,
-            range,
-            median,
-        });
+            ZonalResult {
+                zone_id,
+                count,
+                sum,
+                mean,
+                std_dev,
+                min,
+                max,
+                range,
+                median,
+            },
+        );
     }
 
     Ok(results)
@@ -153,7 +158,9 @@ pub fn zonal_statistics_raster(
                     ZonalStatistic::Sum => zr.sum,
                     ZonalStatistic::Count => zr.count as f64,
                     ZonalStatistic::Median => zr.median,
-                    ZonalStatistic::Majority | ZonalStatistic::Minority | ZonalStatistic::Variety => {
+                    ZonalStatistic::Majority
+                    | ZonalStatistic::Minority
+                    | ZonalStatistic::Variety => {
                         zr.mean // Fallback for categorical stats on continuous data
                     }
                 };
@@ -252,7 +259,9 @@ mod tests {
             for col in 0..4 {
                 let zone = if row < 2 { 1 } else { 2 };
                 zones.set(row, col, zone).unwrap();
-                values.set(row, col, if row < 2 { 10.0 } else { 20.0 }).unwrap();
+                values
+                    .set(row, col, if row < 2 { 10.0 } else { 20.0 })
+                    .unwrap();
             }
         }
 

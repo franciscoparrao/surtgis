@@ -170,9 +170,10 @@ impl KdTree {
 
         // Check if we need to search the other side
         if diff * diff < *best_dist_sq
-            && let Some(child) = second {
-                self.nearest_recursive(child, qx, qy, best_dist_sq, best_idx);
-            }
+            && let Some(child) = second
+        {
+            self.nearest_recursive(child, qx, qy, best_dist_sq, best_idx);
+        }
     }
 
     fn knn_recursive(
@@ -226,16 +227,13 @@ impl KdTree {
             self.knn_recursive(child, qx, qy, k, heap);
         }
 
-        let threshold = if heap.len() >= k {
-            heap[0].0
-        } else {
-            f64::MAX
-        };
+        let threshold = if heap.len() >= k { heap[0].0 } else { f64::MAX };
 
         if diff * diff < threshold
-            && let Some(child) = second {
-                self.knn_recursive(child, qx, qy, k, heap);
-            }
+            && let Some(child) = second
+        {
+            self.knn_recursive(child, qx, qy, k, heap);
+        }
     }
 
     fn radius_recursive(
@@ -265,14 +263,16 @@ impl KdTree {
 
         // Always check both sides if the splitting plane is within radius
         if let Some(left) = node.left
-            && (diff > 0.0 || diff * diff <= radius_sq) {
-                self.radius_recursive(left, qx, qy, radius_sq, results);
-            }
+            && (diff > 0.0 || diff * diff <= radius_sq)
+        {
+            self.radius_recursive(left, qx, qy, radius_sq, results);
+        }
 
         if let Some(right) = node.right
-            && (diff < 0.0 || diff * diff <= radius_sq) {
-                self.radius_recursive(right, qx, qy, radius_sq, results);
-            }
+            && (diff < 0.0 || diff * diff <= radius_sq)
+        {
+            self.radius_recursive(right, qx, qy, radius_sq, results);
+        }
     }
 }
 
@@ -400,9 +400,7 @@ mod tests {
                     .iter()
                     .enumerate()
                     .min_by(|(_, a), (_, b)| {
-                        a.dist_sq(qx, qy)
-                            .partial_cmp(&b.dist_sq(qx, qy))
-                            .unwrap()
+                        a.dist_sq(qx, qy).partial_cmp(&b.dist_sq(qx, qy)).unwrap()
                     })
                     .unwrap();
 

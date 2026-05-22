@@ -15,11 +15,11 @@
 //! Wang, J. et al. (2000). Approximating viewsheds on gridded DEMs.
 //! Cauchi-Saunders, A. (2015). Comprehensive analysis of viewshed algorithms.
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
+use std::f64::consts::PI;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
-use std::f64::consts::PI;
 
 /// Parameters for viewshed analysis
 #[derive(Debug, Clone)]
@@ -108,8 +108,18 @@ pub fn viewshed(dem: &Raster<f64>, params: ViewshedParams) -> Result<Raster<u8>>
     let visibility_maps: Vec<Vec<(usize, usize)>> = targets
         .into_par_iter()
         .map(|(tr, tc)| {
-            trace_ray(dem, obs_r, obs_c, obs_z, tr, tc,
-                      params.target_height, cell_size, rows, cols)
+            trace_ray(
+                dem,
+                obs_r,
+                obs_c,
+                obs_z,
+                tr,
+                tc,
+                params.target_height,
+                cell_size,
+                rows,
+                cols,
+            )
         })
         .collect();
 
@@ -134,11 +144,15 @@ pub fn viewshed(dem: &Raster<f64>, params: ViewshedParams) -> Result<Raster<u8>>
 #[allow(clippy::too_many_arguments)]
 fn trace_ray(
     dem: &Raster<f64>,
-    obs_r: isize, obs_c: isize, obs_z: f64,
-    target_r: isize, target_c: isize,
+    obs_r: isize,
+    obs_c: isize,
+    obs_z: f64,
+    target_r: isize,
+    target_c: isize,
     target_height: f64,
     cell_size: f64,
-    rows: usize, cols: usize,
+    rows: usize,
+    cols: usize,
 ) -> Vec<(usize, usize)> {
     let mut visible = Vec::new();
     let mut max_angle = f64::NEG_INFINITY;
@@ -284,9 +298,7 @@ pub fn viewshed_xdraw(dem: &Raster<f64>, params: ViewshedParams) -> Result<Raste
         let slope_angle = (z + params.target_height - obs_z) / dist;
 
         // Interpolate reference from the two parent cells
-        let ref_interp = xdraw_interpolate_ref(
-            &reference, obs_r, obs_c, dr, dc, rows, cols,
-        );
+        let ref_interp = xdraw_interpolate_ref(&reference, obs_r, obs_c, dr, dc, rows, cols);
 
         if slope_angle >= ref_interp {
             visible[(r, c)] = 1;
@@ -308,9 +320,12 @@ pub fn viewshed_xdraw(dem: &Raster<f64>, params: ViewshedParams) -> Result<Raste
 /// and linearly interpolates the reference value.
 fn xdraw_interpolate_ref(
     reference: &Array2<f64>,
-    obs_r: isize, obs_c: isize,
-    dr: isize, dc: isize,
-    rows: usize, cols: usize,
+    obs_r: isize,
+    obs_c: isize,
+    dr: isize,
+    dc: isize,
+    rows: usize,
+    cols: usize,
 ) -> f64 {
     let abs_dr = dr.unsigned_abs();
     let abs_dc = dc.unsigned_abs();
@@ -329,7 +344,11 @@ fn xdraw_interpolate_ref(
         let br = r as isize - sign_r;
         let bc = if sign_c != 0 { c as isize - sign_c } else { ac };
 
-        let f = if abs_dr > 0 { abs_dc as f64 / abs_dr as f64 } else { 0.0 };
+        let f = if abs_dr > 0 {
+            abs_dc as f64 / abs_dr as f64
+        } else {
+            0.0
+        };
 
         let ref_a = safe_ref(reference, ar, ac, rows, cols);
         let ref_b = if sign_c != 0 {
@@ -339,7 +358,13 @@ fn xdraw_interpolate_ref(
         };
 
         // Avoid NaN from infinity * 0.0 in IEEE 754
-        if f <= 0.0 { ref_a } else if f >= 1.0 { ref_b } else { ref_a * (1.0 - f) + ref_b * f }
+        if f <= 0.0 {
+            ref_a
+        } else if f >= 1.0 {
+            ref_b
+        } else {
+            ref_a * (1.0 - f) + ref_b * f
+        }
     } else {
         // Primary axis is column direction
         // Cell A: one step back along primary (same secondary)
@@ -349,7 +374,11 @@ fn xdraw_interpolate_ref(
         let br = if sign_r != 0 { r as isize - sign_r } else { ar };
         let bc = c as isize - sign_c;
 
-        let f = if abs_dc > 0 { abs_dr as f64 / abs_dc as f64 } else { 0.0 };
+        let f = if abs_dc > 0 {
+            abs_dr as f64 / abs_dc as f64
+        } else {
+            0.0
+        };
 
         let ref_a = safe_ref(reference, ar, ac, rows, cols);
         let ref_b = if sign_r != 0 {
@@ -359,7 +388,13 @@ fn xdraw_interpolate_ref(
         };
 
         // Avoid NaN from infinity * 0.0 in IEEE 754
-        if f <= 0.0 { ref_a } else if f >= 1.0 { ref_b } else { ref_a * (1.0 - f) + ref_b * f }
+        if f <= 0.0 {
+            ref_a
+        } else if f >= 1.0 {
+            ref_b
+        } else {
+            ref_a * (1.0 - f) + ref_b * f
+        }
     }
 }
 
@@ -453,12 +488,17 @@ struct Lcg {
 
 impl Lcg {
     fn new(seed: u64) -> Self {
-        Self { state: seed.wrapping_add(1) }
+        Self {
+            state: seed.wrapping_add(1),
+        }
     }
 
     fn next_u64(&mut self) -> u64 {
         // Multiplier and increment from Knuth (MMIX)
-        self.state = self.state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.state = self
+            .state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         self.state
     }
 
@@ -651,7 +691,8 @@ pub fn observer_optimization(
     }
 
     // Precompute viewsheds for all candidates
-    let viewsheds: Vec<Option<Raster<u8>>> = candidates.iter()
+    let viewsheds: Vec<Option<Raster<u8>>> = candidates
+        .iter()
         .map(|&(obs_r, obs_c)| {
             if obs_r >= rows || obs_c >= cols {
                 return None;
@@ -753,12 +794,16 @@ mod tests {
         let mut dem = Raster::filled(20, 20, 100.0_f64);
         dem.set_transform(GeoTransform::new(0.0, 20.0, 1.0, -1.0));
 
-        let result = viewshed(&dem, ViewshedParams {
-            observer_row: 10,
-            observer_col: 10,
-            observer_height: 1.7,
-            ..Default::default()
-        }).unwrap();
+        let result = viewshed(
+            &dem,
+            ViewshedParams {
+                observer_row: 10,
+                observer_col: 10,
+                observer_height: 1.7,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         // Center and nearby cells should be visible
         assert_eq!(result.get(10, 10).unwrap(), 1);
@@ -777,17 +822,29 @@ mod tests {
             dem.set(row, 10, 1000.0).unwrap();
         }
 
-        let result = viewshed(&dem, ViewshedParams {
-            observer_row: 10,
-            observer_col: 5,
-            observer_height: 1.7,
-            ..Default::default()
-        }).unwrap();
+        let result = viewshed(
+            &dem,
+            ViewshedParams {
+                observer_row: 10,
+                observer_col: 5,
+                observer_height: 1.7,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         // Cells behind the wall should not be visible
-        assert_eq!(result.get(10, 15).unwrap(), 0, "Cell behind wall should be hidden");
+        assert_eq!(
+            result.get(10, 15).unwrap(),
+            0,
+            "Cell behind wall should be hidden"
+        );
         // Cells before the wall should be visible
-        assert_eq!(result.get(10, 8).unwrap(), 1, "Cell before wall should be visible");
+        assert_eq!(
+            result.get(10, 8).unwrap(),
+            1,
+            "Cell before wall should be visible"
+        );
     }
 
     #[test]
@@ -795,23 +852,34 @@ mod tests {
         let mut dem = Raster::filled(10, 10, 100.0_f64);
         dem.set_transform(GeoTransform::new(0.0, 10.0, 1.0, -1.0));
 
-        let result = viewshed(&dem, ViewshedParams {
-            observer_row: 5,
-            observer_col: 5,
-            observer_height: 0.0,
-            ..Default::default()
-        }).unwrap();
-        assert_eq!(result.get(5, 5).unwrap(), 1, "Observer should always be visible");
+        let result = viewshed(
+            &dem,
+            ViewshedParams {
+                observer_row: 5,
+                observer_col: 5,
+                observer_height: 0.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            result.get(5, 5).unwrap(),
+            1,
+            "Observer should always be visible"
+        );
     }
 
     #[test]
     fn test_viewshed_invalid_observer() {
         let dem = Raster::filled(10, 10, 100.0_f64);
-        let result = viewshed(&dem, ViewshedParams {
-            observer_row: 20,
-            observer_col: 5,
-            ..Default::default()
-        });
+        let result = viewshed(
+            &dem,
+            ViewshedParams {
+                observer_row: 20,
+                observer_col: 5,
+                ..Default::default()
+            },
+        );
         assert!(result.is_err());
     }
 
@@ -822,16 +890,28 @@ mod tests {
         let mut dem = Raster::filled(20, 20, 100.0_f64);
         dem.set_transform(GeoTransform::new(0.0, 20.0, 1.0, -1.0));
 
-        let result = viewshed_xdraw(&dem, ViewshedParams {
-            observer_row: 10,
-            observer_col: 10,
-            observer_height: 1.7,
-            ..Default::default()
-        }).unwrap();
+        let result = viewshed_xdraw(
+            &dem,
+            ViewshedParams {
+                observer_row: 10,
+                observer_col: 10,
+                observer_height: 1.7,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         assert_eq!(result.get(10, 10).unwrap(), 1, "Observer should be visible");
-        assert_eq!(result.get(10, 15).unwrap(), 1, "Flat terrain should be visible");
-        assert_eq!(result.get(5, 10).unwrap(), 1, "Flat terrain should be visible");
+        assert_eq!(
+            result.get(10, 15).unwrap(),
+            1,
+            "Flat terrain should be visible"
+        );
+        assert_eq!(
+            result.get(5, 10).unwrap(),
+            1,
+            "Flat terrain should be visible"
+        );
     }
 
     #[test]
@@ -844,15 +924,27 @@ mod tests {
             dem.set(row, 10, 1000.0).unwrap();
         }
 
-        let result = viewshed_xdraw(&dem, ViewshedParams {
-            observer_row: 10,
-            observer_col: 5,
-            observer_height: 1.7,
-            ..Default::default()
-        }).unwrap();
+        let result = viewshed_xdraw(
+            &dem,
+            ViewshedParams {
+                observer_row: 10,
+                observer_col: 5,
+                observer_height: 1.7,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
-        assert_eq!(result.get(10, 15).unwrap(), 0, "XDraw: cell behind wall should be hidden");
-        assert_eq!(result.get(10, 8).unwrap(), 1, "XDraw: cell before wall should be visible");
+        assert_eq!(
+            result.get(10, 15).unwrap(),
+            0,
+            "XDraw: cell behind wall should be hidden"
+        );
+        assert_eq!(
+            result.get(10, 8).unwrap(),
+            1,
+            "XDraw: cell before wall should be visible"
+        );
     }
 
     #[test]
@@ -860,12 +952,16 @@ mod tests {
         let mut dem = Raster::filled(10, 10, 100.0_f64);
         dem.set_transform(GeoTransform::new(0.0, 10.0, 1.0, -1.0));
 
-        let result = viewshed_xdraw(&dem, ViewshedParams {
-            observer_row: 5,
-            observer_col: 5,
-            observer_height: 0.0,
-            ..Default::default()
-        }).unwrap();
+        let result = viewshed_xdraw(
+            &dem,
+            ViewshedParams {
+                observer_row: 5,
+                observer_col: 5,
+                observer_height: 0.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         assert_eq!(result.get(5, 5).unwrap(), 1, "Observer always visible");
     }
@@ -876,13 +972,17 @@ mod tests {
         let mut dem = Raster::filled(15, 15, 50.0_f64);
         dem.set_transform(GeoTransform::new(0.0, 15.0, 1.0, -1.0));
 
-        let result = viewshed_xdraw(&dem, ViewshedParams {
-            observer_row: 7,
-            observer_col: 7,
-            observer_height: 0.0,
-            target_height: 0.0,
-            max_radius: 6,
-        }).unwrap();
+        let result = viewshed_xdraw(
+            &dem,
+            ViewshedParams {
+                observer_row: 7,
+                observer_col: 7,
+                observer_height: 0.0,
+                target_height: 0.0,
+                max_radius: 6,
+            },
+        )
+        .unwrap();
 
         // All cells within max_radius should be visible on perfectly flat terrain
         let mut missed: Vec<(usize, usize, f64)> = Vec::new();
@@ -911,28 +1011,46 @@ mod tests {
         let mut dem = Raster::filled(21, 21, 100.0_f64);
         dem.set_transform(GeoTransform::new(0.0, 21.0, 1.0, -1.0));
 
-        let result = viewshed_xdraw(&dem, ViewshedParams {
-            observer_row: 10,
-            observer_col: 10,
-            observer_height: 0.0,
-            target_height: 0.0,
-            max_radius: 3,
-        }).unwrap();
+        let result = viewshed_xdraw(
+            &dem,
+            ViewshedParams {
+                observer_row: 10,
+                observer_col: 10,
+                observer_height: 0.0,
+                target_height: 0.0,
+                max_radius: 3,
+            },
+        )
+        .unwrap();
 
         // Cell at distance 3 should be visible
-        assert_eq!(result.get(7, 10).unwrap(), 1, "Cell at distance 3 should be visible");
+        assert_eq!(
+            result.get(7, 10).unwrap(),
+            1,
+            "Cell at distance 3 should be visible"
+        );
         // Cell at distance > 3 should not be (outside search radius)
-        assert_eq!(result.get(6, 10).unwrap(), 0, "Cell beyond max_radius should be 0");
+        assert_eq!(
+            result.get(6, 10).unwrap(),
+            0,
+            "Cell beyond max_radius should be 0"
+        );
     }
 
     #[test]
     fn test_xdraw_invalid_observer() {
         let dem = Raster::filled(10, 10, 100.0_f64);
-        assert!(viewshed_xdraw(&dem, ViewshedParams {
-            observer_row: 20,
-            observer_col: 5,
-            ..Default::default()
-        }).is_err());
+        assert!(
+            viewshed_xdraw(
+                &dem,
+                ViewshedParams {
+                    observer_row: 20,
+                    observer_col: 5,
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -941,14 +1059,18 @@ mod tests {
         let mut dem = Raster::filled(15, 15, 100.0_f64);
         dem.set_transform(GeoTransform::new(0.0, 15.0, 1.0, -1.0));
 
-        let result = viewshed_probabilistic(&dem, ProbabilisticViewshedParams {
-            observer_row: 7,
-            observer_col: 7,
-            observer_height: 10.0,
-            dem_rmse: 0.1, // Small uncertainty relative to observer height
-            n_realizations: 50,
-            ..Default::default()
-        }).unwrap();
+        let result = viewshed_probabilistic(
+            &dem,
+            ProbabilisticViewshedParams {
+                observer_row: 7,
+                observer_col: 7,
+                observer_height: 10.0,
+                dem_rmse: 0.1, // Small uncertainty relative to observer height
+                n_realizations: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         // Cells near observer should have probability ~1.0
         let p = result.get(7, 8).unwrap();
@@ -964,13 +1086,17 @@ mod tests {
         let mut dem = Raster::filled(15, 15, 100.0_f64);
         dem.set_transform(GeoTransform::new(0.0, 15.0, 1.0, -1.0));
 
-        let result = viewshed_probabilistic(&dem, ProbabilisticViewshedParams {
-            observer_row: 7,
-            observer_col: 7,
-            dem_rmse: 1.0,
-            n_realizations: 30,
-            ..Default::default()
-        }).unwrap();
+        let result = viewshed_probabilistic(
+            &dem,
+            ProbabilisticViewshedParams {
+                observer_row: 7,
+                observer_col: 7,
+                dem_rmse: 1.0,
+                n_realizations: 30,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         // All probabilities should be in [0, 1]
         for r in 0..15 {
@@ -979,7 +1105,9 @@ mod tests {
                 assert!(
                     p >= 0.0 && p <= 1.0,
                     "Probability should be in [0,1], got {} at ({},{})",
-                    p, r, c
+                    p,
+                    r,
+                    c
                 );
             }
         }
@@ -996,26 +1124,34 @@ mod tests {
         }
 
         // Low uncertainty: result should be binary-ish
-        let low_u = viewshed_probabilistic(&dem, ProbabilisticViewshedParams {
-            observer_row: 5,
-            observer_col: 10,
-            observer_height: 1.7,
-            dem_rmse: 0.01, // Tiny uncertainty
-            n_realizations: 50,
-            seed: 42,
-            ..Default::default()
-        }).unwrap();
+        let low_u = viewshed_probabilistic(
+            &dem,
+            ProbabilisticViewshedParams {
+                observer_row: 5,
+                observer_col: 10,
+                observer_height: 1.7,
+                dem_rmse: 0.01, // Tiny uncertainty
+                n_realizations: 50,
+                seed: 42,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         // High uncertainty: result should be more varied
-        let high_u = viewshed_probabilistic(&dem, ProbabilisticViewshedParams {
-            observer_row: 5,
-            observer_col: 10,
-            observer_height: 1.7,
-            dem_rmse: 3.0, // Large uncertainty
-            n_realizations: 50,
-            seed: 42,
-            ..Default::default()
-        }).unwrap();
+        let high_u = viewshed_probabilistic(
+            &dem,
+            ProbabilisticViewshedParams {
+                observer_row: 5,
+                observer_col: 10,
+                observer_height: 1.7,
+                dem_rmse: 3.0, // Large uncertainty
+                n_realizations: 50,
+                seed: 42,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         // Behind wall, high uncertainty should show higher probability
         // (some realizations will lower the wall)
@@ -1025,7 +1161,8 @@ mod tests {
         assert!(
             p_high >= p_low,
             "Higher uncertainty should increase visibility behind wall: low={:.2}, high={:.2}",
-            p_low, p_high
+            p_low,
+            p_high
         );
     }
 
@@ -1033,7 +1170,9 @@ mod tests {
     fn test_probabilistic_deterministic_seed() {
         let mut dem = Raster::filled(11, 11, 100.0_f64);
         dem.set_transform(GeoTransform::new(0.0, 11.0, 1.0, -1.0));
-        for c in 0..11 { dem.set(5, c, 102.0).unwrap(); }
+        for c in 0..11 {
+            dem.set(5, c, 102.0).unwrap();
+        }
 
         let params = ProbabilisticViewshedParams {
             observer_row: 2,
@@ -1053,7 +1192,8 @@ mod tests {
         assert!(
             (p1 - p2).abs() < 1e-10,
             "Same seed should give identical results: {} vs {}",
-            p1, p2
+            p1,
+            p2
         );
     }
 
@@ -1064,10 +1204,15 @@ mod tests {
 
         let candidates = vec![(3, 3), (3, 11), (11, 3), (11, 11), (7, 7)];
 
-        let result = observer_optimization(&dem, &candidates, ObserverOptimizationParams {
-            max_observers: 3,
-            ..Default::default()
-        }).unwrap();
+        let result = observer_optimization(
+            &dem,
+            &candidates,
+            ObserverOptimizationParams {
+                max_observers: 3,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         assert!(!result.observers.is_empty());
         assert!(result.observers.len() <= 3);
@@ -1087,14 +1232,21 @@ mod tests {
 
         let candidates = vec![(5, 5), (5, 15), (15, 5), (15, 15)];
 
-        let result = observer_optimization(&dem, &candidates, ObserverOptimizationParams {
-            max_observers: 4,
-            ..Default::default()
-        }).unwrap();
+        let result = observer_optimization(
+            &dem,
+            &candidates,
+            ObserverOptimizationParams {
+                max_observers: 4,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         // With 4 corners on flat terrain, should get high coverage
-        assert!(result.coverage.last().unwrap() > &0.5,
-            "4 observers on flat terrain should cover >50%");
+        assert!(
+            result.coverage.last().unwrap() > &0.5,
+            "4 observers on flat terrain should cover >50%"
+        );
     }
 
     #[test]
@@ -1118,13 +1270,21 @@ mod tests {
 
         let candidates = vec![(0, 0), (10, 10)];
 
-        let result = observer_optimization(&dem, &candidates, ObserverOptimizationParams {
-            max_observers: 1,
-            ..Default::default()
-        }).unwrap();
+        let result = observer_optimization(
+            &dem,
+            &candidates,
+            ObserverOptimizationParams {
+                max_observers: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         // Center observer should be selected (sees through the interior)
-        assert_eq!(result.observers[0], (10, 10),
-            "Center observer should be selected (less blocked)");
+        assert_eq!(
+            result.observers[0],
+            (10, 10),
+            "Center observer should be selected (less blocked)"
+        );
     }
 }

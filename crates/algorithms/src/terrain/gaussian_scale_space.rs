@@ -70,10 +70,7 @@ pub struct GssResult {
 ///
 /// # Returns
 /// [`GssResult`] containing smoothed DEMs at each scale level.
-pub fn gaussian_scale_space(
-    dem: &Raster<f64>,
-    params: GssParams,
-) -> Result<GssResult> {
+pub fn gaussian_scale_space(dem: &Raster<f64>, params: GssParams) -> Result<GssResult> {
     if params.sigmas.is_empty() {
         return Err(Error::Algorithm("At least one sigma value required".into()));
     }
@@ -149,9 +146,15 @@ pub fn scale_space_derivatives(
             }
             for col in 1..cols - 1 {
                 let z = [
-                    smooth[[row - 1, col - 1]], smooth[[row - 1, col]], smooth[[row - 1, col + 1]],
-                    smooth[[row, col - 1]], smooth[[row, col]], smooth[[row, col + 1]],
-                    smooth[[row + 1, col - 1]], smooth[[row + 1, col]], smooth[[row + 1, col + 1]],
+                    smooth[[row - 1, col - 1]],
+                    smooth[[row - 1, col]],
+                    smooth[[row - 1, col + 1]],
+                    smooth[[row, col - 1]],
+                    smooth[[row, col]],
+                    smooth[[row, col + 1]],
+                    smooth[[row + 1, col - 1]],
+                    smooth[[row + 1, col]],
+                    smooth[[row + 1, col + 1]],
                 ];
 
                 if z.iter().any(|v| v.is_nan()) {
@@ -179,12 +182,7 @@ pub fn scale_space_derivatives(
 ///
 /// Splits the 2D Gaussian into row and column passes for efficiency.
 /// Kernel truncated at 3σ.
-fn gaussian_smooth_2d(
-    data: &Array2<f64>,
-    rows: usize,
-    cols: usize,
-    sigma: f64,
-) -> Vec<f64> {
+fn gaussian_smooth_2d(data: &Array2<f64>, rows: usize, cols: usize, sigma: f64) -> Vec<f64> {
     let kernel = make_gaussian_kernel(sigma);
     let half = kernel.len() / 2;
 
@@ -313,7 +311,11 @@ mod tests {
         }
         // Should sum to ~1
         let sum: f64 = k.iter().sum();
-        assert!((sum - 1.0).abs() < 1e-10, "Kernel sum should be 1.0, got {}", sum);
+        assert!(
+            (sum - 1.0).abs() < 1e-10,
+            "Kernel sum should be 1.0, got {}",
+            sum
+        );
         // Center should be the largest
         assert!(k[n / 2] >= k[0]);
     }
@@ -343,29 +345,36 @@ mod tests {
 
         // Higher sigma should produce smoother surfaces
         // Measure "roughness" as variance of Laplacian (r + t)
-        let roughness: Vec<f64> = result.levels.iter().map(|level| {
-            let d = level.smoothed.data();
-            let rows = level.smoothed.rows();
-            let cols = level.smoothed.cols();
-            let mut sum = 0.0;
-            let mut count = 0;
-            for r in 1..rows - 1 {
-                for c in 1..cols - 1 {
-                    let lap = d[[r - 1, c]] + d[[r + 1, c]] + d[[r, c - 1]] + d[[r, c + 1]] - 4.0 * d[[r, c]];
-                    sum += lap * lap;
-                    count += 1;
+        let roughness: Vec<f64> = result
+            .levels
+            .iter()
+            .map(|level| {
+                let d = level.smoothed.data();
+                let rows = level.smoothed.rows();
+                let cols = level.smoothed.cols();
+                let mut sum = 0.0;
+                let mut count = 0;
+                for r in 1..rows - 1 {
+                    for c in 1..cols - 1 {
+                        let lap = d[[r - 1, c]] + d[[r + 1, c]] + d[[r, c - 1]] + d[[r, c + 1]]
+                            - 4.0 * d[[r, c]];
+                        sum += lap * lap;
+                        count += 1;
+                    }
                 }
-            }
-            sum / count as f64
-        }).collect();
+                sum / count as f64
+            })
+            .collect();
 
         // Roughness should decrease with increasing sigma
         for i in 1..roughness.len() {
             assert!(
                 roughness[i] < roughness[i - 1] + 1e-6,
                 "σ={} roughness ({:.4}) should be <= σ={} roughness ({:.4})",
-                result.levels[i].sigma, roughness[i],
-                result.levels[i - 1].sigma, roughness[i - 1]
+                result.levels[i].sigma,
+                roughness[i],
+                result.levels[i - 1].sigma,
+                roughness[i - 1]
             );
         }
     }
@@ -391,7 +400,8 @@ mod tests {
         assert!(
             (original_mean - smoothed_mean).abs() / original_mean.abs() < 0.05,
             "Mean should be approximately preserved: {:.2} vs {:.2}",
-            original_mean, smoothed_mean
+            original_mean,
+            smoothed_mean
         );
     }
 
@@ -441,7 +451,9 @@ mod tests {
                     assert!(
                         (v - 100.0).abs() < 0.01,
                         "Flat surface should stay flat after smoothing, got {:.4} at ({},{})",
-                        v, r, c
+                        v,
+                        r,
+                        c
                     );
                 }
             }

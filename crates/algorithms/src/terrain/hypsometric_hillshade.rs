@@ -7,9 +7,9 @@
 //!
 //! Reference: WhiteboxTools `HypsometricallyTintedHillshade`
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
-use crate::terrain::{hillshade, HillshadeParams};
+use crate::terrain::{HillshadeParams, hillshade};
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -17,10 +17,7 @@ use surtgis_core::{Error, Result};
 ///
 /// Multiplies the standard hillshade by the normalized elevation position
 /// `(z - z_min) / (z_max - z_min)`, producing values in [0, 1].
-pub fn hypsometric_hillshade(
-    dem: &Raster<f64>,
-    params: HillshadeParams,
-) -> Result<Raster<f64>> {
+pub fn hypsometric_hillshade(dem: &Raster<f64>, params: HillshadeParams) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
     let nodata = dem.nodata();
 
@@ -33,8 +30,12 @@ pub fn hypsometric_hillshade(
             if v.is_nan() || nodata.is_some_and(|nd| (v - nd).abs() < f64::EPSILON) {
                 continue;
             }
-            if v < global_min { global_min = v; }
-            if v > global_max { global_max = v; }
+            if v < global_min {
+                global_min = v;
+            }
+            if v > global_max {
+                global_max = v;
+            }
         }
     }
 

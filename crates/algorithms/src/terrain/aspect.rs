@@ -2,11 +2,11 @@
 //!
 //! Calculates the direction of the steepest slope using the Horn (1981) method.
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
+use std::f64::consts::PI;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Algorithm, Error, Result};
-use std::f64::consts::PI;
 
 /// Output format for aspect
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -226,9 +226,7 @@ impl surtgis_core::WindowAlgorithm for AspectStreaming {
                 }
 
                 let e = input[[ir, c]];
-                if e.is_nan()
-                    || nodata.map_or(false, |nd| (e - nd).abs() < f64::EPSILON)
-                {
+                if e.is_nan() || nodata.map_or(false, |nd| (e - nd).abs() < f64::EPSILON) {
                     output[[r, c]] = f64::NAN;
                     continue;
                 }

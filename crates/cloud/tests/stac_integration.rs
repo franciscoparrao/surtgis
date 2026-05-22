@@ -40,9 +40,8 @@ async fn stac_earth_search_sentinel2() {
 #[tokio::test]
 #[ignore]
 async fn stac_planetary_computer_sentinel2() {
-    let client =
-        StacClient::new(StacCatalog::PlanetaryComputer, StacClientOptions::default())
-            .expect("failed to create client");
+    let client = StacClient::new(StacCatalog::PlanetaryComputer, StacClientOptions::default())
+        .expect("failed to create client");
 
     let params = StacSearchParams::new()
         .bbox(-3.75, 40.38, -3.65, 40.45)
@@ -52,7 +51,11 @@ async fn stac_planetary_computer_sentinel2() {
 
     let results = client.search(&params).await.expect("search failed");
 
-    println!("Found {} items (matched: {:?})", results.len(), results.number_matched);
+    println!(
+        "Found {} items (matched: {:?})",
+        results.len(),
+        results.number_matched
+    );
     assert!(!results.is_empty(), "should find at least one item");
 
     // Verify assets exist
@@ -67,9 +70,8 @@ async fn stac_planetary_computer_sentinel2() {
 #[tokio::test]
 #[ignore]
 async fn stac_pc_url_signing() {
-    let client =
-        StacClient::new(StacCatalog::PlanetaryComputer, StacClientOptions::default())
-            .expect("failed to create client");
+    let client = StacClient::new(StacCatalog::PlanetaryComputer, StacClientOptions::default())
+        .expect("failed to create client");
 
     let href = "https://elevationeuwest.blob.core.windows.net/copernicus-dem/COP30_hh/Copernicus_DSM_COG_10_N40_00_W004_00_DEM.tif";
 
@@ -79,7 +81,10 @@ async fn stac_pc_url_signing() {
         .expect("signing failed");
 
     println!("Signed URL: {}", &signed[..signed.len().min(150)]);
-    assert!(signed.contains("sig=") || signed.contains("se="), "should contain SAS token params");
+    assert!(
+        signed.contains("sig=") || signed.contains("se="),
+        "should contain SAS token params"
+    );
     assert!(signed.starts_with(href), "should start with original href");
 }
 
@@ -90,8 +95,7 @@ async fn stac_paginated_search() {
     let mut opts = StacClientOptions::default();
     opts.max_items = 15;
 
-    let client = StacClient::new(StacCatalog::EarthSearch, opts)
-        .expect("failed to create client");
+    let client = StacClient::new(StacCatalog::EarthSearch, opts).expect("failed to create client");
 
     let params = StacSearchParams::new()
         .bbox(-3.75, 40.38, -3.65, 40.45)

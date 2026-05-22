@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use std::time::Instant;
 
-use surtgis_algorithms::texture::{haralick_glcm, laplacian, sobel_edge, GlcmParams, GlcmTexture};
+use surtgis_algorithms::texture::{GlcmParams, GlcmTexture, haralick_glcm, laplacian, sobel_edge};
 
 use crate::commands::TextureCommands;
 use crate::helpers::{done, read_dem, spinner, write_result};
@@ -11,7 +11,11 @@ use crate::helpers::{done, read_dem, spinner, write_result};
 pub fn handle(algorithm: TextureCommands, compress: bool) -> Result<()> {
     match algorithm {
         TextureCommands::Glcm {
-            input, output, texture, radius, levels,
+            input,
+            output,
+            texture,
+            radius,
+            levels,
         } => {
             let tex = match texture.to_lowercase().as_str() {
                 "energy" => GlcmTexture::Energy,

@@ -9,7 +9,7 @@ use ndarray::Array2;
 
 use crate::error::Result;
 use crate::io::strip_reader::StripReader;
-use crate::io::strip_writer::{write_geotiff_streaming, StripWriterConfig};
+use crate::io::strip_writer::{StripWriterConfig, write_geotiff_streaming};
 
 /// Trait for algorithms that operate on a moving window.
 ///

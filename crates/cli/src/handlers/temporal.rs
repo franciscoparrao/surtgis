@@ -4,12 +4,10 @@ use anyhow::{Context, Result};
 use std::path::PathBuf;
 use std::time::Instant;
 
-use surtgis_algorithms::imagery::{raster_difference, RasterDiffParams};
+use surtgis_algorithms::imagery::{RasterDiffParams, raster_difference};
 use surtgis_algorithms::temporal::{
-    temporal_percentile, temporal_stats,
-    linear_trend, mann_kendall, sens_slope,
-    temporal_anomaly, AnomalyMethod,
-    vegetation_phenology, PhenologyParams,
+    AnomalyMethod, PhenologyParams, linear_trend, mann_kendall, sens_slope, temporal_anomaly,
+    temporal_percentile, temporal_stats, vegetation_phenology,
 };
 
 use crate::commands::TemporalCommands;
@@ -17,17 +15,44 @@ use crate::helpers::{done, read_dem, write_result};
 
 pub fn handle(cmd: TemporalCommands, compress: bool) -> Result<()> {
     match cmd {
-        TemporalCommands::Stats { input, outdir, stats } => handle_stats(input, outdir, stats, compress),
-        TemporalCommands::Trend { input, outdir, method, times } => handle_trend(input, outdir, method, times, compress),
-        TemporalCommands::Change { before, after, output, decrease_threshold, increase_threshold } => {
-            handle_change(before, after, output, decrease_threshold, increase_threshold, compress)
-        }
-        TemporalCommands::Anomaly { reference, target, outdir, method } => {
-            handle_anomaly(reference, target, outdir, method, compress)
-        }
-        TemporalCommands::Phenology { input, outdir, doys, threshold, smooth } => {
-            handle_phenology(input, outdir, doys, threshold, smooth, compress)
-        }
+        TemporalCommands::Stats {
+            input,
+            outdir,
+            stats,
+        } => handle_stats(input, outdir, stats, compress),
+        TemporalCommands::Trend {
+            input,
+            outdir,
+            method,
+            times,
+        } => handle_trend(input, outdir, method, times, compress),
+        TemporalCommands::Change {
+            before,
+            after,
+            output,
+            decrease_threshold,
+            increase_threshold,
+        } => handle_change(
+            before,
+            after,
+            output,
+            decrease_threshold,
+            increase_threshold,
+            compress,
+        ),
+        TemporalCommands::Anomaly {
+            reference,
+            target,
+            outdir,
+            method,
+        } => handle_anomaly(reference, target, outdir, method, compress),
+        TemporalCommands::Phenology {
+            input,
+            outdir,
+            doys,
+            threshold,
+            smooth,
+        } => handle_phenology(input, outdir, doys, threshold, smooth, compress),
     }
 }
 
@@ -35,19 +60,30 @@ fn load_raster_stack(paths: &[PathBuf]) -> Result<Vec<surtgis_core::Raster<f64>>
     println!("Loading {} rasters...", paths.len());
     let mut rasters = Vec::with_capacity(paths.len());
     for (i, path) in paths.iter().enumerate() {
-        let r = read_dem(path).with_context(|| format!("Failed to read raster {}: {}", i, path.display()))?;
+        let r = read_dem(path)
+            .with_context(|| format!("Failed to read raster {}: {}", i, path.display()))?;
         rasters.push(r);
     }
     Ok(rasters)
 }
 
 fn parse_times(times_str: &str) -> Result<Vec<f64>> {
-    times_str.split(',')
-        .map(|s| s.trim().parse::<f64>().with_context(|| format!("invalid time value: '{}'", s)))
+    times_str
+        .split(',')
+        .map(|s| {
+            s.trim()
+                .parse::<f64>()
+                .with_context(|| format!("invalid time value: '{}'", s))
+        })
         .collect()
 }
 
-fn handle_stats(input: Vec<PathBuf>, outdir: PathBuf, stats_str: String, compress: bool) -> Result<()> {
+fn handle_stats(
+    input: Vec<PathBuf>,
+    outdir: PathBuf,
+    stats_str: String,
+    compress: bool,
+) -> Result<()> {
     let rasters = load_raster_stack(&input)?;
     let refs: Vec<&surtgis_core::Raster<f64>> = rasters.iter().collect();
 
@@ -57,7 +93,9 @@ fn handle_stats(input: Vec<PathBuf>, outdir: PathBuf, stats_str: String, compres
     let requested: Vec<&str> = stats_str.split(',').map(|s| s.trim()).collect();
 
     // Use single-pass temporal_stats for the common ones
-    let has_basic = requested.iter().any(|s| matches!(*s, "mean" | "std" | "min" | "max" | "count"));
+    let has_basic = requested
+        .iter()
+        .any(|s| matches!(*s, "mean" | "std" | "min" | "max" | "count"));
 
     if has_basic {
         println!("Computing temporal statistics...");
@@ -98,7 +136,13 @@ fn handle_stats(input: Vec<PathBuf>, outdir: PathBuf, stats_str: String, compres
     Ok(())
 }
 
-fn handle_trend(input: Vec<PathBuf>, outdir: PathBuf, method: String, times_str: Option<String>, compress: bool) -> Result<()> {
+fn handle_trend(
+    input: Vec<PathBuf>,
+    outdir: PathBuf,
+    method: String,
+    times_str: Option<String>,
+    compress: bool,
+) -> Result<()> {
     let rasters = load_raster_stack(&input)?;
     let refs: Vec<&surtgis_core::Raster<f64>> = rasters.iter().collect();
 
@@ -110,8 +154,7 @@ fn handle_trend(input: Vec<PathBuf>, outdir: PathBuf, method: String, times_str:
     match method.as_str() {
         "linear" | "ols" => {
             println!("Computing linear trend (OLS)...");
-            let result = linear_trend(&refs, times.as_deref())
-                .context("linear_trend failed")?;
+            let result = linear_trend(&refs, times.as_deref()).context("linear_trend failed")?;
 
             let slope_path = outdir.join("slope.tif");
             let intercept_path = outdir.join("intercept.tif");
@@ -144,7 +187,10 @@ fn handle_trend(input: Vec<PathBuf>, outdir: PathBuf, method: String, times_str:
 
             println!("  tau        → {}", tau_path.display());
             println!("  p-value    → {}", pval_path.display());
-            println!("  trend      → {} (1=up, 0=none, -1=down)", trend_path.display());
+            println!(
+                "  trend      → {} (1=up, 0=none, -1=down)",
+                trend_path.display()
+            );
             println!("  Sen's slope → {}", sens_path.display());
         }
         "sens" | "sens-slope" => {
@@ -154,7 +200,10 @@ fn handle_trend(input: Vec<PathBuf>, outdir: PathBuf, method: String, times_str:
             write_result(&result, &path, compress)?;
             println!("  Sen's slope → {}", path.display());
         }
-        _ => anyhow::bail!("unknown trend method: '{}'. Use: linear, mann-kendall, sens", method),
+        _ => anyhow::bail!(
+            "unknown trend method: '{}'. Use: linear, mann-kendall, sens",
+            method
+        ),
     }
 
     done("Trend analysis", &outdir, start.elapsed());
@@ -162,8 +211,12 @@ fn handle_trend(input: Vec<PathBuf>, outdir: PathBuf, method: String, times_str:
 }
 
 fn handle_change(
-    before: PathBuf, after: PathBuf, output: PathBuf,
-    decrease_threshold: f64, increase_threshold: f64, compress: bool,
+    before: PathBuf,
+    after: PathBuf,
+    output: PathBuf,
+    decrease_threshold: f64,
+    increase_threshold: f64,
+    compress: bool,
 ) -> Result<()> {
     let before_r = read_dem(&before)?;
     let after_r = read_dem(&after)?;
@@ -175,50 +228,59 @@ fn handle_change(
         decrease_threshold,
         increase_threshold,
     };
-    let (diff, cat) = raster_difference(&before_r, &after_r, params)
-        .context("raster_difference failed")?;
+    let (diff, cat) =
+        raster_difference(&before_r, &after_r, params).context("raster_difference failed")?;
 
     // Write difference raster
     write_result(&diff, &output, compress)?;
 
     // Write categorical raster alongside
-    let cat_path = output.with_file_name(
-        format!("{}_categorical.tif",
-            output.file_stem().unwrap_or_default().to_string_lossy()
-        )
-    );
+    let cat_path = output.with_file_name(format!(
+        "{}_categorical.tif",
+        output.file_stem().unwrap_or_default().to_string_lossy()
+    ));
     write_result(&cat, &cat_path, compress)?;
 
     println!("  difference  → {}", output.display());
-    println!("  categorical → {} (1=decrease, 2=stable, 3=increase)", cat_path.display());
+    println!(
+        "  categorical → {} (1=decrease, 2=stable, 3=increase)",
+        cat_path.display()
+    );
 
     done("Change detection", &output, start.elapsed());
     Ok(())
 }
 
 fn handle_anomaly(
-    reference: Vec<PathBuf>, target: Vec<PathBuf>, outdir: PathBuf,
-    method_str: String, compress: bool,
+    reference: Vec<PathBuf>,
+    target: Vec<PathBuf>,
+    outdir: PathBuf,
+    method_str: String,
+    compress: bool,
 ) -> Result<()> {
     let ref_rasters = load_raster_stack(&reference)?;
     let tgt_rasters = load_raster_stack(&target)?;
     let ref_refs: Vec<&surtgis_core::Raster<f64>> = ref_rasters.iter().collect();
     let tgt_refs: Vec<&surtgis_core::Raster<f64>> = tgt_rasters.iter().collect();
 
-    let method = AnomalyMethod::from_str(&method_str)
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let method = AnomalyMethod::from_str(&method_str).map_err(|e| anyhow::anyhow!("{}", e))?;
 
     std::fs::create_dir_all(&outdir)?;
     let start = Instant::now();
 
-    println!("Computing anomaly ({:?}) with {} reference, {} target rasters...",
-        method, ref_rasters.len(), tgt_rasters.len());
+    println!(
+        "Computing anomaly ({:?}) with {} reference, {} target rasters...",
+        method,
+        ref_rasters.len(),
+        tgt_rasters.len()
+    );
 
-    let results = temporal_anomaly(&ref_refs, &tgt_refs, method)
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
+    let results =
+        temporal_anomaly(&ref_refs, &tgt_refs, method).map_err(|e| anyhow::anyhow!("{}", e))?;
 
     for (i, result) in results.iter().enumerate() {
-        let name = target[i].file_stem()
+        let name = target[i]
+            .file_stem()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| format!("anomaly_{}", i));
         let path = outdir.join(format!("{}_anomaly.tif", name));
@@ -231,8 +293,12 @@ fn handle_anomaly(
 }
 
 fn handle_phenology(
-    input: Vec<PathBuf>, outdir: PathBuf, doys_str: Option<String>,
-    threshold: f64, smooth: usize, compress: bool,
+    input: Vec<PathBuf>,
+    outdir: PathBuf,
+    doys_str: Option<String>,
+    threshold: f64,
+    smooth: usize,
+    compress: bool,
 ) -> Result<()> {
     let rasters = load_raster_stack(&input)?;
     let refs: Vec<&surtgis_core::Raster<f64>> = rasters.iter().collect();
@@ -247,7 +313,11 @@ fn handle_phenology(
     std::fs::create_dir_all(&outdir)?;
     let start = Instant::now();
 
-    println!("Extracting vegetation phenology ({} time steps, threshold={:.2})...", rasters.len(), threshold);
+    println!(
+        "Extracting vegetation phenology ({} time steps, threshold={:.2})...",
+        rasters.len(),
+        threshold
+    );
 
     let result = vegetation_phenology(&refs, doys.as_deref(), &params)
         .map_err(|e| anyhow::anyhow!("{}", e))?;

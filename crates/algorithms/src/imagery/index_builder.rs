@@ -15,9 +15,9 @@
 //! Wang, F. et al. (2019). Three-band spectral indices outperform
 //! two-band for crop phenology. *Field Crops Research*.
 
-use std::collections::HashMap;
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
+use std::collections::HashMap;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -26,7 +26,7 @@ use surtgis_core::{Error, Result};
 enum Token {
     Number(f64),
     Band(String),
-    Op(char),    // +, -, *, /
+    Op(char), // +, -, *, /
     LParen,
     RParen,
 }
@@ -52,22 +52,30 @@ fn tokenize(formula: &str) -> Result<Vec<Token>> {
 
     while i < chars.len() {
         match chars[i] {
-            ' ' | '\t' | '\n' => { i += 1; }
+            ' ' | '\t' | '\n' => {
+                i += 1;
+            }
             '+' | '-' | '*' | '/' => {
                 tokens.push(Token::Op(chars[i]));
                 i += 1;
             }
-            '(' => { tokens.push(Token::LParen); i += 1; }
-            ')' => { tokens.push(Token::RParen); i += 1; }
+            '(' => {
+                tokens.push(Token::LParen);
+                i += 1;
+            }
+            ')' => {
+                tokens.push(Token::RParen);
+                i += 1;
+            }
             c if c.is_ascii_digit() || c == '.' => {
                 let start = i;
                 while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
                     i += 1;
                 }
                 let num_str: String = chars[start..i].iter().collect();
-                let num = num_str.parse::<f64>().map_err(|_| {
-                    Error::Algorithm(format!("Invalid number: {}", num_str))
-                })?;
+                let num = num_str
+                    .parse::<f64>()
+                    .map_err(|_| Error::Algorithm(format!("Invalid number: {}", num_str)))?;
                 tokens.push(Token::Number(num));
             }
             c if c.is_ascii_alphabetic() || c == '_' => {
@@ -80,7 +88,8 @@ fn tokenize(formula: &str) -> Result<Vec<Token>> {
             }
             c => {
                 return Err(Error::Algorithm(format!(
-                    "Unexpected character '{}' in formula", c
+                    "Unexpected character '{}' in formula",
+                    c
                 )));
             }
         }
@@ -179,7 +188,8 @@ impl Parser {
                 self.parse_factor()
             }
             other => Err(Error::Algorithm(format!(
-                "Unexpected token in formula: {:?}", other
+                "Unexpected token in formula: {:?}",
+                other
             ))),
         }
     }
@@ -189,9 +199,7 @@ impl Parser {
 fn eval(expr: &Expr, bands: &HashMap<String, f64>) -> f64 {
     match expr {
         Expr::Num(n) => *n,
-        Expr::Band(name) => {
-            *bands.get(name).unwrap_or(&f64::NAN)
-        }
+        Expr::Band(name) => *bands.get(name).unwrap_or(&f64::NAN),
         Expr::BinOp { op, left, right } => {
             let l = eval(left, bands);
             let r = eval(right, bands);
@@ -200,7 +208,11 @@ fn eval(expr: &Expr, bands: &HashMap<String, f64>) -> f64 {
                 '-' => l - r,
                 '*' => l * r,
                 '/' => {
-                    if r.abs() < 1e-10 { f64::NAN } else { l / r }
+                    if r.abs() < 1e-10 {
+                        f64::NAN
+                    } else {
+                        l / r
+                    }
                 }
                 _ => f64::NAN,
             }
@@ -242,10 +254,7 @@ fn collect_bands(expr: &Expr, names: &mut Vec<String>) {
 /// - If formula is invalid (parse error)
 /// - If a referenced band is not in the map
 /// - If raster dimensions don't match
-pub fn index_builder(
-    formula: &str,
-    bands: &HashMap<&str, &Raster<f64>>,
-) -> Result<Raster<f64>> {
+pub fn index_builder(formula: &str, bands: &HashMap<&str, &Raster<f64>>) -> Result<Raster<f64>> {
     if bands.is_empty() {
         return Err(Error::Algorithm("No bands provided".into()));
     }
@@ -278,8 +287,10 @@ pub fn index_builder(
         let (r, c) = raster.shape();
         if r != rows || c != cols {
             return Err(Error::SizeMismatch {
-                er: rows, ec: cols,
-                ar: r, ac: c,
+                er: rows,
+                ec: cols,
+                ar: r,
+                ac: c,
             });
         }
     }
@@ -287,7 +298,8 @@ pub fn index_builder(
     // Evaluate for each pixel
     // Build band data references for parallel access
     let band_names: Vec<String> = bands.keys().map(|s| s.to_string()).collect();
-    let band_refs: Vec<&Raster<f64>> = band_names.iter()
+    let band_refs: Vec<&Raster<f64>> = band_names
+        .iter()
         .map(|name| *bands.get(name.as_str()).unwrap())
         .collect();
 
@@ -353,11 +365,7 @@ mod tests {
         let v = result.get(2, 2).unwrap();
 
         // NDVI = (0.8 - 0.2) / (0.8 + 0.2) = 0.6
-        assert!(
-            (v - 0.6).abs() < 0.001,
-            "NDVI should be 0.6, got {}",
-            v
-        );
+        assert!((v - 0.6).abs() < 0.001, "NDVI should be 0.6, got {}", v);
     }
 
     #[test]
@@ -402,7 +410,8 @@ mod tests {
         assert!(
             (v - expected).abs() < 0.01,
             "EVI should be ~{:.4}, got {}",
-            expected, v
+            expected,
+            v
         );
     }
 
@@ -448,10 +457,6 @@ mod tests {
 
         let result = index_builder("A * 2.5 + 10", &bands).unwrap();
         let v = result.get(1, 1).unwrap();
-        assert!(
-            (v - 22.5).abs() < 0.001,
-            "5.0 * 2.5 + 10 = 22.5, got {}",
-            v
-        );
+        assert!((v - 22.5).abs() < 0.001, "5.0 * 2.5 + 10 = 22.5, got {}", v);
     }
 }

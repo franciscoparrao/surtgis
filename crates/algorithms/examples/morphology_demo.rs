@@ -25,10 +25,9 @@ use std::fs;
 use std::path::Path;
 
 use surtgis_algorithms::morphology::{
-    closing, dilate, erode, gradient, opening, top_hat, black_hat,
-    StructuringElement,
+    StructuringElement, black_hat, closing, dilate, erode, gradient, opening, top_hat,
 };
-use surtgis_core::io::{write_geotiff, GeoTiffOptions};
+use surtgis_core::io::{GeoTiffOptions, write_geotiff};
 use surtgis_core::{GeoTransform, Raster};
 
 const ROWS: usize = 200;
@@ -211,8 +210,20 @@ fn verify_noise_removal(
         }
     }
 
-    println!("  Original:  salt pixels = {}, pepper pixels = {}", orig_salt, orig_pepper);
-    println!("  Opened:    salt pixels = {} (should be 0 — removed by opening)", opened_salt);
-    println!("  Closed:    pepper pixels = {} (should be 0 — removed by closing)", closed_pepper);
-    println!("  Cleaned:   salt = {}, pepper = {} (both should be 0)", cleaned_salt, cleaned_pepper);
+    println!(
+        "  Original:  salt pixels = {}, pepper pixels = {}",
+        orig_salt, orig_pepper
+    );
+    println!(
+        "  Opened:    salt pixels = {} (should be 0 — removed by opening)",
+        opened_salt
+    );
+    println!(
+        "  Closed:    pepper pixels = {} (should be 0 — removed by closing)",
+        closed_pepper
+    );
+    println!(
+        "  Cleaned:   salt = {}, pepper = {} (both should be 0)",
+        cleaned_salt, cleaned_pepper
+    );
 }

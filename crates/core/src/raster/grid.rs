@@ -70,8 +70,8 @@ impl<T: RasterElement> Raster<T> {
             });
         }
 
-        let array = Array2::from_shape_vec((rows, cols), data)
-            .map_err(|e| Error::Other(e.to_string()))?;
+        let array =
+            Array2::from_shape_vec((rows, cols), data).map_err(|e| Error::Other(e.to_string()))?;
 
         Ok(Self {
             data: array,
@@ -180,7 +180,9 @@ impl<T: RasterElement> Raster<T> {
     /// # Safety
     /// Caller must ensure row < self.rows() and col < self.cols()
     pub unsafe fn set_unchecked(&mut self, row: usize, col: usize, value: T) {
-        unsafe { *self.data.uget_mut((row, col)) = value; }
+        unsafe {
+            *self.data.uget_mut((row, col)) = value;
+        }
     }
 
     /// Get a view of the underlying data

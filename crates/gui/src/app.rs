@@ -9,25 +9,25 @@ use egui_dock::{DockArea, DockState, Style, TabViewer};
 use surtgis_colormap::ColorScheme;
 use surtgis_core::raster::Raster;
 
-use crate::dock::{create_dock_state, PanelId};
+use crate::dock::{PanelId, create_dock_state};
 use crate::executor::dispatch_algorithm;
 use crate::io;
-use crate::menu::{show_menu_bar, MenuAction};
+use crate::menu::{MenuAction, show_menu_bar};
 use crate::panels::algo_tree::show_algo_tree;
 use crate::panels::console::show_console;
 use crate::panels::data_manager::show_data_manager;
-use crate::panels::layers::{show_layers, LayerAction};
-use crate::panels::map_canvas::{invalidate_texture, show_map_canvas, MapCanvasState};
-use crate::panels::properties::{show_properties, PropertiesAction};
+use crate::panels::layers::{LayerAction, show_layers};
+use crate::panels::map_canvas::{MapCanvasState, invalidate_texture, show_map_canvas};
+use crate::panels::properties::{PropertiesAction, show_properties};
 use crate::panels::stac_browser::{
     StacBrowserAction, StacBrowserState, StacSearchState, show_stac_browser,
 };
-use crate::panels::tool_dialog::{show_tool_dialog, ToolDialogAction, ToolDialogState};
+use crate::panels::tool_dialog::{ToolDialogAction, ToolDialogState, show_tool_dialog};
 use crate::panels::view_3d::{View3dState, show_view_3d};
-use crate::registry::{build_registry, AlgorithmEntry, ParamValue};
+use crate::registry::{AlgorithmEntry, ParamValue, build_registry};
+use crate::render::MapMode;
 use crate::render::map_tiles::{BasemapState, show_basemap};
 use crate::render::tiled_renderer::TiledRenderer;
-use crate::render::MapMode;
 use crate::state::workspace::{Dataset, DatasetRaster, Workspace};
 use crate::state::{AppMessage, DatasetId, LogEntry};
 
@@ -112,8 +112,7 @@ impl SurtGisApp {
             view_3d: View3dState::default(),
         };
 
-        app.logs
-            .push(LogEntry::info("SurtGis Desktop GUI started"));
+        app.logs.push(LogEntry::info("SurtGis Desktop GUI started"));
         app.logs.push(LogEntry::info(format!(
             "{} algorithms available",
             app.registry.len()
@@ -165,12 +164,7 @@ impl SurtGisApp {
                         visible: true,
                         opacity: 1.0,
                         rgba_cache: None,
-                        provenance: Some(
-                            self.tool_dialog
-                                .algo_id
-                                .clone()
-                                .unwrap_or_default(),
-                        ),
+                        provenance: Some(self.tool_dialog.algo_id.clone().unwrap_or_default()),
                     };
                     self.workspace.add_dataset(dataset);
                     self.map_texture = None;
@@ -192,12 +186,7 @@ impl SurtGisApp {
                         visible: true,
                         opacity: 1.0,
                         rgba_cache: None,
-                        provenance: Some(
-                            self.tool_dialog
-                                .algo_id
-                                .clone()
-                                .unwrap_or_default(),
-                        ),
+                        provenance: Some(self.tool_dialog.algo_id.clone().unwrap_or_default()),
                     };
                     self.workspace.add_dataset(dataset);
                     self.map_texture = None;
@@ -218,12 +207,7 @@ impl SurtGisApp {
                         visible: true,
                         opacity: 1.0,
                         rgba_cache: None,
-                        provenance: Some(
-                            self.tool_dialog
-                                .algo_id
-                                .clone()
-                                .unwrap_or_default(),
-                        ),
+                        provenance: Some(self.tool_dialog.algo_id.clone().unwrap_or_default()),
                     };
                     self.workspace.add_dataset(dataset);
                     self.map_texture = None;
@@ -279,9 +263,9 @@ impl SurtGisApp {
                 }
 
                 AppMessage::StacError { message } => {
-                    self.stac_browser.search_state =
-                        StacSearchState::Error(message.clone());
-                    self.logs.push(LogEntry::error(format!("STAC: {}", message)));
+                    self.stac_browser.search_state = StacSearchState::Error(message.clone());
+                    self.logs
+                        .push(LogEntry::error(format!("STAC: {}", message)));
                 }
             }
         }
@@ -358,7 +342,10 @@ impl SurtGisApp {
             StacBrowserAction::Search => {
                 self.launch_stac_search();
             }
-            StacBrowserAction::Download { item_idx, asset_key } => {
+            StacBrowserAction::Download {
+                item_idx,
+                asset_key,
+            } => {
                 self.launch_stac_download(item_idx, asset_key);
             }
             StacBrowserAction::UseMapExtent => {
@@ -388,16 +375,15 @@ impl SurtGisApp {
         let east: f64 = self.stac_browser.bbox_east.parse().unwrap_or(0.0);
         let north: f64 = self.stac_browser.bbox_north.parse().unwrap_or(0.0);
 
-        let datetime = if !self.stac_browser.date_start.is_empty()
-            && !self.stac_browser.date_end.is_empty()
-        {
-            Some(format!(
-                "{}/{}",
-                self.stac_browser.date_start, self.stac_browser.date_end
-            ))
-        } else {
-            None
-        };
+        let datetime =
+            if !self.stac_browser.date_start.is_empty() && !self.stac_browser.date_end.is_empty() {
+                Some(format!(
+                    "{}/{}",
+                    self.stac_browser.date_start, self.stac_browser.date_end
+                ))
+            } else {
+                None
+            };
 
         let collection = if self.stac_browser.collection_filter.is_empty() {
             None
@@ -429,8 +415,7 @@ impl SurtGisApp {
                 }
             };
 
-            let mut params = surtgis_cloud::StacSearchParams::new()
-                .bbox(west, south, east, north);
+            let mut params = surtgis_cloud::StacSearchParams::new().bbox(west, south, east, north);
 
             if let Some(dt) = &datetime {
                 params = params.datetime(dt);
@@ -461,10 +446,7 @@ impl SurtGisApp {
                                 cloud_cover: item.properties.eo_cloud_cover,
                                 platform: item.properties.platform.clone(),
                                 gsd: item.properties.gsd,
-                                collection: item
-                                    .collection
-                                    .clone()
-                                    .unwrap_or_else(|| "—".into()),
+                                collection: item.collection.clone().unwrap_or_else(|| "—".into()),
                                 asset_keys: item.assets.keys().cloned().collect(),
                                 cog_href: cog.map(|(_, a)| a.href.clone()),
                                 cog_key: cog.map(|(k, _)| k.clone()),
@@ -489,9 +471,8 @@ impl SurtGisApp {
 
     #[cfg(not(feature = "cloud"))]
     fn launch_stac_search(&mut self) {
-        self.logs.push(LogEntry::error(
-            "STAC search requires the 'cloud' feature",
-        ));
+        self.logs
+            .push(LogEntry::error("STAC search requires the 'cloud' feature"));
     }
 
     /// Download a STAC asset in a background thread.
@@ -685,10 +666,7 @@ impl eframe::App for SurtGisApp {
                         .selected_text(current_name)
                         .show_ui(ui, |ui| {
                             for (id, name) in &names {
-                                if ui
-                                    .selectable_label(active_id == Some(*id), name)
-                                    .clicked()
-                                {
+                                if ui.selectable_label(active_id == Some(*id), name).clicked() {
                                     self.workspace.active_dataset = Some(*id);
                                     self.map_texture = None;
                                 }
@@ -764,8 +742,7 @@ impl eframe::App for SurtGisApp {
         let layer_action = std::mem::replace(&mut tab_viewer.layer_action, LayerAction::None);
         let props_action =
             std::mem::replace(&mut tab_viewer.properties_action, PropertiesAction::None);
-        let stac_action =
-            std::mem::replace(&mut tab_viewer.stac_action, StacBrowserAction::None);
+        let stac_action = std::mem::replace(&mut tab_viewer.stac_action, StacBrowserAction::None);
         drop(tab_viewer);
 
         // Handle tool dialog actions
@@ -876,33 +853,31 @@ impl<'a> TabViewer for SurtGisTabViewer<'a> {
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
         match tab {
-            PanelId::MapCanvas => {
-                match self.map_mode {
-                    MapMode::Simple => {
-                        let active = self
-                            .workspace
-                            .active_dataset
-                            .and_then(|id| self.workspace.get_mut(id));
-                        show_map_canvas(ui, active, self.map_texture, self.map_state, self.ctx);
-                    }
-                    MapMode::Basemap => {
-                        if let Some(basemap) = self.basemap {
-                            let active = self.workspace.active();
-                            let (tex, bounds, opacity) = match active {
-                                Some(ds) => (
-                                    self.map_texture.as_ref(),
-                                    Some(ds.raster.bounds()),
-                                    ds.opacity,
-                                ),
-                                None => (None, None, 1.0),
-                            };
-                            show_basemap(ui, basemap, tex, bounds, opacity);
-                        } else {
-                            ui.label("Basemap not initialised.");
-                        }
+            PanelId::MapCanvas => match self.map_mode {
+                MapMode::Simple => {
+                    let active = self
+                        .workspace
+                        .active_dataset
+                        .and_then(|id| self.workspace.get_mut(id));
+                    show_map_canvas(ui, active, self.map_texture, self.map_state, self.ctx);
+                }
+                MapMode::Basemap => {
+                    if let Some(basemap) = self.basemap {
+                        let active = self.workspace.active();
+                        let (tex, bounds, opacity) = match active {
+                            Some(ds) => (
+                                self.map_texture.as_ref(),
+                                Some(ds.raster.bounds()),
+                                ds.opacity,
+                            ),
+                            None => (None, None, 1.0),
+                        };
+                        show_basemap(ui, basemap, tex, bounds, opacity);
+                    } else {
+                        ui.label("Basemap not initialised.");
                     }
                 }
-            }
+            },
 
             PanelId::View3D => {
                 let active_ds = self.workspace.active();
@@ -911,12 +886,8 @@ impl<'a> TabViewer for SurtGisTabViewer<'a> {
 
             PanelId::AlgoTree => {
                 if self.tool_dialog.algo_id.is_some() {
-                    match show_tool_dialog(
-                        ui,
-                        self.tool_dialog,
-                        self.registry,
-                        self.dataset_names,
-                    ) {
+                    match show_tool_dialog(ui, self.tool_dialog, self.registry, self.dataset_names)
+                    {
                         ToolDialogAction::Run => {
                             self.run_requested = true;
                         }
@@ -925,8 +896,7 @@ impl<'a> TabViewer for SurtGisTabViewer<'a> {
                         }
                         ToolDialogAction::None => {}
                     }
-                } else if let Some(algo_id) =
-                    show_algo_tree(ui, self.registry, self.selected_algo)
+                } else if let Some(algo_id) = show_algo_tree(ui, self.registry, self.selected_algo)
                 {
                     self.algo_clicked = Some(algo_id);
                 }
@@ -965,23 +935,38 @@ impl<'a> TabViewer for SurtGisTabViewer<'a> {
 /// Suggest a colormap based on the algorithm name.
 fn suggest_colormap(algo_name: &str) -> ColorScheme {
     let lower = algo_name.to_lowercase();
-    if lower.contains("ndvi") || lower.contains("gndvi") || lower.contains("ndre")
-        || lower.contains("savi") || lower.contains("evi") || lower.contains("reci")
-        || lower.contains("ngrdi") || lower.contains("msavi")
+    if lower.contains("ndvi")
+        || lower.contains("gndvi")
+        || lower.contains("ndre")
+        || lower.contains("savi")
+        || lower.contains("evi")
+        || lower.contains("reci")
+        || lower.contains("ngrdi")
+        || lower.contains("msavi")
     {
         ColorScheme::Ndvi
-    } else if lower.contains("ndwi") || lower.contains("water") || lower.contains("twi")
-        || lower.contains("mrvbf") || lower.contains("depression") || lower.contains("ndmi")
+    } else if lower.contains("ndwi")
+        || lower.contains("water")
+        || lower.contains("twi")
+        || lower.contains("mrvbf")
+        || lower.contains("depression")
+        || lower.contains("ndmi")
     {
         ColorScheme::Water
     } else if lower.contains("geomorphon") || lower.contains("landform") {
         ColorScheme::Geomorphons
-    } else if lower.contains("curvature") || lower.contains("tpi") || lower.contains("dev")
-        || lower.contains("moran") || lower.contains("getis") || lower.contains("convergence")
+    } else if lower.contains("curvature")
+        || lower.contains("tpi")
+        || lower.contains("dev")
+        || lower.contains("moran")
+        || lower.contains("getis")
+        || lower.contains("convergence")
         || lower.contains("wind")
     {
         ColorScheme::BlueWhiteRed
-    } else if lower.contains("accumulation") || lower.contains("spi") || lower.contains("sti")
+    } else if lower.contains("accumulation")
+        || lower.contains("spi")
+        || lower.contains("sti")
         || lower.contains("cost_distance")
     {
         ColorScheme::Accumulation
@@ -995,15 +980,20 @@ fn suggest_colormap(algo_name: &str) -> ColorScheme {
         ColorScheme::Water
     } else if lower.contains("ndbi") || lower.contains("built") {
         ColorScheme::Accumulation
-    } else if lower.contains("shannon") || lower.contains("simpson") || lower.contains("diversity")
+    } else if lower.contains("shannon")
+        || lower.contains("simpson")
+        || lower.contains("diversity")
         || lower.contains("patch")
     {
         ColorScheme::Ndvi
     } else if lower.contains("contour") {
         ColorScheme::Grayscale
-    } else if lower.contains("kmeans") || lower.contains("isodata")
-        || lower.contains("minimum distance") || lower.contains("maximum likelihood")
-        || lower.contains("strahler") || lower.contains("isobasin")
+    } else if lower.contains("kmeans")
+        || lower.contains("isodata")
+        || lower.contains("minimum distance")
+        || lower.contains("maximum likelihood")
+        || lower.contains("strahler")
+        || lower.contains("isobasin")
     {
         ColorScheme::Geomorphons
     } else if lower.contains("glcm") || lower.contains("texture") || lower.contains("entropy") {
@@ -1014,8 +1004,11 @@ fn suggest_colormap(algo_name: &str) -> ColorScheme {
         ColorScheme::Water
     } else if lower.contains("flow path") || lower.contains("path length") {
         ColorScheme::Accumulation
-    } else if lower.contains("pca") || lower.contains("pc1")
-        || lower.contains("raster diff") || lower.contains("change") || lower.contains("cva")
+    } else if lower.contains("pca")
+        || lower.contains("pc1")
+        || lower.contains("raster diff")
+        || lower.contains("change")
+        || lower.contains("cva")
     {
         ColorScheme::BlueWhiteRed
     } else {

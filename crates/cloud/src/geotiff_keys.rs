@@ -5,8 +5,8 @@
 //! 42113 (GDAL_NODATA) to produce a `GeoTransform`, optional `CRS`,
 //! and optional nodata value.
 
-use surtgis_core::raster::GeoTransform;
 use surtgis_core::crs::CRS;
+use surtgis_core::raster::GeoTransform;
 
 use crate::ifd::{self, RawTagEntry, TiffByteOrder, tags};
 
@@ -51,7 +51,8 @@ fn extract_geotransform(
     let tiepoint = find_resolved_f64(byte_order, entries, resolved, tags::MODEL_TIEPOINT);
 
     if let (Some(scale), Some(tiepoint)) = (&scale, &tiepoint)
-        && scale.len() >= 2 && tiepoint.len() >= 6
+        && scale.len() >= 2
+        && tiepoint.len() >= 6
     {
         let origin_x = tiepoint[3] - tiepoint[0] * scale[0];
         let origin_y = tiepoint[4] + tiepoint[1] * scale[1];
@@ -92,7 +93,11 @@ fn extract_crs(
     let data = if entry.inline {
         return None; // GeoKeyDirectory is always external
     } else {
-        resolved.iter().find(|(tag, _)| *tag == tags::GEO_KEY_DIRECTORY)?.1.as_slice()
+        resolved
+            .iter()
+            .find(|(tag, _)| *tag == tags::GEO_KEY_DIRECTORY)?
+            .1
+            .as_slice()
     };
 
     // GeoKeyDirectory: [version, revision, minor, count, key1_id, key1_loc, key1_count, key1_value, ...]
@@ -136,10 +141,7 @@ fn extract_crs(
 }
 
 /// Extract nodata from GDAL_NODATA tag (42113) — ASCII string.
-fn extract_nodata(
-    entries: &[RawTagEntry],
-    resolved: &[(u16, Vec<u8>)],
-) -> Option<f64> {
+fn extract_nodata(entries: &[RawTagEntry], resolved: &[(u16, Vec<u8>)]) -> Option<f64> {
     let entry = entries.iter().find(|e| e.tag == tags::GDAL_NODATA)?;
 
     if entry.inline {
@@ -149,7 +151,11 @@ fn extract_nodata(
         return s.trim_end_matches('\0').trim().parse::<f64>().ok();
     }
 
-    let data = resolved.iter().find(|(tag, _)| *tag == tags::GDAL_NODATA)?.1.as_slice();
+    let data = resolved
+        .iter()
+        .find(|(tag, _)| *tag == tags::GDAL_NODATA)?
+        .1
+        .as_slice();
     let s = ifd::read_offset_ascii(entry, data);
     s.trim().parse::<f64>().ok()
 }
@@ -162,7 +168,11 @@ fn find_resolved_f64(
     tag_id: u16,
 ) -> Option<Vec<f64>> {
     let entry = entries.iter().find(|e| e.tag == tag_id)?;
-    let data = resolved.iter().find(|(tag, _)| *tag == tag_id)?.1.as_slice();
+    let data = resolved
+        .iter()
+        .find(|(tag, _)| *tag == tag_id)?
+        .1
+        .as_slice();
     let values = ifd::read_offset_values_f64(byte_order, entry, data);
     if values.is_empty() {
         None

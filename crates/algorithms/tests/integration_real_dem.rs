@@ -6,15 +6,17 @@
 //! The DEM covers a 720×720 pixel area of the Chilean Andes near Santiago,
 //! with elevations ranging from ~2858m to ~5981m at 30m resolution.
 
-use surtgis_algorithms::hydrology::{fill_sinks, flow_accumulation, flow_direction, FillSinksParams};
-use surtgis_algorithms::statistics::{focal_statistics, FocalParams, FocalStatistic};
+use std::path::Path;
+use surtgis_algorithms::hydrology::{
+    FillSinksParams, fill_sinks, flow_accumulation, flow_direction,
+};
+use surtgis_algorithms::statistics::{FocalParams, FocalStatistic, focal_statistics};
 use surtgis_algorithms::terrain::{
-    aspect, curvature, hillshade, slope, twi, AspectOutput, CurvatureParams, CurvatureType,
-    HillshadeParams, SlopeParams, SlopeUnits,
+    AspectOutput, CurvatureParams, CurvatureType, HillshadeParams, SlopeParams, SlopeUnits, aspect,
+    curvature, hillshade, slope, twi,
 };
 use surtgis_core::io::{read_geotiff, write_geotiff};
 use surtgis_core::raster::Raster;
-use std::path::Path;
 
 /// Path to the DEM fixture relative to workspace root.
 const DEM_FILENAME: &str = "tests/fixtures/andes_chile_30m.tif";
@@ -410,10 +412,7 @@ fn no_inf_in_outputs() {
         ("curvature", &curv_out),
     ] {
         for &v in raster.data().iter() {
-            assert!(
-                !v.is_infinite(),
-                "{name} output contains Inf"
-            );
+            assert!(!v.is_infinite(), "{name} output contains Inf");
         }
     }
 }

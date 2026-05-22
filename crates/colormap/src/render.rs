@@ -1,6 +1,6 @@
 //! Raster-to-RGBA rendering using color schemes.
 
-use crate::scheme::{evaluate, ColorScheme, Rgb};
+use crate::scheme::{ColorScheme, Rgb, evaluate};
 use surtgis_core::raster::{Raster, RasterElement};
 
 /// Parameters for colormap rendering.

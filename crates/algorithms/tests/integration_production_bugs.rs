@@ -10,24 +10,24 @@
 //! Tests use the fixture DEM at `tests/fixtures/andes_chile_30m.tif`.
 //! If the fixture doesn't exist, tests are skipped.
 
+use ndarray::Array2;
+use std::path::Path;
 use surtgis_algorithms::hydrology::{
-    flow_accumulation, flow_direction, hand, priority_flood, stream_network,
-    HandParams, PriorityFloodParams, StreamNetworkParams,
+    HandParams, PriorityFloodParams, StreamNetworkParams, flow_accumulation, flow_direction, hand,
+    priority_flood, stream_network,
 };
 use surtgis_algorithms::imagery::{
-    bsi, cloud_mask_scl, evi, EviParams, median_composite, mndwi, ndbi, ndmi, ndsi, ndvi, ndwi,
-    nbr, normalized_difference, savi, SaviParams,
+    EviParams, SaviParams, bsi, cloud_mask_scl, evi, median_composite, mndwi, nbr, ndbi, ndmi,
+    ndsi, ndvi, ndwi, normalized_difference, savi,
 };
 use surtgis_algorithms::terrain::{
-    aspect, hillshade, slope, twi, AspectOutput, HillshadeParams, SlopeParams, SlopeUnits,
+    AspectOutput, HillshadeParams, SlopeParams, SlopeUnits, aspect, hillshade, slope, twi,
 };
-use ndarray::Array2;
 use surtgis_core::crs::CRS;
-use surtgis_core::io::{read_geotiff, write_geotiff, GeoTiffOptions};
+use surtgis_core::io::{GeoTiffOptions, read_geotiff, write_geotiff};
 use surtgis_core::mosaic::mosaic;
 use surtgis_core::raster::{GeoTransform, Raster};
-use surtgis_core::resample::{resample_to_grid, ResampleMethod};
-use std::path::Path;
+use surtgis_core::resample::{ResampleMethod, resample_to_grid};
 
 // ─── Helpers ────────────────────────────────────────────────────────────
 
@@ -277,7 +277,11 @@ fn test_resample_aligns_grids_with_offset() {
     let aligned = resample_to_grid(&s2, &dem, ResampleMethod::Bilinear).unwrap();
 
     // Output should have DEM's dimensions and transform
-    assert_eq!(aligned.shape(), dem.shape(), "Aligned should match DEM dimensions");
+    assert_eq!(
+        aligned.shape(),
+        dem.shape(),
+        "Aligned should match DEM dimensions"
+    );
 
     let gt = aligned.transform();
     assert!(
@@ -322,7 +326,8 @@ fn test_resample_nearest_preserves_classes() {
     // Reference at 10m
     let reference = make_raster_with_crs(100, 100, 0.0, 500000.0, 7100000.0, 10.0, 32719);
 
-    let result = resample_to_grid(&classification, &reference, ResampleMethod::NearestNeighbor).unwrap();
+    let result =
+        resample_to_grid(&classification, &reference, ResampleMethod::NearestNeighbor).unwrap();
 
     // Nearest neighbor should produce exact class values (no interpolation)
     let top = result.get(10, 10).unwrap();
@@ -369,7 +374,14 @@ fn test_full_terrain_hydrology_pipeline() {
     let input_crs = dem.crs().and_then(|c| c.epsg());
 
     // Terrain
-    let slp = slope(&dem, SlopeParams { units: SlopeUnits::Radians, z_factor: 1.0 }).unwrap();
+    let slp = slope(
+        &dem,
+        SlopeParams {
+            units: SlopeUnits::Radians,
+            z_factor: 1.0,
+        },
+    )
+    .unwrap();
     let asp = aspect(&dem, AspectOutput::Degrees).unwrap();
     let hs = hillshade(&dem, HillshadeParams::default()).unwrap();
 
@@ -377,10 +389,25 @@ fn test_full_terrain_hydrology_pipeline() {
     let filled = priority_flood(&dem, PriorityFloodParams { epsilon: 0.0001 }).unwrap();
     let fdir = flow_direction(&filled).unwrap();
     let facc = flow_accumulation(&fdir).unwrap();
-    let slope_rad = slope(&filled, SlopeParams { units: SlopeUnits::Radians, z_factor: 1.0 }).unwrap();
+    let slope_rad = slope(
+        &filled,
+        SlopeParams {
+            units: SlopeUnits::Radians,
+            z_factor: 1.0,
+        },
+    )
+    .unwrap();
     let twi_result = twi(&facc, &slope_rad).unwrap();
     let _streams = stream_network(&facc, StreamNetworkParams { threshold: 500.0 }).unwrap();
-    let hand_result = hand(&dem, &fdir, &facc, HandParams { stream_threshold: 500.0 }).unwrap();
+    let hand_result = hand(
+        &dem,
+        &fdir,
+        &facc,
+        HandParams {
+            stream_threshold: 500.0,
+        },
+    )
+    .unwrap();
 
     // All outputs should have same dimensions as input
     let (rows, cols) = dem.shape();
@@ -390,13 +417,33 @@ fn test_full_terrain_hydrology_pipeline() {
     assert_eq!(filled.shape(), (rows, cols), "Filled dimensions mismatch");
     assert_eq!(facc.shape(), (rows, cols), "Flow acc dimensions mismatch");
     assert_eq!(twi_result.shape(), (rows, cols), "TWI dimensions mismatch");
-    assert_eq!(hand_result.shape(), (rows, cols), "HAND dimensions mismatch");
+    assert_eq!(
+        hand_result.shape(),
+        (rows, cols),
+        "HAND dimensions mismatch"
+    );
 
     // CRS should propagate through terrain algorithms
-    assert_eq!(slp.crs().and_then(|c| c.epsg()), input_crs, "Slope CRS mismatch");
-    assert_eq!(filled.crs().and_then(|c| c.epsg()), input_crs, "Filled CRS mismatch");
-    assert_eq!(twi_result.crs().and_then(|c| c.epsg()), input_crs, "TWI CRS mismatch");
-    assert_eq!(hand_result.crs().and_then(|c| c.epsg()), input_crs, "HAND CRS mismatch");
+    assert_eq!(
+        slp.crs().and_then(|c| c.epsg()),
+        input_crs,
+        "Slope CRS mismatch"
+    );
+    assert_eq!(
+        filled.crs().and_then(|c| c.epsg()),
+        input_crs,
+        "Filled CRS mismatch"
+    );
+    assert_eq!(
+        twi_result.crs().and_then(|c| c.epsg()),
+        input_crs,
+        "TWI CRS mismatch"
+    );
+    assert_eq!(
+        hand_result.crs().and_then(|c| c.epsg()),
+        input_crs,
+        "HAND CRS mismatch"
+    );
 
     // Values should be reasonable
     let slp_stats = slp.statistics();
@@ -408,8 +455,14 @@ fn test_full_terrain_hydrology_pipeline() {
     assert!(slp_stats.max.unwrap() < 1.6, "Slope max should be < π/2");
 
     // TWI: can range widely depending on terrain; just verify it's finite
-    assert!(twi_stats.min.is_some() && twi_stats.min.unwrap().is_finite(), "TWI min should be finite");
-    assert!(twi_stats.max.is_some() && twi_stats.max.unwrap().is_finite(), "TWI max should be finite");
+    assert!(
+        twi_stats.min.is_some() && twi_stats.min.unwrap().is_finite(),
+        "TWI min should be finite"
+    );
+    assert!(
+        twi_stats.max.is_some() && twi_stats.max.unwrap().is_finite(),
+        "TWI max should be finite"
+    );
 
     // HAND: should be >= 0 (height above drainage)
     assert!(hand_stats.min.unwrap() >= -1.0, "HAND min should be ~0");
@@ -420,9 +473,13 @@ fn test_full_terrain_hydrology_pipeline() {
 /// Helper to load the real Río Salado DEM from Agentes project.
 /// Returns None if the DEM is not available (test will be skipped).
 fn load_salado_dem() -> Option<Raster<f64>> {
-    let path = std::path::Path::new("/home/franciscoparrao/proyectos/Agentes/salado_utm_cropped.tif");
+    let path =
+        std::path::Path::new("/home/franciscoparrao/proyectos/Agentes/salado_utm_cropped.tif");
     if !path.exists() {
-        eprintln!("SKIPPING Río Salado tests: DEM not found at {}", path.display());
+        eprintln!(
+            "SKIPPING Río Salado tests: DEM not found at {}",
+            path.display()
+        );
         return None;
     }
     Some(read_geotiff::<f64, _>(path, None).expect("failed to read Río Salado DEM"))
@@ -435,13 +492,19 @@ fn load_salado_shapefile() -> Option<Vec<geo_types::Polygon<f64>>> {
     #[cfg(feature = "shapefile")]
     {
         use surtgis_core::vector::read_shapefile;
-        let path = std::path::Path::new("/home/franciscoparrao/proyectos/Agentes/Subsubcuencas/Subsubcuencas_BNA.shp");
+        let path = std::path::Path::new(
+            "/home/franciscoparrao/proyectos/Agentes/Subsubcuencas/Subsubcuencas_BNA.shp",
+        );
         if !path.exists() {
-            eprintln!("SKIPPING shapefile test: shapefile not found at {}", path.display());
+            eprintln!(
+                "SKIPPING shapefile test: shapefile not found at {}",
+                path.display()
+            );
             return None;
         }
         let fc = read_shapefile(path).expect("failed to read Subsubcuencas shapefile");
-        let polys: Vec<_> = fc.iter()
+        let polys: Vec<_> = fc
+            .iter()
             .filter_map(|f| {
                 f.geometry.clone().and_then(|g| {
                     use geo_types::Geometry;
@@ -477,17 +540,29 @@ fn test_salado_dem_slope_with_streaming() {
     };
 
     let (rows, cols) = dem.shape();
-    eprintln!("Testing Río Salado DEM: {}x{} ({:.0}MB)",
-        rows, cols, (rows * cols * 8) as f64 / 1e6);
+    eprintln!(
+        "Testing Río Salado DEM: {}x{} ({:.0}MB)",
+        rows,
+        cols,
+        (rows * cols * 8) as f64 / 1e6
+    );
 
     // Compute slope normally (in-memory)
-    let slope_result = slope(&dem, SlopeParams {
-        units: SlopeUnits::Degrees,
-        z_factor: 1.0
-    }).expect("slope computation failed");
+    let slope_result = slope(
+        &dem,
+        SlopeParams {
+            units: SlopeUnits::Degrees,
+            z_factor: 1.0,
+        },
+    )
+    .expect("slope computation failed");
 
     // Verify basic properties
-    assert_eq!(slope_result.shape(), dem.shape(), "Slope dimensions mismatch");
+    assert_eq!(
+        slope_result.shape(),
+        dem.shape(),
+        "Slope dimensions mismatch"
+    );
 
     // Check CRS preservation (UTM 19S = 32719)
     assert_eq!(
@@ -500,10 +575,17 @@ fn test_salado_dem_slope_with_streaming() {
     let stats = slope_result.statistics();
     assert!(stats.min.unwrap() >= 0.0, "Slope min should be >= 0");
     assert!(stats.max.unwrap() <= 90.0, "Slope max should be <= 90°");
-    assert!(stats.max.unwrap() > 30.0, "Andes should have steep slopes (>30°)");
+    assert!(
+        stats.max.unwrap() > 30.0,
+        "Andes should have steep slopes (>30°)"
+    );
 
-    eprintln!("  Slope range: {:.2}° to {:.2}°, mean: {:.2}°",
-        stats.min.unwrap(), stats.max.unwrap(), stats.mean.unwrap());
+    eprintln!(
+        "  Slope range: {:.2}° to {:.2}°, mean: {:.2}°",
+        stats.min.unwrap(),
+        stats.max.unwrap(),
+        stats.mean.unwrap()
+    );
 }
 
 #[test]
@@ -519,7 +601,7 @@ fn test_salado_dem_clip_shapefile() {
 
     let geoms = match load_salado_shapefile() {
         Some(g) => g,
-        None => return,  // Skip if shapefile feature disabled or no polygons
+        None => return, // Skip if shapefile feature disabled or no polygons
     };
 
     if geoms.is_empty() {
@@ -531,8 +613,7 @@ fn test_salado_dem_clip_shapefile() {
 
     eprintln!("Loaded {} subsubcuencas polygons", geoms.len());
 
-    let clipped = clip_raster_by_polygon(&dem, &geoms[0])
-        .expect("clip_raster_by_polygon failed");
+    let clipped = clip_raster_by_polygon(&dem, &geoms[0]).expect("clip_raster_by_polygon failed");
 
     let (orig_rows, orig_cols) = dem.shape();
     let (clipped_rows, clipped_cols) = clipped.shape();
@@ -541,8 +622,14 @@ fn test_salado_dem_clip_shapefile() {
     eprintln!("  Clipped to polygon: {}x{}", clipped_rows, clipped_cols);
 
     // Clipped should be smaller
-    assert!(clipped_rows <= orig_rows, "Clipped should have <= original rows");
-    assert!(clipped_cols <= orig_cols, "Clipped should have <= original cols");
+    assert!(
+        clipped_rows <= orig_rows,
+        "Clipped should have <= original rows"
+    );
+    assert!(
+        clipped_cols <= orig_cols,
+        "Clipped should have <= original cols"
+    );
 
     // Should still have reasonable size (not all masked)
     assert!(clipped_rows > 100, "Clipped polygon should span >100 rows");
@@ -560,8 +647,14 @@ fn test_salado_dem_clip_shapefile() {
     let total_pixels = clipped.shape().0 * clipped.shape().1;
     let valid_pixels = stats.valid_count;
 
-    eprintln!("  Valid pixels in clipped region: {}/{}", valid_pixels, total_pixels);
-    assert!(valid_pixels > 100, "Clipped region should have at least 100 valid pixels");
+    eprintln!(
+        "  Valid pixels in clipped region: {}/{}",
+        valid_pixels, total_pixels
+    );
+    assert!(
+        valid_pixels > 100,
+        "Clipped region should have at least 100 valid pixels"
+    );
 }
 
 #[test]
@@ -578,8 +671,10 @@ fn test_salado_edge_cases_utm_coords() {
     };
 
     let gt = dem.transform();
-    eprintln!("DEM transform: origin=({}, {}), cell_size={}m",
-        gt.origin_x, gt.origin_y, gt.pixel_width);
+    eprintln!(
+        "DEM transform: origin=({}, {}), cell_size={}m",
+        gt.origin_x, gt.origin_y, gt.pixel_width
+    );
 
     // Verify coordinates are in expected UTM 19S range
     // UTM 19S zone covers Andes region; Río Salado is within ~200km of zone center
@@ -595,34 +690,51 @@ fn test_salado_edge_cases_utm_coords() {
     );
 
     // Compute slope (tests that internal calculations handle large coordinates)
-    let slope_result = slope(&dem, SlopeParams {
-        units: SlopeUnits::Degrees,
-        z_factor: 1.0
-    }).expect("slope failed");
+    let slope_result = slope(
+        &dem,
+        SlopeParams {
+            units: SlopeUnits::Degrees,
+            z_factor: 1.0,
+        },
+    )
+    .expect("slope failed");
 
     // Compute aspect (also uses local coordinates)
-    let aspect_result = aspect(&dem, AspectOutput::Degrees)
-        .expect("aspect failed");
+    let aspect_result = aspect(&dem, AspectOutput::Degrees).expect("aspect failed");
 
     // Both should have valid statistics (not all NaN, not infinite)
     let slope_stats = slope_result.statistics();
     let aspect_stats = aspect_result.statistics();
 
-    assert!(slope_stats.min.is_some() && slope_stats.max.is_some(),
-        "Slope should have valid statistics");
-    assert!(aspect_stats.min.is_some() && aspect_stats.max.is_some(),
-        "Aspect should have valid statistics");
+    assert!(
+        slope_stats.min.is_some() && slope_stats.max.is_some(),
+        "Slope should have valid statistics"
+    );
+    assert!(
+        aspect_stats.min.is_some() && aspect_stats.max.is_some(),
+        "Aspect should have valid statistics"
+    );
 
     // Verify values are physically reasonable
-    assert!(slope_stats.min.unwrap() >= 0.0 && slope_stats.max.unwrap() <= 90.0,
-        "Slope should be in [0, 90]");
-    assert!(aspect_stats.min.unwrap() >= 0.0 && aspect_stats.max.unwrap() <= 360.0,
-        "Aspect should be in [0, 360]");
+    assert!(
+        slope_stats.min.unwrap() >= 0.0 && slope_stats.max.unwrap() <= 90.0,
+        "Slope should be in [0, 90]"
+    );
+    assert!(
+        aspect_stats.min.unwrap() >= 0.0 && aspect_stats.max.unwrap() <= 360.0,
+        "Aspect should be in [0, 360]"
+    );
 
-    eprintln!("  Slope: {:.2}° to {:.2}°",
-        slope_stats.min.unwrap(), slope_stats.max.unwrap());
-    eprintln!("  Aspect: {:.1}° to {:.1}°",
-        aspect_stats.min.unwrap(), aspect_stats.max.unwrap());
+    eprintln!(
+        "  Slope: {:.2}° to {:.2}°",
+        slope_stats.min.unwrap(),
+        slope_stats.max.unwrap()
+    );
+    eprintln!(
+        "  Aspect: {:.1}° to {:.1}°",
+        aspect_stats.min.unwrap(),
+        aspect_stats.max.unwrap()
+    );
 }
 
 #[test]
@@ -634,52 +746,76 @@ fn test_pipeline_susceptibility_end_to_end() {
     // Note: This test verifies the pipeline orchestration by calling the underlying
     // terrain and hydrology algorithms directly, since the CLI handlers are in a separate crate.
 
-    let dem_path = PathBuf::from(
-        "/home/franciscoparrao/proyectos/Agentes/salado_utm_cropped.tif"
-    );
+    let dem_path = PathBuf::from("/home/franciscoparrao/proyectos/Agentes/salado_utm_cropped.tif");
 
     if !dem_path.exists() {
-        eprintln!("⚠️ Skipping test: DEM file not found at {}", dem_path.display());
+        eprintln!(
+            "⚠️ Skipping test: DEM file not found at {}",
+            dem_path.display()
+        );
         return;
     }
 
     let _outdir = TempDir::new().expect("Failed to create temp dir");
 
     // Test 1: Verify DEM can be read
-    let dem = surtgis_core::io::read_geotiff(&dem_path, None)
-        .expect("Should read DEM");
-    assert!(dem.rows() > 0 && dem.cols() > 0, "DEM should have positive dimensions");
+    let dem = surtgis_core::io::read_geotiff(&dem_path, None).expect("Should read DEM");
+    assert!(
+        dem.rows() > 0 && dem.cols() > 0,
+        "DEM should have positive dimensions"
+    );
     eprintln!("✓ DEM loaded: {} x {}", dem.rows(), dem.cols());
 
     // Test 2: Compute terrain factors (representative subset)
-    use surtgis_algorithms::terrain::{slope, aspect, hillshade, SlopeParams, SlopeUnits, AspectOutput, HillshadeParams};
+    use surtgis_algorithms::terrain::{
+        AspectOutput, HillshadeParams, SlopeParams, SlopeUnits, aspect, hillshade, slope,
+    };
 
-    let slope_result = slope(&dem, SlopeParams {
-        units: SlopeUnits::Degrees,
-        z_factor: 1.0,
-    }).expect("slope should compute");
+    let slope_result = slope(
+        &dem,
+        SlopeParams {
+            units: SlopeUnits::Degrees,
+            z_factor: 1.0,
+        },
+    )
+    .expect("slope should compute");
     assert_eq!(slope_result.rows(), dem.rows(), "slope output rows");
     assert_eq!(slope_result.cols(), dem.cols(), "slope output cols");
-    eprintln!("✓ Slope computed: {} x {}", slope_result.rows(), slope_result.cols());
+    eprintln!(
+        "✓ Slope computed: {} x {}",
+        slope_result.rows(),
+        slope_result.cols()
+    );
 
-    let aspect_result = aspect(&dem, AspectOutput::Degrees)
-        .expect("aspect should compute");
+    let aspect_result = aspect(&dem, AspectOutput::Degrees).expect("aspect should compute");
     assert_eq!(aspect_result.rows(), dem.rows(), "aspect output rows");
-    eprintln!("✓ Aspect computed: {} x {}", aspect_result.rows(), aspect_result.cols());
+    eprintln!(
+        "✓ Aspect computed: {} x {}",
+        aspect_result.rows(),
+        aspect_result.cols()
+    );
 
-    let hillshade_result = hillshade(&dem, HillshadeParams {
-        azimuth: 315.0,
-        altitude: 45.0,
-        z_factor: 1.0,
-        normalized: false,
-    }).expect("hillshade should compute");
+    let hillshade_result = hillshade(
+        &dem,
+        HillshadeParams {
+            azimuth: 315.0,
+            altitude: 45.0,
+            z_factor: 1.0,
+            normalized: false,
+        },
+    )
+    .expect("hillshade should compute");
     assert_eq!(hillshade_result.rows(), dem.rows(), "hillshade output rows");
-    eprintln!("✓ Hillshade computed: {} x {}", hillshade_result.rows(), hillshade_result.cols());
+    eprintln!(
+        "✓ Hillshade computed: {} x {}",
+        hillshade_result.rows(),
+        hillshade_result.cols()
+    );
 
     // Test 3: Compute hydrology factors
     use surtgis_algorithms::hydrology::{
-        priority_flood, flow_direction, flow_accumulation, stream_network,
-        PriorityFloodParams, StreamNetworkParams,
+        PriorityFloodParams, StreamNetworkParams, flow_accumulation, flow_direction,
+        priority_flood, stream_network,
     };
 
     let filled = priority_flood(&dem, PriorityFloodParams { epsilon: 0.0001 })
@@ -687,13 +823,11 @@ fn test_pipeline_susceptibility_end_to_end() {
     assert_eq!(filled.rows(), dem.rows(), "filled DEM rows");
     eprintln!("✓ Fill sinks: {} x {}", filled.rows(), filled.cols());
 
-    let fdir = flow_direction(&filled)
-        .expect("flow direction should compute");
+    let fdir = flow_direction(&filled).expect("flow direction should compute");
     assert_eq!(fdir.rows(), filled.rows(), "flow_dir output rows");
     eprintln!("✓ Flow direction (D8): {} x {}", fdir.rows(), fdir.cols());
 
-    let facc = flow_accumulation(&fdir)
-        .expect("flow accumulation should compute");
+    let facc = flow_accumulation(&fdir).expect("flow accumulation should compute");
     assert_eq!(facc.rows(), filled.rows(), "flow_acc output rows");
     eprintln!("✓ Flow accumulation: {} x {}", facc.rows(), facc.cols());
 
@@ -710,8 +844,12 @@ fn test_pipeline_susceptibility_end_to_end() {
     eprintln!("\n✅ Pipeline end-to-end test passed");
     eprintln!("   Computed {} terrain factors", terrain_count);
     eprintln!("   Computed {} hydrology factors", hydrology_count);
-    eprintln!("   Total output files would be: {} terrain + {} hydrology = {} files",
-        17, 8, 17 + 8);
+    eprintln!(
+        "   Total output files would be: {} terrain + {} hydrology = {} files",
+        17,
+        8,
+        17 + 8
+    );
 }
 
 #[test]
@@ -776,69 +914,73 @@ fn test_pipeline_with_s2_imagery() {
     eprintln!("Computing spectral indices...");
 
     // 1. NDVI
-    let ndvi_result = ndvi(&nir, &red)
-        .expect("NDVI computation failed");
+    let ndvi_result = ndvi(&nir, &red).expect("NDVI computation failed");
     assert_eq!(ndvi_result.shape(), dem.shape(), "NDVI shape mismatch");
     let ndvi_stats = ndvi_result.statistics();
-    assert!(ndvi_stats.min.unwrap() >= -1.0 && ndvi_stats.max.unwrap() <= 1.0,
+    assert!(
+        ndvi_stats.min.unwrap() >= -1.0 && ndvi_stats.max.unwrap() <= 1.0,
         "NDVI should be in [-1, 1], got [{}, {}]",
-        ndvi_stats.min.unwrap(), ndvi_stats.max.unwrap());
-    eprintln!("  ✓ NDVI: {:.3} to {:.3}", ndvi_stats.min.unwrap(), ndvi_stats.max.unwrap());
+        ndvi_stats.min.unwrap(),
+        ndvi_stats.max.unwrap()
+    );
+    eprintln!(
+        "  ✓ NDVI: {:.3} to {:.3}",
+        ndvi_stats.min.unwrap(),
+        ndvi_stats.max.unwrap()
+    );
 
     // 2. NDWI
-    let ndwi_result = ndwi(&green, &nir)
-        .expect("NDWI computation failed");
+    let ndwi_result = ndwi(&green, &nir).expect("NDWI computation failed");
     assert_eq!(ndwi_result.shape(), dem.shape(), "NDWI shape mismatch");
     let ndwi_stats = ndwi_result.statistics();
-    assert!(ndwi_stats.min.unwrap() >= -1.0 && ndwi_stats.max.unwrap() <= 1.0,
-        "NDWI should be in [-1, 1]");
-    eprintln!("  ✓ NDWI: {:.3} to {:.3}", ndwi_stats.min.unwrap(), ndwi_stats.max.unwrap());
+    assert!(
+        ndwi_stats.min.unwrap() >= -1.0 && ndwi_stats.max.unwrap() <= 1.0,
+        "NDWI should be in [-1, 1]"
+    );
+    eprintln!(
+        "  ✓ NDWI: {:.3} to {:.3}",
+        ndwi_stats.min.unwrap(),
+        ndwi_stats.max.unwrap()
+    );
 
     // 3. MNDWI
-    let mndwi_result = mndwi(&green, &swir1)
-        .expect("MNDWI computation failed");
+    let mndwi_result = mndwi(&green, &swir1).expect("MNDWI computation failed");
     assert_eq!(mndwi_result.shape(), dem.shape(), "MNDWI shape mismatch");
     eprintln!("  ✓ MNDWI computed");
 
     // 4. NBR
-    let nbr_result = nbr(&nir, &swir2)
-        .expect("NBR computation failed");
+    let nbr_result = nbr(&nir, &swir2).expect("NBR computation failed");
     assert_eq!(nbr_result.shape(), dem.shape(), "NBR shape mismatch");
     eprintln!("  ✓ NBR computed");
 
     // 5. SAVI (L=0.5)
-    let savi_result = savi(&nir, &red, SaviParams { l_factor: 0.5 })
-        .expect("SAVI computation failed");
+    let savi_result =
+        savi(&nir, &red, SaviParams { l_factor: 0.5 }).expect("SAVI computation failed");
     assert_eq!(savi_result.shape(), dem.shape(), "SAVI shape mismatch");
     eprintln!("  ✓ SAVI computed");
 
     // 6. EVI
-    let evi_result = evi(&nir, &red, &blue, EviParams::default())
-        .expect("EVI computation failed");
+    let evi_result = evi(&nir, &red, &blue, EviParams::default()).expect("EVI computation failed");
     assert_eq!(evi_result.shape(), dem.shape(), "EVI shape mismatch");
     eprintln!("  ✓ EVI computed");
 
     // 7. BSI
-    let bsi_result = bsi(&swir2, &red, &nir, &blue)
-        .expect("BSI computation failed");
+    let bsi_result = bsi(&swir2, &red, &nir, &blue).expect("BSI computation failed");
     assert_eq!(bsi_result.shape(), dem.shape(), "BSI shape mismatch");
     eprintln!("  ✓ BSI computed");
 
     // 8. NDBI
-    let ndbi_result = ndbi(&swir1, &nir)
-        .expect("NDBI computation failed");
+    let ndbi_result = ndbi(&swir1, &nir).expect("NDBI computation failed");
     assert_eq!(ndbi_result.shape(), dem.shape(), "NDBI shape mismatch");
     eprintln!("  ✓ NDBI computed");
 
     // 9. NDMI
-    let ndmi_result = ndmi(&nir, &swir1)
-        .expect("NDMI computation failed");
+    let ndmi_result = ndmi(&nir, &swir1).expect("NDMI computation failed");
     assert_eq!(ndmi_result.shape(), dem.shape(), "NDMI shape mismatch");
     eprintln!("  ✓ NDMI computed");
 
     // 10. NDSI
-    let ndsi_result = ndsi(&green, &swir1)
-        .expect("NDSI computation failed");
+    let ndsi_result = ndsi(&green, &swir1).expect("NDSI computation failed");
     assert_eq!(ndsi_result.shape(), dem.shape(), "NDSI shape mismatch");
     eprintln!("  ✓ NDSI computed");
 

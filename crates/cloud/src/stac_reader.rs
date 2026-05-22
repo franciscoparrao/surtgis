@@ -83,9 +83,10 @@ pub async fn search_and_read<T: RasterElement>(
     let client = StacClient::new(catalog, StacClientOptions::default())?;
     let results = client.search(params).await?;
 
-    let item = results.features.first().ok_or_else(|| {
-        CloudError::Network("STAC search returned no items".to_string())
-    })?;
+    let item = results
+        .features
+        .first()
+        .ok_or_else(|| CloudError::Network("STAC search returned no items".to_string()))?;
 
     // Determine which asset to read
     let key = if let Some(k) = asset_key {
@@ -93,10 +94,7 @@ pub async fn search_and_read<T: RasterElement>(
     } else {
         // Auto-detect first COG asset
         let (k, _) = item.first_cog_asset().ok_or_else(|| {
-            CloudError::Network(format!(
-                "no COG asset found in item '{}'",
-                item.id
-            ))
+            CloudError::Network(format!("no COG asset found in item '{}'", item.id))
         })?;
         k.clone()
     };

@@ -3,21 +3,19 @@
 //! Replaces each pixel with the minimum value in its structuring element
 //! neighborhood. Shrinks bright regions and enlarges dark regions.
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Algorithm, Error, Result};
 
 use super::element::StructuringElement;
 
 /// Parameters for morphological erosion
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ErodeParams {
     /// Structuring element shape
     pub element: StructuringElement,
 }
-
 
 /// Erosion algorithm
 #[derive(Debug, Clone, Default)]

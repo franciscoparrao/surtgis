@@ -67,8 +67,8 @@ async fn build_azure_store(
 
 /// Build an HTTP-backed store (read-only, for non-Azure URLs).
 async fn build_http_store(url: &str) -> Result<AsyncReadableListableStorage> {
-    use zarrs_object_store::object_store::http::HttpBuilder;
     use zarrs_object_store::object_store::ClientOptions;
+    use zarrs_object_store::object_store::http::HttpBuilder;
 
     let client_opts = ClientOptions::new().with_allow_http(true);
     let store = HttpBuilder::new()
@@ -90,7 +90,11 @@ pub fn parse_azure_blob_url(url: &str) -> Option<(String, String, String)> {
     if let Some(stripped) = url.strip_prefix("abfs://") {
         let (container, path) = stripped.split_once('/').unwrap_or((stripped, ""));
         // For abfs://, account = container (convention on Planetary Computer)
-        return Some((container.to_string(), container.to_string(), path.to_string()));
+        return Some((
+            container.to_string(),
+            container.to_string(),
+            path.to_string(),
+        ));
     }
 
     let stripped = url

@@ -326,8 +326,7 @@ mod tests {
             stream_threshold: 10.0, // Bottom row becomes stream
         };
 
-        let result =
-            sediment_connectivity(&slope, &flow_acc, &flow_dir, params, None).unwrap();
+        let result = sediment_connectivity(&slope, &flow_acc, &flow_dir, params, None).unwrap();
 
         // Top row should have lower IC (farther from channel)
         let ic_top = result.get(0, 1).unwrap();
@@ -374,14 +373,10 @@ mod tests {
             stream_threshold: 1000.0,
         };
 
-        let result =
-            sediment_connectivity(&slope, &flow_acc, &flow_dir, params, None).unwrap();
+        let result = sediment_connectivity(&slope, &flow_acc, &flow_dir, params, None).unwrap();
 
         let ic = result.get(1, 1).unwrap();
-        assert!(
-            !ic.is_nan(),
-            "Stream cell should have valid IC"
-        );
+        assert!(!ic.is_nan(), "Stream cell should have valid IC");
         assert!(
             ic > 5.0,
             "Stream cell should have high IC (D_dn≈0), got {}",

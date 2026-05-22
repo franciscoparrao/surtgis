@@ -52,11 +52,10 @@ pub fn create_dock_state() -> DockState<PanelId> {
     let mut dock_state = DockState::new(vec![PanelId::MapCanvas, PanelId::View3D]);
 
     // Split: main area (top) and console (bottom) — 75% / 25%
-    let [top, _bottom] = dock_state.main_surface_mut().split_below(
-        NodeIndex::root(),
-        0.75,
-        vec![PanelId::Console],
-    );
+    let [top, _bottom] =
+        dock_state
+            .main_surface_mut()
+            .split_below(NodeIndex::root(), 0.75, vec![PanelId::Console]);
 
     // Split top area: map canvas (left 72%) and right sidebar (28%)
     let [_map, right] = dock_state.main_surface_mut().split_right(

@@ -3,11 +3,11 @@
 use anyhow::{Context, Result};
 use std::time::Instant;
 
-use surtgis_algorithms::statistics::{
-    focal_statistics, global_morans_i, local_getis_ord, zonal_statistics,
-    FocalParams, FocalStatistic, ZonalStatistic,
-};
 use surtgis_algorithms::statistics::zonal::zonal_statistics_raster;
+use surtgis_algorithms::statistics::{
+    FocalParams, FocalStatistic, ZonalStatistic, focal_statistics, global_morans_i,
+    local_getis_ord, zonal_statistics,
+};
 use surtgis_core::io::read_geotiff;
 
 use crate::commands::StatisticsCommands;
@@ -50,7 +50,11 @@ fn parse_zonal_stat(s: &str) -> ZonalStatistic {
 pub fn handle(algorithm: StatisticsCommands, compress: bool) -> Result<()> {
     match algorithm {
         StatisticsCommands::Focal {
-            input, output, stat, radius, circular,
+            input,
+            output,
+            stat,
+            radius,
+            circular,
         } => {
             let raster = read_dem(&input)?;
             let start = Instant::now();
@@ -71,7 +75,9 @@ pub fn handle(algorithm: StatisticsCommands, compress: bool) -> Result<()> {
         }
 
         StatisticsCommands::Zonal {
-            input, output, zones,
+            input,
+            output,
+            zones,
         } => {
             let values = read_dem(&input)?;
             let pb = spinner("Reading zones...");
@@ -81,8 +87,8 @@ pub fn handle(algorithm: StatisticsCommands, compress: bool) -> Result<()> {
 
             let start = Instant::now();
             let pb = spinner("Computing zonal statistics...");
-            let results = zonal_statistics(&values, &zone_raster)
-                .context("Zonal statistics failed")?;
+            let results =
+                zonal_statistics(&values, &zone_raster).context("Zonal statistics failed")?;
             pb.finish_and_clear();
 
             // Write as CSV (zone_id,count,mean,std,min,max,median)
@@ -93,8 +99,7 @@ pub fn handle(algorithm: StatisticsCommands, compress: bool) -> Result<()> {
                 let z = &results[id];
                 csv.push_str(&format!(
                     "{},{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}\n",
-                    z.zone_id, z.count, z.sum, z.mean, z.std_dev,
-                    z.min, z.max, z.range, z.median
+                    z.zone_id, z.count, z.sum, z.mean, z.std_dev, z.min, z.max, z.range, z.median
                 ));
             }
             std::fs::write(&output, &csv).context("Failed to write output")?;
@@ -103,7 +108,10 @@ pub fn handle(algorithm: StatisticsCommands, compress: bool) -> Result<()> {
         }
 
         StatisticsCommands::ZonalRaster {
-            input, output, zones, stat,
+            input,
+            output,
+            zones,
+            stat,
         } => {
             let values = read_dem(&input)?;
             let pb = spinner("Reading zones...");
@@ -135,13 +143,14 @@ pub fn handle(algorithm: StatisticsCommands, compress: bool) -> Result<()> {
         }
 
         StatisticsCommands::GetisOrd {
-            input, output, radius,
+            input,
+            output,
+            radius,
         } => {
             let raster = read_dem(&input)?;
             let start = Instant::now();
             let pb = spinner(&format!("Getis-Ord Gi* (radius={})...", radius));
-            let result = local_getis_ord(&raster, radius)
-                .context("Getis-Ord failed")?;
+            let result = local_getis_ord(&raster, radius).context("Getis-Ord failed")?;
             pb.finish_and_clear();
             write_result(&result.z_scores, &output, compress)?;
             // Also write p-values

@@ -7,12 +7,14 @@
 //! - **Minimum Distance**: Supervised classification (nearest centroid)
 //! - **Maximum Likelihood**: Supervised classification (Gaussian MLE)
 
-mod pca;
-mod kmeans;
 mod isodata;
+mod kmeans;
+mod pca;
 mod supervised;
 
-pub use pca::{pca, PcaParams, PcaResult};
-pub use kmeans::{kmeans_raster, KmeansParams};
-pub use isodata::{isodata, IsodataParams};
-pub use supervised::{minimum_distance, maximum_likelihood, signatures_from_training, ClassSignature};
+pub use isodata::{IsodataParams, isodata};
+pub use kmeans::{KmeansParams, kmeans_raster};
+pub use pca::{PcaParams, PcaResult, pca};
+pub use supervised::{
+    ClassSignature, maximum_likelihood, minimum_distance, signatures_from_training,
+};

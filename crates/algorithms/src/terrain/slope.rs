@@ -3,8 +3,8 @@
 //! Calculates the rate of change of elevation using the Horn (1981) method,
 //! which uses a 3x3 neighborhood to compute partial derivatives.
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Algorithm, Error, Result};
 
@@ -208,9 +208,7 @@ impl surtgis_core::WindowAlgorithm for SlopeStreaming {
                 }
 
                 let e = input[[ir, c]];
-                if e.is_nan()
-                    || nodata.map_or(false, |nd| (e - nd).abs() < f64::EPSILON)
-                {
+                if e.is_nan() || nodata.map_or(false, |nd| (e - nd).abs() < f64::EPSILON) {
                     output[[r, c]] = f64::NAN;
                     continue;
                 }
@@ -297,9 +295,30 @@ mod tests {
     fn test_slope_units() {
         let dem = create_test_dem();
 
-        let deg = slope(&dem, SlopeParams { units: SlopeUnits::Degrees, z_factor: 1.0 }).unwrap();
-        let rad = slope(&dem, SlopeParams { units: SlopeUnits::Radians, z_factor: 1.0 }).unwrap();
-        let pct = slope(&dem, SlopeParams { units: SlopeUnits::Percent, z_factor: 1.0 }).unwrap();
+        let deg = slope(
+            &dem,
+            SlopeParams {
+                units: SlopeUnits::Degrees,
+                z_factor: 1.0,
+            },
+        )
+        .unwrap();
+        let rad = slope(
+            &dem,
+            SlopeParams {
+                units: SlopeUnits::Radians,
+                z_factor: 1.0,
+            },
+        )
+        .unwrap();
+        let pct = slope(
+            &dem,
+            SlopeParams {
+                units: SlopeUnits::Percent,
+                z_factor: 1.0,
+            },
+        )
+        .unwrap();
 
         let deg_val = deg.get(5, 5).unwrap();
         let rad_val = rad.get(5, 5).unwrap();

@@ -19,8 +19,8 @@
 //! Quantifying landscape ruggedness for animal habitat analysis.
 //! Journal of Wildlife Management, 71(5), 1419–1425.
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -81,9 +81,14 @@ pub fn vrm(dem: &Raster<f64>, params: VrmParams) -> Result<Raster<f64>> {
             let z8 = data[[row + 1, col]];
             let z9 = data[[row + 1, col + 1]];
 
-            if z1.is_nan() || z2.is_nan() || z3.is_nan()
-                || z4.is_nan() || z6.is_nan()
-                || z7.is_nan() || z8.is_nan() || z9.is_nan()
+            if z1.is_nan()
+                || z2.is_nan()
+                || z3.is_nan()
+                || z4.is_nan()
+                || z6.is_nan()
+                || z7.is_nan()
+                || z8.is_nan()
+                || z9.is_nan()
             {
                 continue;
             }
@@ -100,7 +105,11 @@ pub fn vrm(dem: &Raster<f64>, params: VrmParams) -> Result<Raster<f64>> {
                 0.0
             } else {
                 let a = (-dz_dy).atan2(-dz_dx);
-                if a < 0.0 { a + 2.0 * std::f64::consts::PI } else { a }
+                if a < 0.0 {
+                    a + 2.0 * std::f64::consts::PI
+                } else {
+                    a
+                }
             };
 
             // Unit normal vector components
@@ -200,9 +209,14 @@ impl VrmStreaming {
         let z8 = input[[row + 1, col]];
         let z9 = input[[row + 1, col + 1]];
 
-        if z1.is_nan() || z2.is_nan() || z3.is_nan()
-            || z4.is_nan() || z6.is_nan()
-            || z7.is_nan() || z8.is_nan() || z9.is_nan()
+        if z1.is_nan()
+            || z2.is_nan()
+            || z3.is_nan()
+            || z4.is_nan()
+            || z6.is_nan()
+            || z7.is_nan()
+            || z8.is_nan()
+            || z9.is_nan()
         {
             return None;
         }
@@ -217,7 +231,11 @@ impl VrmStreaming {
             0.0
         } else {
             let a = (-dz_dy).atan2(-dz_dx);
-            if a < 0.0 { a + 2.0 * std::f64::consts::PI } else { a }
+            if a < 0.0 {
+                a + 2.0 * std::f64::consts::PI
+            } else {
+                a
+            }
         };
 
         let sin_s = slope.sin();
@@ -343,7 +361,9 @@ mod tests {
                     assert!(
                         v.abs() < 0.01,
                         "VRM on flat should be ~0, got {:.4} at ({},{})",
-                        v, row, col
+                        v,
+                        row,
+                        col
                     );
                 }
             }
@@ -363,7 +383,9 @@ mod tests {
                     assert!(
                         v < 0.05,
                         "VRM on uniform slope should be near 0, got {:.4} at ({},{})",
-                        v, row, col
+                        v,
+                        row,
+                        col
                     );
                 }
             }
@@ -396,7 +418,9 @@ mod tests {
                     assert!(
                         v >= -0.001 && v <= 1.001,
                         "VRM should be in [0,1], got {:.4} at ({},{})",
-                        v, row, col
+                        v,
+                        row,
+                        col
                     );
                 }
             }

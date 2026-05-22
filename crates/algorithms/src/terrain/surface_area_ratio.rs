@@ -48,9 +48,15 @@ const NEIGHBORS: [(isize, isize); 8] = [
 /// Area = 0.5 * |cross_product(v1, v2)| where v1 = p1-p0, v2 = p2-p0
 #[inline]
 fn triangle_area_3d(
-    x0: f64, y0: f64, z0: f64,
-    x1: f64, y1: f64, z1: f64,
-    x2: f64, y2: f64, z2: f64,
+    x0: f64,
+    y0: f64,
+    z0: f64,
+    x1: f64,
+    y1: f64,
+    z1: f64,
+    x2: f64,
+    y2: f64,
+    z2: f64,
 ) -> f64 {
     let v1x = x1 - x0;
     let v1y = y1 - y0;
@@ -164,18 +170,12 @@ pub fn surface_area_ratio(dem: &Raster<f64>, params: SarParams) -> Result<Raster
                     let y2 = -(dr2 as f64) * cell_h;
 
                     // 3D triangle area
-                    total_3d_area += triangle_area_3d(
-                        x_center, y_center, z_center,
-                        x1, y1, z1,
-                        x2, y2, z2,
-                    );
+                    total_3d_area +=
+                        triangle_area_3d(x_center, y_center, z_center, x1, y1, z1, x2, y2, z2);
 
                     // 2D triangle area (z=0)
-                    total_2d_area += triangle_area_3d(
-                        x_center, y_center, 0.0,
-                        x1, y1, 0.0,
-                        x2, y2, 0.0,
-                    );
+                    total_2d_area +=
+                        triangle_area_3d(x_center, y_center, 0.0, x1, y1, 0.0, x2, y2, 0.0);
                 }
 
                 if valid && total_2d_area > 1e-20 {

@@ -116,7 +116,8 @@ fn zhang_suen_thin(image: &Array2<u8>) -> Array2<u8> {
                 if (2..=6).contains(&b)
                     && a == 1
                     && (p[0] * p[2] * p[4]) == 0  // P2 * P4 * P6 = 0
-                    && (p[2] * p[4] * p[6]) == 0  // P4 * P6 * P8 = 0
+                    && (p[2] * p[4] * p[6]) == 0
+                // P4 * P6 * P8 = 0
                 {
                     to_remove.push((r, c));
                 }
@@ -143,7 +144,8 @@ fn zhang_suen_thin(image: &Array2<u8>) -> Array2<u8> {
                 if (2..=6).contains(&b)
                     && a == 1
                     && (p[0] * p[2] * p[6]) == 0  // P2 * P4 * P8 = 0
-                    && (p[0] * p[4] * p[6]) == 0  // P2 * P6 * P8 = 0
+                    && (p[0] * p[4] * p[6]) == 0
+                // P2 * P6 * P8 = 0
                 {
                     to_remove.push((r, c));
                 }
@@ -255,8 +257,10 @@ pub fn lineament_detection(
 
     if rows_h != rows_v || cols_h != cols_v {
         return Err(Error::SizeMismatch {
-            er: rows_h, ec: cols_h,
-            ar: rows_v, ac: cols_v,
+            er: rows_h,
+            ec: cols_h,
+            ar: rows_v,
+            ac: cols_v,
         });
     }
 
@@ -373,7 +377,10 @@ mod tests {
         }
 
         // Should have at least some strike-slip and dip-slip
-        assert!(strike + dip + oblique > 0, "Should have classified lineaments");
+        assert!(
+            strike + dip + oblique > 0,
+            "Should have classified lineaments"
+        );
     }
 
     #[test]
@@ -422,7 +429,8 @@ mod tests {
         assert!(
             skel_count < orig_count,
             "Skeleton should be thinner: orig={}, skel={}",
-            orig_count, skel_count
+            orig_count,
+            skel_count
         );
         assert!(skel_count > 0, "Skeleton should not be empty");
     }

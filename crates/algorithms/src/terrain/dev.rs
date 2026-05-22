@@ -14,8 +14,8 @@
 //! Reference: De Reu et al. (2013) "Application of the topographic position
 //! index to heterogeneous landscapes" (509 citations)
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Algorithm, Error, Result};
 
@@ -79,9 +79,7 @@ pub fn dev(dem: &Raster<f64>, params: DevParams) -> Result<Raster<f64>> {
 
             for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let center = unsafe { dem.get_unchecked(row, col) };
-                if center.is_nan()
-                    || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON)
-                {
+                if center.is_nan() || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON) {
                     continue;
                 }
 
@@ -103,9 +101,7 @@ pub fn dev(dem: &Raster<f64>, params: DevParams) -> Result<Raster<f64>> {
                         let nr = (ri + dr) as usize;
                         let nc = (ci + dc) as usize;
                         let nv = unsafe { dem.get_unchecked(nr, nc) };
-                        if !nv.is_nan()
-                            && nodata.is_none_or(|nd| (nv - nd).abs() >= f64::EPSILON)
-                        {
+                        if !nv.is_nan() && nodata.is_none_or(|nd| (nv - nd).abs() >= f64::EPSILON) {
                             sum += nv;
                             sum_sq += nv * nv;
                             count += 1;
@@ -193,8 +189,7 @@ impl surtgis_core::WindowAlgorithm for DevStreaming {
                 }
 
                 let center = input[[ir, c]];
-                if center.is_nan()
-                    || nodata.map_or(false, |nd| (center - nd).abs() < f64::EPSILON)
+                if center.is_nan() || nodata.map_or(false, |nd| (center - nd).abs() < f64::EPSILON)
                 {
                     output[[r, c]] = f64::NAN;
                     continue;
@@ -213,8 +208,7 @@ impl surtgis_core::WindowAlgorithm for DevStreaming {
                         let nr = (ir as isize + dr) as usize;
                         let nc = (ci + dc) as usize;
                         let nv = input[[nr, nc]];
-                        if !nv.is_nan()
-                            && nodata.map_or(true, |nd| (nv - nd).abs() >= f64::EPSILON)
+                        if !nv.is_nan() && nodata.map_or(true, |nd| (nv - nd).abs() >= f64::EPSILON)
                         {
                             sum += nv;
                             sum_sq += nv * nv;

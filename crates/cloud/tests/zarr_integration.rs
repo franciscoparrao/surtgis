@@ -9,32 +9,42 @@
 
 use surtgis_cloud::blocking::{StacClientBlocking, ZarrReaderBlocking};
 use surtgis_cloud::{
-    BBox, StacCatalog, StacClientOptions, StacSearchParams,
-    TimeReduction, TimeSelector, ZarrReaderOptions,
+    BBox, StacCatalog, StacClientOptions, StacSearchParams, TimeReduction, TimeSelector,
+    ZarrReaderOptions,
 };
 
 /// Helper: search PC for a collection, find a specific zarr asset, sign it.
 /// Returns (https_store_url, sas_token, variable_name).
-fn get_signed_zarr_url(collection: &str, target_asset: Option<&str>) -> (String, Option<String>, String) {
-    let client = StacClientBlocking::new(
-        StacCatalog::PlanetaryComputer,
-        StacClientOptions::default(),
-    )
-    .expect("Failed to create STAC client");
+fn get_signed_zarr_url(
+    collection: &str,
+    target_asset: Option<&str>,
+) -> (String, Option<String>, String) {
+    let client =
+        StacClientBlocking::new(StacCatalog::PlanetaryComputer, StacClientOptions::default())
+            .expect("Failed to create STAC client");
 
-    let params = StacSearchParams::new()
-        .collections(&[collection])
-        .limit(1);
+    let params = StacSearchParams::new().collections(&[collection]).limit(1);
 
     let results = client.search(&params).expect("STAC search failed");
     let item = results.features.first().expect("No items found");
 
-    println!("Item: {} [{}]", item.id, item.collection.as_deref().unwrap_or("-"));
-    println!("Assets: {}", item.assets.keys().cloned().collect::<Vec<_>>().join(", "));
+    println!(
+        "Item: {} [{}]",
+        item.id,
+        item.collection.as_deref().unwrap_or("-")
+    );
+    println!(
+        "Assets: {}",
+        item.assets.keys().cloned().collect::<Vec<_>>().join(", ")
+    );
 
     // Find the asset
     let (asset_key, stac_asset) = if let Some(key) = target_asset {
-        (key.to_string(), item.asset(key).unwrap_or_else(|| panic!("Asset '{}' not found", key)))
+        (
+            key.to_string(),
+            item.asset(key)
+                .unwrap_or_else(|| panic!("Asset '{}' not found", key)),
+        )
     } else {
         let zarr_keys = ["zarr-https", "zarr-abfs", "zarr"];
         zarr_keys
@@ -53,10 +63,8 @@ fn get_signed_zarr_url(collection: &str, target_asset: Option<&str>) -> (String,
 
     let (sas, store_url) = if let Some((token, account, _container)) = auth {
         // Convert abfs:// to https:// with the correct storage account
-        let url = surtgis_cloud::zarr_auth::abfs_to_https_with_account(
-            &stac_asset.href,
-            Some(&account),
-        );
+        let url =
+            surtgis_cloud::zarr_auth::abfs_to_https_with_account(&stac_asset.href, Some(&account));
         (Some(token), url)
     } else {
         (None, stac_asset.href.clone())
@@ -102,8 +110,8 @@ fn test_zarr_era5_read_bbox() {
         get_signed_zarr_url("era5-pds", Some("precipitation_amount_1hour_Accumulation"));
     let opts = ZarrReaderOptions { sas_token };
 
-    let reader = ZarrReaderBlocking::open(&store_url, &variable, opts)
-        .expect("Failed to open ERA5");
+    let reader =
+        ZarrReaderBlocking::open(&store_url, &variable, opts).expect("Failed to open ERA5");
 
     let meta = reader.metadata();
     println!("Variable: {}, shape: {:?}", meta.variable, meta.shape);
@@ -137,8 +145,10 @@ fn test_zarr_era5_read_bbox() {
 #[test]
 #[ignore]
 fn test_zarr_era5_temperature() {
-    let (store_url, sas_token, variable) =
-        get_signed_zarr_url("era5-pds", Some("air_temperature_at_2_metres_1hour_Maximum"));
+    let (store_url, sas_token, variable) = get_signed_zarr_url(
+        "era5-pds",
+        Some("air_temperature_at_2_metres_1hour_Maximum"),
+    );
     let opts = ZarrReaderOptions { sas_token };
 
     let reader = ZarrReaderBlocking::open(&store_url, &variable, opts)
@@ -182,8 +192,8 @@ fn test_zarr_era5_time_aggregation() {
         get_signed_zarr_url("era5-pds", Some("precipitation_amount_1hour_Accumulation"));
     let opts = ZarrReaderOptions { sas_token };
 
-    let reader = ZarrReaderBlocking::open(&store_url, &variable, opts)
-        .expect("Failed to open ERA5");
+    let reader =
+        ZarrReaderBlocking::open(&store_url, &variable, opts).expect("Failed to open ERA5");
 
     let bbox = BBox {
         min_x: -71.0,

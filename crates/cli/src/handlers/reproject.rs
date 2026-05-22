@@ -14,11 +14,11 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use rayon::prelude::*;
 
-use surtgis_core::io::{read_geotiff, write_geotiff, GeoTiffOptions};
-use surtgis_core::{crs::CRS, raster::GeoTransform, Raster};
+use surtgis_core::io::{GeoTiffOptions, read_geotiff, write_geotiff};
+use surtgis_core::{Raster, crs::CRS, raster::GeoTransform};
 
 /// Resampling method for the inverse-mapping interpolation.
 #[derive(Debug, Clone, Copy)]
@@ -69,14 +69,9 @@ pub fn handle(
 
     let src_epsg = match from {
         Some(f) => parse_epsg(&f)?,
-        None => raster
-            .crs()
-            .and_then(|c| c.epsg())
-            .ok_or_else(|| {
-                anyhow!(
-                    "source CRS not embedded in input GeoTIFF; pass --from EPSG:XXXX to override"
-                )
-            })?,
+        None => raster.crs().and_then(|c| c.epsg()).ok_or_else(|| {
+            anyhow!("source CRS not embedded in input GeoTIFF; pass --from EPSG:XXXX to override")
+        })?,
     };
 
     let start = Instant::now();
@@ -87,7 +82,11 @@ pub fn handle(
             src_epsg
         );
         write_output(&raster, &output, compress)?;
-        eprintln!("✓ wrote {} in {:.2} s", output.display(), start.elapsed().as_secs_f64());
+        eprintln!(
+            "✓ wrote {} in {:.2} s",
+            output.display(),
+            start.elapsed().as_secs_f64()
+        );
         return Ok(());
     }
 
@@ -117,7 +116,9 @@ pub fn handle(
 
 fn write_output(raster: &Raster<f64>, output: &Path, compress: bool) -> Result<()> {
     let opts = if compress {
-        Some(GeoTiffOptions { compression: "DEFLATE".into() })
+        Some(GeoTiffOptions {
+            compression: "DEFLATE".into(),
+        })
     } else {
         None
     };
@@ -187,7 +188,9 @@ fn reproject(
     // metres-per-degree at the centre of the source extent.
     let px = match pixel_size_override {
         Some(p) => p,
-        None => infer_default_pixel_size(&src_gt, &src_proj, &dst_proj, &samples, max_x, max_y, min_x, min_y)?,
+        None => infer_default_pixel_size(
+            &src_gt, &src_proj, &dst_proj, &samples, max_x, max_y, min_x, min_y,
+        )?,
     };
 
     let out_cols = ((max_x - min_x) / px).ceil() as usize;
@@ -196,13 +199,18 @@ fn reproject(
     if out_rows == 0 || out_cols == 0 {
         return Err(anyhow!(
             "output dimensions are zero (extent: {:.3}..{:.3}, {:.3}..{:.3}; pixel {}). Use --pixel-size",
-            min_x, max_x, min_y, max_y, px
+            min_x,
+            max_x,
+            min_y,
+            max_y,
+            px
         ));
     }
     if out_rows > 200_000 || out_cols > 200_000 {
         return Err(anyhow!(
             "output dimensions too large ({}x{}). Refine --pixel-size",
-            out_rows, out_cols
+            out_rows,
+            out_cols
         ));
     }
 
@@ -231,12 +239,11 @@ fn reproject(
                 } else {
                     (dst_x, dst_y)
                 };
-                let (sx, sy) = match proj4rs::adaptors::transform_xy(
-                    &dst_proj, &src_proj, in_x, in_y,
-                ) {
-                    Ok(p) => p,
-                    Err(_) => continue,
-                };
+                let (sx, sy) =
+                    match proj4rs::adaptors::transform_xy(&dst_proj, &src_proj, in_x, in_y) {
+                        Ok(p) => p,
+                        Err(_) => continue,
+                    };
                 let (src_x, src_y) = if src_proj.is_latlong() {
                     (sx.to_degrees(), sy.to_degrees())
                 } else {
@@ -247,8 +254,12 @@ fn reproject(
                 let src_r_f = (src_y - src_gt.origin_y) / src_gt.pixel_height - 0.5;
 
                 let val = match method {
-                    Method::Nearest => sample_nearest(src_data, src_rows, src_cols, src_r_f, src_c_f),
-                    Method::Bilinear => sample_bilinear(src_data, src_rows, src_cols, src_r_f, src_c_f),
+                    Method::Nearest => {
+                        sample_nearest(src_data, src_rows, src_cols, src_r_f, src_c_f)
+                    }
+                    Method::Bilinear => {
+                        sample_bilinear(src_data, src_rows, src_cols, src_r_f, src_c_f)
+                    }
                 };
                 if let Some(v) = val {
                     row[out_c] = v;
@@ -280,11 +291,7 @@ fn sample_nearest(
         return None;
     }
     let v = data[[r as usize, c as usize]];
-    if v.is_finite() {
-        Some(v)
-    } else {
-        None
-    }
+    if v.is_finite() { Some(v) } else { None }
 }
 
 fn sample_bilinear(
@@ -327,7 +334,10 @@ fn infer_default_pixel_size(
     src_proj: &proj4rs::Proj,
     dst_proj: &proj4rs::Proj,
     samples: &[(f64, f64)],
-    max_x: f64, max_y: f64, min_x: f64, min_y: f64,
+    max_x: f64,
+    max_y: f64,
+    min_x: f64,
+    min_y: f64,
 ) -> Result<f64> {
     // If both CRS are in the same kind of units (both metric or both geographic),
     // reuse source pixel width.
@@ -339,7 +349,10 @@ fn infer_default_pixel_size(
     // times the source pixel width. This produces an output pixel size that roughly
     // preserves the column count, which is a sensible default for ad-hoc reprojection.
     let src_x_min = samples.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
-    let src_x_max = samples.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max);
+    let src_x_max = samples
+        .iter()
+        .map(|p| p.0)
+        .fold(f64::NEG_INFINITY, f64::max);
     let src_width = src_x_max - src_x_min;
     if src_width <= 0.0 {
         return Err(anyhow!("could not infer pixel size; use --pixel-size"));

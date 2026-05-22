@@ -4,8 +4,8 @@
 //! value and all other cells are NaN. This is a raster-based approximation of
 //! vector contour extraction, useful for visualization overlays.
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -128,15 +128,30 @@ mod tests {
     fn test_contour_basic() {
         // Raster where each row = row_index (0, 1, 2, ... 19)
         let r = slope_raster(20, 10, 1.0);
-        let result = contour_lines(&r, ContourParams { interval: 5.0, base: 0.0 }).unwrap();
+        let result = contour_lines(
+            &r,
+            ContourParams {
+                interval: 5.0,
+                base: 0.0,
+            },
+        )
+        .unwrap();
 
         // Contours at 5, 10, 15. Cell at row 4 has value 4, row 5 has 5.
         // Crossing between row 4->5 means row 4 is marked.
         let v4 = result.get(4, 0).unwrap();
-        assert!((v4 - 5.0).abs() < 1e-10, "Row 4 should have contour 5.0, got {}", v4);
+        assert!(
+            (v4 - 5.0).abs() < 1e-10,
+            "Row 4 should have contour 5.0, got {}",
+            v4
+        );
 
         let v9 = result.get(9, 0).unwrap();
-        assert!((v9 - 10.0).abs() < 1e-10, "Row 9 should have contour 10.0, got {}", v9);
+        assert!(
+            (v9 - 10.0).abs() < 1e-10,
+            "Row 9 should have contour 10.0, got {}",
+            v9
+        );
 
         // Row 2 should NOT be on a contour
         let v2 = result.get(2, 0).unwrap();
@@ -146,17 +161,34 @@ mod tests {
     #[test]
     fn test_contour_interval_error() {
         let r = slope_raster(5, 5, 1.0);
-        let result = contour_lines(&r, ContourParams { interval: 0.0, base: 0.0 });
+        let result = contour_lines(
+            &r,
+            ContourParams {
+                interval: 0.0,
+                base: 0.0,
+            },
+        );
         assert!(result.is_err());
     }
 
     #[test]
     fn test_contour_with_base() {
         let r = slope_raster(20, 10, 1.0);
-        let result = contour_lines(&r, ContourParams { interval: 10.0, base: 3.0 }).unwrap();
+        let result = contour_lines(
+            &r,
+            ContourParams {
+                interval: 10.0,
+                base: 3.0,
+            },
+        )
+        .unwrap();
 
         // Contours at 3, 13. Row 2->3 crossing at 3.0.
         let v2 = result.get(2, 0).unwrap();
-        assert!((v2 - 3.0).abs() < 1e-10, "Row 2 should have contour 3.0, got {}", v2);
+        assert!(
+            (v2 - 3.0).abs() < 1e-10,
+            "Row 2 should have contour 3.0, got {}",
+            v2
+        );
     }
 }

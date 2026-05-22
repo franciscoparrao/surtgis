@@ -5,17 +5,23 @@
 //! - **Isobasins**: Equal-area watershed subdivision
 //! - **Flood Fill Simulation**: Water level flood modeling
 
-use std::collections::VecDeque;
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
+use std::collections::VecDeque;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
 /// D8 neighbor offsets: (dr, dc) indexed 1..=8
 /// 1=E, 2=NE, 3=N, 4=NW, 5=W, 6=SW, 7=S, 8=SE
 const D8_OFFSETS: [(isize, isize); 8] = [
-    (0, 1), (-1, 1), (-1, 0), (-1, -1),
-    (0, -1), (1, -1), (1, 0), (1, 1),
+    (0, 1),
+    (-1, 1),
+    (-1, 0),
+    (-1, -1),
+    (0, -1),
+    (1, -1),
+    (1, 0),
+    (1, 1),
 ];
 
 // ─────────────────────────────────────────────────────────
@@ -35,14 +41,14 @@ const D8_OFFSETS: [(isize, isize); 8] = [
 ///
 /// # Returns
 /// Raster with Strahler order values for stream cells, 0 for non-stream cells
-pub fn strahler_order(
-    flow_dir: &Raster<u8>,
-    stream_mask: &Raster<u8>,
-) -> Result<Raster<f64>> {
+pub fn strahler_order(flow_dir: &Raster<u8>, stream_mask: &Raster<u8>) -> Result<Raster<f64>> {
     let (rows, cols) = flow_dir.shape();
     if stream_mask.shape() != (rows, cols) {
         return Err(Error::SizeMismatch {
-            er: rows, ec: cols, ar: stream_mask.rows(), ac: stream_mask.cols(),
+            er: rows,
+            ec: cols,
+            ar: stream_mask.rows(),
+            ac: stream_mask.cols(),
         });
     }
 
@@ -53,7 +59,9 @@ pub fn strahler_order(
     for r in 0..rows {
         for c in 0..cols {
             let sm = unsafe { stream_mask.get_unchecked(r, c) };
-            if sm == 0 { continue; }
+            if sm == 0 {
+                continue;
+            }
 
             let dir = unsafe { flow_dir.get_unchecked(r, c) };
             if (1..=8).contains(&dir) {
@@ -90,7 +98,9 @@ pub fn strahler_order(
         let c = idx % cols;
         let dir = unsafe { flow_dir.get_unchecked(r, c) };
 
-        if !(1..=8).contains(&dir) { continue; }
+        if !(1..=8).contains(&dir) {
+            continue;
+        }
 
         let (dr, dc) = D8_OFFSETS[(dir - 1) as usize];
         let nr = r as isize + dr;
@@ -102,7 +112,9 @@ pub fn strahler_order(
 
         let nidx = nr as usize * cols + nc as usize;
         let target_sm = unsafe { stream_mask.get_unchecked(nr as usize, nc as usize) };
-        if target_sm == 0 { continue; }
+        if target_sm == 0 {
+            continue;
+        }
 
         // Strahler rule: track max order and count of max
         in_degree[nidx] -= 1;
@@ -126,8 +138,8 @@ pub fn strahler_order(
     let data: Vec<f64> = order.iter().map(|&o| o as f64).collect();
     let mut output = flow_dir.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(0.0));
-    *output.data_mut() = Array2::from_shape_vec((rows, cols), data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() =
+        Array2::from_shape_vec((rows, cols), data).map_err(|e| Error::Other(e.to_string()))?;
 
     Ok(output)
 }
@@ -198,8 +210,8 @@ pub fn flow_path_length(flow_dir: &Raster<u8>) -> Result<Raster<f64>> {
 
     let mut output = flow_dir.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() = Array2::from_shape_vec((rows, cols), data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() =
+        Array2::from_shape_vec((rows, cols), data).map_err(|e| Error::Other(e.to_string()))?;
 
     Ok(output)
 }
@@ -241,7 +253,10 @@ pub fn isobasins(
     let (rows, cols) = flow_dir.shape();
     if flow_acc.shape() != (rows, cols) {
         return Err(Error::SizeMismatch {
-            er: rows, ec: cols, ar: flow_acc.rows(), ac: flow_acc.cols(),
+            er: rows,
+            ec: cols,
+            ar: flow_acc.rows(),
+            ac: flow_acc.cols(),
         });
     }
 
@@ -257,10 +272,14 @@ pub fn isobasins(
     for r in 0..rows {
         for c in 0..cols {
             let acc = unsafe { flow_acc.get_unchecked(r, c) };
-            if !acc.is_finite() || acc < threshold { continue; }
+            if !acc.is_finite() || acc < threshold {
+                continue;
+            }
 
             let dir = unsafe { flow_dir.get_unchecked(r, c) };
-            if !(1..=8).contains(&dir) { continue; }
+            if !(1..=8).contains(&dir) {
+                continue;
+            }
 
             // Check if this is a threshold crossing point
             // Simple: is accumulation a multiple of threshold?
@@ -287,7 +306,11 @@ pub fn isobasins(
             }
         }
         cells_by_acc.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-        pour_points = cells_by_acc.iter().take(n_basins).map(|&(_, r, c)| (r, c)).collect();
+        pour_points = cells_by_acc
+            .iter()
+            .take(n_basins)
+            .map(|&(_, r, c)| (r, c))
+            .collect();
     }
 
     // Assign basin IDs by tracing upstream from each pour point
@@ -296,7 +319,9 @@ pub fn isobasins(
 
     for &(pr, pc) in &pour_points {
         let idx = pr * cols + pc;
-        if basin_id[idx] > 0.0 { continue; } // Already assigned
+        if basin_id[idx] > 0.0 {
+            continue;
+        } // Already assigned
 
         // BFS upstream
         let mut queue: VecDeque<(usize, usize)> = VecDeque::new();
@@ -317,7 +342,9 @@ pub fn isobasins(
                 let nc = nc as usize;
                 let nidx = nr * cols + nc;
 
-                if basin_id[nidx] > 0.0 { continue; }
+                if basin_id[nidx] > 0.0 {
+                    continue;
+                }
 
                 let ndir = unsafe { flow_dir.get_unchecked(nr, nc) };
                 if (1..=8).contains(&ndir) && (ndir - 1) as usize == di {
@@ -336,8 +363,8 @@ pub fn isobasins(
 
     let mut output = flow_dir.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(0.0));
-    *output.data_mut() = Array2::from_shape_vec((rows, cols), basin_id)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() =
+        Array2::from_shape_vec((rows, cols), basin_id).map_err(|e| Error::Other(e.to_string()))?;
 
     Ok(output)
 }
@@ -367,10 +394,7 @@ pub struct FloodSimParams {
 ///
 /// # Returns
 /// Raster with water depth (> 0 = flooded, NaN = dry)
-pub fn flood_fill_simulation(
-    dem: &Raster<f64>,
-    params: FloodSimParams,
-) -> Result<Raster<f64>> {
+pub fn flood_fill_simulation(dem: &Raster<f64>, params: FloodSimParams) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
     let water_level = params.water_level;
 
@@ -382,7 +406,9 @@ pub fn flood_fill_simulation(
     for r in 0..rows {
         for c in 0..cols {
             let is_boundary = r == 0 || r == rows - 1 || c == 0 || c == cols - 1;
-            if !is_boundary { continue; }
+            if !is_boundary {
+                continue;
+            }
 
             let elev = unsafe { dem.get_unchecked(r, c) };
             if elev.is_finite() && elev <= water_level {
@@ -406,7 +432,9 @@ pub fn flood_fill_simulation(
             let nr = nr as usize;
             let nc = nc as usize;
             let idx = nr * cols + nc;
-            if flooded[idx] { continue; }
+            if flooded[idx] {
+                continue;
+            }
 
             let elev = unsafe { dem.get_unchecked(nr, nc) };
             if elev.is_finite() && elev <= water_level {
@@ -432,8 +460,8 @@ pub fn flood_fill_simulation(
 
     let mut output = dem.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() = Array2::from_shape_vec((rows, cols), data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() =
+        Array2::from_shape_vec((rows, cols), data).map_err(|e| Error::Other(e.to_string()))?;
 
     Ok(output)
 }
@@ -483,11 +511,19 @@ mod tests {
 
         // Cell at (2,0) flows 4 cells east → length = 4.0
         let v = result.get(2, 0).unwrap();
-        assert!((v - 4.0).abs() < 1e-10, "Flow path length should be 4.0, got {}", v);
+        assert!(
+            (v - 4.0).abs() < 1e-10,
+            "Flow path length should be 4.0, got {}",
+            v
+        );
 
         // Cell at (2,3) flows 1 cell east → length = 1.0
         let v3 = result.get(2, 3).unwrap();
-        assert!((v3 - 1.0).abs() < 1e-10, "Flow path length should be 1.0, got {}", v3);
+        assert!(
+            (v3 - 1.0).abs() < 1e-10,
+            "Flow path length should be 1.0, got {}",
+            v3
+        );
 
         // Cell at (2,4) is a pit → length = 0
         let v4 = result.get(2, 4).unwrap();

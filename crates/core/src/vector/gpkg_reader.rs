@@ -32,8 +32,13 @@ use super::{AttributeValue, Feature, FeatureCollection};
 /// let fc = read_gpkg(Path::new("data.gpkg"), Some("basins")).unwrap();
 /// ```
 pub fn read_gpkg(path: &Path, layer: Option<&str>) -> Result<FeatureCollection> {
-    let conn = rusqlite::Connection::open(path)
-        .map_err(|e| Error::Other(format!("Cannot open GeoPackage '{}': {}", path.display(), e)))?;
+    let conn = rusqlite::Connection::open(path).map_err(|e| {
+        Error::Other(format!(
+            "Cannot open GeoPackage '{}': {}",
+            path.display(),
+            e
+        ))
+    })?;
 
     // Find the feature table name
     let table_name = if let Some(name) = layer {
@@ -382,9 +387,9 @@ fn parse_wkb_multi(
                     _ => None,
                 })
                 .collect();
-            Some(Geometry::MultiLineString(
-                geo_types::MultiLineString::new(lines),
-            ))
+            Some(Geometry::MultiLineString(geo_types::MultiLineString::new(
+                lines,
+            )))
         }
         3 => {
             let polygons: Vec<Polygon<f64>> = sub_geoms
@@ -443,7 +448,13 @@ mod tests {
         wkb.extend_from_slice(&3u32.to_le_bytes()); // Polygon type
         wkb.extend_from_slice(&1u32.to_le_bytes()); // 1 ring
         wkb.extend_from_slice(&5u32.to_le_bytes()); // 5 points
-        for &(x, y) in &[(0.0f64, 0.0f64), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)] {
+        for &(x, y) in &[
+            (0.0f64, 0.0f64),
+            (10.0, 0.0),
+            (10.0, 10.0),
+            (0.0, 10.0),
+            (0.0, 0.0),
+        ] {
             wkb.extend_from_slice(&x.to_le_bytes());
             wkb.extend_from_slice(&y.to_le_bytes());
         }
@@ -568,7 +579,13 @@ mod tests {
         wkb.extend_from_slice(&3u32.to_le_bytes()); // Polygon
         wkb.extend_from_slice(&1u32.to_le_bytes()); // 1 ring
         wkb.extend_from_slice(&5u32.to_le_bytes()); // 5 points
-        for &(x, y) in &[(0.0f64, 0.0f64), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)] {
+        for &(x, y) in &[
+            (0.0f64, 0.0f64),
+            (10.0, 0.0),
+            (10.0, 10.0),
+            (0.0, 10.0),
+            (0.0, 0.0),
+        ] {
             wkb.extend_from_slice(&x.to_le_bytes());
             wkb.extend_from_slice(&y.to_le_bytes());
         }

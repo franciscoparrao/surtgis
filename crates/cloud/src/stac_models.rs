@@ -211,9 +211,7 @@ impl StacItem {
                 .type_
                 .as_ref()
                 .map(|t| {
-                    t.contains("geotiff")
-                        || t.contains("geo+tiff")
-                        || t.contains("cloud-optimized")
+                    t.contains("geotiff") || t.contains("geo+tiff") || t.contains("cloud-optimized")
                 })
                 .unwrap_or(false);
             let href_tiff = a.href.ends_with(".tif") || a.href.ends_with(".tiff");
@@ -312,24 +310,24 @@ pub struct StacAsset {
 impl StacAsset {
     /// Check if this asset is a Zarr store (by media type).
     pub fn is_zarr(&self) -> bool {
-        self.type_.as_ref().is_some_and(|t| {
-            t.contains("zarr") || t.contains("application/vnd+zarr")
-        })
+        self.type_
+            .as_ref()
+            .is_some_and(|t| t.contains("zarr") || t.contains("application/vnd+zarr"))
     }
 
     /// Check if this asset is a GRIB2 file (by media type or extension).
     pub fn is_grib(&self) -> bool {
-        self.type_.as_ref().is_some_and(|t| {
-            t.contains("grib") || t.contains("GRIB")
-        }) || self.href.ends_with(".grib2") || self.href.ends_with(".grb2")
+        self.type_
+            .as_ref()
+            .is_some_and(|t| t.contains("grib") || t.contains("GRIB"))
+            || self.href.ends_with(".grib2")
+            || self.href.ends_with(".grb2")
     }
 
     /// Check if this asset is a COG/GeoTIFF (by media type or extension).
     pub fn is_cog(&self) -> bool {
         let by_type = self.type_.as_ref().is_some_and(|t| {
-            t.contains("geotiff")
-                || t.contains("geo+tiff")
-                || t.contains("cloud-optimized")
+            t.contains("geotiff") || t.contains("geo+tiff") || t.contains("cloud-optimized")
         });
         by_type || self.href.ends_with(".tif") || self.href.ends_with(".tiff")
     }
@@ -441,7 +439,10 @@ mod tests {
     fn parse_item() {
         let col: StacItemCollection = serde_json::from_str(FIXTURE).unwrap();
         let item = &col.features[0];
-        assert_eq!(item.id, "S2A_MSIL2A_20240615T105621_R094_T30TVK_20240615T164132");
+        assert_eq!(
+            item.id,
+            "S2A_MSIL2A_20240615T105621_R094_T30TVK_20240615T164132"
+        );
         assert_eq!(item.collection.as_deref(), Some("sentinel-2-l2a"));
         assert!(item.geometry.is_some());
         assert_eq!(item.bbox.as_ref().unwrap().len(), 4);
@@ -512,8 +513,14 @@ mod tests {
             .limit(5);
 
         let json = serde_json::to_value(&params).unwrap();
-        assert_eq!(json["bbox"], serde_json::json!([-3.75, 40.38, -3.65, 40.45]));
-        assert_eq!(json["datetime"], "2024-06-01T00:00:00Z/2024-06-30T00:00:00Z");
+        assert_eq!(
+            json["bbox"],
+            serde_json::json!([-3.75, 40.38, -3.65, 40.45])
+        );
+        assert_eq!(
+            json["datetime"],
+            "2024-06-01T00:00:00Z/2024-06-30T00:00:00Z"
+        );
         assert_eq!(json["collections"], serde_json::json!(["sentinel-2-l2a"]));
         assert_eq!(json["limit"], 5);
         assert!(json.get("token").is_none());

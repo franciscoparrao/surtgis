@@ -64,7 +64,8 @@ pub fn ssa_2d(dem: &Raster<f64>, params: Ssa2dParams) -> Result<Raster<f64>> {
     }
     if lr > rows || lc > cols {
         return Err(Error::Algorithm(format!(
-            "Window ({},{}) exceeds DEM ({},{})", lr, lc, rows, cols
+            "Window ({},{}) exceeds DEM ({},{})",
+            lr, lc, rows, cols
         )));
     }
     if params.n_components == 0 {
@@ -76,8 +77,8 @@ pub fn ssa_2d(dem: &Raster<f64>, params: Ssa2dParams) -> Result<Raster<f64>> {
     // Trajectory matrix dimensions
     let kr = rows - lr + 1; // number of window positions vertically
     let kc = cols - lc + 1; // number of window positions horizontally
-    let window_size = lr * lc;  // length of each flattened window
-    let n_windows = kr * kc;    // number of windows
+    let window_size = lr * lc; // length of each flattened window
+    let n_windows = kr * kc; // number of windows
 
     // Step 1: Construct trajectory matrix X (n_windows × window_size)
     // Each row is a flattened local window
@@ -171,19 +172,13 @@ pub fn ssa_2d(dem: &Raster<f64>, params: Ssa2dParams) -> Result<Raster<f64>> {
 /// Power iteration with deflation to find leading eigenvectors.
 ///
 /// Returns flat array of `n_components` eigenvectors, each of length `dim`.
-fn power_iteration_deflation(
-    matrix: &[f64],
-    dim: usize,
-    n_components: usize,
-) -> Vec<f64> {
+fn power_iteration_deflation(matrix: &[f64], dim: usize, n_components: usize) -> Vec<f64> {
     let mut result = vec![0.0_f64; n_components * dim];
     let mut m = matrix.to_vec();
 
     for comp in 0..n_components {
         // Initialize random-ish vector
-        let mut v: Vec<f64> = (0..dim)
-            .map(|i| 1.0 + (i as f64 * 0.1).sin())
-            .collect();
+        let mut v: Vec<f64> = (0..dim).map(|i| 1.0 + (i as f64 * 0.1).sin()).collect();
         normalize(&mut v);
 
         // Power iteration
@@ -269,11 +264,15 @@ mod tests {
             }
         }
 
-        let smoothed = ssa_2d(&dem, Ssa2dParams {
-            window_rows: 5,
-            window_cols: 5,
-            n_components: 2,
-        }).unwrap();
+        let smoothed = ssa_2d(
+            &dem,
+            Ssa2dParams {
+                window_rows: 5,
+                window_cols: 5,
+                n_components: 2,
+            },
+        )
+        .unwrap();
 
         // Compute variance of original and smoothed in interior
         let mut var_orig = 0.0;
@@ -303,12 +302,10 @@ mod tests {
         assert!(
             var_smooth < var_orig,
             "Smoothed variance should be less: orig={:.1}, smooth={:.1}",
-            var_orig, var_smooth
+            var_orig,
+            var_smooth
         );
-        assert!(
-            var_smooth > 0.0,
-            "Smoothed should preserve some signal"
-        );
+        assert!(var_smooth > 0.0, "Smoothed should preserve some signal");
     }
 
     #[test]
@@ -320,15 +317,20 @@ mod tests {
         dem.set_transform(GeoTransform::new(0.0, n as f64, 1.0, -1.0));
         for row in 0..n {
             for col in 0..n {
-                dem.set(row, col, 2.0 * col as f64 + 3.0 * row as f64).unwrap();
+                dem.set(row, col, 2.0 * col as f64 + 3.0 * row as f64)
+                    .unwrap();
             }
         }
 
-        let smoothed = ssa_2d(&dem, Ssa2dParams {
-            window_rows: 3,
-            window_cols: 3,
-            n_components: 3,
-        }).unwrap();
+        let smoothed = ssa_2d(
+            &dem,
+            Ssa2dParams {
+                window_rows: 3,
+                window_cols: 3,
+                n_components: 3,
+            },
+        )
+        .unwrap();
 
         // Output should exist and have the right shape
         assert_eq!(smoothed.shape(), dem.shape());
@@ -365,17 +367,25 @@ mod tests {
             }
         }
 
-        let few = ssa_2d(&dem, Ssa2dParams {
-            window_rows: 4,
-            window_cols: 4,
-            n_components: 1,
-        }).unwrap();
+        let few = ssa_2d(
+            &dem,
+            Ssa2dParams {
+                window_rows: 4,
+                window_cols: 4,
+                n_components: 1,
+            },
+        )
+        .unwrap();
 
-        let many = ssa_2d(&dem, Ssa2dParams {
-            window_rows: 4,
-            window_cols: 4,
-            n_components: 8,
-        }).unwrap();
+        let many = ssa_2d(
+            &dem,
+            Ssa2dParams {
+                window_rows: 4,
+                window_cols: 4,
+                n_components: 8,
+            },
+        )
+        .unwrap();
 
         // Few components = more smoothing = closer to mean
         let mut diff_few = 0.0;
@@ -391,16 +401,44 @@ mod tests {
         assert!(
             diff_few > diff_many,
             "Fewer components should change data more: diff_few={:.1}, diff_many={:.1}",
-            diff_few, diff_many
+            diff_few,
+            diff_many
         );
     }
 
     #[test]
     fn test_ssa_2d_invalid_params() {
         let dem = Raster::filled(10, 10, 100.0_f64);
-        assert!(ssa_2d(&dem, Ssa2dParams { window_rows: 0, ..Default::default() }).is_err());
-        assert!(ssa_2d(&dem, Ssa2dParams { window_rows: 20, ..Default::default() }).is_err());
-        assert!(ssa_2d(&dem, Ssa2dParams { n_components: 0, ..Default::default() }).is_err());
+        assert!(
+            ssa_2d(
+                &dem,
+                Ssa2dParams {
+                    window_rows: 0,
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            ssa_2d(
+                &dem,
+                Ssa2dParams {
+                    window_rows: 20,
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            ssa_2d(
+                &dem,
+                Ssa2dParams {
+                    n_components: 0,
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
     }
 
     #[test]

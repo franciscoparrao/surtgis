@@ -8,53 +8,33 @@
 
 use wasm_bindgen::prelude::*;
 
-use surtgis_algorithms::terrain::{
-    aspect, hillshade, curvature, advanced_curvatures,
-    slope as compute_slope,
-    tpi as compute_tpi, tri as compute_tri,
-    twi as compute_twi,
-    geomorphons as compute_geomorphons,
-    northness, eastness,
-    dev as compute_dev,
-    multidirectional_hillshade as compute_multi_hillshade,
-    shape_index as compute_shape_index,
-    curvedness as compute_curvedness,
-    sky_view_factor as compute_svf,
-    positive_openness as compute_positive_openness,
-    negative_openness as compute_negative_openness,
-    mrvbf as compute_mrvbf,
-    uncertainty as compute_uncertainty,
-    ssa_2d as compute_ssa_2d,
-    AspectOutput, HillshadeParams, SlopeParams, SlopeUnits,
-    CurvatureParams, CurvatureType, DerivativeMethod, AdvancedCurvatureType,
-    TpiParams, TriParams, GeomorphonParams, DevParams,
-    MultiHillshadeParams, SvfParams,
-    OpennessParams, MrvbfParams,
-    UncertaintyParams, Ssa2dParams,
-};
 use surtgis_algorithms::hydrology::{
-    fill_sinks, flow_direction, flow_accumulation,
-    flow_accumulation_mfd, flow_direction_dinf, flow_dinf,
-    priority_flood, hand as compute_hand,
-    FillSinksParams, PriorityFloodParams, HandParams, MfdParams,
+    FillSinksParams, HandParams, MfdParams, PriorityFloodParams, fill_sinks, flow_accumulation,
+    flow_accumulation_mfd, flow_dinf, flow_direction, flow_direction_dinf, hand as compute_hand,
+    priority_flood,
 };
 use surtgis_algorithms::imagery::{
-    ndvi as compute_ndvi, ndwi as compute_ndwi, savi as compute_savi,
-    mndwi as compute_mndwi, nbr as compute_nbr,
-    evi as compute_evi, bsi as compute_bsi,
-    ndre as compute_ndre, gndvi as compute_gndvi,
-    ndbi as compute_ndbi, ndmi as compute_ndmi,
-    msavi as compute_msavi, evi2 as compute_evi2,
-    normalized_difference,
-    SaviParams, EviParams,
+    EviParams, SaviParams, bsi as compute_bsi, evi as compute_evi, evi2 as compute_evi2,
+    gndvi as compute_gndvi, mndwi as compute_mndwi, msavi as compute_msavi, nbr as compute_nbr,
+    ndbi as compute_ndbi, ndmi as compute_ndmi, ndre as compute_ndre, ndvi as compute_ndvi,
+    ndwi as compute_ndwi, normalized_difference, savi as compute_savi,
 };
 use surtgis_algorithms::morphology::{
-    erode as compute_erode, dilate as compute_dilate,
-    opening as compute_opening, closing as compute_closing,
-    StructuringElement,
+    StructuringElement, closing as compute_closing, dilate as compute_dilate,
+    erode as compute_erode, opening as compute_opening,
 };
-use surtgis_algorithms::statistics::{
-    focal_statistics, FocalStatistic, FocalParams,
+use surtgis_algorithms::statistics::{FocalParams, FocalStatistic, focal_statistics};
+use surtgis_algorithms::terrain::{
+    AdvancedCurvatureType, AspectOutput, CurvatureParams, CurvatureType, DerivativeMethod,
+    DevParams, GeomorphonParams, HillshadeParams, MrvbfParams, MultiHillshadeParams,
+    OpennessParams, SlopeParams, SlopeUnits, Ssa2dParams, SvfParams, TpiParams, TriParams,
+    UncertaintyParams, advanced_curvatures, aspect, curvature, curvedness as compute_curvedness,
+    dev as compute_dev, eastness, geomorphons as compute_geomorphons, hillshade,
+    mrvbf as compute_mrvbf, multidirectional_hillshade as compute_multi_hillshade,
+    negative_openness as compute_negative_openness, northness,
+    positive_openness as compute_positive_openness, shape_index as compute_shape_index,
+    sky_view_factor as compute_svf, slope as compute_slope, ssa_2d as compute_ssa_2d,
+    tpi as compute_tpi, tri as compute_tri, twi as compute_twi, uncertainty as compute_uncertainty,
 };
 use surtgis_core::io::{read_geotiff_from_buffer, write_geotiff_to_buffer};
 
@@ -63,10 +43,8 @@ macro_rules! dem_op {
     ($tiff:expr, $body:expr) => {{
         let dem = read_geotiff_from_buffer::<f64>($tiff, None)
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        let result = ($body)(&dem)
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        write_geotiff_to_buffer(&result, None)
-            .map_err(|e| JsValue::from_str(&e.to_string()))
+        let result = ($body)(&dem).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        write_geotiff_to_buffer(&result, None).map_err(|e| JsValue::from_str(&e.to_string()))
     }};
 }
 
@@ -83,7 +61,10 @@ pub fn slope(tiff_bytes: &[u8], units: &str) -> Result<Vec<u8>, JsValue> {
     };
     dem_op!(tiff_bytes, |dem: &_| compute_slope(
         dem,
-        SlopeParams { units: slope_units, z_factor: 1.0 }
+        SlopeParams {
+            units: slope_units,
+            z_factor: 1.0
+        }
     ))
 }
 
@@ -102,7 +83,12 @@ pub fn hillshade_compute(
 ) -> Result<Vec<u8>, JsValue> {
     dem_op!(tiff_bytes, |dem: &_| hillshade(
         dem,
-        HillshadeParams { azimuth, altitude, z_factor: 1.0, normalized: false }
+        HillshadeParams {
+            azimuth,
+            altitude,
+            z_factor: 1.0,
+            normalized: false
+        }
     ))
 }
 
@@ -110,7 +96,8 @@ pub fn hillshade_compute(
 #[wasm_bindgen]
 pub fn multidirectional_hillshade(tiff_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
     dem_op!(tiff_bytes, |dem: &_| compute_multi_hillshade(
-        dem, MultiHillshadeParams::default()
+        dem,
+        MultiHillshadeParams::default()
     ))
 }
 
@@ -124,7 +111,11 @@ pub fn curvature_compute(tiff_bytes: &[u8], ctype: &str) -> Result<Vec<u8>, JsVa
     };
     dem_op!(tiff_bytes, |dem: &_| curvature(
         dem,
-        CurvatureParams { curvature_type: ct, method: DerivativeMethod::EvansYoung, ..Default::default() }
+        CurvatureParams {
+            curvature_type: ct,
+            method: DerivativeMethod::EvansYoung,
+            ..Default::default()
+        }
     ))
 }
 
@@ -167,9 +158,7 @@ pub fn advanced_curvature(tiff_bytes: &[u8], ctype: &str) -> Result<Vec<u8>, JsV
 /// Compute TPI (Topographic Position Index). `radius`: window radius in cells.
 #[wasm_bindgen]
 pub fn tpi_compute(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> {
-    dem_op!(tiff_bytes, |dem: &_| compute_tpi(
-        dem, TpiParams { radius }
-    ))
+    dem_op!(tiff_bytes, |dem: &_| compute_tpi(dem, TpiParams { radius }))
 }
 
 /// Compute TRI (Terrain Ruggedness Index).
@@ -186,24 +175,34 @@ pub fn twi_compute(tiff_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
     let filled = fill_sinks(&dem, FillSinksParams::default())
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let fdir = flow_direction(&filled)
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let facc = flow_accumulation(&fdir)
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let slp = compute_slope(&dem, SlopeParams { units: SlopeUnits::Degrees, z_factor: 1.0 })
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let result = compute_twi(&facc, &slp)
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    write_geotiff_to_buffer(&result, None)
-        .map_err(|e| JsValue::from_str(&e.to_string()))
+    let fdir = flow_direction(&filled).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let facc = flow_accumulation(&fdir).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let slp = compute_slope(
+        &dem,
+        SlopeParams {
+            units: SlopeUnits::Degrees,
+            z_factor: 1.0,
+        },
+    )
+    .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let result = compute_twi(&facc, &slp).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    write_geotiff_to_buffer(&result, None).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 /// Compute geomorphons landform classification.
 /// `flatness`: flatness threshold degrees. `radius`: search radius in cells.
 #[wasm_bindgen]
-pub fn geomorphons_compute(tiff_bytes: &[u8], flatness: f64, radius: usize) -> Result<Vec<u8>, JsValue> {
+pub fn geomorphons_compute(
+    tiff_bytes: &[u8],
+    flatness: f64,
+    radius: usize,
+) -> Result<Vec<u8>, JsValue> {
     dem_op!(tiff_bytes, |dem: &_| compute_geomorphons(
-        dem, GeomorphonParams { flatness_threshold: flatness, radius }
+        dem,
+        GeomorphonParams {
+            flatness_threshold: flatness,
+            radius
+        }
     ))
 }
 
@@ -222,9 +221,7 @@ pub fn eastness_compute(tiff_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
 /// Compute DEV (Deviation from Mean Elevation). `radius`: window radius.
 #[wasm_bindgen]
 pub fn dev_compute(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> {
-    dem_op!(tiff_bytes, |dem: &_| compute_dev(
-        dem, DevParams { radius }
-    ))
+    dem_op!(tiff_bytes, |dem: &_| compute_dev(dem, DevParams { radius }))
 }
 
 /// Compute shape index.
@@ -241,27 +238,51 @@ pub fn curvedness(tiff_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
 
 /// Compute sky view factor. `n_dirs`: number of directions. `max_radius`: search radius in cells.
 #[wasm_bindgen]
-pub fn sky_view_factor(tiff_bytes: &[u8], n_dirs: usize, max_radius: usize) -> Result<Vec<u8>, JsValue> {
+pub fn sky_view_factor(
+    tiff_bytes: &[u8],
+    n_dirs: usize,
+    max_radius: usize,
+) -> Result<Vec<u8>, JsValue> {
     dem_op!(tiff_bytes, |dem: &_| compute_svf(
-        dem, SvfParams { directions: n_dirs, radius: max_radius }
+        dem,
+        SvfParams {
+            directions: n_dirs,
+            radius: max_radius
+        }
     ))
 }
 
 /// Positive openness — visibility of the sky above each cell across `n_dirs`
 /// directions out to `radius` cells. High values = exposed ridges/peaks.
 #[wasm_bindgen]
-pub fn openness_positive(tiff_bytes: &[u8], radius: usize, n_dirs: usize) -> Result<Vec<u8>, JsValue> {
+pub fn openness_positive(
+    tiff_bytes: &[u8],
+    radius: usize,
+    n_dirs: usize,
+) -> Result<Vec<u8>, JsValue> {
     dem_op!(tiff_bytes, |dem: &_| compute_positive_openness(
-        dem, OpennessParams { radius, directions: n_dirs }
+        dem,
+        OpennessParams {
+            radius,
+            directions: n_dirs
+        }
     ))
 }
 
 /// Negative openness — visibility of the ground below each cell. High values
 /// = concave hollows / valleys.
 #[wasm_bindgen]
-pub fn openness_negative(tiff_bytes: &[u8], radius: usize, n_dirs: usize) -> Result<Vec<u8>, JsValue> {
+pub fn openness_negative(
+    tiff_bytes: &[u8],
+    radius: usize,
+    n_dirs: usize,
+) -> Result<Vec<u8>, JsValue> {
     dem_op!(tiff_bytes, |dem: &_| compute_negative_openness(
-        dem, OpennessParams { radius, directions: n_dirs }
+        dem,
+        OpennessParams {
+            radius,
+            directions: n_dirs
+        }
     ))
 }
 
@@ -274,8 +295,7 @@ pub fn mrvbf(tiff_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
     let (mrvbf_raster, _mrrtf) = compute_mrvbf(&dem, MrvbfParams::default())
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    write_geotiff_to_buffer(&mrvbf_raster, None)
-        .map_err(|e| JsValue::from_str(&e.to_string()))
+    write_geotiff_to_buffer(&mrvbf_raster, None).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 /// Compute slope uncertainty (RMSE). `dem_rmse`: DEM vertical RMSE in meters.
@@ -285,15 +305,23 @@ pub fn uncertainty_slope(tiff_bytes: &[u8], dem_rmse: f64) -> Result<Vec<u8>, Js
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
     let result = compute_uncertainty(&dem, UncertaintyParams { dem_rmse })
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    write_geotiff_to_buffer(&result.slope_rmse, None)
-        .map_err(|e| JsValue::from_str(&e.to_string()))
+    write_geotiff_to_buffer(&result.slope_rmse, None).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 /// Denoise DEM using 2D-SSA. `window`: window size, `components`: number of signal components.
 #[wasm_bindgen]
-pub fn ssa_2d_denoise(tiff_bytes: &[u8], window: usize, components: usize) -> Result<Vec<u8>, JsValue> {
+pub fn ssa_2d_denoise(
+    tiff_bytes: &[u8],
+    window: usize,
+    components: usize,
+) -> Result<Vec<u8>, JsValue> {
     dem_op!(tiff_bytes, |dem: &_| compute_ssa_2d(
-        dem, Ssa2dParams { window_rows: window, window_cols: window, n_components: components }
+        dem,
+        Ssa2dParams {
+            window_rows: window,
+            window_cols: window,
+            n_components: components
+        }
     ))
 }
 
@@ -304,13 +332,19 @@ pub fn ssa_2d_denoise(tiff_bytes: &[u8], window: usize, components: usize) -> Re
 /// Fill sinks (depressions) in a DEM.
 #[wasm_bindgen]
 pub fn fill_depressions(tiff_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
-    dem_op!(tiff_bytes, |dem: &_| fill_sinks(dem, FillSinksParams::default()))
+    dem_op!(tiff_bytes, |dem: &_| fill_sinks(
+        dem,
+        FillSinksParams::default()
+    ))
 }
 
 /// Priority-flood depression filling (Barnes 2014).
 #[wasm_bindgen]
 pub fn priority_flood_fill(tiff_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
-    dem_op!(tiff_bytes, |dem: &_| priority_flood(dem, PriorityFloodParams::default()))
+    dem_op!(tiff_bytes, |dem: &_| priority_flood(
+        dem,
+        PriorityFloodParams::default()
+    ))
 }
 
 /// Compute D8 flow direction from a filled DEM. Returns encoded direction raster.
@@ -318,10 +352,8 @@ pub fn priority_flood_fill(tiff_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
 pub fn flow_direction_d8(tiff_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
     let dem = read_geotiff_from_buffer::<f64>(tiff_bytes, None)
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let result = flow_direction(&dem)
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    write_geotiff_to_buffer(&result, None)
-        .map_err(|e| JsValue::from_str(&e.to_string()))
+    let result = flow_direction(&dem).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    write_geotiff_to_buffer(&result, None).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 /// Compute flow accumulation from a D8 flow direction raster.
@@ -331,7 +363,8 @@ pub fn flow_direction_d8(tiff_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
 #[wasm_bindgen]
 pub fn flow_accumulation_mfd_compute(tiff_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
     dem_op!(tiff_bytes, |dem: &_| flow_accumulation_mfd(
-        dem, MfdParams::default()
+        dem,
+        MfdParams::default()
     ))
 }
 
@@ -349,8 +382,7 @@ pub fn flow_direction_dinf_compute(tiff_bytes: &[u8]) -> Result<Vec<u8>, JsValue
 pub fn flow_accumulation_dinf_compute(tiff_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
     let dem = read_geotiff_from_buffer::<f64>(tiff_bytes, None)
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let result = flow_dinf(&dem)
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let result = flow_dinf(&dem).map_err(|e| JsValue::from_str(&e.to_string()))?;
     write_geotiff_to_buffer(&result.accumulation, None)
         .map_err(|e| JsValue::from_str(&e.to_string()))
 }
@@ -359,10 +391,8 @@ pub fn flow_accumulation_dinf_compute(tiff_bytes: &[u8]) -> Result<Vec<u8>, JsVa
 pub fn flow_accumulation_d8(fdir_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
     let fdir = read_geotiff_from_buffer::<u8>(fdir_bytes, None)
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let result = flow_accumulation(&fdir)
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    write_geotiff_to_buffer(&result, None)
-        .map_err(|e| JsValue::from_str(&e.to_string()))
+    let result = flow_accumulation(&fdir).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    write_geotiff_to_buffer(&result, None).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 /// Compute HAND (Height Above Nearest Drainage) from a DEM.
@@ -374,14 +404,11 @@ pub fn hand_compute(tiff_bytes: &[u8], stream_threshold: f64) -> Result<Vec<u8>,
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
     let filled = fill_sinks(&dem, FillSinksParams::default())
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let fdir = flow_direction(&filled)
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let facc = flow_accumulation(&fdir)
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let fdir = flow_direction(&filled).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let facc = flow_accumulation(&fdir).map_err(|e| JsValue::from_str(&e.to_string()))?;
     let result = compute_hand(&dem, &fdir, &facc, HandParams { stream_threshold })
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    write_geotiff_to_buffer(&result, None)
-        .map_err(|e| JsValue::from_str(&e.to_string()))
+    write_geotiff_to_buffer(&result, None).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 // ===========================================================================
@@ -395,10 +422,8 @@ pub fn ndvi(nir_bytes: &[u8], red_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
     let red = read_geotiff_from_buffer::<f64>(red_bytes, None)
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let result = compute_ndvi(&nir, &red)
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    write_geotiff_to_buffer(&result, None)
-        .map_err(|e| JsValue::from_str(&e.to_string()))
+    let result = compute_ndvi(&nir, &red).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    write_geotiff_to_buffer(&result, None).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 /// Compute NDWI (Normalized Difference Water Index) from Green and NIR bands.
@@ -408,10 +433,8 @@ pub fn ndwi(green_bytes: &[u8], nir_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
     let nir = read_geotiff_from_buffer::<f64>(nir_bytes, None)
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let result = compute_ndwi(&green, &nir)
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    write_geotiff_to_buffer(&result, None)
-        .map_err(|e| JsValue::from_str(&e.to_string()))
+    let result = compute_ndwi(&green, &nir).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    write_geotiff_to_buffer(&result, None).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 /// Compute SAVI (Soil-Adjusted Vegetation Index). `l_factor`: soil adjustment (default 0.5).
@@ -423,8 +446,7 @@ pub fn savi(nir_bytes: &[u8], red_bytes: &[u8], l_factor: f64) -> Result<Vec<u8>
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
     let result = compute_savi(&nir, &red, SaviParams { l_factor })
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    write_geotiff_to_buffer(&result, None)
-        .map_err(|e| JsValue::from_str(&e.to_string()))
+    write_geotiff_to_buffer(&result, None).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 /// Compute generic Normalized Difference Index: (A - B) / (A + B).
@@ -434,10 +456,8 @@ pub fn normalized_diff(a_bytes: &[u8], b_bytes: &[u8]) -> Result<Vec<u8>, JsValu
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
     let b = read_geotiff_from_buffer::<f64>(b_bytes, None)
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let result = normalized_difference(&a, &b)
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    write_geotiff_to_buffer(&result, None)
-        .map_err(|e| JsValue::from_str(&e.to_string()))
+    let result = normalized_difference(&a, &b).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    write_geotiff_to_buffer(&result, None).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 /// Helper: two-band spectral index. Loads the two GeoTIFFs, applies `f`, writes result.
@@ -447,10 +467,8 @@ macro_rules! two_band_index {
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
         let b = read_geotiff_from_buffer::<f64>($b, None)
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        let result = ($f)(&a, &b)
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        write_geotiff_to_buffer(&result, None)
-            .map_err(|e| JsValue::from_str(&e.to_string()))
+        let result = ($f)(&a, &b).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        write_geotiff_to_buffer(&result, None).map_err(|e| JsValue::from_str(&e.to_string()))
     }};
 }
 
@@ -505,9 +523,7 @@ pub fn evi2(nir_bytes: &[u8], red_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
 /// EVI (Enhanced Vegetation Index) from NIR, Red, and Blue bands.
 /// Uses default EVI coefficients (G=2.5, L=1, C1=6, C2=7.5).
 #[wasm_bindgen]
-pub fn evi(
-    nir_bytes: &[u8], red_bytes: &[u8], blue_bytes: &[u8],
-) -> Result<Vec<u8>, JsValue> {
+pub fn evi(nir_bytes: &[u8], red_bytes: &[u8], blue_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
     let nir = read_geotiff_from_buffer::<f64>(nir_bytes, None)
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
     let red = read_geotiff_from_buffer::<f64>(red_bytes, None)
@@ -516,14 +532,16 @@ pub fn evi(
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
     let result = compute_evi(&nir, &red, &blue, EviParams::default())
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    write_geotiff_to_buffer(&result, None)
-        .map_err(|e| JsValue::from_str(&e.to_string()))
+    write_geotiff_to_buffer(&result, None).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 /// BSI (Bare Soil Index) from SWIR, Red, NIR, and Blue bands.
 #[wasm_bindgen]
 pub fn bsi(
-    swir_bytes: &[u8], red_bytes: &[u8], nir_bytes: &[u8], blue_bytes: &[u8],
+    swir_bytes: &[u8],
+    red_bytes: &[u8],
+    nir_bytes: &[u8],
+    blue_bytes: &[u8],
 ) -> Result<Vec<u8>, JsValue> {
     let swir = read_geotiff_from_buffer::<f64>(swir_bytes, None)
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
@@ -533,10 +551,9 @@ pub fn bsi(
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
     let blue = read_geotiff_from_buffer::<f64>(blue_bytes, None)
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let result = compute_bsi(&swir, &red, &nir, &blue)
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    write_geotiff_to_buffer(&result, None)
-        .map_err(|e| JsValue::from_str(&e.to_string()))
+    let result =
+        compute_bsi(&swir, &red, &nir, &blue).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    write_geotiff_to_buffer(&result, None).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
 // ===========================================================================
@@ -579,7 +596,12 @@ pub fn morph_closing(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValu
 #[wasm_bindgen]
 pub fn focal_mean(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> {
     dem_op!(tiff_bytes, |dem: &_| focal_statistics(
-        dem, FocalParams { statistic: FocalStatistic::Mean, radius, circular: false }
+        dem,
+        FocalParams {
+            statistic: FocalStatistic::Mean,
+            radius,
+            circular: false
+        }
     ))
 }
 
@@ -587,7 +609,12 @@ pub fn focal_mean(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> 
 #[wasm_bindgen]
 pub fn focal_std(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> {
     dem_op!(tiff_bytes, |dem: &_| focal_statistics(
-        dem, FocalParams { statistic: FocalStatistic::StdDev, radius, circular: false }
+        dem,
+        FocalParams {
+            statistic: FocalStatistic::StdDev,
+            radius,
+            circular: false
+        }
     ))
 }
 
@@ -595,7 +622,12 @@ pub fn focal_std(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> {
 #[wasm_bindgen]
 pub fn focal_range(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> {
     dem_op!(tiff_bytes, |dem: &_| focal_statistics(
-        dem, FocalParams { statistic: FocalStatistic::Range, radius, circular: false }
+        dem,
+        FocalParams {
+            statistic: FocalStatistic::Range,
+            radius,
+            circular: false
+        }
     ))
 }
 
@@ -603,7 +635,12 @@ pub fn focal_range(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue>
 #[wasm_bindgen]
 pub fn focal_min(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> {
     dem_op!(tiff_bytes, |dem: &_| focal_statistics(
-        dem, FocalParams { statistic: FocalStatistic::Min, radius, circular: false }
+        dem,
+        FocalParams {
+            statistic: FocalStatistic::Min,
+            radius,
+            circular: false
+        }
     ))
 }
 
@@ -611,7 +648,12 @@ pub fn focal_min(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> {
 #[wasm_bindgen]
 pub fn focal_max(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> {
     dem_op!(tiff_bytes, |dem: &_| focal_statistics(
-        dem, FocalParams { statistic: FocalStatistic::Max, radius, circular: false }
+        dem,
+        FocalParams {
+            statistic: FocalStatistic::Max,
+            radius,
+            circular: false
+        }
     ))
 }
 
@@ -619,7 +661,12 @@ pub fn focal_max(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> {
 #[wasm_bindgen]
 pub fn focal_sum(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> {
     dem_op!(tiff_bytes, |dem: &_| focal_statistics(
-        dem, FocalParams { statistic: FocalStatistic::Sum, radius, circular: false }
+        dem,
+        FocalParams {
+            statistic: FocalStatistic::Sum,
+            radius,
+            circular: false
+        }
     ))
 }
 
@@ -627,7 +674,12 @@ pub fn focal_sum(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> {
 #[wasm_bindgen]
 pub fn focal_median(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> {
     dem_op!(tiff_bytes, |dem: &_| focal_statistics(
-        dem, FocalParams { statistic: FocalStatistic::Median, radius, circular: false }
+        dem,
+        FocalParams {
+            statistic: FocalStatistic::Median,
+            radius,
+            circular: false
+        }
     ))
 }
 
@@ -635,16 +687,28 @@ pub fn focal_median(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue
 #[wasm_bindgen]
 pub fn focal_majority(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> {
     dem_op!(tiff_bytes, |dem: &_| focal_statistics(
-        dem, FocalParams { statistic: FocalStatistic::Majority, radius, circular: false }
+        dem,
+        FocalParams {
+            statistic: FocalStatistic::Majority,
+            radius,
+            circular: false
+        }
     ))
 }
 
 /// Focal percentile. `percentile` in [0, 100]; e.g. 50 = median, 25 = Q1.
 #[wasm_bindgen]
 pub fn focal_percentile(
-    tiff_bytes: &[u8], radius: usize, percentile: f64,
+    tiff_bytes: &[u8],
+    radius: usize,
+    percentile: f64,
 ) -> Result<Vec<u8>, JsValue> {
     dem_op!(tiff_bytes, |dem: &_| focal_statistics(
-        dem, FocalParams { statistic: FocalStatistic::Percentile(percentile), radius, circular: false }
+        dem,
+        FocalParams {
+            statistic: FocalStatistic::Percentile(percentile),
+            radius,
+            circular: false
+        }
     ))
 }

@@ -10,12 +10,12 @@
 //! Reference: Stage (1976) "An expression for the effect of aspect, slope,
 //! and habitat type on tree growth"
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
-use super::aspect::{aspect, AspectOutput};
+use super::aspect::{AspectOutput, aspect};
 
 /// Calculate northness from a DEM
 ///
@@ -130,8 +130,8 @@ pub fn northness_eastness(dem: &Raster<f64>) -> Result<(Raster<f64>, Raster<f64>
 
     let mut east = dem.with_same_meta::<f64>(rows, cols);
     east.set_nodata(Some(f64::NAN));
-    *east.data_mut() = Array2::from_shape_vec((rows, cols), east_data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *east.data_mut() =
+        Array2::from_shape_vec((rows, cols), east_data).map_err(|e| Error::Other(e.to_string()))?;
 
     Ok((north, east))
 }
@@ -180,9 +180,7 @@ impl surtgis_core::WindowAlgorithm for NorthnessStreaming {
                 }
 
                 let e = input[[ir, c]];
-                if e.is_nan()
-                    || nodata.map_or(false, |nd| (e - nd).abs() < f64::EPSILON)
-                {
+                if e.is_nan() || nodata.map_or(false, |nd| (e - nd).abs() < f64::EPSILON) {
                     output[[r, c]] = f64::NAN;
                     continue;
                 }
@@ -261,9 +259,7 @@ impl surtgis_core::WindowAlgorithm for EastnessStreaming {
                 }
 
                 let e = input[[ir, c]];
-                if e.is_nan()
-                    || nodata.map_or(false, |nd| (e - nd).abs() < f64::EPSILON)
-                {
+                if e.is_nan() || nodata.map_or(false, |nd| (e - nd).abs() < f64::EPSILON) {
                     output[[r, c]] = f64::NAN;
                     continue;
                 }

@@ -65,10 +65,7 @@ pub struct StacSearchResult {
 #[derive(Debug)]
 pub enum StacBrowserAction {
     Search,
-    Download {
-        item_idx: usize,
-        asset_key: String,
-    },
+    Download { item_idx: usize, asset_key: String },
     UseMapExtent,
     None,
 }
@@ -153,15 +150,24 @@ fn show_stac_browser_inner(ui: &mut Ui, state: &mut StacBrowserState) -> StacBro
                     _ => "Custom",
                 })
                 .show_ui(ui, |ui| {
-                    if ui.selectable_label(state.catalog_idx == 0, "Planetary Computer").clicked() {
+                    if ui
+                        .selectable_label(state.catalog_idx == 0, "Planetary Computer")
+                        .clicked()
+                    {
                         state.catalog_idx = 0;
                         state.catalog = StacCatalogChoice::PlanetaryComputer;
                     }
-                    if ui.selectable_label(state.catalog_idx == 1, "Earth Search").clicked() {
+                    if ui
+                        .selectable_label(state.catalog_idx == 1, "Earth Search")
+                        .clicked()
+                    {
                         state.catalog_idx = 1;
                         state.catalog = StacCatalogChoice::EarthSearch;
                     }
-                    if ui.selectable_label(state.catalog_idx == 2, "Custom URL").clicked() {
+                    if ui
+                        .selectable_label(state.catalog_idx == 2, "Custom URL")
+                        .clicked()
+                    {
                         state.catalog_idx = 2;
                         state.catalog = StacCatalogChoice::Custom(state.custom_url.clone());
                     }
@@ -228,7 +234,10 @@ fn show_stac_browser_inner(ui: &mut Ui, state: &mut StacBrowserState) -> StacBro
         // ── Search button ───────────────────────────────────────────
         let is_searching = state.search_state == StacSearchState::Searching;
         ui.horizontal(|ui| {
-            if ui.add_enabled(!is_searching, egui::Button::new("Search")).clicked() {
+            if ui
+                .add_enabled(!is_searching, egui::Button::new("Search"))
+                .clicked()
+            {
                 action = StacBrowserAction::Search;
             }
             if is_searching {
@@ -254,68 +263,56 @@ fn show_stac_browser_inner(ui: &mut Ui, state: &mut StacBrowserState) -> StacBro
                 ui.label(format!("{} results", state.results.len()));
             }
 
-            egui::ScrollArea::both()
-                .max_height(300.0)
-                .show(ui, |ui| {
-                    egui::Grid::new("stac_results")
-                        .striped(true)
-                        .num_columns(6)
-                        .min_col_width(60.0)
-                        .show(ui, |ui| {
-                            // Header
-                            ui.strong("Date");
-                            ui.strong("Cloud%");
-                            ui.strong("Platform");
-                            ui.strong("GSD");
-                            ui.strong("Collection");
-                            ui.strong("Action");
-                            ui.end_row();
+            egui::ScrollArea::both().max_height(300.0).show(ui, |ui| {
+                egui::Grid::new("stac_results")
+                    .striped(true)
+                    .num_columns(6)
+                    .min_col_width(60.0)
+                    .show(ui, |ui| {
+                        // Header
+                        ui.strong("Date");
+                        ui.strong("Cloud%");
+                        ui.strong("Platform");
+                        ui.strong("GSD");
+                        ui.strong("Collection");
+                        ui.strong("Action");
+                        ui.end_row();
 
-                            for (idx, item) in state.results.iter().enumerate() {
-                                let is_selected = state.selected_item == Some(idx);
+                        for (idx, item) in state.results.iter().enumerate() {
+                            let is_selected = state.selected_item == Some(idx);
 
-                                if ui
-                                    .selectable_label(is_selected, &item.datetime)
-                                    .clicked()
-                                {
-                                    state.selected_item = Some(idx);
-                                }
-
-                                ui.label(
-                                    item.cloud_cover
-                                        .map(|c| format!("{:.1}", c))
-                                        .unwrap_or_else(|| "—".into()),
-                                );
-                                ui.label(
-                                    item.platform
-                                        .as_deref()
-                                        .unwrap_or("—"),
-                                );
-                                ui.label(
-                                    item.gsd
-                                        .map(|g| format!("{:.1}m", g))
-                                        .unwrap_or_else(|| "—".into()),
-                                );
-                                ui.label(&item.collection);
-
-                                if item.cog_href.is_some() {
-                                    if ui.small_button("Download").clicked() {
-                                        action = StacBrowserAction::Download {
-                                            item_idx: idx,
-                                            asset_key: item
-                                                .cog_key
-                                                .clone()
-                                                .unwrap_or_default(),
-                                        };
-                                    }
-                                } else {
-                                    ui.label("—");
-                                }
-
-                                ui.end_row();
+                            if ui.selectable_label(is_selected, &item.datetime).clicked() {
+                                state.selected_item = Some(idx);
                             }
-                        });
-                });
+
+                            ui.label(
+                                item.cloud_cover
+                                    .map(|c| format!("{:.1}", c))
+                                    .unwrap_or_else(|| "—".into()),
+                            );
+                            ui.label(item.platform.as_deref().unwrap_or("—"));
+                            ui.label(
+                                item.gsd
+                                    .map(|g| format!("{:.1}m", g))
+                                    .unwrap_or_else(|| "—".into()),
+                            );
+                            ui.label(&item.collection);
+
+                            if item.cog_href.is_some() {
+                                if ui.small_button("Download").clicked() {
+                                    action = StacBrowserAction::Download {
+                                        item_idx: idx,
+                                        asset_key: item.cog_key.clone().unwrap_or_default(),
+                                    };
+                                }
+                            } else {
+                                ui.label("—");
+                            }
+
+                            ui.end_row();
+                        }
+                    });
+            });
 
             // ── Asset detail for selected item ──────────────────────
             if let Some(sel) = state.selected_item

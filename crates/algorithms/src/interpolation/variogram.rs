@@ -78,12 +78,8 @@ impl FittedVariogram {
                     c0 + c * (1.5 * hr - 0.5 * hr * hr * hr)
                 }
             }
-            VariogramModel::Exponential => {
-                c0 + c * (1.0 - (-3.0 * h / a).exp())
-            }
-            VariogramModel::Gaussian => {
-                c0 + c * (1.0 - (-3.0 * h * h / (a * a)).exp())
-            }
+            VariogramModel::Exponential => c0 + c * (1.0 - (-3.0 * h / a).exp()),
+            VariogramModel::Gaussian => c0 + c * (1.0 - (-3.0 * h * h / (a * a)).exp()),
         }
     }
 }
@@ -123,7 +119,9 @@ pub fn empirical_variogram(
 ) -> Result<EmpiricalVariogram> {
     let n = points.len();
     if n < 2 {
-        return Err(Error::Algorithm("Need at least 2 points for variogram".into()));
+        return Err(Error::Algorithm(
+            "Need at least 2 points for variogram".into(),
+        ));
     }
 
     // Compute max pairwise distance if not provided
@@ -226,10 +224,7 @@ pub fn fit_variogram(
     }
 
     let max_lag = valid.last().map(|(l, _, _)| *l).unwrap_or(1.0);
-    let max_sv = valid
-        .iter()
-        .map(|(_, sv, _)| *sv)
-        .fold(0.0_f64, f64::max);
+    let max_sv = valid.iter().map(|(_, sv, _)| *sv).fold(0.0_f64, f64::max);
 
     if max_sv <= 0.0 {
         return Err(Error::Algorithm("All semivariance values are zero".into()));
@@ -296,9 +291,7 @@ pub fn fit_variogram(
 }
 
 /// Fit all three models and return the best one (lowest RSS).
-pub fn fit_best_variogram(
-    empirical: &EmpiricalVariogram,
-) -> Result<FittedVariogram> {
+pub fn fit_best_variogram(empirical: &EmpiricalVariogram) -> Result<FittedVariogram> {
     let models = [
         VariogramModel::Spherical,
         VariogramModel::Exponential,
@@ -308,9 +301,10 @@ pub fn fit_best_variogram(
     let mut best: Option<FittedVariogram> = None;
     for &model in &models {
         if let Ok(fitted) = fit_variogram(empirical, model)
-            && best.as_ref().is_none_or(|b| fitted.rss < b.rss) {
-                best = Some(fitted);
-            }
+            && best.as_ref().is_none_or(|b| fitted.rss < b.rss)
+        {
+            best = Some(fitted);
+        }
     }
 
     best.ok_or_else(|| Error::Algorithm("Could not fit any variogram model".into()))
@@ -326,14 +320,19 @@ mod tests {
         let mut rng = seed;
 
         for _ in 0..n {
-            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let x = (rng >> 33) as f64 / (1u64 << 31) as f64 * 100.0;
-            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let y = (rng >> 33) as f64 / (1u64 << 31) as f64 * 100.0;
             // Value with spatial trend + noise
-            let value = 0.5 * x + 0.3 * y
-                + 10.0 * ((x / range).sin() + (y / range).sin());
-            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let value = 0.5 * x + 0.3 * y + 10.0 * ((x / range).sin() + (y / range).sin());
+            rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let noise = (rng >> 33) as f64 / (1u64 << 31) as f64 * 2.0 - 1.0;
             points.push(SamplePoint::new(x, y, value + noise));
         }
@@ -355,7 +354,9 @@ mod tests {
 
         // Semivariance should generally increase with distance
         // (for spatially correlated data)
-        let valid_sv: Vec<f64> = result.semivariance.iter()
+        let valid_sv: Vec<f64> = result
+            .semivariance
+            .iter()
             .copied()
             .filter(|v| !v.is_nan())
             .collect();
@@ -365,7 +366,8 @@ mod tests {
         assert!(
             valid_sv[0] < *valid_sv.last().unwrap(),
             "Semivariance should increase: first={:.2}, last={:.2}",
-            valid_sv[0], valid_sv.last().unwrap()
+            valid_sv[0],
+            valid_sv.last().unwrap()
         );
     }
 
@@ -378,10 +380,14 @@ mod tests {
     #[test]
     fn test_fit_spherical() {
         let points = generate_spatially_correlated(200, 15.0, 123);
-        let emp = empirical_variogram(&points, VariogramParams {
-            n_lags: 15,
-            ..Default::default()
-        }).unwrap();
+        let emp = empirical_variogram(
+            &points,
+            VariogramParams {
+                n_lags: 15,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let fitted = fit_variogram(&emp, VariogramModel::Spherical).unwrap();
 
@@ -454,7 +460,11 @@ mod tests {
 
         // Intermediate should be between nugget and sill
         let mid = model.evaluate(25.0);
-        assert!(mid > 1.0 && mid < 10.0, "Mid should be between nugget and sill: {:.2}", mid);
+        assert!(
+            mid > 1.0 && mid < 10.0,
+            "Mid should be between nugget and sill: {:.2}",
+            mid
+        );
     }
 
     #[test]

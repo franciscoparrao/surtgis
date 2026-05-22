@@ -3,14 +3,14 @@
 use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::path::PathBuf;
-use tracing::{info, Level};
+use tracing::{Level, info};
 use tracing_subscriber::FmtSubscriber;
 
 use surtgis_algorithms::imagery::{BandMathOp, ReclassEntry};
 use surtgis_algorithms::landscape::Connectivity;
 use surtgis_algorithms::morphology::StructuringElement;
 use surtgis_algorithms::terrain::AdvancedCurvatureType;
-use surtgis_core::io::{read_geotiff, write_geotiff, GeoTiffOptions};
+use surtgis_core::io::{GeoTiffOptions, read_geotiff, write_geotiff};
 
 #[cfg(feature = "cloud")]
 use surtgis_cloud::BBox;
@@ -63,10 +63,13 @@ pub fn write_opts(compress: bool) -> GeoTiffOptions {
     }
 }
 
-pub fn write_result(raster: &surtgis_core::Raster<f64>, path: &PathBuf, compress: bool) -> Result<()> {
+pub fn write_result(
+    raster: &surtgis_core::Raster<f64>,
+    path: &PathBuf,
+    compress: bool,
+) -> Result<()> {
     let pb = spinner("Writing output...");
-    write_geotiff(raster, path, Some(write_opts(compress)))
-        .context("Failed to write output")?;
+    write_geotiff(raster, path, Some(write_opts(compress))).context("Failed to write output")?;
     pb.finish_and_clear();
     Ok(())
 }
@@ -77,8 +80,7 @@ pub fn write_result_u8(
     compress: bool,
 ) -> Result<()> {
     let pb = spinner("Writing output...");
-    write_geotiff(raster, path, Some(write_opts(compress)))
-        .context("Failed to write output")?;
+    write_geotiff(raster, path, Some(write_opts(compress))).context("Failed to write output")?;
     pb.finish_and_clear();
     Ok(())
 }
@@ -89,8 +91,7 @@ pub fn write_result_i32(
     compress: bool,
 ) -> Result<()> {
     let pb = spinner("Writing output...");
-    write_geotiff(raster, path, Some(write_opts(compress)))
-        .context("Failed to write output")?;
+    write_geotiff(raster, path, Some(write_opts(compress))).context("Failed to write output")?;
     pb.finish_and_clear();
     Ok(())
 }

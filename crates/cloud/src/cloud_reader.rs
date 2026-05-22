@@ -3,8 +3,8 @@
 //! Provides a unified interface for reading 2D rasters from cloud sources,
 //! regardless of the underlying format.
 
-use surtgis_core::raster::{GeoTransform, Raster};
 use surtgis_core::CRS;
+use surtgis_core::raster::{GeoTransform, Raster};
 
 use crate::error::Result;
 use crate::tile_index::BBox;

@@ -66,7 +66,10 @@ pub enum CloudError {
 
     #[cfg(feature = "zarr")]
     #[error("zarr time out of range: {requested} (available: {available})")]
-    ZarrTimeOutOfRange { requested: String, available: String },
+    ZarrTimeOutOfRange {
+        requested: String,
+        available: String,
+    },
 }
 
 /// Result alias for cloud operations.

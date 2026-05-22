@@ -41,19 +41,19 @@ pub mod tags {
 /// TIFF data type IDs and their byte sizes.
 fn type_byte_size(type_id: u16) -> Option<usize> {
     match type_id {
-        1 => Some(1),   // BYTE
-        2 => Some(1),   // ASCII
-        3 => Some(2),   // SHORT
-        4 => Some(4),   // LONG
-        5 => Some(8),   // RATIONAL
-        6 => Some(1),   // SBYTE
-        7 => Some(1),   // UNDEFINED
-        8 => Some(2),   // SSHORT
-        9 => Some(4),   // SLONG
-        10 => Some(8),  // SRATIONAL
-        11 => Some(4),  // FLOAT
-        12 => Some(8),  // DOUBLE
-        16 => Some(8),  // LONG8 (BigTIFF)
+        1 => Some(1),  // BYTE
+        2 => Some(1),  // ASCII
+        3 => Some(2),  // SHORT
+        4 => Some(4),  // LONG
+        5 => Some(8),  // RATIONAL
+        6 => Some(1),  // SBYTE
+        7 => Some(1),  // UNDEFINED
+        8 => Some(2),  // SSHORT
+        9 => Some(4),  // SLONG
+        10 => Some(8), // SRATIONAL
+        11 => Some(4), // FLOAT
+        12 => Some(8), // DOUBLE
+        16 => Some(8), // LONG8 (BigTIFF)
         _ => None,
     }
 }
@@ -385,6 +385,9 @@ mod tests {
         assert_eq!(ifd.entries[0].type_id, 3);
         assert_eq!(ifd.entries[0].count, 1);
         assert!(ifd.entries[0].inline);
-        assert_eq!(inline_u16(TiffByteOrder::LittleEndian, &ifd.entries[0]), 512);
+        assert_eq!(
+            inline_u16(TiffByteOrder::LittleEndian, &ifd.entries[0]),
+            512
+        );
     }
 }

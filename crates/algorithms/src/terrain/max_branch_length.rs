@@ -14,9 +14,9 @@
 //!
 //! Reference: WhiteboxTools `MaxBranchLength`
 
+use crate::hydrology::{PriorityFloodParams, flow_direction, priority_flood};
 use ndarray::Array2;
 use std::collections::VecDeque;
-use crate::hydrology::{priority_flood, flow_direction, PriorityFloodParams};
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -34,16 +34,28 @@ const D8_OFFSETS: [(isize, isize); 8] = [
 
 /// Distance for each D8 direction (1.0 for cardinal, sqrt(2) for diagonal)
 const D8_DIST: [f64; 8] = [
-    1.0, std::f64::consts::SQRT_2, 1.0, std::f64::consts::SQRT_2,
-    1.0, std::f64::consts::SQRT_2, 1.0, std::f64::consts::SQRT_2,
+    1.0,
+    std::f64::consts::SQRT_2,
+    1.0,
+    std::f64::consts::SQRT_2,
+    1.0,
+    std::f64::consts::SQRT_2,
+    1.0,
+    std::f64::consts::SQRT_2,
 ];
 
 /// Opposite direction: if a neighbor flows in direction d toward us,
 /// d's opposite tells us which neighbor that is.
 fn opposite_dir(d: u8) -> u8 {
     match d {
-        1 => 5, 2 => 6, 3 => 7, 4 => 8,
-        5 => 1, 6 => 2, 7 => 3, 8 => 4,
+        1 => 5,
+        2 => 6,
+        3 => 7,
+        4 => 8,
+        5 => 1,
+        6 => 2,
+        7 => 3,
+        8 => 4,
         _ => 0,
     }
 }
@@ -162,7 +174,11 @@ mod tests {
         let v = result.get(5, 5).unwrap();
         // After priority flood with epsilon, there's a gradient toward boundary
         // so max_branch should be small
-        assert!(v < 20.0, "Flat DEM should have small branch length, got {}", v);
+        assert!(
+            v < 20.0,
+            "Flat DEM should have small branch length, got {}",
+            v
+        );
     }
 
     #[test]
@@ -180,7 +196,12 @@ mod tests {
         let result = max_branch_length(&dem).unwrap();
         let top = result.get(0, 5).unwrap();
         let bottom = result.get(9, 5).unwrap();
-        assert!(bottom > top, "Bottom should have longer branch ({}) than top ({})", bottom, top);
+        assert!(
+            bottom > top,
+            "Bottom should have longer branch ({}) than top ({})",
+            bottom,
+            top
+        );
     }
 
     #[test]
@@ -200,7 +221,13 @@ mod tests {
             for c in 0..15 {
                 let v = result.get(r, c).unwrap();
                 if !v.is_nan() {
-                    assert!(v >= 0.0, "Branch length should be >= 0, got {} at ({},{})", v, r, c);
+                    assert!(
+                        v >= 0.0,
+                        "Branch length should be >= 0, got {} at ({},{})",
+                        v,
+                        r,
+                        c
+                    );
                 }
             }
         }

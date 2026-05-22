@@ -124,7 +124,8 @@ impl Workspace {
 
     /// Get the active dataset mutably.
     pub fn active_mut(&mut self) -> Option<&mut Dataset> {
-        self.active_dataset.and_then(|id| self.datasets.get_mut(&id))
+        self.active_dataset
+            .and_then(|id| self.datasets.get_mut(&id))
     }
 
     /// Remove a dataset.
@@ -161,11 +162,7 @@ impl Workspace {
     pub fn dataset_names(&self) -> Vec<(DatasetId, String)> {
         self.layer_order
             .iter()
-            .filter_map(|id| {
-                self.datasets
-                    .get(id)
-                    .map(|d| (*id, d.name.clone()))
-            })
+            .filter_map(|id| self.datasets.get(id).map(|d| (*id, d.name.clone())))
             .collect()
     }
 }

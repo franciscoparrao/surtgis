@@ -14,8 +14,8 @@
 //! Reference: Mardia (1972) circular statistics.
 //! WhiteboxTools `CircularVarianceOfAspect`
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -51,9 +51,7 @@ pub fn circular_variance_aspect(
 
             for (col, out) in row_data.iter_mut().enumerate() {
                 let center = unsafe { dem.get_unchecked(row, col) };
-                if center.is_nan()
-                    || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON)
-                {
+                if center.is_nan() || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON) {
                     continue;
                 }
 
@@ -61,8 +59,10 @@ pub fn circular_variance_aspect(
                 let ci = col as isize;
                 // Need radius + 1 for computing aspect (3x3 stencil) at window edges
                 let border = r + 1;
-                if ri < border || ri >= rows as isize - border
-                    || ci < border || ci >= cols as isize - border
+                if ri < border
+                    || ri >= rows as isize - border
+                    || ci < border
+                    || ci >= cols as isize - border
                 {
                     continue;
                 }
@@ -78,9 +78,7 @@ pub fn circular_variance_aspect(
 
                         // Compute aspect at (nr, nc) using Horn's 3x3 stencil
                         let nv = unsafe { dem.get_unchecked(nr, nc) };
-                        if nv.is_nan()
-                            || nodata.is_some_and(|nd| (nv - nd).abs() < f64::EPSILON)
-                        {
+                        if nv.is_nan() || nodata.is_some_and(|nd| (nv - nd).abs() < f64::EPSILON) {
                             continue;
                         }
 
@@ -91,14 +89,14 @@ pub fn circular_variance_aspect(
 
                         // Horn's method for dz/dx and dz/dy (cell_size cancels for aspect)
                         let z = |r: usize, c: usize| unsafe { dem.get_unchecked(r, c) };
-                        let dzdx = (
-                            z(nr - 1, nc + 1) + 2.0 * z(nr, nc + 1) + z(nr + 1, nc + 1)
-                            - z(nr - 1, nc - 1) - 2.0 * z(nr, nc - 1) - z(nr + 1, nc - 1)
-                        );
-                        let dzdy = (
-                            z(nr + 1, nc - 1) + 2.0 * z(nr + 1, nc) + z(nr + 1, nc + 1)
-                            - z(nr - 1, nc - 1) - 2.0 * z(nr - 1, nc) - z(nr - 1, nc + 1)
-                        );
+                        let dzdx = (z(nr - 1, nc + 1) + 2.0 * z(nr, nc + 1) + z(nr + 1, nc + 1)
+                            - z(nr - 1, nc - 1)
+                            - 2.0 * z(nr, nc - 1)
+                            - z(nr + 1, nc - 1));
+                        let dzdy = (z(nr + 1, nc - 1) + 2.0 * z(nr + 1, nc) + z(nr + 1, nc + 1)
+                            - z(nr - 1, nc - 1)
+                            - 2.0 * z(nr - 1, nc)
+                            - z(nr - 1, nc + 1));
 
                         // Flat check
                         if dzdx.abs() < 1e-10 && dzdy.abs() < 1e-10 {
@@ -185,8 +183,7 @@ impl surtgis_core::WindowAlgorithm for CircularVarianceStreaming {
                 }
 
                 let center = input[[ir, c]];
-                if center.is_nan()
-                    || nodata.map_or(false, |nd| (center - nd).abs() < f64::EPSILON)
+                if center.is_nan() || nodata.map_or(false, |nd| (center - nd).abs() < f64::EPSILON)
                 {
                     output[[row, c]] = f64::NAN;
                     continue;
@@ -202,8 +199,7 @@ impl surtgis_core::WindowAlgorithm for CircularVarianceStreaming {
                         let nc = (c as isize + dc) as usize;
 
                         let nv = input[[nr, nc]];
-                        if nv.is_nan()
-                            || nodata.map_or(false, |nd| (nv - nd).abs() < f64::EPSILON)
+                        if nv.is_nan() || nodata.map_or(false, |nd| (nv - nd).abs() < f64::EPSILON)
                         {
                             continue;
                         }
@@ -212,14 +208,20 @@ impl surtgis_core::WindowAlgorithm for CircularVarianceStreaming {
                             continue;
                         }
 
-                        let dzdx = (
-                            input[[nr - 1, nc + 1]] + 2.0 * input[[nr, nc + 1]] + input[[nr + 1, nc + 1]]
-                            - input[[nr - 1, nc - 1]] - 2.0 * input[[nr, nc - 1]] - input[[nr + 1, nc - 1]]
-                        ) / 8.0;
-                        let dzdy = (
-                            input[[nr + 1, nc - 1]] + 2.0 * input[[nr + 1, nc]] + input[[nr + 1, nc + 1]]
-                            - input[[nr - 1, nc - 1]] - 2.0 * input[[nr - 1, nc]] - input[[nr - 1, nc + 1]]
-                        ) / 8.0;
+                        let dzdx = (input[[nr - 1, nc + 1]]
+                            + 2.0 * input[[nr, nc + 1]]
+                            + input[[nr + 1, nc + 1]]
+                            - input[[nr - 1, nc - 1]]
+                            - 2.0 * input[[nr, nc - 1]]
+                            - input[[nr + 1, nc - 1]])
+                            / 8.0;
+                        let dzdy = (input[[nr + 1, nc - 1]]
+                            + 2.0 * input[[nr + 1, nc]]
+                            + input[[nr + 1, nc + 1]]
+                            - input[[nr - 1, nc - 1]]
+                            - 2.0 * input[[nr - 1, nc]]
+                            - input[[nr - 1, nc + 1]])
+                            / 8.0;
 
                         if dzdx.abs() < 1e-10 && dzdy.abs() < 1e-10 {
                             continue;
@@ -284,8 +286,13 @@ mod tests {
             for c in 5..15 {
                 let v = result.get(r, c).unwrap();
                 if !v.is_nan() {
-                    assert!(v >= -0.001 && v <= 1.001,
-                        "CV should be [0,1], got {} at ({},{})", v, r, c);
+                    assert!(
+                        v >= -0.001 && v <= 1.001,
+                        "CV should be [0,1], got {} at ({},{})",
+                        v,
+                        r,
+                        c
+                    );
                 }
             }
         }

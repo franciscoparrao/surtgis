@@ -37,11 +37,10 @@ pub fn simplify_dp(geom: &Geometry<f64>, tolerance: f64) -> Geometry<f64> {
             Geometry::MultiLineString(MultiLineString::new(simplified))
         }
         Geometry::MultiPolygon(mp) => {
-            let simplified: Vec<Polygon<f64>> = mp
-                .0
-                .iter()
-                .map(|p| simplify_polygon_dp(p, tolerance))
-                .collect();
+            let simplified: Vec<Polygon<f64>> =
+                mp.0.iter()
+                    .map(|p| simplify_polygon_dp(p, tolerance))
+                    .collect();
             Geometry::MultiPolygon(MultiPolygon::new(simplified))
         }
         other => other.clone(),
@@ -77,11 +76,10 @@ pub fn simplify_vw(geom: &Geometry<f64>, tolerance: f64) -> Geometry<f64> {
             Geometry::MultiLineString(MultiLineString::new(simplified))
         }
         Geometry::MultiPolygon(mp) => {
-            let simplified: Vec<Polygon<f64>> = mp
-                .0
-                .iter()
-                .map(|p| simplify_polygon_vw(p, tolerance))
-                .collect();
+            let simplified: Vec<Polygon<f64>> =
+                mp.0.iter()
+                    .map(|p| simplify_polygon_vw(p, tolerance))
+                    .collect();
             Geometry::MultiPolygon(MultiPolygon::new(simplified))
         }
         other => other.clone(),
@@ -107,11 +105,11 @@ mod tests {
         // A zigzag line with small deviations
         LineString::from(vec![
             (0.0, 0.0),
-            (1.0, 0.1),  // small deviation
+            (1.0, 0.1), // small deviation
             (2.0, 0.0),
             (3.0, -0.05), // tiny deviation
             (4.0, 0.0),
-            (5.0, 0.2),  // larger deviation
+            (5.0, 0.2), // larger deviation
             (6.0, 0.0),
             (7.0, 0.0),
             (8.0, 0.0),
@@ -179,7 +177,11 @@ mod tests {
         let simplified = simplify_dp(&Geometry::LineString(line), 0.0);
 
         if let Geometry::LineString(ls) = simplified {
-            assert_eq!(ls.0.len(), original_count, "Zero tolerance should keep all vertices");
+            assert_eq!(
+                ls.0.len(),
+                original_count,
+                "Zero tolerance should keep all vertices"
+            );
         }
     }
 

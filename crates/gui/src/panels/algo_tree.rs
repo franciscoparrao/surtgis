@@ -19,10 +19,8 @@ pub fn show_algo_tree(
         .auto_shrink([false, false])
         .show(ui, |ui| {
             for &category in AlgoCategory::ALL {
-                let algos: Vec<&AlgorithmEntry> = registry
-                    .iter()
-                    .filter(|a| a.category == category)
-                    .collect();
+                let algos: Vec<&AlgorithmEntry> =
+                    registry.iter().filter(|a| a.category == category).collect();
 
                 if algos.is_empty() {
                     continue;
@@ -32,10 +30,8 @@ pub fn show_algo_tree(
                     .default_open(true)
                     .show(ui, |ui| {
                         for algo in &algos {
-                            let is_selected = selected
-                                .as_ref()
-                                .map(|s| s == algo.id)
-                                .unwrap_or(false);
+                            let is_selected =
+                                selected.as_ref().map(|s| s == algo.id).unwrap_or(false);
 
                             let response = ui.selectable_label(is_selected, algo.name);
 

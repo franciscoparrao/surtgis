@@ -16,8 +16,8 @@
 //! Corripio, J.G. (2003). Vectorial algebra algorithms for calculating terrain
 //! parameters from DEMs and the position of the sun. *IJGIS*, 17(1), 1–23.
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -172,8 +172,16 @@ pub fn horizon_angles(dem: &Raster<f64>, params: HorizonParams) -> Result<Horizo
 
                 for (d, &(dr, dc)) in dir_vectors.iter().enumerate() {
                     let angle = trace_horizon(
-                        dem, row, col, z0, dr, dc,
-                        params.radius, cell_size, rows, cols,
+                        dem,
+                        row,
+                        col,
+                        z0,
+                        dr,
+                        dc,
+                        params.radius,
+                        cell_size,
+                        rows,
+                        cols,
                     );
                     row_data[d * cols + col] = angle;
                 }
@@ -242,10 +250,8 @@ pub fn horizon_angle_map(
                     continue;
                 }
 
-                *row_data_col = trace_horizon(
-                    dem, row, col, z0, dr, dc,
-                    radius, cell_size, rows, cols,
-                );
+                *row_data_col =
+                    trace_horizon(dem, row, col, z0, dr, dc, radius, cell_size, rows, cols);
             }
 
             row_data
@@ -369,10 +375,9 @@ fn build_lod_pyramid(dem: &Raster<f64>) -> Vec<LodLevel> {
                 // Max of valid values (NaN-aware)
                 let mut mx = f64::NAN;
                 for &v in &[v00, v01, v10, v11] {
-                    if !v.is_nan()
-                        && (mx.is_nan() || v > mx) {
-                            mx = v;
-                        }
+                    if !v.is_nan() && (mx.is_nan() || v > mx) {
+                        mx = v;
+                    }
                 }
                 new_data[r * new_cols + c] = mx;
             }
@@ -412,10 +417,15 @@ fn select_lod_level(distance_cells: f64, near_distance: usize, max_level: usize)
 #[inline]
 fn trace_horizon_lod(
     pyramid: &[LodLevel],
-    row: usize, col: usize, z0: f64,
-    dr_step: f64, dc_step: f64,
-    radius: usize, cell_size: f64,
-    rows: usize, cols: usize,
+    row: usize,
+    col: usize,
+    z0: f64,
+    dr_step: f64,
+    dc_step: f64,
+    radius: usize,
+    cell_size: f64,
+    rows: usize,
+    cols: usize,
     near_distance: usize,
 ) -> f64 {
     let max_level = pyramid.len() - 1;
@@ -520,8 +530,17 @@ pub fn horizon_angles_fast(dem: &Raster<f64>, params: FastHorizonParams) -> Resu
 
                 for (d, &(dr, dc)) in dir_vectors.iter().enumerate() {
                     let angle = trace_horizon_lod(
-                        &pyramid, row, col, z0, dr, dc,
-                        params.radius, cell_size, rows, cols, near,
+                        &pyramid,
+                        row,
+                        col,
+                        z0,
+                        dr,
+                        dc,
+                        params.radius,
+                        cell_size,
+                        rows,
+                        cols,
+                        near,
                     );
                     row_data[d * cols + col] = angle;
                 }
@@ -587,8 +606,17 @@ pub fn horizon_angle_map_fast(
                 }
 
                 *row_data_col = trace_horizon_lod(
-                    &pyramid, row, col, z0, dr, dc,
-                    radius, cell_size, rows, cols, near_distance,
+                    &pyramid,
+                    row,
+                    col,
+                    z0,
+                    dr,
+                    dc,
+                    radius,
+                    cell_size,
+                    rows,
+                    cols,
+                    near_distance,
                 );
             }
 
@@ -612,10 +640,15 @@ pub fn horizon_angle_map_fast(
 #[inline]
 fn trace_horizon(
     dem: &Raster<f64>,
-    row: usize, col: usize, z0: f64,
-    dr_step: f64, dc_step: f64,
-    radius: usize, cell_size: f64,
-    rows: usize, cols: usize,
+    row: usize,
+    col: usize,
+    z0: f64,
+    dr_step: f64,
+    dc_step: f64,
+    radius: usize,
+    cell_size: f64,
+    rows: usize,
+    cols: usize,
 ) -> f64 {
     let mut max_angle = 0.0_f64;
 
@@ -663,18 +696,23 @@ mod tests {
         let mut dem = Raster::filled(41, 41, 100.0_f64);
         dem.set_transform(GeoTransform::new(0.0, 41.0, 1.0, -1.0));
 
-        let result = horizon_angles_fast(&dem, FastHorizonParams {
-            radius: 20,
-            directions: 8,
-            near_distance: 8,
-        }).unwrap();
+        let result = horizon_angles_fast(
+            &dem,
+            FastHorizonParams {
+                radius: 20,
+                directions: 8,
+                near_distance: 8,
+            },
+        )
+        .unwrap();
 
         for d in 0..8 {
             let angle = result.get(d, 20, 20);
             assert!(
                 angle.abs() < 0.01,
                 "Fast: flat terrain dir {} should be ~0, got {:.4}",
-                d, angle
+                d,
+                angle
             );
         }
     }
@@ -687,22 +725,28 @@ mod tests {
             for col in 0..41 {
                 let dx = col as f64 - 20.0;
                 let dy = row as f64 - 20.0;
-                dem.set(row, col, (dx * dx + dy * dy).sqrt() * 10.0).unwrap();
+                dem.set(row, col, (dx * dx + dy * dy).sqrt() * 10.0)
+                    .unwrap();
             }
         }
 
-        let result = horizon_angles_fast(&dem, FastHorizonParams {
-            radius: 20,
-            directions: 8,
-            near_distance: 8,
-        }).unwrap();
+        let result = horizon_angles_fast(
+            &dem,
+            FastHorizonParams {
+                radius: 20,
+                directions: 8,
+                near_distance: 8,
+            },
+        )
+        .unwrap();
 
         for d in 0..8 {
             let angle = result.get(d, 20, 20);
             assert!(
                 angle > 0.1,
                 "Fast: pit center dir {} should be positive, got {:.4}",
-                d, angle
+                d,
+                angle
             );
         }
     }
@@ -726,16 +770,24 @@ mod tests {
         let radius = 25;
         let dirs = 8;
 
-        let standard = horizon_angles(&dem, HorizonParams {
-            radius,
-            directions: dirs,
-        }).unwrap();
+        let standard = horizon_angles(
+            &dem,
+            HorizonParams {
+                radius,
+                directions: dirs,
+            },
+        )
+        .unwrap();
 
-        let fast = horizon_angles_fast(&dem, FastHorizonParams {
-            radius,
-            directions: dirs,
-            near_distance: 8,
-        }).unwrap();
+        let fast = horizon_angles_fast(
+            &dem,
+            FastHorizonParams {
+                radius,
+                directions: dirs,
+                near_distance: 8,
+            },
+        )
+        .unwrap();
 
         // Fast uses LOD stepping that may miss the exact peak cell, so
         // results are approximate. For smooth terrain, the difference should
@@ -754,7 +806,8 @@ mod tests {
         assert!(
             max_diff < 0.15,
             "Fast vs standard max diff should be small, got {:.4} rad ({:.1}°)",
-            max_diff, max_diff.to_degrees()
+            max_diff,
+            max_diff.to_degrees()
         );
     }
 
@@ -766,7 +819,8 @@ mod tests {
             for col in 0..41 {
                 let dx = col as f64 - 20.0;
                 let dy = row as f64 - 20.0;
-                dem.set(row, col, (dx * dx + dy * dy).sqrt() * 10.0).unwrap();
+                dem.set(row, col, (dx * dx + dy * dy).sqrt() * 10.0)
+                    .unwrap();
             }
         }
 
@@ -785,7 +839,11 @@ mod tests {
         let pyramid = build_lod_pyramid(&dem);
 
         // 64 → 32 → 16 → 8 → 4 → 2 = 6 levels
-        assert!(pyramid.len() >= 5, "64×64 should produce >= 5 LOD levels, got {}", pyramid.len());
+        assert!(
+            pyramid.len() >= 5,
+            "64×64 should produce >= 5 LOD levels, got {}",
+            pyramid.len()
+        );
         assert_eq!(pyramid[0].rows, 64);
         assert_eq!(pyramid[0].cols, 64);
         assert_eq!(pyramid[0].scale, 1);
@@ -806,21 +864,49 @@ mod tests {
 
         // Level 1 (2x2 aggregation): cell (0,0) should have max=100
         let l1 = &pyramid[1];
-        assert_eq!(l1.get(0, 0), 100.0, "LOD level 1 should preserve max elevation");
+        assert_eq!(
+            l1.get(0, 0),
+            100.0,
+            "LOD level 1 should preserve max elevation"
+        );
     }
 
     #[test]
     fn test_fast_invalid_params() {
         let dem = Raster::filled(5, 5, 100.0_f64);
-        assert!(horizon_angles_fast(&dem, FastHorizonParams {
-            radius: 0, directions: 8, near_distance: 4
-        }).is_err());
-        assert!(horizon_angles_fast(&dem, FastHorizonParams {
-            radius: 10, directions: 0, near_distance: 4
-        }).is_err());
-        assert!(horizon_angles_fast(&dem, FastHorizonParams {
-            radius: 10, directions: 8, near_distance: 0
-        }).is_err());
+        assert!(
+            horizon_angles_fast(
+                &dem,
+                FastHorizonParams {
+                    radius: 0,
+                    directions: 8,
+                    near_distance: 4
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            horizon_angles_fast(
+                &dem,
+                FastHorizonParams {
+                    radius: 10,
+                    directions: 0,
+                    near_distance: 4
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            horizon_angles_fast(
+                &dem,
+                FastHorizonParams {
+                    radius: 10,
+                    directions: 8,
+                    near_distance: 0
+                }
+            )
+            .is_err()
+        );
         assert!(horizon_angle_map_fast(&dem, 0.0, 0, 4).is_err());
         assert!(horizon_angle_map_fast(&dem, 0.0, 10, 0).is_err());
     }
@@ -831,11 +917,15 @@ mod tests {
         dem.set_transform(GeoTransform::new(0.0, 21.0, 1.0, -1.0));
         dem.set(10, 10, f64::NAN).unwrap();
 
-        let result = horizon_angles_fast(&dem, FastHorizonParams {
-            radius: 10,
-            directions: 4,
-            near_distance: 4,
-        }).unwrap();
+        let result = horizon_angles_fast(
+            &dem,
+            FastHorizonParams {
+                radius: 10,
+                directions: 4,
+                near_distance: 4,
+            },
+        )
+        .unwrap();
 
         for d in 0..4 {
             assert!(
@@ -850,10 +940,14 @@ mod tests {
         let mut dem = Raster::filled(21, 21, 100.0_f64);
         dem.set_transform(GeoTransform::new(0.0, 21.0, 1.0, -1.0));
 
-        let result = horizon_angles(&dem, HorizonParams {
-            radius: 10,
-            directions: 8,
-        }).unwrap();
+        let result = horizon_angles(
+            &dem,
+            HorizonParams {
+                radius: 10,
+                directions: 8,
+            },
+        )
+        .unwrap();
 
         // Flat terrain: interior cells should have ~0 horizon angle
         for d in 0..8 {
@@ -861,7 +955,8 @@ mod tests {
             assert!(
                 angle.abs() < 0.01,
                 "Flat terrain should have ~0 horizon, dir {} got {:.4}",
-                d, angle
+                d,
+                angle
             );
         }
     }
@@ -875,14 +970,19 @@ mod tests {
             for col in 0..21 {
                 let dx = col as f64 - 10.0;
                 let dy = row as f64 - 10.0;
-                dem.set(row, col, (dx * dx + dy * dy).sqrt() * 10.0).unwrap();
+                dem.set(row, col, (dx * dx + dy * dy).sqrt() * 10.0)
+                    .unwrap();
             }
         }
 
-        let result = horizon_angles(&dem, HorizonParams {
-            radius: 10,
-            directions: 8,
-        }).unwrap();
+        let result = horizon_angles(
+            &dem,
+            HorizonParams {
+                radius: 10,
+                directions: 8,
+            },
+        )
+        .unwrap();
 
         // Center of pit should have positive horizon angles in all directions
         for d in 0..8 {
@@ -890,7 +990,8 @@ mod tests {
             assert!(
                 angle > 0.1,
                 "Pit center should have positive horizon angle, dir {} got {:.4}",
-                d, angle
+                d,
+                angle
             );
         }
     }
@@ -903,14 +1004,19 @@ mod tests {
         for row in 0..21 {
             for col in 0..21 {
                 let dist_from_center_row = (row as f64 - 10.0).abs();
-                dem.set(row, col, 100.0 - dist_from_center_row * 10.0).unwrap();
+                dem.set(row, col, 100.0 - dist_from_center_row * 10.0)
+                    .unwrap();
             }
         }
 
-        let result = horizon_angles(&dem, HorizonParams {
-            radius: 10,
-            directions: 4, // N, E, S, W
-        }).unwrap();
+        let result = horizon_angles(
+            &dem,
+            HorizonParams {
+                radius: 10,
+                directions: 4, // N, E, S, W
+            },
+        )
+        .unwrap();
 
         // Cell at row=5 is below the ridge (row=10).
         // Looking South (toward ridge) should have higher horizon than North (away).
@@ -921,7 +1027,8 @@ mod tests {
         assert!(
             south_angle > north_angle,
             "Looking toward ridge (S) should have higher horizon: N={:.4}, S={:.4}",
-            north_angle, south_angle
+            north_angle,
+            south_angle
         );
     }
 
@@ -933,14 +1040,19 @@ mod tests {
             for col in 0..21 {
                 let dx = col as f64 - 10.0;
                 let dy = row as f64 - 10.0;
-                dem.set(row, col, (dx * dx + dy * dy).sqrt() * 10.0).unwrap();
+                dem.set(row, col, (dx * dx + dy * dy).sqrt() * 10.0)
+                    .unwrap();
             }
         }
 
-        let result = horizon_angles(&dem, HorizonParams {
-            radius: 10,
-            directions: 8,
-        }).unwrap();
+        let result = horizon_angles(
+            &dem,
+            HorizonParams {
+                radius: 10,
+                directions: 8,
+            },
+        )
+        .unwrap();
 
         // For symmetric pit, interpolation at N (azimuth=0) should match dir 0
         let direct = result.get(0, 10, 10);
@@ -948,7 +1060,8 @@ mod tests {
         assert!(
             (direct - interpolated).abs() < 0.001,
             "Interpolation at exact azimuth should match: direct={:.4}, interp={:.4}",
-            direct, interpolated
+            direct,
+            interpolated
         );
 
         // Interpolation between two directions should be between them
@@ -960,7 +1073,8 @@ mod tests {
         assert!(
             (mid - expected).abs() < 0.01,
             "Mid-interpolation should be average: got {:.4}, expected {:.4}",
-            mid, expected
+            mid,
+            expected
         );
     }
 
@@ -972,7 +1086,8 @@ mod tests {
             for col in 0..21 {
                 let dx = col as f64 - 10.0;
                 let dy = row as f64 - 10.0;
-                dem.set(row, col, (dx * dx + dy * dy).sqrt() * 10.0).unwrap();
+                dem.set(row, col, (dx * dx + dy * dy).sqrt() * 10.0)
+                    .unwrap();
             }
         }
 
@@ -991,10 +1106,14 @@ mod tests {
         let mut dem = Raster::filled(11, 11, 100.0_f64);
         dem.set_transform(GeoTransform::new(0.0, 11.0, 1.0, -1.0));
 
-        let result = horizon_angles(&dem, HorizonParams {
-            radius: 5,
-            directions: 4,
-        }).unwrap();
+        let result = horizon_angles(
+            &dem,
+            HorizonParams {
+                radius: 5,
+                directions: 4,
+            },
+        )
+        .unwrap();
 
         let raster = result.to_raster(0);
         let (r, c) = raster.shape();
@@ -1002,14 +1121,36 @@ mod tests {
         assert_eq!(c, 11);
 
         let v = raster.get(5, 5).unwrap();
-        assert!(v.abs() < 0.01, "Flat terrain raster horizon should be ~0, got {:.4}", v);
+        assert!(
+            v.abs() < 0.01,
+            "Flat terrain raster horizon should be ~0, got {:.4}",
+            v
+        );
     }
 
     #[test]
     fn test_invalid_params() {
         let dem = Raster::filled(5, 5, 100.0_f64);
-        assert!(horizon_angles(&dem, HorizonParams { radius: 0, directions: 8 }).is_err());
-        assert!(horizon_angles(&dem, HorizonParams { radius: 10, directions: 0 }).is_err());
+        assert!(
+            horizon_angles(
+                &dem,
+                HorizonParams {
+                    radius: 0,
+                    directions: 8
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            horizon_angles(
+                &dem,
+                HorizonParams {
+                    radius: 10,
+                    directions: 0
+                }
+            )
+            .is_err()
+        );
         assert!(horizon_angle_map(&dem, 0.0, 0).is_err());
     }
 
@@ -1019,10 +1160,14 @@ mod tests {
         dem.set_transform(GeoTransform::new(0.0, 11.0, 1.0, -1.0));
         dem.set(5, 5, f64::NAN).unwrap();
 
-        let result = horizon_angles(&dem, HorizonParams {
-            radius: 5,
-            directions: 4,
-        }).unwrap();
+        let result = horizon_angles(
+            &dem,
+            HorizonParams {
+                radius: 5,
+                directions: 4,
+            },
+        )
+        .unwrap();
 
         for d in 0..4 {
             assert!(

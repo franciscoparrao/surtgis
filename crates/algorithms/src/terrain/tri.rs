@@ -20,8 +20,8 @@
 //!
 //! Reference: Riley, S.J., DeGloria, S.D., Elliot, R. (1999)
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Algorithm, Error, Result};
 
@@ -81,8 +81,7 @@ pub fn tri(dem: &Raster<f64>, params: TriParams) -> Result<Raster<f64>> {
 
             for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let center = unsafe { dem.get_unchecked(row, col) };
-                if center.is_nan() || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON)
-                {
+                if center.is_nan() || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON) {
                     continue;
                 }
 
@@ -103,8 +102,7 @@ pub fn tri(dem: &Raster<f64>, params: TriParams) -> Result<Raster<f64>> {
                         let nr = (ri + dr) as usize;
                         let nc = (ci + dc) as usize;
                         let nv = unsafe { dem.get_unchecked(nr, nc) };
-                        if !nv.is_nan() && nodata.is_none_or(|nd| (nv - nd).abs() >= f64::EPSILON)
-                        {
+                        if !nv.is_nan() && nodata.is_none_or(|nd| (nv - nd).abs() >= f64::EPSILON) {
                             let diff = nv - center;
                             sum_sq += diff * diff;
                             count += 1;
@@ -123,8 +121,8 @@ pub fn tri(dem: &Raster<f64>, params: TriParams) -> Result<Raster<f64>> {
 
     let mut output = dem.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() =
-        Array2::from_shape_vec((rows, cols), output_data).map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() = Array2::from_shape_vec((rows, cols), output_data)
+        .map_err(|e| Error::Other(e.to_string()))?;
 
     Ok(output)
 }
@@ -181,8 +179,7 @@ impl surtgis_core::WindowAlgorithm for TriStreaming {
                 }
 
                 let center = input[[ir, c]];
-                if center.is_nan()
-                    || nodata.map_or(false, |nd| (center - nd).abs() < f64::EPSILON)
+                if center.is_nan() || nodata.map_or(false, |nd| (center - nd).abs() < f64::EPSILON)
                 {
                     output[[r, c]] = f64::NAN;
                     continue;
@@ -200,8 +197,7 @@ impl surtgis_core::WindowAlgorithm for TriStreaming {
                         let nr = (ir as isize + dr) as usize;
                         let nc = (ci + dc) as usize;
                         let nv = input[[nr, nc]];
-                        if !nv.is_nan()
-                            && nodata.map_or(true, |nd| (nv - nd).abs() >= f64::EPSILON)
+                        if !nv.is_nan() && nodata.map_or(true, |nd| (nv - nd).abs() >= f64::EPSILON)
                         {
                             let diff = nv - center;
                             sum_sq += diff * diff;
@@ -261,7 +257,8 @@ mod tests {
         assert!(
             (val - expected).abs() < 1e-6,
             "Expected TRI≈{:.2} for checkerboard, got {}",
-            expected, val
+            expected,
+            val
         );
     }
 

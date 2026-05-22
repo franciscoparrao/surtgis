@@ -117,18 +117,42 @@ where
             if epsg == 4326 {
                 // Geographic CRS (WGS84)
                 vec![
-                    1, 1, 0, 3, // Version 1.1.0, 3 keys
-                    1024, 0, 1, 2, // GTModelTypeGeoKey = ModelTypeGeographic
-                    1025, 0, 1, 1, // GTRasterTypeGeoKey = RasterPixelIsArea
-                    2048, 0, 1, epsg as u16, // GeographicTypeGeoKey
+                    1,
+                    1,
+                    0,
+                    3, // Version 1.1.0, 3 keys
+                    1024,
+                    0,
+                    1,
+                    2, // GTModelTypeGeoKey = ModelTypeGeographic
+                    1025,
+                    0,
+                    1,
+                    1, // GTRasterTypeGeoKey = RasterPixelIsArea
+                    2048,
+                    0,
+                    1,
+                    epsg as u16, // GeographicTypeGeoKey
                 ]
             } else {
                 // Projected CRS (e.g., UTM)
                 vec![
-                    1, 1, 0, 3, // Version 1.1.0, 3 keys
-                    1024, 0, 1, 1, // GTModelTypeGeoKey = ModelTypeProjected
-                    1025, 0, 1, 1, // GTRasterTypeGeoKey = RasterPixelIsArea
-                    3072, 0, 1, epsg as u16, // ProjectedCSTypeGeoKey
+                    1,
+                    1,
+                    0,
+                    3, // Version 1.1.0, 3 keys
+                    1024,
+                    0,
+                    1,
+                    1, // GTModelTypeGeoKey = ModelTypeProjected
+                    1025,
+                    0,
+                    1,
+                    1, // GTRasterTypeGeoKey = RasterPixelIsArea
+                    3072,
+                    0,
+                    1,
+                    epsg as u16, // ProjectedCSTypeGeoKey
                 ]
             }
         } else {

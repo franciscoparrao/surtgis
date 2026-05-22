@@ -5,120 +5,161 @@
 
 use numpy::ndarray::Array2;
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray2, PyUntypedArrayMethods};
-use pyo3::prelude::*;
 use pyo3::exceptions::PyValueError;
+use pyo3::prelude::*;
 
-use surtgis_core::raster::{GeoTransform, Raster};
-use surtgis_algorithms::terrain::{
-    aspect, hillshade, curvature,
-    slope as compute_slope,
-    tpi as compute_tpi, tri as compute_tri,
-    twi as compute_twi,
-    geomorphons as compute_geomorphons,
-    northness, eastness,
-    dev as compute_dev,
-    multidirectional_hillshade as compute_multi_hillshade,
-    shape_index as compute_shape_index,
-    curvedness as compute_curvedness,
-    sky_view_factor as compute_svf,
-    uncertainty as compute_uncertainty,
-    viewshed as compute_viewshed,
-    positive_openness, negative_openness,
-    mrvbf as compute_mrvbf,
-    vrm as compute_vrm,
-    advanced_curvatures,
-    AspectOutput, HillshadeParams, SlopeParams, SlopeUnits,
-    CurvatureParams, CurvatureType, CurvatureFormula, DerivativeMethod,
-    TpiParams, TriParams, GeomorphonParams, DevParams,
-    MultiHillshadeParams, SvfParams, OpennessParams, MrvbfParams, VrmParams,
-    UncertaintyParams, ViewshedParams, AdvancedCurvatureType,
-    // New terrain imports
-    solar_radiation as compute_solar_radiation, SolarParams,
-    surface_area_ratio as compute_surface_area_ratio, SarParams,
-    valley_depth as compute_valley_depth,
-    convergence_index as compute_convergence_index, ConvergenceParams,
-    landform_classification as compute_landform_classification, LandformParams,
-    wind_exposure as compute_wind_exposure, WindExposureParams,
-    contour_lines as compute_contour_lines, ContourParams,
-    cost_distance as compute_cost_distance, CostDistanceParams,
-    feature_preserving_smoothing as compute_fps, SmoothingParams,
-    gaussian_smoothing as compute_gaussian_smoothing, GaussianSmoothingParams,
-    log_transform as compute_log_transform,
-    accumulation_zones as compute_accumulation_zones,
-    viewshed_xdraw as compute_viewshed_xdraw,
-    horizon_angle_map as compute_horizon_angle_map,
+use surtgis_algorithms::classification::{
+    IsodataParams, KmeansParams, isodata as compute_isodata, kmeans_raster as compute_kmeans,
 };
 use surtgis_algorithms::hydrology::{
-    fill_sinks, flow_direction, flow_accumulation,
+    AdaptiveMfdParams,
+    BreachParams,
+    FillSinksParams,
+    HandParams,
+    MfdParams,
+    PriorityFloodParams,
+    StreamNetworkParams,
+    TfgaParams,
+    WatershedParams,
+    breach_depressions,
+    fill_sinks,
+    flow_accumulation,
+    flow_accumulation_mfd,
+    flow_accumulation_mfd_adaptive as compute_adaptive_mfd,
+    flow_accumulation_tfga as compute_tfga,
+    flow_direction,
     flow_direction_dinf as compute_flow_direction_dinf,
-    priority_flood, hand as compute_hand,
-    breach_depressions, flow_accumulation_mfd,
-    stream_network as compute_stream_network,
-    FillSinksParams, PriorityFloodParams, HandParams,
-    BreachParams, MfdParams, StreamNetworkParams,
-    // New hydrology imports
-    watershed as compute_watershed, WatershedParams,
-    flow_accumulation_tfga as compute_tfga, TfgaParams,
-    flow_accumulation_mfd_adaptive as compute_adaptive_mfd, AdaptiveMfdParams,
+    flow_path_length as compute_flow_path_length,
+    hand as compute_hand,
+    priority_flood,
     priority_flood_flat as compute_priority_flood_flat,
     strahler_order as compute_strahler_order,
-    flow_path_length as compute_flow_path_length,
+    stream_network as compute_stream_network,
+    // New hydrology imports
+    watershed as compute_watershed,
 };
 use surtgis_algorithms::imagery::{
-    ndvi as compute_ndvi, ndwi as compute_ndwi, savi as compute_savi,
-    normalized_difference,
+    EviParams,
     SaviParams,
-    // New imagery imports
-    mndwi as compute_mndwi, nbr as compute_nbr,
-    evi as compute_evi, EviParams,
     bsi as compute_bsi,
-    ndre as compute_ndre, gndvi as compute_gndvi, ngrdi as compute_ngrdi,
+    evi as compute_evi,
+    evi2 as compute_evi2,
+    gndvi as compute_gndvi,
+    // New imagery imports
+    mndwi as compute_mndwi,
+    msavi as compute_msavi,
+    nbr as compute_nbr,
+    ndbi as compute_ndbi,
+    ndmi as compute_ndmi,
+    ndre as compute_ndre,
+    ndsi as compute_ndsi,
+    ndvi as compute_ndvi,
+    ndwi as compute_ndwi,
+    ngrdi as compute_ngrdi,
+    normalized_difference,
     reci as compute_reci,
-    ndsi as compute_ndsi, ndbi as compute_ndbi, ndmi as compute_ndmi,
-    msavi as compute_msavi, evi2 as compute_evi2,
-};
-use surtgis_algorithms::morphology::{
-    erode as compute_erode, dilate as compute_dilate,
-    opening as compute_opening, closing as compute_closing,
-    gradient as compute_gradient, top_hat as compute_top_hat, black_hat as compute_black_hat,
-    StructuringElement,
-};
-use surtgis_algorithms::statistics::{
-    focal_statistics, FocalStatistic, FocalParams,
-};
-use surtgis_algorithms::classification::{
-    kmeans_raster as compute_kmeans, KmeansParams,
-    isodata as compute_isodata, IsodataParams,
+    savi as compute_savi,
 };
 use surtgis_algorithms::interpolation::{
-    idw as compute_idw, IdwParams, SamplePoint,
-    nearest_neighbor as compute_nearest_neighbor, NearestNeighborParams,
-    natural_neighbor as compute_natural_neighbor, NaturalNeighborParams,
+    IdwParams, NaturalNeighborParams, NearestNeighborParams, SamplePoint, idw as compute_idw,
+    natural_neighbor as compute_natural_neighbor, nearest_neighbor as compute_nearest_neighbor,
 };
 use surtgis_algorithms::landscape::{
-    label_patches as compute_label_patches, Connectivity,
-    shannon_diversity as compute_shannon_diversity,
-    simpson_diversity as compute_simpson_diversity,
-    patch_density as compute_patch_density,
-    DiversityParams,
-    landscape_metrics as compute_landscape_metrics,
+    Connectivity, DiversityParams, label_patches as compute_label_patches,
+    landscape_metrics as compute_landscape_metrics, patch_density as compute_patch_density,
+    shannon_diversity as compute_shannon_diversity, simpson_diversity as compute_simpson_diversity,
+};
+use surtgis_algorithms::morphology::{
+    StructuringElement, black_hat as compute_black_hat, closing as compute_closing,
+    dilate as compute_dilate, erode as compute_erode, gradient as compute_gradient,
+    opening as compute_opening, top_hat as compute_top_hat,
+};
+use surtgis_algorithms::statistics::{FocalParams, FocalStatistic, focal_statistics};
+use surtgis_algorithms::terrain::{
+    AdvancedCurvatureType,
+    AspectOutput,
+    ContourParams,
+    ConvergenceParams,
+    CostDistanceParams,
+    CurvatureFormula,
+    CurvatureParams,
+    CurvatureType,
+    DerivativeMethod,
+    DevParams,
+    GaussianSmoothingParams,
+    GeomorphonParams,
+    HillshadeParams,
+    LandformParams,
+    MrvbfParams,
+    MultiHillshadeParams,
+    OpennessParams,
+    SarParams,
+    SlopeParams,
+    SlopeUnits,
+    SmoothingParams,
+    SolarParams,
+    SvfParams,
+    TpiParams,
+    TriParams,
+    UncertaintyParams,
+    ViewshedParams,
+    VrmParams,
+    WindExposureParams,
+    accumulation_zones as compute_accumulation_zones,
+    advanced_curvatures,
+    aspect,
+    contour_lines as compute_contour_lines,
+    convergence_index as compute_convergence_index,
+    cost_distance as compute_cost_distance,
+    curvature,
+    curvedness as compute_curvedness,
+    dev as compute_dev,
+    eastness,
+    feature_preserving_smoothing as compute_fps,
+    gaussian_smoothing as compute_gaussian_smoothing,
+    geomorphons as compute_geomorphons,
+    hillshade,
+    horizon_angle_map as compute_horizon_angle_map,
+    landform_classification as compute_landform_classification,
+    log_transform as compute_log_transform,
+    mrvbf as compute_mrvbf,
+    multidirectional_hillshade as compute_multi_hillshade,
+    negative_openness,
+    northness,
+    positive_openness,
+    shape_index as compute_shape_index,
+    sky_view_factor as compute_svf,
+    slope as compute_slope,
+    // New terrain imports
+    solar_radiation as compute_solar_radiation,
+    surface_area_ratio as compute_surface_area_ratio,
+    tpi as compute_tpi,
+    tri as compute_tri,
+    twi as compute_twi,
+    uncertainty as compute_uncertainty,
+    valley_depth as compute_valley_depth,
+    viewshed as compute_viewshed,
+    viewshed_xdraw as compute_viewshed_xdraw,
+    vrm as compute_vrm,
+    wind_exposure as compute_wind_exposure,
 };
 use surtgis_algorithms::texture::{
-    sobel_edge as compute_sobel_edge,
-    laplacian as compute_laplacian,
-    haralick_glcm as compute_haralick_glcm, GlcmParams, GlcmTexture,
+    GlcmParams, GlcmTexture, haralick_glcm as compute_haralick_glcm,
+    laplacian as compute_laplacian, sobel_edge as compute_sobel_edge,
 };
+use surtgis_core::raster::{GeoTransform, Raster};
 
 /// Build a Raster<f64> from a numpy 2D array and cell_size.
 fn numpy_to_raster(arr: &PyReadonlyArray2<'_, f64>, cell_size: f64) -> PyResult<Raster<f64>> {
     let shape = arr.shape();
     let rows = shape[0];
     let cols = shape[1];
-    let data: Vec<f64> = arr.as_slice()
+    let data: Vec<f64> = arr
+        .as_slice()
         .map_err(|_| PyValueError::new_err("array must be contiguous C-order"))?
         .to_vec();
-    let mut raster = Raster::from_vec(data, rows, cols)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let mut raster =
+        Raster::from_vec(data, rows, cols).map_err(|e| PyValueError::new_err(e.to_string()))?;
     raster.set_transform(GeoTransform::new(0.0, 0.0, cell_size, -cell_size));
     Ok(raster)
 }
@@ -128,11 +169,12 @@ fn numpy_u8_to_raster(arr: &PyReadonlyArray2<'_, u8>, cell_size: f64) -> PyResul
     let shape = arr.shape();
     let rows = shape[0];
     let cols = shape[1];
-    let data: Vec<u8> = arr.as_slice()
+    let data: Vec<u8> = arr
+        .as_slice()
         .map_err(|_| PyValueError::new_err("array must be contiguous C-order"))?
         .to_vec();
-    let mut raster = Raster::from_vec(data, rows, cols)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let mut raster =
+        Raster::from_vec(data, rows, cols).map_err(|e| PyValueError::new_err(e.to_string()))?;
     raster.set_transform(GeoTransform::new(0.0, 0.0, cell_size, -cell_size));
     Ok(raster)
 }
@@ -150,7 +192,10 @@ fn raster_u8_to_numpy<'py>(py: Python<'py>, raster: &Raster<u8>) -> Bound<'py, P
 }
 
 /// Convert Raster<i32> back to a numpy 2D f64 array (cast i32 to f64).
-fn raster_i32_to_numpy_f64<'py>(py: Python<'py>, raster: &Raster<i32>) -> Bound<'py, PyArray2<f64>> {
+fn raster_i32_to_numpy_f64<'py>(
+    py: Python<'py>,
+    raster: &Raster<i32>,
+) -> Bound<'py, PyArray2<f64>> {
     let arr: Array2<i32> = raster.data().clone();
     let arr_f64 = arr.mapv(|v| v as f64);
     arr_f64.into_pyarray(py)
@@ -182,8 +227,14 @@ fn slope<'py>(
         "percent" | "pct" => SlopeUnits::Percent,
         _ => SlopeUnits::Degrees,
     };
-    let result = compute_slope(&raster, SlopeParams { units: slope_units, z_factor: 1.0 })
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = compute_slope(
+        &raster,
+        SlopeParams {
+            units: slope_units,
+            z_factor: 1.0,
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -196,8 +247,8 @@ fn aspect_degrees<'py>(
     cell_size: f64,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&dem, cell_size)?;
-    let result = aspect(&raster, AspectOutput::Degrees)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result =
+        aspect(&raster, AspectOutput::Degrees).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -212,8 +263,16 @@ fn hillshade_compute<'py>(
     altitude: f64,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&dem, cell_size)?;
-    let result = hillshade(&raster, HillshadeParams { azimuth, altitude, z_factor: 1.0, normalized: false })
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = hillshade(
+        &raster,
+        HillshadeParams {
+            azimuth,
+            altitude,
+            z_factor: 1.0,
+            normalized: false,
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -246,8 +305,16 @@ fn curvature_compute<'py>(
         "plan" | "tangential" => CurvatureType::Plan,
         _ => CurvatureType::General,
     };
-    let result = curvature(&raster, CurvatureParams { curvature_type: ct, method: DerivativeMethod::EvansYoung, formula: CurvatureFormula::Full, z_factor: 1.0 })
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = curvature(
+        &raster,
+        CurvatureParams {
+            curvature_type: ct,
+            method: DerivativeMethod::EvansYoung,
+            formula: CurvatureFormula::Full,
+            z_factor: 1.0,
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -291,8 +358,14 @@ fn geomorphons_compute<'py>(
     radius: usize,
 ) -> PyResult<Bound<'py, PyArray2<u8>>> {
     let raster = numpy_to_raster(&dem, cell_size)?;
-    let result = compute_geomorphons(&raster, GeomorphonParams { flatness_threshold: flatness, radius })
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = compute_geomorphons(
+        &raster,
+        GeomorphonParams {
+            flatness_threshold: flatness,
+            radius,
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_u8_to_numpy(py, &result))
 }
 
@@ -305,8 +378,7 @@ fn northness_compute<'py>(
     cell_size: f64,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&dem, cell_size)?;
-    let result = northness(&raster)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = northness(&raster).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -319,8 +391,7 @@ fn eastness_compute<'py>(
     cell_size: f64,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&dem, cell_size)?;
-    let result = eastness(&raster)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = eastness(&raster).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -348,8 +419,7 @@ fn shape_index_compute<'py>(
     cell_size: f64,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&dem, cell_size)?;
-    let result = compute_shape_index(&raster)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = compute_shape_index(&raster).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -362,8 +432,7 @@ fn curvedness_compute<'py>(
     cell_size: f64,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&dem, cell_size)?;
-    let result = compute_curvedness(&raster)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = compute_curvedness(&raster).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -412,11 +481,17 @@ fn viewshed_compute<'py>(
     max_radius: usize,
 ) -> PyResult<Bound<'py, PyArray2<u8>>> {
     let raster = numpy_to_raster(&dem, cell_size)?;
-    let result = compute_viewshed(&raster, ViewshedParams {
-        observer_row, observer_col,
-        observer_height, target_height,
-        max_radius,
-    }).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = compute_viewshed(
+        &raster,
+        ViewshedParams {
+            observer_row,
+            observer_col,
+            observer_height,
+            target_height,
+            max_radius,
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_u8_to_numpy(py, &result))
 }
 
@@ -511,7 +586,12 @@ fn advanced_curvature<'py>(
         "ring_kr" | "kr" => AdvancedCurvatureType::RingKr,
         "rotor" => AdvancedCurvatureType::Rotor,
         "laplacian" => AdvancedCurvatureType::Laplacian,
-        _ => return Err(PyValueError::new_err(format!("Unknown curvature type: {}", ctype))),
+        _ => {
+            return Err(PyValueError::new_err(format!(
+                "Unknown curvature type: {}",
+                ctype
+            )));
+        }
     };
     let result = advanced_curvatures(&raster, curv_type)
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
@@ -559,8 +639,7 @@ fn flow_direction_d8<'py>(
     cell_size: f64,
 ) -> PyResult<Bound<'py, PyArray2<u8>>> {
     let raster = numpy_to_raster(&dem, cell_size)?;
-    let result = flow_direction(&raster)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = flow_direction(&raster).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_u8_to_numpy(py, &result))
 }
 
@@ -574,8 +653,8 @@ fn flow_direction_dinf<'py>(
     cell_size: f64,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&dem, cell_size)?;
-    let result = compute_flow_direction_dinf(&raster)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result =
+        compute_flow_direction_dinf(&raster).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -588,8 +667,7 @@ fn flow_accumulation_d8<'py>(
     cell_size: f64,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_u8_to_raster(&fdir, cell_size)?;
-    let result = flow_accumulation(&raster)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = flow_accumulation(&raster).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -604,14 +682,17 @@ fn twi_compute<'py>(
     let raster = numpy_to_raster(&dem, cell_size)?;
     let filled = fill_sinks(&raster, FillSinksParams::default())
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    let fdir = flow_direction(&filled)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    let facc = flow_accumulation(&fdir)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    let slp = compute_slope(&raster, SlopeParams { units: SlopeUnits::Degrees, z_factor: 1.0 })
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    let result = compute_twi(&facc, &slp)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let fdir = flow_direction(&filled).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let facc = flow_accumulation(&fdir).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let slp = compute_slope(
+        &raster,
+        SlopeParams {
+            units: SlopeUnits::Degrees,
+            z_factor: 1.0,
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = compute_twi(&facc, &slp).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -627,10 +708,8 @@ fn hand_compute<'py>(
     let raster = numpy_to_raster(&dem, cell_size)?;
     let filled = fill_sinks(&raster, FillSinksParams::default())
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    let fdir = flow_direction(&filled)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    let facc = flow_accumulation(&fdir)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let fdir = flow_direction(&filled).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let facc = flow_accumulation(&fdir).map_err(|e| PyValueError::new_err(e.to_string()))?;
     let result = compute_hand(&raster, &fdir, &facc, HandParams { stream_threshold })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
@@ -679,10 +758,8 @@ fn stream_network_compute<'py>(
     let raster = numpy_to_raster(&dem, cell_size)?;
     let filled = fill_sinks(&raster, FillSinksParams::default())
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    let fdir = flow_direction(&filled)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    let facc = flow_accumulation(&fdir)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let fdir = flow_direction(&filled).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let facc = flow_accumulation(&fdir).map_err(|e| PyValueError::new_err(e.to_string()))?;
     let result = compute_stream_network(&facc, StreamNetworkParams { threshold })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_u8_to_numpy(py, &result))
@@ -701,8 +778,7 @@ fn ndvi_compute<'py>(
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let nir_r = numpy_to_raster(&nir, 1.0)?;
     let red_r = numpy_to_raster(&red, 1.0)?;
-    let result = compute_ndvi(&nir_r, &red_r)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = compute_ndvi(&nir_r, &red_r).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -715,8 +791,8 @@ fn ndwi_compute<'py>(
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let green_r = numpy_to_raster(&green, 1.0)?;
     let nir_r = numpy_to_raster(&nir, 1.0)?;
-    let result = compute_ndwi(&green_r, &nir_r)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result =
+        compute_ndwi(&green_r, &nir_r).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -745,8 +821,8 @@ fn normalized_diff<'py>(
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let a_r = numpy_to_raster(&a, 1.0)?;
     let b_r = numpy_to_raster(&b, 1.0)?;
-    let result = normalized_difference(&a_r, &b_r)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result =
+        normalized_difference(&a_r, &b_r).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -759,8 +835,8 @@ fn mndwi_compute<'py>(
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let green_r = numpy_to_raster(&green, 1.0)?;
     let swir_r = numpy_to_raster(&swir, 1.0)?;
-    let result = compute_mndwi(&green_r, &swir_r)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result =
+        compute_mndwi(&green_r, &swir_r).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -773,8 +849,7 @@ fn nbr_compute<'py>(
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let nir_r = numpy_to_raster(&nir, 1.0)?;
     let swir_r = numpy_to_raster(&swir, 1.0)?;
-    let result = compute_nbr(&nir_r, &swir_r)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = compute_nbr(&nir_r, &swir_r).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -826,8 +901,7 @@ fn ndre_compute<'py>(
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let nir_r = numpy_to_raster(&nir, 1.0)?;
     let re_r = numpy_to_raster(&red_edge, 1.0)?;
-    let result = compute_ndre(&nir_r, &re_r)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = compute_ndre(&nir_r, &re_r).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -840,8 +914,8 @@ fn gndvi_compute<'py>(
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let nir_r = numpy_to_raster(&nir, 1.0)?;
     let green_r = numpy_to_raster(&green, 1.0)?;
-    let result = compute_gndvi(&nir_r, &green_r)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result =
+        compute_gndvi(&nir_r, &green_r).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -854,8 +928,8 @@ fn ngrdi_compute<'py>(
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let green_r = numpy_to_raster(&green, 1.0)?;
     let red_r = numpy_to_raster(&red, 1.0)?;
-    let result = compute_ngrdi(&green_r, &red_r)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result =
+        compute_ngrdi(&green_r, &red_r).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -868,8 +942,7 @@ fn reci_compute<'py>(
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let nir_r = numpy_to_raster(&nir, 1.0)?;
     let re_r = numpy_to_raster(&red_edge, 1.0)?;
-    let result = compute_reci(&nir_r, &re_r)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = compute_reci(&nir_r, &re_r).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -882,8 +955,8 @@ fn ndsi_compute<'py>(
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let green_r = numpy_to_raster(&green, 1.0)?;
     let swir_r = numpy_to_raster(&swir, 1.0)?;
-    let result = compute_ndsi(&green_r, &swir_r)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result =
+        compute_ndsi(&green_r, &swir_r).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -896,8 +969,7 @@ fn ndbi_compute<'py>(
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let swir_r = numpy_to_raster(&swir, 1.0)?;
     let nir_r = numpy_to_raster(&nir, 1.0)?;
-    let result = compute_ndbi(&swir_r, &nir_r)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = compute_ndbi(&swir_r, &nir_r).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -910,8 +982,7 @@ fn ndmi_compute<'py>(
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let nir_r = numpy_to_raster(&nir, 1.0)?;
     let swir_r = numpy_to_raster(&swir, 1.0)?;
-    let result = compute_ndmi(&nir_r, &swir_r)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = compute_ndmi(&nir_r, &swir_r).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -924,8 +995,7 @@ fn msavi_compute<'py>(
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let nir_r = numpy_to_raster(&nir, 1.0)?;
     let red_r = numpy_to_raster(&red, 1.0)?;
-    let result = compute_msavi(&nir_r, &red_r)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = compute_msavi(&nir_r, &red_r).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -938,8 +1008,7 @@ fn evi2_compute<'py>(
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let nir_r = numpy_to_raster(&nir, 1.0)?;
     let red_r = numpy_to_raster(&red, 1.0)?;
-    let result = compute_evi2(&nir_r, &red_r)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = compute_evi2(&nir_r, &red_r).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -957,8 +1026,7 @@ fn morph_erode<'py>(
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&data, 1.0)?;
     let elem = StructuringElement::Square(radius);
-    let result = compute_erode(&raster, &elem)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = compute_erode(&raster, &elem).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -972,8 +1040,8 @@ fn morph_dilate<'py>(
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&data, 1.0)?;
     let elem = StructuringElement::Square(radius);
-    let result = compute_dilate(&raster, &elem)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result =
+        compute_dilate(&raster, &elem).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -987,8 +1055,8 @@ fn morph_opening<'py>(
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&data, 1.0)?;
     let elem = StructuringElement::Square(radius);
-    let result = compute_opening(&raster, &elem)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result =
+        compute_opening(&raster, &elem).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -1002,8 +1070,8 @@ fn morph_closing<'py>(
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&data, 1.0)?;
     let elem = StructuringElement::Square(radius);
-    let result = compute_closing(&raster, &elem)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result =
+        compute_closing(&raster, &elem).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -1017,8 +1085,8 @@ fn morph_gradient<'py>(
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&data, 1.0)?;
     let elem = StructuringElement::Square(radius);
-    let result = compute_gradient(&raster, &elem)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result =
+        compute_gradient(&raster, &elem).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -1032,8 +1100,8 @@ fn morph_top_hat<'py>(
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&data, 1.0)?;
     let elem = StructuringElement::Square(radius);
-    let result = compute_top_hat(&raster, &elem)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result =
+        compute_top_hat(&raster, &elem).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -1047,8 +1115,8 @@ fn morph_black_hat<'py>(
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&data, 1.0)?;
     let elem = StructuringElement::Square(radius);
-    let result = compute_black_hat(&raster, &elem)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result =
+        compute_black_hat(&raster, &elem).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -1066,8 +1134,15 @@ fn focal_mean<'py>(
     circular: bool,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&data, 1.0)?;
-    let result = focal_statistics(&raster, FocalParams { statistic: FocalStatistic::Mean, radius, circular })
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = focal_statistics(
+        &raster,
+        FocalParams {
+            statistic: FocalStatistic::Mean,
+            radius,
+            circular,
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -1081,8 +1156,15 @@ fn focal_std<'py>(
     circular: bool,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&data, 1.0)?;
-    let result = focal_statistics(&raster, FocalParams { statistic: FocalStatistic::StdDev, radius, circular })
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = focal_statistics(
+        &raster,
+        FocalParams {
+            statistic: FocalStatistic::StdDev,
+            radius,
+            circular,
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -1096,8 +1178,15 @@ fn focal_range<'py>(
     circular: bool,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&data, 1.0)?;
-    let result = focal_statistics(&raster, FocalParams { statistic: FocalStatistic::Range, radius, circular })
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = focal_statistics(
+        &raster,
+        FocalParams {
+            statistic: FocalStatistic::Range,
+            radius,
+            circular,
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -1111,8 +1200,15 @@ fn focal_min<'py>(
     circular: bool,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&data, 1.0)?;
-    let result = focal_statistics(&raster, FocalParams { statistic: FocalStatistic::Min, radius, circular })
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = focal_statistics(
+        &raster,
+        FocalParams {
+            statistic: FocalStatistic::Min,
+            radius,
+            circular,
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -1126,8 +1222,15 @@ fn focal_max<'py>(
     circular: bool,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&data, 1.0)?;
-    let result = focal_statistics(&raster, FocalParams { statistic: FocalStatistic::Max, radius, circular })
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = focal_statistics(
+        &raster,
+        FocalParams {
+            statistic: FocalStatistic::Max,
+            radius,
+            circular,
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -1141,8 +1244,15 @@ fn focal_sum<'py>(
     circular: bool,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&data, 1.0)?;
-    let result = focal_statistics(&raster, FocalParams { statistic: FocalStatistic::Sum, radius, circular })
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = focal_statistics(
+        &raster,
+        FocalParams {
+            statistic: FocalStatistic::Sum,
+            radius,
+            circular,
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -1156,8 +1266,15 @@ fn focal_median<'py>(
     circular: bool,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&data, 1.0)?;
-    let result = focal_statistics(&raster, FocalParams { statistic: FocalStatistic::Median, radius, circular })
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = focal_statistics(
+        &raster,
+        FocalParams {
+            statistic: FocalStatistic::Median,
+            radius,
+            circular,
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -1177,19 +1294,33 @@ fn solar_radiation_compute<'py>(
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&dem, cell_size)?;
     // Compute slope and aspect in degrees, then convert to radians
-    let slope_deg = compute_slope(&raster, SlopeParams { units: SlopeUnits::Degrees, z_factor: 1.0 })
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    let aspect_deg = aspect(&raster, AspectOutput::Degrees)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let slope_deg = compute_slope(
+        &raster,
+        SlopeParams {
+            units: SlopeUnits::Degrees,
+            z_factor: 1.0,
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let aspect_deg =
+        aspect(&raster, AspectOutput::Degrees).map_err(|e| PyValueError::new_err(e.to_string()))?;
     let mut slope_rad = slope_deg;
     for v in slope_rad.data_mut().iter_mut() {
-        if v.is_finite() { *v = v.to_radians(); }
+        if v.is_finite() {
+            *v = v.to_radians();
+        }
     }
     let mut aspect_rad = aspect_deg;
     for v in aspect_rad.data_mut().iter_mut() {
-        if v.is_finite() { *v = v.to_radians(); }
+        if v.is_finite() {
+            *v = v.to_radians();
+        }
     }
-    let params = SolarParams { day, latitude, ..SolarParams::default() };
+    let params = SolarParams {
+        day,
+        latitude,
+        ..SolarParams::default()
+    };
     let result = compute_solar_radiation(&slope_rad, &aspect_rad, params)
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result.total))
@@ -1218,8 +1349,7 @@ fn valley_depth_compute<'py>(
     cell_size: f64,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&dem, cell_size)?;
-    let result = compute_valley_depth(&raster)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = compute_valley_depth(&raster).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -1263,11 +1393,15 @@ fn wind_exposure_compute<'py>(
     max_distance: usize,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&dem, cell_size)?;
-    let result = compute_wind_exposure(&raster, WindExposureParams {
-        directions,
-        radius: max_distance,
-        ..WindExposureParams::default()
-    }).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = compute_wind_exposure(
+        &raster,
+        WindExposureParams {
+            directions,
+            radius: max_distance,
+            ..WindExposureParams::default()
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -1281,8 +1415,14 @@ fn contour_lines_compute<'py>(
     interval: f64,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&dem, cell_size)?;
-    let result = compute_contour_lines(&raster, ContourParams { interval, base: 0.0 })
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = compute_contour_lines(
+        &raster,
+        ContourParams {
+            interval,
+            base: 0.0,
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -1297,9 +1437,13 @@ fn cost_distance_compute<'py>(
     source_col: usize,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&cost_surface, cell_size)?;
-    let result = compute_cost_distance(&raster, CostDistanceParams {
-        sources: vec![(source_row, source_col)],
-    }).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = compute_cost_distance(
+        &raster,
+        CostDistanceParams {
+            sources: vec![(source_row, source_col)],
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -1314,8 +1458,15 @@ fn feature_preserving_smoothing_compute<'py>(
     threshold: f64,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&dem, cell_size)?;
-    let result = compute_fps(&raster, SmoothingParams { radius: 2, iterations, threshold })
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = compute_fps(
+        &raster,
+        SmoothingParams {
+            radius: 2,
+            iterations,
+            threshold,
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -1343,8 +1494,8 @@ fn log_transform_compute<'py>(
     data: PyReadonlyArray2<'py, f64>,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&data, 1.0)?;
-    let result = compute_log_transform(&raster)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result =
+        compute_log_transform(&raster).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -1357,8 +1508,8 @@ fn accumulation_zones_compute<'py>(
     cell_size: f64,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&dem, cell_size)?;
-    let result = compute_accumulation_zones(&raster)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result =
+        compute_accumulation_zones(&raster).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -1376,11 +1527,17 @@ fn viewshed_xdraw_compute<'py>(
     max_radius: usize,
 ) -> PyResult<Bound<'py, PyArray2<u8>>> {
     let raster = numpy_to_raster(&dem, cell_size)?;
-    let result = compute_viewshed_xdraw(&raster, ViewshedParams {
-        observer_row, observer_col,
-        observer_height, target_height,
-        max_radius,
-    }).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = compute_viewshed_xdraw(
+        &raster,
+        ViewshedParams {
+            observer_row,
+            observer_col,
+            observer_height,
+            target_height,
+            max_radius,
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_u8_to_numpy(py, &result))
 }
 
@@ -1417,12 +1574,16 @@ fn watershed_compute<'py>(
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_u8_to_raster(&fdir, cell_size)?;
     let params = if pour_row == 0 && pour_col == 0 {
-        WatershedParams { pour_points: vec![] }
+        WatershedParams {
+            pour_points: vec![],
+        }
     } else {
-        WatershedParams { pour_points: vec![(pour_row, pour_col)] }
+        WatershedParams {
+            pour_points: vec![(pour_row, pour_col)],
+        }
     };
-    let result = compute_watershed(&raster, params)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result =
+        compute_watershed(&raster, params).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_i32_to_numpy_f64(py, &result))
 }
 
@@ -1454,10 +1615,14 @@ fn flow_accumulation_adaptive_mfd<'py>(
     let raster = numpy_to_raster(&dem, cell_size)?;
     let filled = fill_sinks(&raster, FillSinksParams::default())
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    let result = compute_adaptive_mfd(&filled, AdaptiveMfdParams {
-        scale_factor: convergence,
-        ..AdaptiveMfdParams::default()
-    }).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = compute_adaptive_mfd(
+        &filled,
+        AdaptiveMfdParams {
+            scale_factor: convergence,
+            ..AdaptiveMfdParams::default()
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -1470,8 +1635,8 @@ fn priority_flood_flat_compute<'py>(
     cell_size: f64,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&dem, cell_size)?;
-    let result = compute_priority_flood_flat(&raster)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result =
+        compute_priority_flood_flat(&raster).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -1500,8 +1665,8 @@ fn flow_path_length_compute<'py>(
     cell_size: f64,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let fdir_r = numpy_u8_to_raster(&fdir, cell_size)?;
-    let result = compute_flow_path_length(&fdir_r)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result =
+        compute_flow_path_length(&fdir_r).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -1519,11 +1684,15 @@ fn kmeans_compute<'py>(
     max_iterations: usize,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&data, 1.0)?;
-    let result = compute_kmeans(&raster, KmeansParams {
-        k,
-        max_iterations,
-        ..KmeansParams::default()
-    }).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = compute_kmeans(
+        &raster,
+        KmeansParams {
+            k,
+            max_iterations,
+            ..KmeansParams::default()
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -1537,11 +1706,15 @@ fn isodata_compute<'py>(
     max_iterations: usize,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&data, 1.0)?;
-    let result = compute_isodata(&raster, IsodataParams {
-        initial_k,
-        max_iterations,
-        ..IsodataParams::default()
-    }).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = compute_isodata(
+        &raster,
+        IsodataParams {
+            initial_k,
+            max_iterations,
+            ..IsodataParams::default()
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -1571,13 +1744,19 @@ fn idw_interpolation<'py>(
     if val_shape[0] != n || val_shape[1] != 1 {
         return Err(PyValueError::new_err("values must have shape (N, 1)"));
     }
-    let xy_slice = points_xy.as_slice()
+    let xy_slice = points_xy
+        .as_slice()
         .map_err(|_| PyValueError::new_err("points_xy must be contiguous"))?;
-    let val_slice = values.as_slice()
+    let val_slice = values
+        .as_slice()
         .map_err(|_| PyValueError::new_err("values must be contiguous"))?;
     let mut sample_points = Vec::with_capacity(n);
     for i in 0..n {
-        sample_points.push(SamplePoint::new(xy_slice[i * 2], xy_slice[i * 2 + 1], val_slice[i]));
+        sample_points.push(SamplePoint::new(
+            xy_slice[i * 2],
+            xy_slice[i * 2 + 1],
+            val_slice[i],
+        ));
     }
     let transform = GeoTransform::new(0.0, grid_rows as f64 * cellsize, cellsize, -cellsize);
     let params = IdwParams {
@@ -1587,8 +1766,8 @@ fn idw_interpolation<'py>(
         transform,
         ..IdwParams::default()
     };
-    let result = compute_idw(&sample_points, params)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result =
+        compute_idw(&sample_points, params).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -1612,13 +1791,19 @@ fn nearest_neighbor_interpolation<'py>(
     if val_shape[0] != n || val_shape[1] != 1 {
         return Err(PyValueError::new_err("values must have shape (N, 1)"));
     }
-    let xy_slice = points_xy.as_slice()
+    let xy_slice = points_xy
+        .as_slice()
         .map_err(|_| PyValueError::new_err("points_xy must be contiguous"))?;
-    let val_slice = values.as_slice()
+    let val_slice = values
+        .as_slice()
         .map_err(|_| PyValueError::new_err("values must be contiguous"))?;
     let mut sample_points = Vec::with_capacity(n);
     for i in 0..n {
-        sample_points.push(SamplePoint::new(xy_slice[i * 2], xy_slice[i * 2 + 1], val_slice[i]));
+        sample_points.push(SamplePoint::new(
+            xy_slice[i * 2],
+            xy_slice[i * 2 + 1],
+            val_slice[i],
+        ));
     }
     let transform = GeoTransform::new(0.0, grid_rows as f64 * cellsize, cellsize, -cellsize);
     let params = NearestNeighborParams {
@@ -1652,13 +1837,19 @@ fn natural_neighbor_interpolation<'py>(
     if val_shape[0] != n || val_shape[1] != 1 {
         return Err(PyValueError::new_err("values must have shape (N, 1)"));
     }
-    let xy_slice = points_xy.as_slice()
+    let xy_slice = points_xy
+        .as_slice()
         .map_err(|_| PyValueError::new_err("points_xy must be contiguous"))?;
-    let val_slice = values.as_slice()
+    let val_slice = values
+        .as_slice()
         .map_err(|_| PyValueError::new_err("values must be contiguous"))?;
     let mut sample_points = Vec::with_capacity(n);
     for i in 0..n {
-        sample_points.push(SamplePoint::new(xy_slice[i * 2], xy_slice[i * 2 + 1], val_slice[i]));
+        sample_points.push(SamplePoint::new(
+            xy_slice[i * 2],
+            xy_slice[i * 2 + 1],
+            val_slice[i],
+        ));
     }
     let transform = GeoTransform::new(0.0, grid_rows as f64 * cellsize, cellsize, -cellsize);
     let params = NaturalNeighborParams {
@@ -1686,9 +1877,13 @@ fn label_patches_compute<'py>(
     connectivity8: bool,
 ) -> PyResult<(Bound<'py, PyArray2<f64>>, usize)> {
     let raster = numpy_to_raster(&classification, 1.0)?;
-    let conn = if connectivity8 { Connectivity::Eight } else { Connectivity::Four };
-    let (labels, n_patches) = compute_label_patches(&raster, conn)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let conn = if connectivity8 {
+        Connectivity::Eight
+    } else {
+        Connectivity::Four
+    };
+    let (labels, n_patches) =
+        compute_label_patches(&raster, conn).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok((raster_i32_to_numpy_f64(py, &labels), n_patches))
 }
 
@@ -1701,8 +1896,14 @@ fn shannon_diversity_compute<'py>(
     radius: usize,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&classification, 1.0)?;
-    let result = compute_shannon_diversity(&raster, DiversityParams { radius, circular: false })
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = compute_shannon_diversity(
+        &raster,
+        DiversityParams {
+            radius,
+            circular: false,
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -1715,8 +1916,14 @@ fn simpson_diversity_compute<'py>(
     radius: usize,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&classification, 1.0)?;
-    let result = compute_simpson_diversity(&raster, DiversityParams { radius, circular: false })
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = compute_simpson_diversity(
+        &raster,
+        DiversityParams {
+            radius,
+            circular: false,
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -1729,8 +1936,14 @@ fn patch_density_compute<'py>(
     radius: usize,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&classification, 1.0)?;
-    let result = compute_patch_density(&raster, DiversityParams { radius, circular: false })
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = compute_patch_density(
+        &raster,
+        DiversityParams {
+            radius,
+            circular: false,
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -1742,9 +1955,16 @@ fn landscape_metrics_compute<'py>(
     classification: PyReadonlyArray2<'py, f64>,
 ) -> PyResult<(f64, f64, usize, usize, f64, usize)> {
     let raster = numpy_to_raster(&classification, 1.0)?;
-    let metrics = compute_landscape_metrics(&raster)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok((metrics.shdi, metrics.sidi, metrics.num_patches, metrics.num_classes, metrics.total_area_m2, metrics.total_cells))
+    let metrics =
+        compute_landscape_metrics(&raster).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok((
+        metrics.shdi,
+        metrics.sidi,
+        metrics.num_patches,
+        metrics.num_classes,
+        metrics.total_area_m2,
+        metrics.total_cells,
+    ))
 }
 
 // ===========================================================================
@@ -1758,8 +1978,7 @@ fn sobel_edge_compute<'py>(
     data: PyReadonlyArray2<'py, f64>,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&data, 1.0)?;
-    let result = compute_sobel_edge(&raster)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = compute_sobel_edge(&raster).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -1770,8 +1989,7 @@ fn laplacian_compute<'py>(
     data: PyReadonlyArray2<'py, f64>,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&data, 1.0)?;
-    let result = compute_laplacian(&raster)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = compute_laplacian(&raster).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -1794,14 +2012,23 @@ fn haralick_glcm_compute<'py>(
         "correlation" => GlcmTexture::Correlation,
         "entropy" => GlcmTexture::Entropy,
         "dissimilarity" => GlcmTexture::Dissimilarity,
-        _ => return Err(PyValueError::new_err(format!("Unknown texture type: {}", texture))),
+        _ => {
+            return Err(PyValueError::new_err(format!(
+                "Unknown texture type: {}",
+                texture
+            )));
+        }
     };
-    let result = compute_haralick_glcm(&raster, GlcmParams {
-        radius,
-        distance,
-        texture: tex,
-        ..GlcmParams::default()
-    }).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let result = compute_haralick_glcm(
+        &raster,
+        GlcmParams {
+            radius,
+            distance,
+            texture: tex,
+            ..GlcmParams::default()
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &result))
 }
 
@@ -1843,19 +2070,25 @@ fn extract_at_points<'py>(
         if r.shape() != ref_shape.as_slice() {
             return Err(PyValueError::new_err(format!(
                 "Raster {} shape {:?} does not match raster 0 shape {:?}",
-                i, r.shape(), ref_shape
+                i,
+                r.shape(),
+                ref_shape
             )));
         }
     }
 
-    let cols_slice = points_col.as_slice()
+    let cols_slice = points_col
+        .as_slice()
         .map_err(|_| PyValueError::new_err("points_col must be contiguous"))?;
-    let rows_slice = points_row.as_slice()
+    let rows_slice = points_row
+        .as_slice()
         .map_err(|_| PyValueError::new_err("points_row must be contiguous"))?;
 
     let n_points = cols_slice.len();
     if rows_slice.len() != n_points {
-        return Err(PyValueError::new_err("points_col and points_row must have same length"));
+        return Err(PyValueError::new_err(
+            "points_col and points_row must have same length",
+        ));
     }
 
     let n_rasters = rasters.len();
@@ -1863,9 +2096,7 @@ fn extract_at_points<'py>(
     let cols_max = ref_shape[1];
 
     // Pre-borrow all raster slices
-    let raster_slices: Vec<&[f64]> = rasters.iter()
-        .map(|r| r.as_slice().unwrap())
-        .collect();
+    let raster_slices: Vec<&[f64]> = rasters.iter().map(|r| r.as_slice().unwrap()).collect();
 
     let mut result_data: Vec<f64> = Vec::new();
     let mut valid_count = 0usize;
@@ -1937,7 +2168,9 @@ fn predict_raster<'py>(
         if r.shape() != ref_shape.as_slice() {
             return Err(PyValueError::new_err(format!(
                 "Raster {} shape {:?} does not match raster 0 shape {:?}",
-                i, r.shape(), ref_shape
+                i,
+                r.shape(),
+                ref_shape
             )));
         }
     }
@@ -1946,9 +2179,7 @@ fn predict_raster<'py>(
     let total_pixels = rows * cols;
 
     // Pre-borrow all raster slices
-    let raster_slices: Vec<&[f64]> = rasters.iter()
-        .map(|r| r.as_slice().unwrap())
-        .collect();
+    let raster_slices: Vec<&[f64]> = rasters.iter().map(|r| r.as_slice().unwrap()).collect();
 
     let mut output = vec![f64::NAN; total_pixels];
 
@@ -1974,17 +2205,21 @@ fn predict_raster<'py>(
         }
 
         // When batch is full or at the end, predict
-        if batch_indices.len() >= batch_size || (pixel == total_pixels - 1 && !batch_indices.is_empty()) {
+        if batch_indices.len() >= batch_size
+            || (pixel == total_pixels - 1 && !batch_indices.is_empty())
+        {
             let n = batch_indices.len();
             let batch_arr = Array2::from_shape_vec((n, n_features), batch_features.clone())
                 .map_err(|e| PyValueError::new_err(e.to_string()))?;
             let batch_py = batch_arr.into_pyarray(py);
 
             let predictions = predict_fn.call1((batch_py,))?;
-            let pred_vec: Vec<f64> = predictions.extract()
-                .map_err(|e| PyValueError::new_err(
-                    format!("predict_fn must return array-like of floats: {}", e)
-                ))?;
+            let pred_vec: Vec<f64> = predictions.extract().map_err(|e| {
+                PyValueError::new_err(format!(
+                    "predict_fn must return array-like of floats: {}",
+                    e
+                ))
+            })?;
 
             for (j, &idx) in batch_indices.iter().enumerate() {
                 if j < pred_vec.len() {

@@ -12,24 +12,33 @@
 //! Geographical Information Science*, 21(4), 443–458.
 
 use ndarray::Array2;
-use surtgis_core::raster::Raster;
 use surtgis_core::Result;
+use surtgis_core::raster::Raster;
 
 /// D8 neighbor offsets
 const D8_OFFSETS: [(isize, isize); 8] = [
-    (0, 1), (-1, 1), (-1, 0), (-1, -1),
-    (0, -1), (1, -1), (1, 0), (1, 1),
+    (0, 1),
+    (-1, 1),
+    (-1, 0),
+    (-1, -1),
+    (0, -1),
+    (1, -1),
+    (1, 0),
+    (1, 1),
 ];
 
 const D8_DIST: [f64; 8] = [
-    1.0, std::f64::consts::SQRT_2, 1.0, std::f64::consts::SQRT_2,
-    1.0, std::f64::consts::SQRT_2, 1.0, std::f64::consts::SQRT_2,
+    1.0,
+    std::f64::consts::SQRT_2,
+    1.0,
+    std::f64::consts::SQRT_2,
+    1.0,
+    std::f64::consts::SQRT_2,
+    1.0,
+    std::f64::consts::SQRT_2,
 ];
 
-const CONTOUR_FRACTION: [f64; 8] = [
-    0.5, 0.354, 0.5, 0.354,
-    0.5, 0.354, 0.5, 0.354,
-];
+const CONTOUR_FRACTION: [f64; 8] = [0.5, 0.354, 0.5, 0.354, 0.5, 0.354, 0.5, 0.354];
 
 /// Parameters for Adaptive MFD
 #[derive(Debug, Clone)]
@@ -79,8 +88,7 @@ pub fn flow_accumulation_mfd_adaptive(
     for row in 0..rows {
         for col in 0..cols {
             let z = unsafe { dem.get_unchecked(row, col) };
-            let is_nd = z.is_nan()
-                || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
+            let is_nd = z.is_nan() || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
             if !is_nd {
                 cells.push((row, col, z));
             }
@@ -93,8 +101,7 @@ pub fn flow_accumulation_mfd_adaptive(
     for row in 0..rows {
         for col in 0..cols {
             let z = unsafe { dem.get_unchecked(row, col) };
-            let is_nd = z.is_nan()
-                || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
+            let is_nd = z.is_nan() || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
             if is_nd {
                 accumulation[(row, col)] = 0.0;
             }
@@ -117,12 +124,19 @@ pub fn flow_accumulation_mfd_adaptive(
             }
 
             let nz = unsafe { dem.get_unchecked(nr as usize, nc as usize) };
-            if nz.is_nan() { continue; }
+            if nz.is_nan() {
+                continue;
+            }
             if let Some(nd) = nodata
-                && (nz - nd).abs() < f64::EPSILON { continue; }
+                && (nz - nd).abs() < f64::EPSILON
+            {
+                continue;
+            }
 
             let drop = z - nz;
-            if drop <= 0.0 { continue; }
+            if drop <= 0.0 {
+                continue;
+            }
 
             let distance = D8_DIST[idx] * cell_size;
             let slope = drop / distance;
@@ -143,7 +157,9 @@ pub fn flow_accumulation_mfd_adaptive(
         let mut sum_weighted = 0.0_f64;
 
         for idx in 0..8 {
-            if slopes_raw[idx] <= 0.0 { continue; }
+            if slopes_raw[idx] <= 0.0 {
+                continue;
+            }
             let contour = CONTOUR_FRACTION[idx] * cell_size;
             let w = (slopes_raw[idx] * contour).powf(beta);
             weights[idx] = w;
@@ -153,7 +169,9 @@ pub fn flow_accumulation_mfd_adaptive(
         // Distribute flow
         if sum_weighted > 0.0 {
             for (idx, &(dr, dc)) in D8_OFFSETS.iter().enumerate() {
-                if weights[idx] <= 0.0 { continue; }
+                if weights[idx] <= 0.0 {
+                    continue;
+                }
                 let nr = (row as isize + dr) as usize;
                 let nc = (col as isize + dc) as usize;
                 accumulation[(nr, nc)] += current_acc * (weights[idx] / sum_weighted);
@@ -165,8 +183,7 @@ pub fn flow_accumulation_mfd_adaptive(
     for row in 0..rows {
         for col in 0..cols {
             let z = unsafe { dem.get_unchecked(row, col) };
-            let is_nd = z.is_nan()
-                || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
+            let is_nd = z.is_nan() || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
             if !is_nd {
                 accumulation[(row, col)] = (accumulation[(row, col)] - 1.0).max(0.0);
             }
@@ -198,7 +215,12 @@ mod tests {
         let acc = flow_accumulation_mfd_adaptive(&dem, AdaptiveMfdParams::default()).unwrap();
         let top = acc.get(0, 2).unwrap();
         let bottom = acc.get(4, 2).unwrap();
-        assert!(bottom > top, "Bottom should have more accumulation: top={}, bottom={}", top, bottom);
+        assert!(
+            bottom > top,
+            "Bottom should have more accumulation: top={}, bottom={}",
+            top,
+            bottom
+        );
     }
 
     #[test]
@@ -212,10 +234,14 @@ mod tests {
             }
         }
 
-        let acc = flow_accumulation_mfd_adaptive(&dem, AdaptiveMfdParams {
-            scale_factor: 100.0,
-            ..Default::default()
-        }).unwrap();
+        let acc = flow_accumulation_mfd_adaptive(
+            &dem,
+            AdaptiveMfdParams {
+                scale_factor: 100.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         // With very concentrated flow, pattern should be D8-like
         let bottom_center = acc.get(4, 2).unwrap();
@@ -242,7 +268,11 @@ mod tests {
                 nonzero += 1;
             }
         }
-        assert!(nonzero >= 2, "Flat terrain should distribute flow to multiple cells: {}", nonzero);
+        assert!(
+            nonzero >= 2,
+            "Flat terrain should distribute flow to multiple cells: {}",
+            nonzero
+        );
     }
 
     #[test]
@@ -286,7 +316,8 @@ mod tests {
         let fixed = crate::hydrology::flow_accumulation_mfd(
             &dem,
             crate::hydrology::MfdParams { exponent: 1.1 },
-        ).unwrap();
+        )
+        .unwrap();
 
         // Should be different at some cells (adaptive varies β per cell)
         let mut diffs = 0;

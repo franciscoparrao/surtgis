@@ -43,10 +43,7 @@ pub struct ChebyshevParams {
 
 impl Default for ChebyshevParams {
     fn default() -> Self {
-        Self {
-            l: 3,
-            degree: 3,
-        }
+        Self { l: 3, degree: 3 }
     }
 }
 
@@ -106,14 +103,16 @@ pub fn chebyshev_derivatives(
         return Err(Error::Algorithm("Window half-size l must be >= 1".into()));
     }
     if deg < 2 {
-        return Err(Error::Algorithm("Polynomial degree must be >= 2 for second derivatives".into()));
+        return Err(Error::Algorithm(
+            "Polynomial degree must be >= 2 for second derivatives".into(),
+        ));
     }
 
     let rows = dem.rows();
     let cols = dem.cols();
     let data = dem.data();
     let n = 2 * l + 1; // window size per dimension
-    let n2 = n * n;     // total cells in window
+    let n2 = n * n; // total cells in window
     let p = n_terms(deg);
 
     if n2 < p {
@@ -131,8 +130,8 @@ pub fn chebyshev_derivatives(
     let mut x_mat = vec![0.0_f64; n2 * p];
     for wr in 0..n {
         for wc in 0..n {
-            let u = (wc as f64 - l as f64) / l as f64;  // x direction (col)
-            let v = (l as f64 - wr as f64) / l as f64;   // y direction (row, north-up)
+            let u = (wc as f64 - l as f64) / l as f64; // x direction (col)
+            let v = (l as f64 - wr as f64) / l as f64; // y direction (row, north-up)
             let idx = wr * n + wc;
             for (j, &(px, py)) in pairs.iter().enumerate() {
                 x_mat[idx * p + j] = u.powi(px as i32) * v.powi(py as i32);
@@ -402,36 +401,24 @@ mod tests {
     fn test_chebyshev_tilted_surface() {
         // z = 2x + 3y + 10, cellsize=10
         let dem = make_planar_dem(30, 30, 2.0, 3.0, 10.0, 10.0);
-        let result = chebyshev_derivatives(&dem, 10.0, ChebyshevParams {
-            l: 3,
-            degree: 3,
-        }).unwrap();
+        let result =
+            chebyshev_derivatives(&dem, 10.0, ChebyshevParams { l: 3, degree: 3 }).unwrap();
 
         let r = 15;
         let c = 15;
         let p = result.p.get(r, c).unwrap();
         let q = result.q.get(r, c).unwrap();
 
-        assert!(
-            (p - 2.0).abs() < 0.5,
-            "p should be ~2.0, got {:.4}",
-            p
-        );
-        assert!(
-            (q - 3.0).abs() < 0.5,
-            "q should be ~3.0, got {:.4}",
-            q
-        );
+        assert!((p - 2.0).abs() < 0.5, "p should be ~2.0, got {:.4}", p);
+        assert!((q - 3.0).abs() < 0.5, "q should be ~3.0, got {:.4}", q);
     }
 
     #[test]
     fn test_chebyshev_quadratic_curvature() {
         // z = x² + y² → r = 2, t = 2, s = 0
         let dem = make_quadratic_dem(30, 30, 10.0);
-        let result = chebyshev_derivatives(&dem, 10.0, ChebyshevParams {
-            l: 5,
-            degree: 3,
-        }).unwrap();
+        let result =
+            chebyshev_derivatives(&dem, 10.0, ChebyshevParams { l: 5, degree: 3 }).unwrap();
 
         let r_val = result.r.get(15, 15).unwrap();
         let t_val = result.t.get(15, 15).unwrap();
@@ -447,11 +434,7 @@ mod tests {
             "t should be ~2.0, got {:.4}",
             t_val
         );
-        assert!(
-            s_val.abs() < 1.0,
-            "s should be ~0, got {:.4}",
-            s_val
-        );
+        assert!(s_val.abs() < 1.0, "s should be ~0, got {:.4}", s_val);
     }
 
     #[test]
@@ -485,7 +468,8 @@ mod tests {
         assert!(
             (p2 - p3).abs() < 0.1,
             "Degree 2 and 3 should agree on linear: {:.4} vs {:.4}",
-            p2, p3
+            p2,
+            p3
         );
     }
 }

@@ -18,8 +18,8 @@
 //! Wahba, G. (1990). Spline Models for Observational Data. SIAM.
 //! Florinsky, I.V. (2025). Digital Terrain Analysis, §3.2.
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::{GeoTransform, Raster};
 use surtgis_core::{Error, Result};
 
@@ -54,11 +54,7 @@ impl Default for TpsParams {
 /// TPS radial basis function: U(r) = r² · ln(r), with U(0) = 0
 #[inline]
 fn tps_kernel(r: f64) -> f64 {
-    if r < 1e-15 {
-        0.0
-    } else {
-        r * r * r.ln()
-    }
+    if r < 1e-15 { 0.0 } else { r * r * r.ln() }
 }
 
 /// Perform Thin Plate Spline interpolation from scattered points to a raster grid.
@@ -75,10 +71,7 @@ fn tps_kernel(r: f64) -> f64 {
 /// # Errors
 /// - If fewer than 3 points are provided
 /// - If the linear system is singular (collinear points)
-pub fn tps_interpolation(
-    points: &[SamplePoint],
-    params: TpsParams,
-) -> Result<Raster<f64>> {
+pub fn tps_interpolation(points: &[SamplePoint], params: TpsParams) -> Result<Raster<f64>> {
     let n = points.len();
     if n < 3 {
         return Err(Error::Algorithm(
@@ -299,7 +292,12 @@ mod tests {
                 assert!(
                     (actual - expected).abs() < 1.0,
                     "Linear surface at ({},{}) [{:.1},{:.1}]: expected {:.2}, got {:.2}",
-                    row, col, x, y, expected, actual
+                    row,
+                    col,
+                    x,
+                    y,
+                    expected,
+                    actual
                 );
             }
         }
@@ -333,7 +331,8 @@ mod tests {
         assert!(
             smooth_center < exact_center,
             "Smoothing should reduce spike: exact={:.1}, smooth={:.1}",
-            exact_center, smooth_center
+            exact_center,
+            smooth_center
         );
     }
 
@@ -357,7 +356,8 @@ mod tests {
         assert!(
             (u2 - expected).abs() < 1e-10,
             "U(2) = 4·ln(2) ≈ {:.4}, got {:.4}",
-            expected, u2
+            expected,
+            u2
         );
     }
 
@@ -384,7 +384,10 @@ mod tests {
         assert!(
             (v22 - v28).abs() < 0.5 && (v22 - v82).abs() < 0.5 && (v22 - v88).abs() < 0.5,
             "Symmetric input should give symmetric output: {:.1}, {:.1}, {:.1}, {:.1}",
-            v22, v28, v82, v88
+            v22,
+            v28,
+            v82,
+            v88
         );
     }
 }

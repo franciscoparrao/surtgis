@@ -14,8 +14,8 @@
 //! *Computers & Geosciences*.
 
 use ndarray::Array2;
-use surtgis_core::raster::Raster;
 use surtgis_core::Result;
+use surtgis_core::raster::Raster;
 
 /// Parameters for TFGA flow accumulation
 #[derive(Debug, Clone)]
@@ -32,8 +32,14 @@ impl Default for TfgaParams {
 
 /// 8 neighbors in clockwise order starting from East
 const OFFSETS: [(isize, isize); 8] = [
-    (0, 1), (-1, 1), (-1, 0), (-1, -1),
-    (0, -1), (1, -1), (1, 0), (1, 1),
+    (0, 1),
+    (-1, 1),
+    (-1, 0),
+    (-1, -1),
+    (0, -1),
+    (1, -1),
+    (1, 0),
+    (1, 1),
 ];
 
 /// Compute TFGA (Facet-to-Facet) flow accumulation.
@@ -60,8 +66,7 @@ pub fn flow_accumulation_tfga(dem: &Raster<f64>, params: TfgaParams) -> Result<R
     for row in 0..rows {
         for col in 0..cols {
             let z = unsafe { dem.get_unchecked(row, col) };
-            let is_nd = z.is_nan()
-                || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
+            let is_nd = z.is_nan() || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
             if !is_nd {
                 cells.push((row, col, z));
             }
@@ -74,8 +79,7 @@ pub fn flow_accumulation_tfga(dem: &Raster<f64>, params: TfgaParams) -> Result<R
     for row in 0..rows {
         for col in 0..cols {
             let z = unsafe { dem.get_unchecked(row, col) };
-            let is_nd = z.is_nan()
-                || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
+            let is_nd = z.is_nan() || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
             if is_nd {
                 acc[(row, col)] = 0.0;
             }
@@ -85,7 +89,9 @@ pub fn flow_accumulation_tfga(dem: &Raster<f64>, params: TfgaParams) -> Result<R
     // Compute actual angles from offset vectors using atan2(dr, dc)
     let dir_angle: [f64; 8] = std::array::from_fn(|i| {
         let (dr, dc) = OFFSETS[i];
-        (dr as f64).atan2(dc as f64).rem_euclid(2.0 * std::f64::consts::PI)
+        (dr as f64)
+            .atan2(dc as f64)
+            .rem_euclid(2.0 * std::f64::consts::PI)
     });
 
     let two_pi = 2.0 * std::f64::consts::PI;
@@ -107,7 +113,10 @@ pub fn flow_accumulation_tfga(dem: &Raster<f64>, params: TfgaParams) -> Result<R
             let z = unsafe { dem.get_unchecked(nr as usize, nc as usize) };
             if !z.is_nan() {
                 if let Some(nd) = nodata
-                    && (z - nd).abs() < f64::EPSILON { continue; }
+                    && (z - nd).abs() < f64::EPSILON
+                {
+                    continue;
+                }
                 nz[i] = z;
             }
         }
@@ -171,8 +180,12 @@ pub fn flow_accumulation_tfga(dem: &Raster<f64>, params: TfgaParams) -> Result<R
 
             // Normalize gradient angle into the range
             let mut ga = grad_angle;
-            if ga < lo { ga += two_pi; }
-            if ga > hi + two_pi { ga -= two_pi; }
+            if ga < lo {
+                ga += two_pi;
+            }
+            if ga > hi + two_pi {
+                ga -= two_pi;
+            }
 
             if ga >= lo && ga <= hi {
                 // Flow is within this facet — distribute to neighbors i and j
@@ -227,8 +240,7 @@ pub fn flow_accumulation_tfga(dem: &Raster<f64>, params: TfgaParams) -> Result<R
     for row in 0..rows {
         for col in 0..cols {
             let z = unsafe { dem.get_unchecked(row, col) };
-            let is_nd = z.is_nan()
-                || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
+            let is_nd = z.is_nan() || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
             if !is_nd {
                 acc[(row, col)] = (acc[(row, col)] - 1.0).max(0.0);
             }
@@ -263,7 +275,8 @@ mod tests {
         assert!(
             bottom > top,
             "Bottom should have more accumulation: top={}, bottom={}",
-            top, bottom
+            top,
+            bottom
         );
     }
 
@@ -312,8 +325,8 @@ mod tests {
         dem.set_transform(GeoTransform::new(0.0, 7.0, 1.0, -1.0));
         for row in 0..7 {
             for col in 0..7 {
-                let z = (7 - row) as f64 * 10.0 + col as f64 * 3.0
-                    + ((row as f64 * 0.5).sin()) * 5.0;
+                let z =
+                    (7 - row) as f64 * 10.0 + col as f64 * 3.0 + ((row as f64 * 0.5).sin()) * 5.0;
                 dem.set(row, col, z).unwrap();
             }
         }
@@ -322,7 +335,8 @@ mod tests {
         let mfd = crate::hydrology::flow_accumulation_mfd(
             &dem,
             crate::hydrology::MfdParams { exponent: 1.1 },
-        ).unwrap();
+        )
+        .unwrap();
 
         let mut diffs = 0;
         for row in 0..7 {

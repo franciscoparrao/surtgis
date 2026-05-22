@@ -37,7 +37,11 @@ pub fn show_properties(ui: &mut Ui, dataset: Option<&Dataset>) -> PropertiesActi
                 .default_open(true)
                 .show(ui, |ui| {
                     ui.label(format!("Name: {}", ds.name));
-                    ui.label(format!("Size: {} x {} pixels", ds.raster.cols(), ds.raster.rows()));
+                    ui.label(format!(
+                        "Size: {} x {} pixels",
+                        ds.raster.cols(),
+                        ds.raster.rows()
+                    ));
                     if let Some(ref path) = ds.source_path {
                         ui.label(format!("File: {}", path.display()));
                     }
@@ -62,14 +66,20 @@ pub fn show_properties(ui: &mut Ui, dataset: Option<&Dataset>) -> PropertiesActi
                         .selected_text(current.name())
                         .show_ui(ui, |ui| {
                             for &scheme in ColorScheme::ALL {
-                                if ui.selectable_label(scheme == current, scheme.name()).clicked() {
+                                if ui
+                                    .selectable_label(scheme == current, scheme.name())
+                                    .clicked()
+                                {
                                     action = PropertiesAction::ChangeColormap(scheme);
                                 }
                             }
                         });
 
                     ui.label(format!("Opacity: {:.0}%", ds.opacity * 100.0));
-                    ui.label(format!("Visible: {}", if ds.visible { "Yes" } else { "No" }));
+                    ui.label(format!(
+                        "Visible: {}",
+                        if ds.visible { "Yes" } else { "No" }
+                    ));
                 });
 
             // ── Legend ──────────────────────────────────────────
@@ -103,34 +113,32 @@ pub fn show_properties(ui: &mut Ui, dataset: Option<&Dataset>) -> PropertiesActi
             // ── Statistics ─────────────────────────────────────
             egui::CollapsingHeader::new("Statistics")
                 .default_open(false)
-                .show(ui, |ui| {
-                    match &ds.raster {
-                        DatasetRaster::F64(r) => {
-                            let stats = r.statistics();
-                            if let Some(min) = stats.min {
-                                ui.label(format!("Min: {:.6}", min));
-                            }
-                            if let Some(max) = stats.max {
-                                ui.label(format!("Max: {:.6}", max));
-                            }
-                            if let Some(mean) = stats.mean {
-                                ui.label(format!("Mean: {:.6}", mean));
-                            }
-                            ui.label(format!("Valid cells: {}", stats.valid_count));
-                            ui.label(format!("NoData cells: {}", stats.nodata_count));
+                .show(ui, |ui| match &ds.raster {
+                    DatasetRaster::F64(r) => {
+                        let stats = r.statistics();
+                        if let Some(min) = stats.min {
+                            ui.label(format!("Min: {:.6}", min));
                         }
-                        DatasetRaster::U8(r) => {
-                            let stats = r.statistics();
-                            ui.label(format!("Min: {:?}", stats.min));
-                            ui.label(format!("Max: {:?}", stats.max));
-                            ui.label(format!("Valid cells: {}", stats.valid_count));
+                        if let Some(max) = stats.max {
+                            ui.label(format!("Max: {:.6}", max));
                         }
-                        DatasetRaster::I32(r) => {
-                            let stats = r.statistics();
-                            ui.label(format!("Min: {:?}", stats.min));
-                            ui.label(format!("Max: {:?}", stats.max));
-                            ui.label(format!("Valid cells: {}", stats.valid_count));
+                        if let Some(mean) = stats.mean {
+                            ui.label(format!("Mean: {:.6}", mean));
                         }
+                        ui.label(format!("Valid cells: {}", stats.valid_count));
+                        ui.label(format!("NoData cells: {}", stats.nodata_count));
+                    }
+                    DatasetRaster::U8(r) => {
+                        let stats = r.statistics();
+                        ui.label(format!("Min: {:?}", stats.min));
+                        ui.label(format!("Max: {:?}", stats.max));
+                        ui.label(format!("Valid cells: {}", stats.valid_count));
+                    }
+                    DatasetRaster::I32(r) => {
+                        let stats = r.statistics();
+                        ui.label(format!("Min: {:?}", stats.min));
+                        ui.label(format!("Max: {:?}", stats.max));
+                        ui.label(format!("Valid cells: {}", stats.valid_count));
                     }
                 });
 
@@ -139,13 +147,27 @@ pub fn show_properties(ui: &mut Ui, dataset: Option<&Dataset>) -> PropertiesActi
                 .default_open(false)
                 .show(ui, |ui| {
                     let (bounds, cell_size, crs_info) = match &ds.raster {
-                        DatasetRaster::F64(r) => (r.bounds(), r.cell_size(), r.crs().map(|c| format!("{:?}", c))),
-                        DatasetRaster::U8(r) => (r.bounds(), r.cell_size(), r.crs().map(|c| format!("{:?}", c))),
-                        DatasetRaster::I32(r) => (r.bounds(), r.cell_size(), r.crs().map(|c| format!("{:?}", c))),
+                        DatasetRaster::F64(r) => (
+                            r.bounds(),
+                            r.cell_size(),
+                            r.crs().map(|c| format!("{:?}", c)),
+                        ),
+                        DatasetRaster::U8(r) => (
+                            r.bounds(),
+                            r.cell_size(),
+                            r.crs().map(|c| format!("{:?}", c)),
+                        ),
+                        DatasetRaster::I32(r) => (
+                            r.bounds(),
+                            r.cell_size(),
+                            r.crs().map(|c| format!("{:?}", c)),
+                        ),
                     };
                     ui.label(format!("Cell size: {:.6}", cell_size));
-                    ui.label(format!("Bounds: ({:.4}, {:.4}) - ({:.4}, {:.4})",
-                        bounds.0, bounds.1, bounds.2, bounds.3));
+                    ui.label(format!(
+                        "Bounds: ({:.4}, {:.4}) - ({:.4}, {:.4})",
+                        bounds.0, bounds.1, bounds.2, bounds.3
+                    ));
                     if let Some(crs) = crs_info {
                         ui.label(format!("CRS: {}", crs));
                     } else {
@@ -156,4 +178,3 @@ pub fn show_properties(ui: &mut Ui, dataset: Option<&Dataset>) -> PropertiesActi
 
     action
 }
-

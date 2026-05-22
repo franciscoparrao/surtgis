@@ -25,8 +25,11 @@ pub fn handle_clip(
     if let Some(limit) = mem_limit_bytes {
         if let Ok(est_size) = memory::estimate_decompressed_size(&input) {
             if est_size > limit {
-                eprintln!("Warning: DEM size ({:.2} GB) exceeds --max-memory limit ({:.2} GB)",
-                         est_size as f64 / 1e9, limit as f64 / 1e9);
+                eprintln!(
+                    "Warning: DEM size ({:.2} GB) exceeds --max-memory limit ({:.2} GB)",
+                    est_size as f64 / 1e9,
+                    limit as f64 / 1e9
+                );
                 eprintln!("Note: Clip operation requires in-memory processing and cannot stream");
             }
         }
@@ -38,8 +41,7 @@ pub fn handle_clip(
     let result = if let Some(polygon_path) = polygon {
         let features = surtgis_core::vector::read_vector(&polygon_path)
             .context("Failed to read vector file")?;
-        surtgis_core::vector::clip_raster(&raster, &features)
-            .context("Failed to clip raster")?
+        surtgis_core::vector::clip_raster(&raster, &features).context("Failed to clip raster")?
     } else {
         // Parse bbox: xmin,ymin,xmax,ymax
         let bbox_str = bbox.unwrap();
@@ -49,7 +51,10 @@ pub fn handle_clip(
             .collect::<std::result::Result<Vec<_>, _>>()
             .context("Invalid bbox format. Expected: xmin,ymin,xmax,ymax")?;
         if parts.len() != 4 {
-            anyhow::bail!("bbox must have exactly 4 values: xmin,ymin,xmax,ymax (got {})", parts.len());
+            anyhow::bail!(
+                "bbox must have exactly 4 values: xmin,ymin,xmax,ymax (got {})",
+                parts.len()
+            );
         }
         let (xmin, ymin, xmax, ymax) = (parts[0], parts[1], parts[2], parts[3]);
 
@@ -79,7 +84,8 @@ pub fn handle_clip(
         let gt = raster.transform();
         let new_gt = surtgis_core::GeoTransform::new(ox, oy, gt.pixel_width, gt.pixel_height);
 
-        let mut out = surtgis_core::Raster::from_vec(sub.iter().copied().collect(), out_rows, out_cols)?;
+        let mut out =
+            surtgis_core::Raster::from_vec(sub.iter().copied().collect(), out_rows, out_cols)?;
         out.set_transform(new_gt);
         out.set_crs(raster.crs().cloned());
         out.set_nodata(raster.nodata());
@@ -109,8 +115,8 @@ pub fn handle_rasterize(
     attribute: Option<String>,
     compress: bool,
 ) -> Result<()> {
-    let features = surtgis_core::vector::read_vector(&input)
-        .context("Failed to read vector file")?;
+    let features =
+        surtgis_core::vector::read_vector(&input).context("Failed to read vector file")?;
     let ref_raster = helpers::read_dem(&reference)?;
 
     let (rows, cols) = ref_raster.shape();

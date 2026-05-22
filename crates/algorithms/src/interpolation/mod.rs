@@ -21,23 +21,23 @@ mod tps;
 mod universal_kriging;
 pub mod variogram;
 
-pub use idw::{idw, IdwParams, AdaptivePower, Anisotropy};
+pub use idw::{AdaptivePower, Anisotropy, IdwParams, idw};
 pub use kdtree::{KdTree, NearestResult};
-pub use natural_neighbor::{natural_neighbor, NaturalNeighborParams};
-pub use nearest::{nearest_neighbor, NearestNeighborParams};
-pub use tin::{tin_interpolation, TinParams};
-pub use tps::{tps_interpolation, TpsParams};
-pub use variogram::{
-    empirical_variogram, fit_variogram, fit_best_variogram,
-    EmpiricalVariogram, FittedVariogram, VariogramModel, VariogramParams,
-};
-pub use kriging::{ordinary_kriging, OrdinaryKrigingParams, KrigingResult};
-pub use universal_kriging::{
-    universal_kriging, UniversalKrigingParams, UniversalKrigingResult, DriftOrder,
-};
+pub use kriging::{KrigingResult, OrdinaryKrigingParams, ordinary_kriging};
+pub use natural_neighbor::{NaturalNeighborParams, natural_neighbor};
+pub use nearest::{NearestNeighborParams, nearest_neighbor};
 pub use regression_kriging::{
-    regression_kriging, regression_kriging_with_variogram,
-    RegressionKrigingParams, RegressionKrigingResult,
+    RegressionKrigingParams, RegressionKrigingResult, regression_kriging,
+    regression_kriging_with_variogram,
+};
+pub use tin::{TinParams, tin_interpolation};
+pub use tps::{TpsParams, tps_interpolation};
+pub use universal_kriging::{
+    DriftOrder, UniversalKrigingParams, UniversalKrigingResult, universal_kriging,
+};
+pub use variogram::{
+    EmpiricalVariogram, FittedVariogram, VariogramModel, VariogramParams, empirical_variogram,
+    fit_best_variogram, fit_variogram,
 };
 
 /// A sample point with x, y coordinates and a value.

@@ -5,29 +5,45 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 
 use surtgis_algorithms::vector::overlay;
-use surtgis_algorithms::vector::{buffer_points, BufferParams};
-use surtgis_core::vector::{read_vector, FeatureCollection};
+use surtgis_algorithms::vector::{BufferParams, buffer_points};
+use surtgis_core::vector::{FeatureCollection, read_vector};
 
 use crate::commands::VectorCommands;
 use crate::helpers::spinner;
 
 pub fn handle(action: VectorCommands) -> Result<()> {
     match action {
-        VectorCommands::Intersection { input_a, input_b, output } => {
+        VectorCommands::Intersection {
+            input_a,
+            input_b,
+            output,
+        } => {
             let start = Instant::now();
             let a = read_vector(&input_a).context("Failed to read layer A")?;
             let b = read_vector(&input_b).context("Failed to read layer B")?;
-            println!("A: {} features, B: {} features", a.features.len(), b.features.len());
+            println!(
+                "A: {} features, B: {} features",
+                a.features.len(),
+                b.features.len()
+            );
 
             let pb = spinner("Computing intersection...");
             let result = overlay::intersection(&a, &b);
             pb.finish_and_clear();
 
-            println!("Result: {} features in {:.1?}", result.features.len(), start.elapsed());
+            println!(
+                "Result: {} features in {:.1?}",
+                result.features.len(),
+                start.elapsed()
+            );
             write_vector(&result, &output)?;
         }
 
-        VectorCommands::Union { input_a, input_b, output } => {
+        VectorCommands::Union {
+            input_a,
+            input_b,
+            output,
+        } => {
             let start = Instant::now();
             let a = read_vector(&input_a)?;
             let b = read_vector(&input_b)?;
@@ -36,11 +52,19 @@ pub fn handle(action: VectorCommands) -> Result<()> {
             let result = overlay::union(&a, &b);
             pb.finish_and_clear();
 
-            println!("Result: {} features in {:.1?}", result.features.len(), start.elapsed());
+            println!(
+                "Result: {} features in {:.1?}",
+                result.features.len(),
+                start.elapsed()
+            );
             write_vector(&result, &output)?;
         }
 
-        VectorCommands::Difference { input_a, input_b, output } => {
+        VectorCommands::Difference {
+            input_a,
+            input_b,
+            output,
+        } => {
             let start = Instant::now();
             let a = read_vector(&input_a)?;
             let b = read_vector(&input_b)?;
@@ -49,11 +73,19 @@ pub fn handle(action: VectorCommands) -> Result<()> {
             let result = overlay::difference(&a, &b);
             pb.finish_and_clear();
 
-            println!("Result: {} features in {:.1?}", result.features.len(), start.elapsed());
+            println!(
+                "Result: {} features in {:.1?}",
+                result.features.len(),
+                start.elapsed()
+            );
             write_vector(&result, &output)?;
         }
 
-        VectorCommands::SymDifference { input_a, input_b, output } => {
+        VectorCommands::SymDifference {
+            input_a,
+            input_b,
+            output,
+        } => {
             let start = Instant::now();
             let a = read_vector(&input_a)?;
             let b = read_vector(&input_b)?;
@@ -62,7 +94,11 @@ pub fn handle(action: VectorCommands) -> Result<()> {
             let result = overlay::symmetric_difference(&a, &b);
             pb.finish_and_clear();
 
-            println!("Result: {} features in {:.1?}", result.features.len(), start.elapsed());
+            println!(
+                "Result: {} features in {:.1?}",
+                result.features.len(),
+                start.elapsed()
+            );
             write_vector(&result, &output)?;
         }
 
@@ -75,20 +111,30 @@ pub fn handle(action: VectorCommands) -> Result<()> {
             let result = overlay::dissolve(&fc);
             pb.finish_and_clear();
 
-            println!("Dissolved to {} features in {:.1?}", result.features.len(), start.elapsed());
+            println!(
+                "Dissolved to {} features in {:.1?}",
+                result.features.len(),
+                start.elapsed()
+            );
             write_vector(&result, &output)?;
         }
 
-        VectorCommands::Buffer { input, distance, segments, output } => {
+        VectorCommands::Buffer {
+            input,
+            distance,
+            segments,
+            output,
+        } => {
             let start = Instant::now();
             let fc = read_vector(&input)?;
-            println!("Input: {} features, distance: {}", fc.features.len(), distance);
+            println!(
+                "Input: {} features, distance: {}",
+                fc.features.len(),
+                distance
+            );
 
             let pb = spinner("Buffering...");
-            let params = BufferParams {
-                distance,
-                segments,
-            };
+            let params = BufferParams { distance, segments };
 
             let mut result = FeatureCollection::new();
             for feature in &fc.features {
@@ -105,7 +151,11 @@ pub fn handle(action: VectorCommands) -> Result<()> {
             }
             pb.finish_and_clear();
 
-            println!("Buffered {} features in {:.1?}", result.features.len(), start.elapsed());
+            println!(
+                "Buffered {} features in {:.1?}",
+                result.features.len(),
+                start.elapsed()
+            );
             write_vector(&result, &output)?;
         }
     }
@@ -115,25 +165,29 @@ pub fn handle(action: VectorCommands) -> Result<()> {
 fn write_vector(fc: &FeatureCollection, path: &std::path::Path) -> Result<()> {
     use geo::algorithm::coords_iter::CoordsIter;
 
-    let features: Vec<serde_json::Value> = fc.features.iter().filter_map(|f| {
-        let geom = f.geometry.as_ref()?;
-        let coords: Vec<Vec<Vec<f64>>> = match geom {
-            geo::Geometry::Polygon(p) => {
-                let mut rings = vec![];
-                rings.push(p.exterior().0.iter().map(|c| vec![c.x, c.y]).collect());
-                for interior in p.interiors() {
-                    rings.push(interior.0.iter().map(|c| vec![c.x, c.y]).collect());
+    let features: Vec<serde_json::Value> = fc
+        .features
+        .iter()
+        .filter_map(|f| {
+            let geom = f.geometry.as_ref()?;
+            let coords: Vec<Vec<Vec<f64>>> = match geom {
+                geo::Geometry::Polygon(p) => {
+                    let mut rings = vec![];
+                    rings.push(p.exterior().0.iter().map(|c| vec![c.x, c.y]).collect());
+                    for interior in p.interiors() {
+                        rings.push(interior.0.iter().map(|c| vec![c.x, c.y]).collect());
+                    }
+                    rings
                 }
-                rings
-            }
-            _ => return None,
-        };
-        Some(serde_json::json!({
-            "type": "Feature",
-            "geometry": { "type": "Polygon", "coordinates": coords },
-            "properties": {}
-        }))
-    }).collect();
+                _ => return None,
+            };
+            Some(serde_json::json!({
+                "type": "Feature",
+                "geometry": { "type": "Polygon", "coordinates": coords },
+                "properties": {}
+            }))
+        })
+        .collect();
 
     let geojson = serde_json::json!({
         "type": "FeatureCollection",

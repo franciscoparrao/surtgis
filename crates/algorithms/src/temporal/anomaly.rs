@@ -25,7 +25,10 @@ impl AnomalyMethod {
             "zscore" | "z-score" | "z" => Ok(Self::ZScore),
             "difference" | "diff" | "absolute" => Ok(Self::Difference),
             "percent" | "percent_difference" | "relative" => Ok(Self::PercentDifference),
-            _ => Err(Error::Other(format!("unknown anomaly method: '{}'. Use zscore, difference, or percent", s))),
+            _ => Err(Error::Other(format!(
+                "unknown anomaly method: '{}'. Use zscore, difference, or percent",
+                s
+            ))),
         }
     }
 }
@@ -45,17 +48,24 @@ pub fn temporal_anomaly(
     method: AnomalyMethod,
 ) -> Result<Vec<Raster<f64>>> {
     if reference.len() < 2 {
-        return Err(Error::Other("anomaly requires at least 2 reference rasters".into()));
+        return Err(Error::Other(
+            "anomaly requires at least 2 reference rasters".into(),
+        ));
     }
     if targets.is_empty() {
-        return Err(Error::Other("anomaly requires at least 1 target raster".into()));
+        return Err(Error::Other(
+            "anomaly requires at least 1 target raster".into(),
+        ));
     }
 
     let (rows, cols) = reference[0].shape();
     for r in reference.iter().chain(targets.iter()) {
         if r.shape() != (rows, cols) {
             return Err(Error::SizeMismatch {
-                er: rows, ec: cols, ar: r.rows(), ac: r.cols(),
+                er: rows,
+                ec: cols,
+                ar: r.rows(),
+                ac: r.cols(),
             });
         }
     }
@@ -66,7 +76,8 @@ pub fn temporal_anomaly(
     let mut ref_mean = vec![f64::NAN; total];
     let mut ref_std = vec![f64::NAN; total];
 
-    ref_mean.par_chunks_mut(cols)
+    ref_mean
+        .par_chunks_mut(cols)
         .zip(ref_std.par_chunks_mut(cols))
         .enumerate()
         .for_each(|(row, (mean_row, std_row))| {
@@ -83,7 +94,8 @@ pub fn temporal_anomaly(
                     let m = vals.iter().sum::<f64>() / vals.len() as f64;
                     mean_row[col] = m;
                     if vals.len() >= 2 {
-                        let var = vals.iter().map(|v| (v - m).powi(2)).sum::<f64>() / (vals.len() - 1) as f64;
+                        let var = vals.iter().map(|v| (v - m).powi(2)).sum::<f64>()
+                            / (vals.len() - 1) as f64;
                         std_row[col] = var.sqrt();
                     }
                 }
@@ -96,16 +108,21 @@ pub fn temporal_anomaly(
     for target in targets {
         let mut out = Array2::<f64>::from_elem((rows, cols), f64::NAN);
 
-        out.as_slice_mut().unwrap()
+        out.as_slice_mut()
+            .unwrap()
             .par_chunks_mut(cols)
             .enumerate()
             .for_each(|(row, out_row)| {
                 let base = row * cols;
                 for col in 0..cols {
                     let v = unsafe { target.get_unchecked(row, col) };
-                    if !v.is_finite() { continue; }
+                    if !v.is_finite() {
+                        continue;
+                    }
                     let m = ref_mean[base + col];
-                    if !m.is_finite() { continue; }
+                    if !m.is_finite() {
+                        continue;
+                    }
 
                     out_row[col] = match method {
                         AnomalyMethod::Difference => v - m,
@@ -161,9 +178,7 @@ mod tests {
         let r3 = make_raster(30.0);
         let target = make_raster(40.0); // z = (40-20)/10 = 2.0
 
-        let result = temporal_anomaly(
-            &[&r1, &r2, &r3], &[&target], AnomalyMethod::ZScore,
-        ).unwrap();
+        let result = temporal_anomaly(&[&r1, &r2, &r3], &[&target], AnomalyMethod::ZScore).unwrap();
 
         assert_eq!(result.len(), 1);
         assert!((result[0].data()[[0, 0]] - 2.0).abs() < 1e-10);
@@ -176,9 +191,8 @@ mod tests {
         let r3 = make_raster(30.0);
         let target = make_raster(15.0); // diff = 15 - 20 = -5
 
-        let result = temporal_anomaly(
-            &[&r1, &r2, &r3], &[&target], AnomalyMethod::Difference,
-        ).unwrap();
+        let result =
+            temporal_anomaly(&[&r1, &r2, &r3], &[&target], AnomalyMethod::Difference).unwrap();
 
         assert!((result[0].data()[[0, 0]] - (-5.0)).abs() < 1e-10);
     }
@@ -190,9 +204,8 @@ mod tests {
         // mean=150, target=225 → (225-150)/150*100 = 50%
         let target = make_raster(225.0);
 
-        let result = temporal_anomaly(
-            &[&r1, &r2], &[&target], AnomalyMethod::PercentDifference,
-        ).unwrap();
+        let result =
+            temporal_anomaly(&[&r1, &r2], &[&target], AnomalyMethod::PercentDifference).unwrap();
 
         assert!((result[0].data()[[0, 0]] - 50.0).abs() < 1e-10);
     }
@@ -202,11 +215,9 @@ mod tests {
         let r1 = make_raster(10.0);
         let r2 = make_raster(20.0);
         let t1 = make_raster(30.0); // diff = 30-15 = 15
-        let t2 = make_raster(5.0);  // diff = 5-15 = -10
+        let t2 = make_raster(5.0); // diff = 5-15 = -10
 
-        let result = temporal_anomaly(
-            &[&r1, &r2], &[&t1, &t2], AnomalyMethod::Difference,
-        ).unwrap();
+        let result = temporal_anomaly(&[&r1, &r2], &[&t1, &t2], AnomalyMethod::Difference).unwrap();
 
         assert_eq!(result.len(), 2);
         assert!((result[0].data()[[0, 0]] - 15.0).abs() < 1e-10);
