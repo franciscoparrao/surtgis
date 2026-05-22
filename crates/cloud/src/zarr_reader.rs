@@ -12,8 +12,8 @@ use zarrs::config::MetadataRetrieveVersion;
 use zarrs::group::Group;
 use zarrs_storage::AsyncReadableListableStorageTraits;
 
-use surtgis_core::raster::{GeoTransform, Raster};
 use surtgis_core::CRS;
+use surtgis_core::raster::{GeoTransform, Raster};
 
 use crate::error::{CloudError, Result};
 use crate::tile_index::BBox;
@@ -102,16 +102,8 @@ pub struct ZarrReader {
 
 impl ZarrReader {
     /// Open a Zarr store and select a variable for reading.
-    pub async fn open(
-        store_url: &str,
-        variable: &str,
-        options: ZarrReaderOptions,
-    ) -> Result<Self> {
-        let store = zarr_auth::build_zarr_store(
-            store_url,
-            options.sas_token.as_deref(),
-        )
-        .await?;
+    pub async fn open(store_url: &str, variable: &str, options: ZarrReaderOptions) -> Result<Self> {
+        let store = zarr_auth::build_zarr_store(store_url, options.sas_token.as_deref()).await?;
 
         // Open root group (try default → V2 fallback)
         let group = match Group::async_open(store.clone(), "/").await {
@@ -134,10 +126,12 @@ impl ZarrReader {
                 // Retry with explicit V2 (common for climate Zarr stores)
                 Array::async_open_opt(store.clone(), &array_path, &MetadataRetrieveVersion::V2)
                     .await
-                    .map_err(|e| CloudError::Zarr(format!(
-                        "failed to open array '/{variable}': {e}. Available: [{}]",
-                        available_variables.join(", ")
-                    )))?
+                    .map_err(|e| {
+                        CloudError::Zarr(format!(
+                            "failed to open array '/{variable}': {e}. Available: [{}]",
+                            available_variables.join(", ")
+                        ))
+                    })?
             }
         };
 
@@ -163,20 +157,17 @@ impl ZarrReader {
         let cf = CfMetadata::from_zarr_attributes(&array_attrs, &group_attrs, &dimension_names);
 
         // Read coordinate arrays
-        let lat_dim = cf.lat_dim.ok_or_else(|| {
-            CloudError::ZarrCfError("cannot identify latitude dimension".into())
-        })?;
-        let lon_dim = cf.lon_dim.ok_or_else(|| {
-            CloudError::ZarrCfError("cannot identify longitude dimension".into())
-        })?;
+        let lat_dim = cf
+            .lat_dim
+            .ok_or_else(|| CloudError::ZarrCfError("cannot identify latitude dimension".into()))?;
+        let lon_dim = cf
+            .lon_dim
+            .ok_or_else(|| CloudError::ZarrCfError("cannot identify longitude dimension".into()))?;
 
         // Read coordinate arrays (try dimension name, then common aliases)
-        let raw_lat = read_coord_with_fallbacks(
-            &store,
-            &dimension_names[lat_dim],
-            &["latitude", "lat", "y"],
-        )
-        .await?;
+        let raw_lat =
+            read_coord_with_fallbacks(&store, &dimension_names[lat_dim], &["latitude", "lat", "y"])
+                .await?;
         let raw_lon = read_coord_with_fallbacks(
             &store,
             &dimension_names[lon_dim],
@@ -357,8 +348,7 @@ impl ZarrReader {
         store_url: &str,
         options: ZarrReaderOptions,
     ) -> Result<Vec<String>> {
-        let store =
-            zarr_auth::build_zarr_store(store_url, options.sas_token.as_deref()).await?;
+        let store = zarr_auth::build_zarr_store(store_url, options.sas_token.as_deref()).await?;
         Self::list_arrays(&store).await
     }
 
@@ -424,8 +414,14 @@ impl ZarrReader {
                         requested: format!("{start} to {end}"),
                         available: format!(
                             "{} to {}",
-                            self.time_coords.first().map(|t| t.to_string()).unwrap_or_default(),
-                            self.time_coords.last().map(|t| t.to_string()).unwrap_or_default(),
+                            self.time_coords
+                                .first()
+                                .map(|t| t.to_string())
+                                .unwrap_or_default(),
+                            self.time_coords
+                                .last()
+                                .map(|t| t.to_string())
+                                .unwrap_or_default(),
                         ),
                     });
                 }
@@ -484,7 +480,11 @@ async fn read_time_cf_metadata(
 
         let attrs = serde_json::Value::Object(arr.attributes().clone());
         // Check if this array has time units
-        if attrs.get("units").and_then(|u| u.as_str()).is_some_and(|u| u.contains("since")) {
+        if attrs
+            .get("units")
+            .and_then(|u| u.as_str())
+            .is_some_and(|u| u.contains("since"))
+        {
             let cf = CfMetadata::from_zarr_attributes(&attrs, &serde_json::json!({}), &[]);
             return Some(cf);
         }
@@ -731,7 +731,9 @@ fn reduce_3d_tlatlat(
                                 valid_vals.iter().sum::<f64>() / valid_vals.len() as f64
                             }
                             AggMethod::Sum => valid_vals.iter().sum(),
-                            AggMethod::Min => valid_vals.iter().copied().fold(f64::INFINITY, f64::min),
+                            AggMethod::Min => {
+                                valid_vals.iter().copied().fold(f64::INFINITY, f64::min)
+                            }
                             AggMethod::Max => {
                                 valid_vals.iter().copied().fold(f64::NEG_INFINITY, f64::max)
                             }

@@ -35,8 +35,8 @@ pub fn parse_geojson(json: &str) -> Result<FeatureCollection> {
             Ok(fc)
         }
         // Bare geometry (wrap in a feature)
-        "Point" | "Polygon" | "MultiPolygon" | "LineString" | "MultiLineString"
-        | "MultiPoint" | "GeometryCollection" => {
+        "Point" | "Polygon" | "MultiPolygon" | "LineString" | "MultiLineString" | "MultiPoint"
+        | "GeometryCollection" => {
             let geom = parse_geometry(&root)?;
             let mut fc = FeatureCollection::new();
             fc.push(Feature::new(geom));

@@ -46,7 +46,10 @@ pub fn pca(bands: &[&Raster<f64>], params: PcaParams) -> Result<PcaResult> {
     for (_i, band) in bands.iter().enumerate().skip(1) {
         if band.shape() != (rows, cols) {
             return Err(Error::SizeMismatch {
-                er: rows, ec: cols, ar: band.rows(), ac: band.cols(),
+                er: rows,
+                ec: cols,
+                ar: band.rows(),
+                ac: band.cols(),
             });
         }
     }
@@ -75,7 +78,9 @@ pub fn pca(bands: &[&Raster<f64>], params: PcaParams) -> Result<PcaResult> {
     }
 
     if pixels.is_empty() {
-        return Err(Error::Algorithm("No valid pixels found across all bands".into()));
+        return Err(Error::Algorithm(
+            "No valid pixels found across all bands".into(),
+        ));
     }
 
     let n_pixels = pixels.len();
@@ -116,15 +121,24 @@ pub fn pca(bands: &[&Raster<f64>], params: PcaParams) -> Result<PcaResult> {
 
     // Sort by eigenvalue descending
     let mut indices: Vec<usize> = (0..n_bands).collect();
-    indices.sort_by(|&a, &b| eigenvalues[b].partial_cmp(&eigenvalues[a]).unwrap_or(std::cmp::Ordering::Equal));
+    indices.sort_by(|&a, &b| {
+        eigenvalues[b]
+            .partial_cmp(&eigenvalues[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let n_components = params.n_components.unwrap_or(n_bands).min(n_bands);
     let total_var: f64 = eigenvalues.iter().sum();
 
-    let sorted_eigenvalues: Vec<f64> = indices.iter().take(n_components).map(|&i| eigenvalues[i]).collect();
-    let variance_explained: Vec<f64> = sorted_eigenvalues.iter().map(|ev| {
-        if total_var > 0.0 { ev / total_var } else { 0.0 }
-    }).collect();
+    let sorted_eigenvalues: Vec<f64> = indices
+        .iter()
+        .take(n_components)
+        .map(|&i| eigenvalues[i])
+        .collect();
+    let variance_explained: Vec<f64> = sorted_eigenvalues
+        .iter()
+        .map(|ev| if total_var > 0.0 { ev / total_var } else { 0.0 })
+        .collect();
 
     // Project pixels onto principal components
     let mut components = Vec::with_capacity(n_components);
@@ -146,8 +160,8 @@ pub fn pca(bands: &[&Raster<f64>], params: PcaParams) -> Result<PcaResult> {
 
         let mut raster = bands[0].with_same_meta::<f64>(rows, cols);
         raster.set_nodata(Some(f64::NAN));
-        *raster.data_mut() = Array2::from_shape_vec((rows, cols), data)
-            .map_err(|e| Error::Other(e.to_string()))?;
+        *raster.data_mut() =
+            Array2::from_shape_vec((rows, cols), data).map_err(|e| Error::Other(e.to_string()))?;
         components.push(raster);
     }
 
@@ -211,8 +225,10 @@ fn jacobi_eigen(matrix: &[Vec<f64>], n: usize) -> Result<(Vec<f64>, Vec<Vec<f64>
                 new_a[q][i] = new_a[i][q];
             }
         }
-        new_a[p][p] = cos_t * cos_t * a[p][p] + 2.0 * sin_t * cos_t * a[p][q] + sin_t * sin_t * a[q][q];
-        new_a[q][q] = sin_t * sin_t * a[p][p] - 2.0 * sin_t * cos_t * a[p][q] + cos_t * cos_t * a[q][q];
+        new_a[p][p] =
+            cos_t * cos_t * a[p][p] + 2.0 * sin_t * cos_t * a[p][q] + sin_t * sin_t * a[q][q];
+        new_a[q][q] =
+            sin_t * sin_t * a[p][p] - 2.0 * sin_t * cos_t * a[p][q] + cos_t * cos_t * a[q][q];
         new_a[p][q] = 0.0;
         new_a[q][p] = 0.0;
         a = new_a;
@@ -240,7 +256,8 @@ mod tests {
         r.set_transform(GeoTransform::new(0.0, rows as f64, 1.0, -1.0));
         for row in 0..rows {
             for col in 0..cols {
-                r.set(row, col, base + (row * cols + col) as f64 * step).unwrap();
+                r.set(row, col, base + (row * cols + col) as f64 * step)
+                    .unwrap();
             }
         }
         r
@@ -256,8 +273,11 @@ mod tests {
         assert_eq!(result.components.len(), 2);
         assert_eq!(result.eigenvalues.len(), 2);
         // First component should explain most variance
-        assert!(result.variance_explained[0] > 0.9,
-            "PC1 should explain >90% variance, got {}", result.variance_explained[0]);
+        assert!(
+            result.variance_explained[0] > 0.9,
+            "PC1 should explain >90% variance, got {}",
+            result.variance_explained[0]
+        );
     }
 
     #[test]
@@ -266,7 +286,13 @@ mod tests {
         let b2 = make_band(10, 10, 100.0, 0.5);
         let b3 = make_band(10, 10, 50.0, 0.3);
 
-        let result = pca(&[&b1, &b2, &b3], PcaParams { n_components: Some(2) }).unwrap();
+        let result = pca(
+            &[&b1, &b2, &b3],
+            PcaParams {
+                n_components: Some(2),
+            },
+        )
+        .unwrap();
         assert_eq!(result.components.len(), 2);
     }
 

@@ -108,9 +108,7 @@ where
     let (rows, cols) = raster.shape();
 
     // Build creation options
-    let mut create_options = vec![
-        format!("COMPRESS={}", opts.compression),
-    ];
+    let mut create_options = vec![format!("COMPRESS={}", opts.compression)];
 
     if opts.tile_size > 0 {
         create_options.push("TILED=YES".to_string());
@@ -127,13 +125,8 @@ where
         csl.add_string(opt)?;
     }
 
-    let mut dataset = driver.create_with_band_type_with_options::<T, _>(
-        path.as_ref(),
-        cols,
-        rows,
-        1,
-        &csl,
-    )?;
+    let mut dataset =
+        driver.create_with_band_type_with_options::<T, _>(path.as_ref(), cols, rows, 1, &csl)?;
 
     // Set geotransform
     dataset.set_geo_transform(&raster.transform().to_gdal())?;

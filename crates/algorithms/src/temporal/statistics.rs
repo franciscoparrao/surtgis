@@ -20,13 +20,18 @@ pub struct TemporalStats {
 
 fn validate_stack(rasters: &[&Raster<f64>]) -> Result<(usize, usize)> {
     if rasters.is_empty() {
-        return Err(Error::Other("temporal statistics require at least 1 raster".into()));
+        return Err(Error::Other(
+            "temporal statistics require at least 1 raster".into(),
+        ));
     }
     let (rows, cols) = rasters[0].shape();
     for r in rasters.iter().skip(1) {
         if r.shape() != (rows, cols) {
             return Err(Error::SizeMismatch {
-                er: rows, ec: cols, ar: r.rows(), ac: r.cols(),
+                er: rows,
+                ec: cols,
+                ar: r.rows(),
+                ac: r.cols(),
             });
         }
     }
@@ -49,7 +54,8 @@ pub fn temporal_mean(rasters: &[&Raster<f64>]) -> Result<Raster<f64>> {
     let (rows, cols) = validate_stack(rasters)?;
     let mut out = Array2::<f64>::from_elem((rows, cols), f64::NAN);
 
-    out.as_slice_mut().unwrap()
+    out.as_slice_mut()
+        .unwrap()
         .par_chunks_mut(cols)
         .enumerate()
         .for_each(|(row, out_row)| {
@@ -75,7 +81,8 @@ pub fn temporal_std(rasters: &[&Raster<f64>]) -> Result<Raster<f64>> {
     let (rows, cols) = validate_stack(rasters)?;
     let mut out = Array2::<f64>::from_elem((rows, cols), f64::NAN);
 
-    out.as_slice_mut().unwrap()
+    out.as_slice_mut()
+        .unwrap()
         .par_chunks_mut(cols)
         .enumerate()
         .for_each(|(row, out_row)| {
@@ -83,7 +90,8 @@ pub fn temporal_std(rasters: &[&Raster<f64>]) -> Result<Raster<f64>> {
                 let vals = collect_valid(rasters, row, col);
                 if vals.len() >= 2 {
                     let mean = vals.iter().sum::<f64>() / vals.len() as f64;
-                    let var = vals.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (vals.len() - 1) as f64;
+                    let var = vals.iter().map(|v| (v - mean).powi(2)).sum::<f64>()
+                        / (vals.len() - 1) as f64;
                     out_row[col] = var.sqrt();
                 }
             }
@@ -103,7 +111,8 @@ pub fn temporal_min(rasters: &[&Raster<f64>]) -> Result<Raster<f64>> {
     let (rows, cols) = validate_stack(rasters)?;
     let mut out = Array2::<f64>::from_elem((rows, cols), f64::NAN);
 
-    out.as_slice_mut().unwrap()
+    out.as_slice_mut()
+        .unwrap()
         .par_chunks_mut(cols)
         .enumerate()
         .for_each(|(row, out_row)| {
@@ -129,7 +138,8 @@ pub fn temporal_max(rasters: &[&Raster<f64>]) -> Result<Raster<f64>> {
     let (rows, cols) = validate_stack(rasters)?;
     let mut out = Array2::<f64>::from_elem((rows, cols), f64::NAN);
 
-    out.as_slice_mut().unwrap()
+    out.as_slice_mut()
+        .unwrap()
         .par_chunks_mut(cols)
         .enumerate()
         .for_each(|(row, out_row)| {
@@ -155,7 +165,8 @@ pub fn temporal_count(rasters: &[&Raster<f64>]) -> Result<Raster<f64>> {
     let (rows, cols) = validate_stack(rasters)?;
     let mut out = Array2::<f64>::from_elem((rows, cols), 0.0);
 
-    out.as_slice_mut().unwrap()
+    out.as_slice_mut()
+        .unwrap()
         .par_chunks_mut(cols)
         .enumerate()
         .for_each(|(row, out_row)| {
@@ -176,12 +187,16 @@ pub fn temporal_count(rasters: &[&Raster<f64>]) -> Result<Raster<f64>> {
 /// Per-pixel percentile (0-100) across time.
 pub fn temporal_percentile(rasters: &[&Raster<f64>], percentile: f64) -> Result<Raster<f64>> {
     if !(0.0..=100.0).contains(&percentile) {
-        return Err(Error::Other(format!("percentile must be 0-100, got {}", percentile)));
+        return Err(Error::Other(format!(
+            "percentile must be 0-100, got {}",
+            percentile
+        )));
     }
     let (rows, cols) = validate_stack(rasters)?;
     let mut out = Array2::<f64>::from_elem((rows, cols), f64::NAN);
 
-    out.as_slice_mut().unwrap()
+    out.as_slice_mut()
+        .unwrap()
         .par_chunks_mut(cols)
         .enumerate()
         .for_each(|(row, out_row)| {
@@ -232,47 +247,56 @@ pub fn temporal_stats(rasters: &[&Raster<f64>]) -> Result<TemporalStats> {
 
     // Zip 5 slices together for parallel processing
     let chunk_size = cols;
-    mean_flat.par_chunks_mut(chunk_size)
+    mean_flat
+        .par_chunks_mut(chunk_size)
         .zip(std_flat.par_chunks_mut(chunk_size))
         .zip(min_flat.par_chunks_mut(chunk_size))
         .zip(max_flat.par_chunks_mut(chunk_size))
         .zip(count_flat.par_chunks_mut(chunk_size))
         .enumerate()
-        .for_each(|(row, ((((mean_row, std_row), min_row), max_row), count_row))| {
-            let mut vals = Vec::with_capacity(n);
-            for col in 0..cols {
-                vals.clear();
-                for r in rasters {
-                    let v = unsafe { r.get_unchecked(row, col) };
-                    if v.is_finite() {
-                        vals.push(v);
+        .for_each(
+            |(row, ((((mean_row, std_row), min_row), max_row), count_row))| {
+                let mut vals = Vec::with_capacity(n);
+                for col in 0..cols {
+                    vals.clear();
+                    for r in rasters {
+                        let v = unsafe { r.get_unchecked(row, col) };
+                        if v.is_finite() {
+                            vals.push(v);
+                        }
+                    }
+                    count_row[col] = vals.len() as f64;
+                    if !vals.is_empty() {
+                        let sum: f64 = vals.iter().sum();
+                        let m = sum / vals.len() as f64;
+                        mean_row[col] = m;
+                        min_row[col] = vals.iter().cloned().fold(f64::INFINITY, f64::min);
+                        max_row[col] = vals.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                        if vals.len() >= 2 {
+                            let var = vals.iter().map(|v| (v - m).powi(2)).sum::<f64>()
+                                / (vals.len() - 1) as f64;
+                            std_row[col] = var.sqrt();
+                        }
                     }
                 }
-                count_row[col] = vals.len() as f64;
-                if !vals.is_empty() {
-                    let sum: f64 = vals.iter().sum();
-                    let m = sum / vals.len() as f64;
-                    mean_row[col] = m;
-                    min_row[col] = vals.iter().cloned().fold(f64::INFINITY, f64::min);
-                    max_row[col] = vals.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-                    if vals.len() >= 2 {
-                        let var = vals.iter().map(|v| (v - m).powi(2)).sum::<f64>() / (vals.len() - 1) as f64;
-                        std_row[col] = var.sqrt();
-                    }
-                }
-            }
-        });
+            },
+        );
 
     mean_arr.as_slice_mut().unwrap().copy_from_slice(&mean_flat);
     std_arr.as_slice_mut().unwrap().copy_from_slice(&std_flat);
     min_arr.as_slice_mut().unwrap().copy_from_slice(&min_flat);
     max_arr.as_slice_mut().unwrap().copy_from_slice(&max_flat);
-    count_arr.as_slice_mut().unwrap().copy_from_slice(&count_flat);
+    count_arr
+        .as_slice_mut()
+        .unwrap()
+        .copy_from_slice(&count_flat);
 
     let make_raster = |arr: Array2<f64>, nodata: bool| {
         let mut r = Raster::from_array(arr);
         r.set_transform(rasters[0].transform().clone());
-        if nodata { r.set_nodata(Some(f64::NAN)); }
+        if nodata {
+            r.set_nodata(Some(f64::NAN));
+        }
         if let Some(crs) = rasters[0].crs() {
             r.set_crs(Some(crs.clone()));
         }

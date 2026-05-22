@@ -12,12 +12,7 @@ pub fn handle(input: PathBuf) -> Result<()> {
     let stats = raster.statistics();
 
     println!("File: {}", input.display());
-    println!(
-        "Dimensions: {} x {} ({} cells)",
-        cols,
-        rows,
-        raster.len()
-    );
+    println!("Dimensions: {} x {} ({} cells)", cols, rows, raster.len());
     println!("Cell size: {}", raster.cell_size());
     println!(
         "Bounds: ({:.6}, {:.6}) - ({:.6}, {:.6})",

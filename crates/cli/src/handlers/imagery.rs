@@ -5,9 +5,9 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use surtgis_algorithms::imagery::{
-    band_math_binary, bsi, burn_severity_classify, cloud_mask_scl, dnbr, evi, evi2, gndvi,
-    index_builder, median_composite, mndwi, msavi, nbr, ndbi, ndmi, ndre, ndsi, ndvi, ndwi,
-    ngrdi, reci, reclassify, savi, EviParams, ReclassifyParams, SaviParams,
+    EviParams, ReclassifyParams, SaviParams, band_math_binary, bsi, burn_severity_classify,
+    cloud_mask_scl, dnbr, evi, evi2, gndvi, index_builder, median_composite, mndwi, msavi, nbr,
+    ndbi, ndmi, ndre, ndsi, ndvi, ndwi, ngrdi, reci, reclassify, savi,
 };
 
 use crate::commands::ImageryCommands;
@@ -46,8 +46,7 @@ pub fn handle(algorithm: ImageryCommands, compress: bool) -> Result<()> {
             let green_r = read_dem(&green)?;
             let swir_r = read_dem(&swir)?;
             let start = Instant::now();
-            let result =
-                mndwi(&green_r, &swir_r).context("Failed to calculate MNDWI")?;
+            let result = mndwi(&green_r, &swir_r).context("Failed to calculate MNDWI")?;
             let elapsed = start.elapsed();
             write_result(&result, &output, compress)?;
             done("MNDWI", &output, elapsed);
@@ -108,8 +107,8 @@ pub fn handle(algorithm: ImageryCommands, compress: bool) -> Result<()> {
             let nir_r = read_dem(&nir)?;
             let blue_r = read_dem(&blue)?;
             let start = Instant::now();
-            let result = bsi(&swir_r, &red_r, &nir_r, &blue_r)
-                .context("Failed to calculate BSI")?;
+            let result =
+                bsi(&swir_r, &red_r, &nir_r, &blue_r).context("Failed to calculate BSI")?;
             let elapsed = start.elapsed();
             write_result(&result, &output, compress)?;
             done("BSI", &output, elapsed);
@@ -120,8 +119,7 @@ pub fn handle(algorithm: ImageryCommands, compress: bool) -> Result<()> {
             let a_r = read_dem(&a)?;
             let b_r = read_dem(&b)?;
             let start = Instant::now();
-            let result = band_math_binary(&a_r, &b_r, op)
-                .context("Failed to perform band math")?;
+            let result = band_math_binary(&a_r, &b_r, op).context("Failed to perform band math")?;
             let elapsed = start.elapsed();
             write_result(&result, &output, compress)?;
             done("Band math", &output, elapsed);
@@ -138,13 +136,11 @@ pub fn handle(algorithm: ImageryCommands, compress: bool) -> Result<()> {
                 let r = read_dem(path)?;
                 rasters.push((name.clone(), r));
             }
-            let band_refs: HashMap<&str, &surtgis_core::Raster<f64>> = rasters
-                .iter()
-                .map(|(name, r)| (name.as_str(), r))
-                .collect();
+            let band_refs: HashMap<&str, &surtgis_core::Raster<f64>> =
+                rasters.iter().map(|(name, r)| (name.as_str(), r)).collect();
             let start = Instant::now();
-            let result = index_builder(&expression, &band_refs)
-                .context("Failed to evaluate expression")?;
+            let result =
+                index_builder(&expression, &band_refs).context("Failed to evaluate expression")?;
             let elapsed = start.elapsed();
             write_result(&result, &output, compress)?;
             done("Calc", &output, elapsed);
@@ -180,7 +176,11 @@ pub fn handle(algorithm: ImageryCommands, compress: bool) -> Result<()> {
             done("NGRDI", &output, elapsed);
         }
 
-        ImageryCommands::Reci { nir, red_edge, output } => {
+        ImageryCommands::Reci {
+            nir,
+            red_edge,
+            output,
+        } => {
             let nir_r = read_dem(&nir)?;
             let re_r = read_dem(&red_edge)?;
             let start = Instant::now();
@@ -190,7 +190,11 @@ pub fn handle(algorithm: ImageryCommands, compress: bool) -> Result<()> {
             done("RECI", &output, elapsed);
         }
 
-        ImageryCommands::Ndre { nir, red_edge, output } => {
+        ImageryCommands::Ndre {
+            nir,
+            red_edge,
+            output,
+        } => {
             let nir_r = read_dem(&nir)?;
             let re_r = read_dem(&red_edge)?;
             let start = Instant::now();
@@ -200,7 +204,11 @@ pub fn handle(algorithm: ImageryCommands, compress: bool) -> Result<()> {
             done("NDRE", &output, elapsed);
         }
 
-        ImageryCommands::Ndsi { green, swir, output } => {
+        ImageryCommands::Ndsi {
+            green,
+            swir,
+            output,
+        } => {
             let green_r = read_dem(&green)?;
             let swir_r = read_dem(&swir)?;
             let start = Instant::now();
@@ -276,21 +284,25 @@ pub fn handle(algorithm: ImageryCommands, compress: bool) -> Result<()> {
             }
             let rasters: Vec<surtgis_core::Raster<f64>> = input
                 .iter()
-                .map(|p| {
-                    read_dem(p)
-                })
+                .map(|p| read_dem(p))
                 .collect::<Result<Vec<_>>>()?;
             let refs: Vec<&surtgis_core::Raster<f64>> = rasters.iter().collect();
             let start = Instant::now();
-            let result =
-                median_composite(&refs).context("Failed to compute median composite")?;
+            let result = median_composite(&refs).context("Failed to compute median composite")?;
             let elapsed = start.elapsed();
             write_result(&result, &output, compress)?;
             println!("  {} input rasters composited", input.len());
             done("Median composite", &output, elapsed);
         }
 
-        ImageryCommands::Dnbr { pre_nir, pre_swir, post_nir, post_swir, output, severity_output } => {
+        ImageryCommands::Dnbr {
+            pre_nir,
+            pre_swir,
+            post_nir,
+            post_swir,
+            output,
+            severity_output,
+        } => {
             let pn = read_dem(&pre_nir)?;
             let ps = read_dem(&pre_swir)?;
             let on = read_dem(&post_nir)?;
@@ -302,8 +314,8 @@ pub fn handle(algorithm: ImageryCommands, compress: bool) -> Result<()> {
             done("dNBR", &output, elapsed);
 
             if let Some(sev_path) = severity_output {
-                let severity = burn_severity_classify(&result)
-                    .context("Failed to classify burn severity")?;
+                let severity =
+                    burn_severity_classify(&result).context("Failed to classify burn severity")?;
                 write_result(&severity, &sev_path, compress)?;
                 println!("Burn severity saved to: {}", sev_path.display());
             }
@@ -319,8 +331,8 @@ pub fn handle(algorithm: ImageryCommands, compress: bool) -> Result<()> {
             let scl_r = read_dem(&scl)?;
             let classes = parse_scl_classes(&keep)?;
             let start = Instant::now();
-            let result = cloud_mask_scl(&data, &scl_r, &classes)
-                .context("Failed to apply cloud mask")?;
+            let result =
+                cloud_mask_scl(&data, &scl_r, &classes).context("Failed to apply cloud mask")?;
             let elapsed = start.elapsed();
             write_result(&result, &output, compress)?;
             done("Cloud mask", &output, elapsed);

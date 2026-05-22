@@ -69,9 +69,18 @@ mod tests {
     #[test]
     fn test_cache_eviction() {
         let mut cache = TileCache::new(2);
-        let k1 = TileKey { ifd_idx: 0, tile_idx: 0 };
-        let k2 = TileKey { ifd_idx: 0, tile_idx: 1 };
-        let k3 = TileKey { ifd_idx: 0, tile_idx: 2 };
+        let k1 = TileKey {
+            ifd_idx: 0,
+            tile_idx: 0,
+        };
+        let k2 = TileKey {
+            ifd_idx: 0,
+            tile_idx: 1,
+        };
+        let k3 = TileKey {
+            ifd_idx: 0,
+            tile_idx: 2,
+        };
 
         cache.insert(k1, vec![1]);
         cache.insert(k2, vec![2]);

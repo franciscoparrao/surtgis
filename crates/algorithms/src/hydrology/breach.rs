@@ -15,24 +15,34 @@
 //! methods for flow path enforcement in digital elevation models.
 //! *Hydrological Processes*, 30(6), 846–857.
 
+use ndarray::Array2;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
-use ndarray::Array2;
-use surtgis_core::raster::Raster;
 use surtgis_core::Result;
+use surtgis_core::raster::Raster;
 
 /// D8 neighbor offsets
 const D8_OFFSETS: [(isize, isize); 8] = [
-    (-1, -1), (-1, 0), (-1, 1),
-    (0, -1),           (0, 1),
-    (1, -1),  (1, 0),  (1, 1),
+    (-1, -1),
+    (-1, 0),
+    (-1, 1),
+    (0, -1),
+    (0, 1),
+    (1, -1),
+    (1, 0),
+    (1, 1),
 ];
 
 /// D8 distance factors
 const D8_DIST: [f64; 8] = [
-    std::f64::consts::SQRT_2, 1.0, std::f64::consts::SQRT_2,
-    1.0,                           1.0,
-    std::f64::consts::SQRT_2, 1.0, std::f64::consts::SQRT_2,
+    std::f64::consts::SQRT_2,
+    1.0,
+    std::f64::consts::SQRT_2,
+    1.0,
+    1.0,
+    std::f64::consts::SQRT_2,
+    1.0,
+    std::f64::consts::SQRT_2,
 ];
 
 /// Parameters for breach depressions
@@ -89,7 +99,10 @@ impl PartialOrd for BreachCell {
 impl Ord for BreachCell {
     fn cmp(&self, other: &Self) -> Ordering {
         // Min-heap: lower cost = higher priority
-        other.cost.partial_cmp(&self.cost).unwrap_or(Ordering::Equal)
+        other
+            .cost
+            .partial_cmp(&self.cost)
+            .unwrap_or(Ordering::Equal)
     }
 }
 
@@ -187,8 +200,8 @@ pub fn breach_depressions(dem: &Raster<f64>, params: BreachParams) -> Result<Ras
             // Check if this is a valid target:
             // (1) lower than the pit, or (2) on the border
             if idx != start_idx {
-                let on_border = cell.row == 0 || cell.row == rows - 1
-                    || cell.col == 0 || cell.col == cols - 1;
+                let on_border =
+                    cell.row == 0 || cell.row == rows - 1 || cell.col == 0 || cell.col == cols - 1;
 
                 if on_border || z < pit_elev {
                     target_idx = Some(idx);
@@ -287,8 +300,8 @@ pub fn breach_depressions(dem: &Raster<f64>, params: BreachParams) -> Result<Ras
         for row in 0..rows {
             for col in 0..cols {
                 let val = output[(row, col)];
-                let is_nd = val.is_nan()
-                    || nodata.is_some_and(|nd| (val - nd).abs() < f64::EPSILON);
+                let is_nd =
+                    val.is_nan() || nodata.is_some_and(|nd| (val - nd).abs() < f64::EPSILON);
 
                 if is_nd {
                     pf_visited[(row, col)] = true;
@@ -296,7 +309,11 @@ pub fn breach_depressions(dem: &Raster<f64>, params: BreachParams) -> Result<Ras
                 }
 
                 if row == 0 || row == rows - 1 || col == 0 || col == cols - 1 {
-                    pf_heap.push(BreachCell { cost: val, row, col });
+                    pf_heap.push(BreachCell {
+                        cost: val,
+                        row,
+                        col,
+                    });
                     pf_visited[(row, col)] = true;
                 }
             }
@@ -330,7 +347,11 @@ pub fn breach_depressions(dem: &Raster<f64>, params: BreachParams) -> Result<Ras
                 };
 
                 output[(nr, nc)] = filled;
-                pf_heap.push(BreachCell { cost: filled, row: nr, col: nc });
+                pf_heap.push(BreachCell {
+                    cost: filled,
+                    row: nr,
+                    col: nc,
+                });
             }
         }
     }
@@ -352,13 +373,9 @@ mod tests {
         dem.set_transform(GeoTransform::new(0.0, 7.0, 1.0, -1.0));
 
         let values = [
-            9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0,
-            9.0, 8.0, 8.0, 8.0, 8.0, 8.0, 9.0,
-            9.0, 8.0, 7.0, 7.0, 7.0, 8.0, 9.0,
-            9.0, 8.0, 7.0, 3.0, 7.0, 8.0, 9.0,
-            9.0, 8.0, 7.0, 7.0, 7.0, 8.0, 9.0,
-            9.0, 8.0, 8.0, 8.0, 8.0, 8.0, 9.0,
-            9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0,
+            9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 8.0, 8.0, 8.0, 8.0, 8.0, 9.0, 9.0, 8.0, 7.0,
+            7.0, 7.0, 8.0, 9.0, 9.0, 8.0, 7.0, 3.0, 7.0, 8.0, 9.0, 9.0, 8.0, 7.0, 7.0, 7.0, 8.0,
+            9.0, 9.0, 8.0, 8.0, 8.0, 8.0, 8.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0,
         ];
 
         for (idx, &val) in values.iter().enumerate() {
@@ -392,7 +409,9 @@ mod tests {
                 assert!(
                     has_lower || z >= 9.0 - 0.01,
                     "Cell ({},{}) z={} should have a downslope path",
-                    row, col, z
+                    row,
+                    col,
+                    z
                 );
             }
         }
@@ -445,7 +464,10 @@ mod tests {
                 assert!(
                     (orig - res).abs() < 1e-10,
                     "Clean DEM should be unchanged at ({},{}): orig={}, result={}",
-                    row, col, orig, res
+                    row,
+                    col,
+                    orig,
+                    res
                 );
             }
         }
@@ -454,10 +476,14 @@ mod tests {
     #[test]
     fn test_breach_never_raises_elevation() {
         let dem = create_dem_with_sink();
-        let result = breach_depressions(&dem, BreachParams {
-            fill_remaining: false,
-            ..Default::default()
-        }).unwrap();
+        let result = breach_depressions(
+            &dem,
+            BreachParams {
+                fill_remaining: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let (rows, cols) = dem.shape();
         for row in 0..rows {
@@ -467,7 +493,10 @@ mod tests {
                 assert!(
                     res <= orig + 1e-10,
                     "Breaching (without fill) should never raise elevation at ({},{}): orig={}, result={}",
-                    row, col, orig, res
+                    row,
+                    col,
+                    orig,
+                    res
                 );
             }
         }

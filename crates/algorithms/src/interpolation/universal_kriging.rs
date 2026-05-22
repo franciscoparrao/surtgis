@@ -23,8 +23,8 @@ use ndarray::Array2;
 use surtgis_core::raster::{GeoTransform, Raster};
 use surtgis_core::{Error, Result};
 
-use super::variogram::FittedVariogram;
 use super::SamplePoint;
+use super::variogram::FittedVariogram;
 
 /// Polynomial drift order for Universal Kriging
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -205,8 +205,8 @@ pub fn universal_kriging(
                     let pt = &points[neighbors[i].0];
                     let fvals = drift_values(pt.x, pt.y, drift_order);
                     for (l, fv) in fvals.iter().enumerate() {
-                        mat[i * m + k + l] = *fv;       // upper-right
-                        mat[(k + l) * m + i] = *fv;     // lower-left
+                        mat[i * m + k + l] = *fv; // upper-right
+                        mat[(k + l) * m + i] = *fv; // lower-left
                     }
                 }
                 // Lower-right (p × p) is already zero
@@ -266,8 +266,8 @@ pub fn universal_kriging(
     let mut estimate = Raster::new(rows, cols);
     estimate.set_transform(transform);
     estimate.set_nodata(Some(f64::NAN));
-    *estimate.data_mut() = Array2::from_shape_vec((rows, cols), est_data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *estimate.data_mut() =
+        Array2::from_shape_vec((rows, cols), est_data).map_err(|e| Error::Other(e.to_string()))?;
 
     let variance = if compute_var {
         let var_data: Vec<f64> = output.iter().map(|(_, v)| *v).collect();
@@ -335,12 +335,16 @@ fn uk_solve(n: usize, mat: &mut [f64], rhs: &mut [f64]) -> Result<Vec<f64>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::variogram::{
-        empirical_variogram, fit_best_variogram, VariogramModel, VariogramParams,
+        VariogramModel, VariogramParams, empirical_variogram, fit_best_variogram,
     };
+    use super::*;
 
-    fn make_params(rows: usize, cols: usize, extent: (f64, f64, f64, f64)) -> UniversalKrigingParams {
+    fn make_params(
+        rows: usize,
+        cols: usize,
+        extent: (f64, f64, f64, f64),
+    ) -> UniversalKrigingParams {
         let (x_min, y_min, x_max, y_max) = extent;
         let x_res = (x_max - x_min) / cols as f64;
         let y_res = -(y_max - y_min) / rows as f64;
@@ -356,13 +360,19 @@ mod tests {
         let mut points = Vec::with_capacity(n);
         let mut rng = seed;
         for _ in 0..n {
-            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let x = (rng >> 33) as f64 / (1u64 << 31) as f64 * 100.0;
-            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let y = (rng >> 33) as f64 / (1u64 << 31) as f64 * 100.0;
             // Strong linear trend + local variation
             let value = 2.0 * x + 1.5 * y + 10.0 * ((x / 15.0).sin() + (y / 15.0).sin());
-            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let noise = (rng >> 33) as f64 / (1u64 << 31) as f64 * 4.0 - 2.0;
             points.push(SamplePoint::new(x, y, value + noise));
         }
@@ -397,7 +407,11 @@ mod tests {
                 }
             }
         }
-        assert!(nan_count == 0, "Should have no NaN in output, got {}", nan_count);
+        assert!(
+            nan_count == 0,
+            "Should have no NaN in output, got {}",
+            nan_count
+        );
     }
 
     #[test]
@@ -483,11 +497,11 @@ mod tests {
     fn test_drift_values_quadratic() {
         let dv = drift_values(2.0, 3.0, DriftOrder::Quadratic);
         assert_eq!(dv.len(), 6);
-        assert!((dv[0] - 1.0).abs() < 1e-10);  // 1
-        assert!((dv[1] - 2.0).abs() < 1e-10);  // x
-        assert!((dv[2] - 3.0).abs() < 1e-10);  // y
-        assert!((dv[3] - 4.0).abs() < 1e-10);  // x²
-        assert!((dv[4] - 6.0).abs() < 1e-10);  // xy
-        assert!((dv[5] - 9.0).abs() < 1e-10);  // y²
+        assert!((dv[0] - 1.0).abs() < 1e-10); // 1
+        assert!((dv[1] - 2.0).abs() < 1e-10); // x
+        assert!((dv[2] - 3.0).abs() < 1e-10); // y
+        assert!((dv[3] - 4.0).abs() < 1e-10); // x²
+        assert!((dv[4] - 6.0).abs() < 1e-10); // xy
+        assert!((dv[5] - 9.0).abs() < 1e-10); // y²
     }
 }

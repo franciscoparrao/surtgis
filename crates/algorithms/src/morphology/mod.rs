@@ -17,10 +17,10 @@ mod gradient;
 mod opening;
 mod tophat;
 
-pub use closing::{closing, Closing, ClosingParams};
-pub use dilate::{dilate, Dilate, DilateParams};
+pub use closing::{Closing, ClosingParams, closing};
+pub use dilate::{Dilate, DilateParams, dilate};
 pub use element::StructuringElement;
-pub use erode::{erode, Erode, ErodeParams};
-pub use gradient::{gradient, Gradient, GradientParams};
-pub use opening::{opening, Opening, OpeningParams};
-pub use tophat::{black_hat, top_hat, BlackHat, BlackHatParams, TopHat, TopHatParams};
+pub use erode::{Erode, ErodeParams, erode};
+pub use gradient::{Gradient, GradientParams, gradient};
+pub use opening::{Opening, OpeningParams, opening};
+pub use tophat::{BlackHat, BlackHatParams, TopHat, TopHatParams, black_hat, top_hat};

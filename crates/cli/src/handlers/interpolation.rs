@@ -7,15 +7,13 @@ use anyhow::{Context, Result};
 use geo::Point;
 
 use surtgis_algorithms::interpolation::{
-    empirical_variogram, fit_best_variogram, ordinary_kriging,
-    universal_kriging, regression_kriging,
-    OrdinaryKrigingParams, UniversalKrigingParams,
-    RegressionKrigingParams,
-    SamplePoint, VariogramParams, FittedVariogram, VariogramModel, DriftOrder,
+    DriftOrder, FittedVariogram, OrdinaryKrigingParams, RegressionKrigingParams, SamplePoint,
+    UniversalKrigingParams, VariogramModel, VariogramParams, empirical_variogram,
+    fit_best_variogram, ordinary_kriging, regression_kriging, universal_kriging,
 };
 use surtgis_core::io::read_geotiff;
 use surtgis_core::raster::Raster;
-use surtgis_core::vector::{read_vector, AttributeValue};
+use surtgis_core::vector::{AttributeValue, read_vector};
 
 use crate::commands::InterpolationCommands;
 use crate::helpers::{done, spinner, write_result};
@@ -23,22 +21,31 @@ use crate::helpers::{done, spinner, write_result};
 pub fn handle(action: InterpolationCommands, compress: bool) -> Result<()> {
     match action {
         InterpolationCommands::Variogram {
-            points, attribute, bins, max_lag, output,
+            points,
+            attribute,
+            bins,
+            max_lag,
+            output,
         } => {
             let start = Instant::now();
             let samples = load_samples(&points, &attribute)?;
             println!("Loaded {} sample points", samples.len());
 
             let pb = spinner("Computing variogram...");
-            let params = VariogramParams { n_lags: bins, max_lag, lag_tolerance: 1.0 };
+            let params = VariogramParams {
+                n_lags: bins,
+                max_lag,
+                lag_tolerance: 1.0,
+            };
             let empirical = empirical_variogram(&samples, params)
                 .context("Failed to compute empirical variogram")?;
-            let fitted = fit_best_variogram(&empirical)
-                .context("Failed to fit variogram model")?;
+            let fitted = fit_best_variogram(&empirical).context("Failed to fit variogram model")?;
             pb.finish_and_clear();
 
-            println!("Model: {:?} — range={:.2}, sill={:.6}, nugget={:.6}",
-                fitted.model, fitted.range, fitted.sill, fitted.nugget);
+            println!(
+                "Model: {:?} — range={:.2}, sill={:.6}, nugget={:.6}",
+                fitted.model, fitted.range, fitted.sill, fitted.nugget
+            );
 
             let result = serde_json::json!({
                 "empirical": {
@@ -61,8 +68,15 @@ pub fn handle(action: InterpolationCommands, compress: bool) -> Result<()> {
         }
 
         InterpolationCommands::Kriging {
-            points, attribute, reference, model,
-            range, sill, nugget, max_neighbors, output,
+            points,
+            attribute,
+            reference,
+            model,
+            range,
+            sill,
+            nugget,
+            max_neighbors,
+            output,
         } => {
             let start = Instant::now();
             let samples = load_samples(&points, &attribute)?;
@@ -73,28 +87,42 @@ pub fn handle(action: InterpolationCommands, compress: bool) -> Result<()> {
             let variogram = if let (Some(r), Some(s)) = (range, sill) {
                 FittedVariogram {
                     model: parse_variogram_model(&model),
-                    range: r, sill: s, nugget,
-                    partial_sill: s - nugget, rss: 0.0,
+                    range: r,
+                    sill: s,
+                    nugget,
+                    partial_sill: s - nugget,
+                    rss: 0.0,
                 }
             } else {
                 let pb = spinner("Auto-fitting variogram...");
-                let emp = empirical_variogram(&samples, VariogramParams { n_lags: 15, max_lag: None, lag_tolerance: 1.0 })?;
+                let emp = empirical_variogram(
+                    &samples,
+                    VariogramParams {
+                        n_lags: 15,
+                        max_lag: None,
+                        lag_tolerance: 1.0,
+                    },
+                )?;
                 let v = fit_best_variogram(&emp)?;
                 pb.finish_and_clear();
-                println!("Auto-fit: {:?} (range={:.1}, sill={:.4})", v.model, v.range, v.sill);
+                println!(
+                    "Auto-fit: {:?} (range={:.1}, sill={:.4})",
+                    v.model, v.range, v.sill
+                );
                 v
             };
 
             let pb = spinner("Kriging...");
             let params = OrdinaryKrigingParams {
-                rows, cols,
+                rows,
+                cols,
                 transform: ref_raster.transform().clone(),
                 max_points: max_neighbors,
                 max_radius: None,
                 compute_variance: false,
             };
-            let result = ordinary_kriging(&samples, &variogram, params)
-                .context("Kriging failed")?;
+            let result =
+                ordinary_kriging(&samples, &variogram, params).context("Kriging failed")?;
             pb.finish_and_clear();
 
             let mut out = result.estimate;
@@ -105,7 +133,13 @@ pub fn handle(action: InterpolationCommands, compress: bool) -> Result<()> {
         }
 
         InterpolationCommands::UniversalKriging {
-            points, attribute, reference, drift, model, max_neighbors, output,
+            points,
+            attribute,
+            reference,
+            drift,
+            model,
+            max_neighbors,
+            output,
         } => {
             let start = Instant::now();
             let samples = load_samples(&points, &attribute)?;
@@ -118,13 +152,21 @@ pub fn handle(action: InterpolationCommands, compress: bool) -> Result<()> {
             };
 
             let pb = spinner("Auto-fitting variogram...");
-            let emp = empirical_variogram(&samples, VariogramParams { n_lags: 15, max_lag: None, lag_tolerance: 1.0 })?;
+            let emp = empirical_variogram(
+                &samples,
+                VariogramParams {
+                    n_lags: 15,
+                    max_lag: None,
+                    lag_tolerance: 1.0,
+                },
+            )?;
             let variogram = fit_best_variogram(&emp)?;
             pb.finish_and_clear();
 
             let pb = spinner("Universal Kriging...");
             let params = UniversalKrigingParams {
-                rows, cols,
+                rows,
+                cols,
                 transform: ref_raster.transform().clone(),
                 max_points: max_neighbors,
                 max_radius: None,
@@ -143,7 +185,12 @@ pub fn handle(action: InterpolationCommands, compress: bool) -> Result<()> {
         }
 
         InterpolationCommands::RegressionKriging {
-            points, attribute, features: _features, reference, model: _model, output,
+            points,
+            attribute,
+            features: _features,
+            reference,
+            model: _model,
+            output,
         } => {
             let start = Instant::now();
             let samples = load_samples(&points, &attribute)?;
@@ -153,15 +200,20 @@ pub fn handle(action: InterpolationCommands, compress: bool) -> Result<()> {
 
             let pb = spinner("Regression-Kriging...");
             let params = RegressionKrigingParams {
-                rows, cols,
+                rows,
+                cols,
                 transform: ref_raster.transform().clone(),
                 max_points: 16,
                 max_radius: None,
                 compute_variance: false,
-                variogram_params: VariogramParams { n_lags: 15, max_lag: None, lag_tolerance: 1.0 },
+                variogram_params: VariogramParams {
+                    n_lags: 15,
+                    max_lag: None,
+                    lag_tolerance: 1.0,
+                },
             };
-            let result = regression_kriging(&samples, params)
-                .context("Regression-Kriging failed")?;
+            let result =
+                regression_kriging(&samples, params).context("Regression-Kriging failed")?;
             pb.finish_and_clear();
 
             let mut out = result.estimate;
@@ -172,9 +224,15 @@ pub fn handle(action: InterpolationCommands, compress: bool) -> Result<()> {
         }
 
         InterpolationCommands::Idw {
-            points, attribute, reference, power, max_radius, max_points, output,
+            points,
+            attribute,
+            reference,
+            power,
+            max_radius,
+            max_points,
+            output,
         } => {
-            use surtgis_algorithms::interpolation::{idw, IdwParams};
+            use surtgis_algorithms::interpolation::{IdwParams, idw};
 
             let samples = load_samples(&points, &attribute)?;
             let ref_raster: Raster<f64> = read_geotiff(&reference, None)?;
@@ -183,15 +241,19 @@ pub fn handle(action: InterpolationCommands, compress: bool) -> Result<()> {
 
             let start = Instant::now();
             let pb = spinner(&format!("IDW (power={})...", power));
-            let result = idw(&samples, IdwParams {
-                power,
-                max_radius,
-                max_points,
-                rows,
-                cols,
-                transform: ref_raster.transform().clone(),
-                ..IdwParams::default()
-            }).context("IDW failed")?;
+            let result = idw(
+                &samples,
+                IdwParams {
+                    power,
+                    max_radius,
+                    max_points,
+                    rows,
+                    cols,
+                    transform: ref_raster.transform().clone(),
+                    ..IdwParams::default()
+                },
+            )
+            .context("IDW failed")?;
             pb.finish_and_clear();
 
             let mut out = result;
@@ -201,9 +263,13 @@ pub fn handle(action: InterpolationCommands, compress: bool) -> Result<()> {
         }
 
         InterpolationCommands::NearestNeighbor {
-            points, attribute, reference, max_radius, output,
+            points,
+            attribute,
+            reference,
+            max_radius,
+            output,
         } => {
-            use surtgis_algorithms::interpolation::{nearest_neighbor, NearestNeighborParams};
+            use surtgis_algorithms::interpolation::{NearestNeighborParams, nearest_neighbor};
 
             let samples = load_samples(&points, &attribute)?;
             let ref_raster: Raster<f64> = read_geotiff(&reference, None)?;
@@ -212,12 +278,16 @@ pub fn handle(action: InterpolationCommands, compress: bool) -> Result<()> {
 
             let start = Instant::now();
             let pb = spinner("Nearest Neighbor...");
-            let result = nearest_neighbor(&samples, NearestNeighborParams {
-                max_radius,
-                rows,
-                cols,
-                transform: ref_raster.transform().clone(),
-            }).context("Nearest Neighbor failed")?;
+            let result = nearest_neighbor(
+                &samples,
+                NearestNeighborParams {
+                    max_radius,
+                    rows,
+                    cols,
+                    transform: ref_raster.transform().clone(),
+                },
+            )
+            .context("Nearest Neighbor failed")?;
             pb.finish_and_clear();
 
             let mut out = result;
@@ -227,9 +297,12 @@ pub fn handle(action: InterpolationCommands, compress: bool) -> Result<()> {
         }
 
         InterpolationCommands::NaturalNeighbor {
-            points, attribute, reference, output,
+            points,
+            attribute,
+            reference,
+            output,
         } => {
-            use surtgis_algorithms::interpolation::{natural_neighbor, NaturalNeighborParams};
+            use surtgis_algorithms::interpolation::{NaturalNeighborParams, natural_neighbor};
 
             let samples = load_samples(&points, &attribute)?;
             let ref_raster: Raster<f64> = read_geotiff(&reference, None)?;
@@ -238,13 +311,17 @@ pub fn handle(action: InterpolationCommands, compress: bool) -> Result<()> {
 
             let start = Instant::now();
             let pb = spinner("Natural Neighbor...");
-            let result = natural_neighbor(&samples, NaturalNeighborParams {
-                max_neighbors: 20,
-                sub_resolution: 11,
-                rows,
-                cols,
-                transform: ref_raster.transform().clone(),
-            }).context("Natural Neighbor failed")?;
+            let result = natural_neighbor(
+                &samples,
+                NaturalNeighborParams {
+                    max_neighbors: 20,
+                    sub_resolution: 11,
+                    rows,
+                    cols,
+                    transform: ref_raster.transform().clone(),
+                },
+            )
+            .context("Natural Neighbor failed")?;
             pb.finish_and_clear();
 
             let mut out = result;
@@ -254,9 +331,13 @@ pub fn handle(action: InterpolationCommands, compress: bool) -> Result<()> {
         }
 
         InterpolationCommands::Tps {
-            points, attribute, reference, smoothing, output,
+            points,
+            attribute,
+            reference,
+            smoothing,
+            output,
         } => {
-            use surtgis_algorithms::interpolation::{tps_interpolation, TpsParams};
+            use surtgis_algorithms::interpolation::{TpsParams, tps_interpolation};
 
             let samples = load_samples(&points, &attribute)?;
             let ref_raster: Raster<f64> = read_geotiff(&reference, None)?;
@@ -265,12 +346,16 @@ pub fn handle(action: InterpolationCommands, compress: bool) -> Result<()> {
 
             let start = Instant::now();
             let pb = spinner("Thin Plate Spline...");
-            let result = tps_interpolation(&samples, TpsParams {
-                rows,
-                cols,
-                transform: ref_raster.transform().clone(),
-                smoothing,
-            }).context("TPS failed")?;
+            let result = tps_interpolation(
+                &samples,
+                TpsParams {
+                    rows,
+                    cols,
+                    transform: ref_raster.transform().clone(),
+                    smoothing,
+                },
+            )
+            .context("TPS failed")?;
             pb.finish_and_clear();
 
             let mut out = result;
@@ -280,9 +365,12 @@ pub fn handle(action: InterpolationCommands, compress: bool) -> Result<()> {
         }
 
         InterpolationCommands::Tin {
-            points, attribute, reference, output,
+            points,
+            attribute,
+            reference,
+            output,
         } => {
-            use surtgis_algorithms::interpolation::{tin_interpolation, TinParams};
+            use surtgis_algorithms::interpolation::{TinParams, tin_interpolation};
 
             let samples = load_samples(&points, &attribute)?;
             let ref_raster: Raster<f64> = read_geotiff(&reference, None)?;
@@ -291,11 +379,15 @@ pub fn handle(action: InterpolationCommands, compress: bool) -> Result<()> {
 
             let start = Instant::now();
             let pb = spinner("TIN interpolation...");
-            let result = tin_interpolation(&samples, TinParams {
-                rows,
-                cols,
-                transform: ref_raster.transform().clone(),
-            }).context("TIN failed")?;
+            let result = tin_interpolation(
+                &samples,
+                TinParams {
+                    rows,
+                    cols,
+                    transform: ref_raster.transform().clone(),
+                },
+            )
+            .context("TIN failed")?;
             pb.finish_and_clear();
 
             let mut out = result;
@@ -312,7 +404,9 @@ fn load_samples(path: &Path, attribute: &str) -> Result<Vec<SamplePoint>> {
 
     let mut samples = Vec::new();
     for feature in &fc.features {
-        let geom = feature.geometry.as_ref()
+        let geom = feature
+            .geometry
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Feature missing geometry"))?;
 
         let (x, y) = match geom {

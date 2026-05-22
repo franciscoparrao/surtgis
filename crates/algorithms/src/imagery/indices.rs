@@ -3,8 +3,8 @@
 //! Common remote sensing indices computed from multispectral imagery.
 //! All indices operate on single-band rasters (one band per raster).
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -250,8 +250,12 @@ pub struct EviParams {
 impl EviParams {
     /// Validate parameters are in expected ranges.
     pub fn validate(&self) -> std::result::Result<(), String> {
-        if self.g <= 0.0 { return Err(format!("g={} must be positive", self.g)); }
-        if self.l <= 0.0 { return Err(format!("l={} must be positive", self.l)); }
+        if self.g <= 0.0 {
+            return Err(format!("g={} must be positive", self.g));
+        }
+        if self.l <= 0.0 {
+            return Err(format!("l={} must be positive", self.l));
+        }
         Ok(())
     }
 }
@@ -713,11 +717,7 @@ mod tests {
         let val = result.get(2, 2).unwrap();
 
         // (0.8 - 0.2) / (0.8 + 0.2) = 0.6
-        assert!(
-            (val - 0.6).abs() < 1e-10,
-            "Expected 0.6, got {}",
-            val
-        );
+        assert!((val - 0.6).abs() < 1e-10, "Expected 0.6, got {}", val);
     }
 
     #[test]
@@ -835,11 +835,7 @@ mod tests {
         let val = result.get(2, 2).unwrap();
 
         // ((0.4+0.3) - (0.2+0.1)) / ((0.4+0.3) + (0.2+0.1)) = (0.7-0.3)/1.0 = 0.4
-        assert!(
-            (val - 0.4).abs() < 1e-10,
-            "Expected 0.4, got {}",
-            val
-        );
+        assert!((val - 0.4).abs() < 1e-10, "Expected 0.4, got {}", val);
     }
 
     #[test]
@@ -925,11 +921,7 @@ mod tests {
         let val = result.get(2, 2).unwrap();
 
         // RECI = (0.6 / 0.2) - 1 = 3.0 - 1.0 = 2.0
-        assert!(
-            (val - 2.0).abs() < 1e-10,
-            "Expected 2.0, got {}",
-            val
-        );
+        assert!((val - 2.0).abs() < 1e-10, "Expected 2.0, got {}", val);
     }
 
     #[test]
@@ -940,7 +932,11 @@ mod tests {
         let result = reci(&nir, &red_edge).unwrap();
         let val = result.get(2, 2).unwrap();
 
-        assert!(val.is_nan(), "Zero red edge should produce NaN, got {}", val);
+        assert!(
+            val.is_nan(),
+            "Zero red edge should produce NaN, got {}",
+            val
+        );
     }
 
     #[test]
@@ -952,7 +948,12 @@ mod tests {
         let val = result.get(2, 2).unwrap();
 
         let expected = (0.7 - 0.2) / (0.7 + 0.2);
-        assert!((val - expected).abs() < 1e-10, "Expected {}, got {}", expected, val);
+        assert!(
+            (val - expected).abs() < 1e-10,
+            "Expected {}, got {}",
+            expected,
+            val
+        );
     }
 
     #[test]
@@ -964,7 +965,12 @@ mod tests {
         let val = result.get(2, 2).unwrap();
 
         let expected = (0.4 - 0.3) / (0.4 + 0.3);
-        assert!((val - expected).abs() < 1e-10, "Expected {}, got {}", expected, val);
+        assert!(
+            (val - expected).abs() < 1e-10,
+            "Expected {}, got {}",
+            expected,
+            val
+        );
     }
 
     #[test]
@@ -976,7 +982,12 @@ mod tests {
         let val = result.get(2, 2).unwrap();
 
         let expected = (0.6 - 0.3) / (0.6 + 0.3);
-        assert!((val - expected).abs() < 1e-10, "Expected {}, got {}", expected, val);
+        assert!(
+            (val - expected).abs() < 1e-10,
+            "Expected {}, got {}",
+            expected,
+            val
+        );
     }
 
     #[test]
@@ -989,10 +1000,19 @@ mod tests {
 
         // MSAVI = (2*0.5 + 1 - sqrt((2*0.5+1)^2 - 8*(0.5-0.1))) / 2
         //       = (2.0 - sqrt(4.0 - 3.2)) / 2 = (2.0 - sqrt(0.8)) / 2
-        let expected = (2.0 * 0.5 + 1.0 - ((2.0 * 0.5 + 1.0_f64).powi(2) - 8.0 * (0.5 - 0.1)).sqrt()) / 2.0;
-        assert!((val - expected).abs() < 1e-10, "Expected {}, got {}", expected, val);
+        let expected =
+            (2.0 * 0.5 + 1.0 - ((2.0 * 0.5 + 1.0_f64).powi(2) - 8.0 * (0.5 - 0.1)).sqrt()) / 2.0;
+        assert!(
+            (val - expected).abs() < 1e-10,
+            "Expected {}, got {}",
+            expected,
+            val
+        );
         // MSAVI should be in reasonable vegetation range
-        assert!(val > 0.0 && val < 1.0, "MSAVI should be in (0,1) for valid reflectance");
+        assert!(
+            val > 0.0 && val < 1.0,
+            "MSAVI should be in (0,1) for valid reflectance"
+        );
     }
 
     #[test]
@@ -1007,6 +1027,11 @@ mod tests {
         //      = 2.5 * 0.4 / (0.5 + 0.24 + 1.0)
         //      = 1.0 / 1.74
         let expected = 2.5 * (0.5 - 0.1) / (0.5 + 2.4 * 0.1 + 1.0);
-        assert!((val - expected).abs() < 1e-10, "Expected {}, got {}", expected, val);
+        assert!(
+            (val - expected).abs() < 1e-10,
+            "Expected {}, got {}",
+            expected,
+            val
+        );
     }
 }

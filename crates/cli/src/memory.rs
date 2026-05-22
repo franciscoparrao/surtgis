@@ -1,6 +1,6 @@
 //! Memory estimation and streaming decision logic.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use std::path::Path;
 
 /// Parse a memory size string into bytes.
@@ -20,7 +20,10 @@ pub fn parse_memory_size(s: &str) -> Result<u64> {
             i += 1;
         }
         if i == 0 {
-            return Err(anyhow!("Invalid memory size format: no number found in '{}'", s));
+            return Err(anyhow!(
+                "Invalid memory size format: no number found in '{}'",
+                s
+            ));
         }
         (&s[..i], s[i..].trim().to_lowercase())
     };
@@ -56,8 +59,8 @@ pub fn parse_memory_size(s: &str) -> Result<u64> {
 pub fn estimate_decompressed_size(path: &Path) -> Result<u64> {
     use surtgis_core::io::strip_reader::StripReader;
 
-    let reader = StripReader::open(path)
-        .map_err(|e| anyhow!("Failed to read TIFF metadata: {}", e))?;
+    let reader =
+        StripReader::open(path).map_err(|e| anyhow!("Failed to read TIFF metadata: {}", e))?;
 
     let total_pixels = reader.rows() as u64 * reader.cols() as u64;
     let bytes_per_pixel = 8u64; // Float64
@@ -148,7 +151,10 @@ mod tests {
         assert_eq!(parse_memory_size("1KiB").unwrap(), 1024);
         assert_eq!(parse_memory_size("1MiB").unwrap(), 1024 * 1024);
         assert_eq!(parse_memory_size("1GiB").unwrap(), 1024 * 1024 * 1024);
-        assert_eq!(parse_memory_size("1TiB").unwrap(), 1024 * 1024 * 1024 * 1024);
+        assert_eq!(
+            parse_memory_size("1TiB").unwrap(),
+            1024 * 1024 * 1024 * 1024
+        );
     }
 
     #[test]

@@ -3,8 +3,8 @@
 //! Computes Haralick texture measures from a GLCM built at each pixel's
 //! neighborhood. Values are quantized to `n_levels` gray levels.
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -81,7 +81,9 @@ pub fn haralick_glcm(raster: &Raster<f64>, params: GlcmParams) -> Result<Raster<
     }
 
     if vmin >= vmax {
-        return Err(Error::Algorithm("Raster has no value range for GLCM".into()));
+        return Err(Error::Algorithm(
+            "Raster has no value range for GLCM".into(),
+        ));
     }
 
     let range = vmax - vmin;
@@ -111,8 +113,14 @@ pub fn haralick_glcm(raster: &Raster<f64>, params: GlcmParams) -> Result<Raster<
                             let r2 = r1 + dir.0;
                             let c2 = c1 + dir.1;
 
-                            if r1 >= 0 && c1 >= 0 && (r1 as usize) < rows && (c1 as usize) < cols
-                                && r2 >= 0 && c2 >= 0 && (r2 as usize) < rows && (c2 as usize) < cols
+                            if r1 >= 0
+                                && c1 >= 0
+                                && (r1 as usize) < rows
+                                && (c1 as usize) < cols
+                                && r2 >= 0
+                                && c2 >= 0
+                                && (r2 as usize) < rows
+                                && (c2 as usize) < cols
                             {
                                 let v1 = unsafe { raster.get_unchecked(r1 as usize, c1 as usize) };
                                 let v2 = unsafe { raster.get_unchecked(r2 as usize, c2 as usize) };
@@ -134,7 +142,9 @@ pub fn haralick_glcm(raster: &Raster<f64>, params: GlcmParams) -> Result<Raster<
                 }
 
                 // Normalize GLCM
-                for v in &mut glcm { *v /= total; }
+                for v in &mut glcm {
+                    *v /= total;
+                }
 
                 *out = compute_texture(&glcm, n, params.texture);
             }
@@ -159,9 +169,7 @@ fn quantize(value: f64, vmin: f64, range: f64, n_levels: usize) -> usize {
 
 fn compute_texture(glcm: &[f64], n: usize, texture: GlcmTexture) -> f64 {
     match texture {
-        GlcmTexture::Energy => {
-            glcm.iter().map(|p| p * p).sum()
-        }
+        GlcmTexture::Energy => glcm.iter().map(|p| p * p).sum(),
         GlcmTexture::Contrast => {
             let mut val = 0.0;
             for i in 0..n {
@@ -263,22 +271,29 @@ mod tests {
     fn test_glcm_energy_uniform() {
         // Uniform raster should have no value range
         let r = uniform_raster(10, 5.0);
-        let result = haralick_glcm(&r, GlcmParams {
-            texture: GlcmTexture::Energy,
-            ..Default::default()
-        });
+        let result = haralick_glcm(
+            &r,
+            GlcmParams {
+                texture: GlcmTexture::Energy,
+                ..Default::default()
+            },
+        );
         assert!(result.is_err()); // No range
     }
 
     #[test]
     fn test_glcm_contrast_gradient() {
         let r = gradient_raster(20);
-        let result = haralick_glcm(&r, GlcmParams {
-            texture: GlcmTexture::Contrast,
-            radius: 2,
-            n_levels: 16,
-            ..Default::default()
-        }).unwrap();
+        let result = haralick_glcm(
+            &r,
+            GlcmParams {
+                texture: GlcmTexture::Contrast,
+                radius: 2,
+                n_levels: 16,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let v = result.get(10, 10).unwrap();
         assert!(v > 0.0, "Gradient should have contrast > 0, got {}", v);
@@ -287,12 +302,16 @@ mod tests {
     #[test]
     fn test_glcm_entropy_gradient() {
         let r = gradient_raster(20);
-        let result = haralick_glcm(&r, GlcmParams {
-            texture: GlcmTexture::Entropy,
-            radius: 2,
-            n_levels: 16,
-            ..Default::default()
-        }).unwrap();
+        let result = haralick_glcm(
+            &r,
+            GlcmParams {
+                texture: GlcmTexture::Entropy,
+                radius: 2,
+                n_levels: 16,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let v = result.get(10, 10).unwrap();
         assert!(v > 0.0, "Gradient should have entropy > 0, got {}", v);

@@ -13,12 +13,9 @@
 //!
 //! Reference: WhiteboxTools `RelativeAspect`
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
-use crate::terrain::{
-    aspect, AspectOutput,
-    gaussian_smoothing, GaussianSmoothingParams,
-};
+use crate::terrain::{AspectOutput, GaussianSmoothingParams, aspect, gaussian_smoothing};
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -36,10 +33,7 @@ impl Default for RelativeAspectParams {
 }
 
 /// Compute relative aspect.
-pub fn relative_aspect(
-    dem: &Raster<f64>,
-    params: RelativeAspectParams,
-) -> Result<Raster<f64>> {
+pub fn relative_aspect(dem: &Raster<f64>, params: RelativeAspectParams) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
     let nodata = dem.nodata();
 
@@ -48,10 +42,13 @@ pub fn relative_aspect(
 
     // Smooth DEM and compute regional aspect
     let radius = (params.sigma * 3.0).ceil() as usize;
-    let smoothed = gaussian_smoothing(dem, GaussianSmoothingParams {
-        sigma: params.sigma,
-        radius,
-    })?;
+    let smoothed = gaussian_smoothing(
+        dem,
+        GaussianSmoothingParams {
+            sigma: params.sigma,
+            radius,
+        },
+    )?;
     let regional_aspect = aspect(&smoothed, AspectOutput::Degrees)?;
 
     // Compute angular difference
@@ -112,7 +109,11 @@ mod tests {
         let result = relative_aspect(&dem, RelativeAspectParams { sigma: 5.0 }).unwrap();
         let v = result.get(25, 25).unwrap();
         if !v.is_nan() {
-            assert!(v < 10.0, "Uniform slope should have low relative aspect, got {}", v);
+            assert!(
+                v < 10.0,
+                "Uniform slope should have low relative aspect, got {}",
+                v
+            );
         }
     }
 
@@ -124,7 +125,8 @@ mod tests {
             for c in 0..50 {
                 let x = c as f64 - 25.0;
                 let y = r as f64 - 25.0;
-                dem.set(r, c, x * x + y * y + (x * 0.3).sin() * 30.0).unwrap();
+                dem.set(r, c, x * x + y * y + (x * 0.3).sin() * 30.0)
+                    .unwrap();
             }
         }
 
@@ -133,8 +135,13 @@ mod tests {
             for c in 10..40 {
                 let v = result.get(r, c).unwrap();
                 if !v.is_nan() {
-                    assert!(v >= -0.01 && v <= 180.01,
-                        "Relative aspect should be [0,180], got {} at ({},{})", v, r, c);
+                    assert!(
+                        v >= -0.01 && v <= 180.01,
+                        "Relative aspect should be [0,180], got {} at ({},{})",
+                        v,
+                        r,
+                        c
+                    );
                 }
             }
         }

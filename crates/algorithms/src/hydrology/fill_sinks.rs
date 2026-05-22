@@ -22,9 +22,7 @@ pub struct FillSinksParams {
 
 impl Default for FillSinksParams {
     fn default() -> Self {
-        Self {
-            min_slope: 0.01,
-        }
+        Self { min_slope: 0.01 }
     }
 }
 
@@ -53,16 +51,26 @@ impl Algorithm for FillSinks {
 
 /// D8 neighbor offsets: (row_offset, col_offset)
 const D8_OFFSETS: [(isize, isize); 8] = [
-    (-1, -1), (-1, 0), (-1, 1),
-    (0, -1),           (0, 1),
-    (1, -1),  (1, 0),  (1, 1),
+    (-1, -1),
+    (-1, 0),
+    (-1, 1),
+    (0, -1),
+    (0, 1),
+    (1, -1),
+    (1, 0),
+    (1, 1),
 ];
 
 /// D8 distances: cardinal = cell_size, diagonal = cell_size * sqrt(2)
 const D8_DISTANCES: [f64; 8] = [
-    std::f64::consts::SQRT_2, 1.0, std::f64::consts::SQRT_2,
-    1.0,                           1.0,
-    std::f64::consts::SQRT_2, 1.0, std::f64::consts::SQRT_2,
+    std::f64::consts::SQRT_2,
+    1.0,
+    std::f64::consts::SQRT_2,
+    1.0,
+    1.0,
+    std::f64::consts::SQRT_2,
+    1.0,
+    std::f64::consts::SQRT_2,
 ];
 
 /// Fill depressions in a DEM using the Planchon-Darboux (2001) algorithm.
@@ -129,9 +137,10 @@ pub fn fill_sinks(dem: &Raster<f64>, params: FillSinksParams) -> Result<Raster<f
                     continue;
                 }
                 if let Some(nd) = nodata
-                    && (dem_val - nd).abs() < f64::EPSILON {
-                        continue;
-                    }
+                    && (dem_val - nd).abs() < f64::EPSILON
+                {
+                    continue;
+                }
 
                 if w[(row, col)] > dem_val {
                     for (idx, &(dr, dc)) in D8_OFFSETS.iter().enumerate() {
@@ -168,9 +177,10 @@ pub fn fill_sinks(dem: &Raster<f64>, params: FillSinksParams) -> Result<Raster<f
                     continue;
                 }
                 if let Some(nd) = nodata
-                    && (dem_val - nd).abs() < f64::EPSILON {
-                        continue;
-                    }
+                    && (dem_val - nd).abs() < f64::EPSILON
+                {
+                    continue;
+                }
 
                 if w[(row, col)] > dem_val {
                     for (idx, &(dr, dc)) in D8_OFFSETS.iter().enumerate() {
@@ -224,13 +234,9 @@ mod tests {
         dem.set_transform(GeoTransform::new(0.0, 7.0, 1.0, -1.0));
 
         let values = [
-            9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0,
-            9.0, 8.0, 8.0, 8.0, 8.0, 8.0, 9.0,
-            9.0, 8.0, 7.0, 7.0, 7.0, 8.0, 9.0,
-            9.0, 8.0, 7.0, 3.0, 7.0, 8.0, 9.0,
-            9.0, 8.0, 7.0, 7.0, 7.0, 8.0, 9.0,
-            9.0, 8.0, 8.0, 8.0, 8.0, 8.0, 9.0,
-            9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0,
+            9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 8.0, 8.0, 8.0, 8.0, 8.0, 9.0, 9.0, 8.0, 7.0,
+            7.0, 7.0, 8.0, 9.0, 9.0, 8.0, 7.0, 3.0, 7.0, 8.0, 9.0, 9.0, 8.0, 7.0, 7.0, 7.0, 8.0,
+            9.0, 9.0, 8.0, 8.0, 8.0, 8.0, 8.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0,
         ];
 
         for (idx, &val) in values.iter().enumerate() {
@@ -279,7 +285,8 @@ mod tests {
         for row in 0..5 {
             for col in 0..5 {
                 let is_border = row == 0 || row == 4 || col == 0 || col == 4;
-                dem.set(row, col, if is_border { 10.0 } else { 5.0 }).unwrap();
+                dem.set(row, col, if is_border { 10.0 } else { 5.0 })
+                    .unwrap();
             }
         }
         dem.set(2, 2, 1.0).unwrap(); // Sink
@@ -297,7 +304,11 @@ mod tests {
 
         // Interior cells that aren't sinks should be unchanged
         let side = filled.get(1, 1).unwrap();
-        assert_eq!(side, 5.0, "Non-sink interior should be preserved, got {}", side);
+        assert_eq!(
+            side, 5.0,
+            "Non-sink interior should be preserved, got {}",
+            side
+        );
     }
 
     #[test]

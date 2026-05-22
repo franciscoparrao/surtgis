@@ -3,8 +3,8 @@
 //! Unsupervised classification by iteratively partitioning pixels
 //! into k clusters based on spectral distance.
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -64,7 +64,9 @@ pub fn kmeans_raster(raster: &Raster<f64>, params: KmeansParams) -> Result<Raste
 
     if values.len() < params.k {
         return Err(Error::Algorithm(format!(
-            "Not enough valid pixels ({}) for {} clusters", values.len(), params.k
+            "Not enough valid pixels ({}) for {} clusters",
+            values.len(),
+            params.k
         )));
     }
 
@@ -125,8 +127,8 @@ pub fn kmeans_raster(raster: &Raster<f64>, params: KmeansParams) -> Result<Raste
 
     let mut output = raster.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() = Array2::from_shape_vec((rows, cols), data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() =
+        Array2::from_shape_vec((rows, cols), data).map_err(|e| Error::Other(e.to_string()))?;
 
     Ok(output)
 }
@@ -162,12 +164,22 @@ mod tests {
             }
         }
 
-        let result = kmeans_raster(&r, KmeansParams { k: 2, ..Default::default() }).unwrap();
+        let result = kmeans_raster(
+            &r,
+            KmeansParams {
+                k: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         // Top and bottom should have different classes
         let top = result.get(0, 0).unwrap();
         let bottom = result.get(9, 0).unwrap();
-        assert!(top != bottom, "Different value groups should get different clusters");
+        assert!(
+            top != bottom,
+            "Different value groups should get different clusters"
+        );
         assert!(top >= 1.0 && top <= 2.0);
         assert!(bottom >= 1.0 && bottom <= 2.0);
     }
@@ -176,14 +188,26 @@ mod tests {
     fn test_kmeans_k_too_large() {
         let mut r = Raster::filled(2, 2, 1.0);
         r.set_transform(GeoTransform::new(0.0, 2.0, 1.0, -1.0));
-        let result = kmeans_raster(&r, KmeansParams { k: 10, ..Default::default() });
+        let result = kmeans_raster(
+            &r,
+            KmeansParams {
+                k: 10,
+                ..Default::default()
+            },
+        );
         assert!(result.is_err());
     }
 
     #[test]
     fn test_kmeans_k_one() {
         let r = Raster::filled(5, 5, 1.0);
-        let result = kmeans_raster(&r, KmeansParams { k: 1, ..Default::default() });
+        let result = kmeans_raster(
+            &r,
+            KmeansParams {
+                k: 1,
+                ..Default::default()
+            },
+        );
         assert!(result.is_err(), "k=1 should error");
     }
 }

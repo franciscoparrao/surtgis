@@ -12,10 +12,7 @@ use crate::decompress;
 use crate::error::{CloudError, Result};
 use crate::geotiff_keys::{self, GeoTiffMeta};
 use crate::http::HttpClient;
-use crate::ifd::{
-    self, IfdInfo, RawTagEntry, TiffByteOrder,
-    tags,
-};
+use crate::ifd::{self, IfdInfo, RawTagEntry, TiffByteOrder, tags};
 use crate::tile_index::{self, BBox, TileMapping};
 
 // ---------------------------------------------------------------------------
@@ -122,17 +119,22 @@ impl CogReader {
         let mut ifd_offset = tiff_header.first_ifd_offset as usize;
 
         while ifd_offset > 0 {
-            let ifd_data = self::ensure_data(
-                &client, url, auth, &header_bytes, ifd_offset, file_size,
-            ).await?;
+            let ifd_data =
+                self::ensure_data(&client, url, auth, &header_bytes, ifd_offset, file_size).await?;
 
             let raw_ifd = ifd::parse_ifd(byte_order, &ifd_data)?;
 
             // Resolve external tag values needed for this IFD.
             let ifd_info = resolve_ifd(
-                &client, url, auth, byte_order,
-                &raw_ifd.entries, &header_bytes, file_size,
-            ).await?;
+                &client,
+                url,
+                auth,
+                byte_order,
+                &raw_ifd.entries,
+                &header_bytes,
+                file_size,
+            )
+            .await?;
 
             ifds.push(ifd_info);
             ifd_offset = raw_ifd.next_ifd_offset as usize;
@@ -144,9 +146,15 @@ impl CogReader {
 
         // 4. Extract GeoTIFF metadata from the first (full-res) IFD.
         let geo_meta = resolve_geotiff_meta(
-            &client, url, auth, byte_order,
-            &ifds[0].raw_entries, &header_bytes, file_size,
-        ).await?;
+            &client,
+            url,
+            auth,
+            byte_order,
+            &ifds[0].raw_entries,
+            &header_bytes,
+            file_size,
+        )
+        .await?;
 
         let cache = TileCache::new(options.cache_capacity);
 
@@ -174,10 +182,17 @@ impl CogReader {
         let gt = self.geo_transform_for(ifd_idx);
 
         let mapping = tile_index::tiles_for_bbox(
-            bbox, &gt, ifd.width, ifd.height, ifd.tile_width, ifd.tile_height,
-        ).ok_or(CloudError::BBoxOutside)?;
+            bbox,
+            &gt,
+            ifd.width,
+            ifd.height,
+            ifd.tile_width,
+            ifd.tile_height,
+        )
+        .ok_or(CloudError::BBoxOutside)?;
 
-        self.assemble_raster::<T>(ifd_idx, &ifd, &gt, &mapping).await
+        self.assemble_raster::<T>(ifd_idx, &ifd, &gt, &mapping)
+            .await
     }
 
     /// Read the full raster extent.
@@ -193,10 +208,17 @@ impl CogReader {
         let bbox = BBox::new(min_x, min_y, max_x, max_y);
 
         let mapping = tile_index::tiles_for_bbox(
-            &bbox, &gt, ifd.width, ifd.height, ifd.tile_width, ifd.tile_height,
-        ).ok_or(CloudError::BBoxOutside)?;
+            &bbox,
+            &gt,
+            ifd.width,
+            ifd.height,
+            ifd.tile_width,
+            ifd.tile_height,
+        )
+        .ok_or(CloudError::BBoxOutside)?;
 
-        self.assemble_raster::<T>(ifd_idx, &ifd, &gt, &mapping).await
+        self.assemble_raster::<T>(ifd_idx, &ifd, &gt, &mapping)
+            .await
     }
 
     /// Return metadata about the COG.
@@ -287,9 +309,7 @@ impl CogReader {
                 ifd_idx,
                 tile_idx: tr.tile_idx,
             };
-            if self.cache.get(&key).is_none()
-                && tr.tile_idx < ifd.tile_offsets.len()
-            {
+            if self.cache.get(&key).is_none() && tr.tile_idx < ifd.tile_offsets.len() {
                 let offset = ifd.tile_offsets[tr.tile_idx];
                 let length = ifd.tile_byte_counts[tr.tile_idx];
                 if length > 0 {
@@ -309,9 +329,7 @@ impl CogReader {
 
             for (j, &(tile_list_idx, _, _)) in chunk.iter().enumerate() {
                 let tr = &mapping.tiles[tile_list_idx];
-                let mut raw = decompress::decompress_tile(
-                    &fetched[j], compression, raw_tile_size,
-                )?;
+                let mut raw = decompress::decompress_tile(&fetched[j], compression, raw_tile_size)?;
                 // Apply predictor undo (TIFF tag 317):
                 //   1 = no predictor
                 //   2 = horizontal differencing (integer samples)
@@ -321,8 +339,12 @@ impl CogReader {
                     2 => {
                         decompress::undo_horizontal_differencing(&mut raw, tw, bytes_per_pixel);
                         if fetch_count == 0 {
-                            eprintln!("    [pred] undo horiz-diff: bps={} tw={} len={}",
-                                bytes_per_pixel, tw, raw.len());
+                            eprintln!(
+                                "    [pred] undo horiz-diff: bps={} tw={} len={}",
+                                bytes_per_pixel,
+                                tw,
+                                raw.len()
+                            );
                         }
                     }
                     3 => {
@@ -330,9 +352,13 @@ impl CogReader {
                         if fetch_count == 0 {
                             let sample0 = if raw.len() >= 4 {
                                 f32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]])
-                            } else { 0.0 };
-                            eprintln!("    [pred] undo fp-predictor: bps={} tw={} sample[0]={}",
-                                bytes_per_pixel, tw, sample0);
+                            } else {
+                                0.0
+                            };
+                            eprintln!(
+                                "    [pred] undo fp-predictor: bps={} tw={} sample[0]={}",
+                                bytes_per_pixel, tw, sample0
+                            );
                         }
                     }
                     p => {
@@ -363,20 +389,40 @@ impl CogReader {
             };
 
             let raw = match self.cache.get(&key) {
-                Some(data) => { tiles_written += 1; data.clone() },
-                None => { tiles_skipped += 1; continue; }
+                Some(data) => {
+                    tiles_written += 1;
+                    data.clone()
+                }
+                None => {
+                    tiles_skipped += 1;
+                    continue;
+                }
             };
 
             // Debug: log first tile's raw bytes and interpreted values
             if tiles_written == 1 && raw.len() >= 10 {
-                let first_bytes: Vec<String> = raw[..10].iter().map(|b| format!("{:02x}", b)).collect();
+                let first_bytes: Vec<String> =
+                    raw[..10].iter().map(|b| format!("{:02x}", b)).collect();
                 let first_u16 = u16::from_le_bytes([raw[0], raw[1]]);
                 let second_u16 = u16::from_le_bytes([raw[2], raw[3]]);
-                eprintln!("    [cog] tile({},{}) idx={} raw[0..10]: {} → u16 LE: [{}, {}, ...]",
-                    tr.tile_col, tr.tile_row, tr.tile_idx,
-                    first_bytes.join(" "), first_u16, second_u16);
-                eprintln!("    [cog] pred={} comp={} bps={} sf={} raw_len={} expected={}",
-                    ifd.predictor, compression, bps, sf, raw.len(), tw * th * bytes_per_pixel);
+                eprintln!(
+                    "    [cog] tile({},{}) idx={} raw[0..10]: {} → u16 LE: [{}, {}, ...]",
+                    tr.tile_col,
+                    tr.tile_row,
+                    tr.tile_idx,
+                    first_bytes.join(" "),
+                    first_u16,
+                    second_u16
+                );
+                eprintln!(
+                    "    [cog] pred={} comp={} bps={} sf={} raw_len={} expected={}",
+                    ifd.predictor,
+                    compression,
+                    bps,
+                    sf,
+                    raw.len(),
+                    tw * th * bytes_per_pixel
+                );
             }
 
             let typed: Vec<T> = decompress::bytes_to_typed(&raw, bps, sf)?;
@@ -392,12 +438,26 @@ impl CogReader {
                 eprintln!(
                     "    [cog] FATAL tile({},{}) idx={} decoded {} px, expected {} (raw={} bytes, bps={} sf={} tw={} th={}).\
                      \n          Aborting to prevent silent striping; see BUG_TILE_DECODE_BPS15_STRIPING.md.",
-                    tr.tile_col, tr.tile_row, tr.tile_idx,
-                    typed.len(), expected_pixels, raw.len(), bps, sf, tw, th,
+                    tr.tile_col,
+                    tr.tile_row,
+                    tr.tile_idx,
+                    typed.len(),
+                    expected_pixels,
+                    raw.len(),
+                    bps,
+                    sf,
+                    tw,
+                    th,
                 );
                 return Err(crate::error::CloudError::Decompress(format!(
                     "tile decode produced {} samples, expected {} (bps={} sf={} tw={} th={} raw_len={})",
-                    typed.len(), expected_pixels, bps, sf, tw, th, raw.len(),
+                    typed.len(),
+                    expected_pixels,
+                    bps,
+                    sf,
+                    tw,
+                    th,
+                    raw.len(),
                 )));
             }
 
@@ -430,10 +490,23 @@ impl CogReader {
 
         // Always log tile assembly stats
         let valid_pixels = output.iter().filter(|v| !v.is_nodata(None)).count();
-        eprintln!("    [cog] assembled: {} tiles ({}+{} skip), output={}x{}, tw={} th={}, valid={}/{} ({:.0}%)",
-            tiles_fetched, tiles_written, tiles_skipped, out_cols, out_rows, tw, th,
-            valid_pixels, out_rows * out_cols,
-            if out_rows * out_cols > 0 { valid_pixels as f64 / (out_rows * out_cols) as f64 * 100.0 } else { 0.0 });
+        eprintln!(
+            "    [cog] assembled: {} tiles ({}+{} skip), output={}x{}, tw={} th={}, valid={}/{} ({:.0}%)",
+            tiles_fetched,
+            tiles_written,
+            tiles_skipped,
+            out_cols,
+            out_rows,
+            tw,
+            th,
+            valid_pixels,
+            out_rows * out_cols,
+            if out_rows * out_cols > 0 {
+                valid_pixels as f64 / (out_rows * out_cols) as f64 * 100.0
+            } else {
+                0.0
+            }
+        );
 
         // Build Raster with correct geo metadata.
         let mut raster = Raster::from_array(output);
@@ -485,7 +558,9 @@ async fn ensure_data(
         } else {
             extra_len
         };
-        let extra = client.fetch_range(url, extra_offset, extra_len, auth).await?;
+        let extra = client
+            .fetch_range(url, extra_offset, extra_len, auth)
+            .await?;
         let mut combined = header_bytes[offset..].to_vec();
         combined.extend_from_slice(&extra);
         Ok(combined)
@@ -497,7 +572,9 @@ async fn ensure_data(
         } else {
             fetch_len
         };
-        client.fetch_range(url, offset as u64, fetch_len, auth).await
+        client
+            .fetch_range(url, offset as u64, fetch_len, auth)
+            .await
     }
 }
 
@@ -546,17 +623,23 @@ async fn resolve_ifd(
     let width = get_tag_u32(byte_order, entries, &resolved, tags::IMAGE_WIDTH).unwrap_or(0);
     let height = get_tag_u32(byte_order, entries, &resolved, tags::IMAGE_LENGTH).unwrap_or(0);
     let tile_width = get_tag_u32(byte_order, entries, &resolved, tags::TILE_WIDTH).unwrap_or(width);
-    let tile_height = get_tag_u32(byte_order, entries, &resolved, tags::TILE_LENGTH).unwrap_or(height);
-    let bits_per_sample = get_tag_u16(byte_order, entries, &resolved, tags::BITS_PER_SAMPLE).unwrap_or(8);
+    let tile_height =
+        get_tag_u32(byte_order, entries, &resolved, tags::TILE_LENGTH).unwrap_or(height);
+    let bits_per_sample =
+        get_tag_u16(byte_order, entries, &resolved, tags::BITS_PER_SAMPLE).unwrap_or(8);
     let compression = get_tag_u16(byte_order, entries, &resolved, tags::COMPRESSION).unwrap_or(1);
-    let samples_per_pixel = get_tag_u16(byte_order, entries, &resolved, tags::SAMPLES_PER_PIXEL).unwrap_or(1);
-    let planar_config = get_tag_u16(byte_order, entries, &resolved, tags::PLANAR_CONFIG).unwrap_or(1);
-    let sample_format = get_tag_u16(byte_order, entries, &resolved, tags::SAMPLE_FORMAT).unwrap_or(1);
+    let samples_per_pixel =
+        get_tag_u16(byte_order, entries, &resolved, tags::SAMPLES_PER_PIXEL).unwrap_or(1);
+    let planar_config =
+        get_tag_u16(byte_order, entries, &resolved, tags::PLANAR_CONFIG).unwrap_or(1);
+    let sample_format =
+        get_tag_u16(byte_order, entries, &resolved, tags::SAMPLE_FORMAT).unwrap_or(1);
     let predictor = get_tag_u16(byte_order, entries, &resolved, 317).unwrap_or(1); // Tag 317 = Predictor
 
     // Tile offsets & byte counts (arrays).
     let tile_offsets = get_tag_u64_array(byte_order, entries, &resolved, tags::TILE_OFFSETS);
-    let tile_byte_counts = get_tag_u64_array(byte_order, entries, &resolved, tags::TILE_BYTE_COUNTS);
+    let tile_byte_counts =
+        get_tag_u64_array(byte_order, entries, &resolved, tags::TILE_BYTE_COUNTS);
 
     Ok(IfdInfo {
         width,
@@ -610,7 +693,9 @@ async fn resolve_geotiff_meta(
         resolved.push((entry.tag, data));
     }
 
-    Ok(geotiff_keys::extract_geotiff_meta(byte_order, entries, &resolved))
+    Ok(geotiff_keys::extract_geotiff_meta(
+        byte_order, entries, &resolved,
+    ))
 }
 
 /// Fetch data or slice from the pre-fetched header bytes.

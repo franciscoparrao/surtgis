@@ -5,8 +5,8 @@
 
 use std::collections::HashMap;
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -269,10 +269,18 @@ fn flood_fill(grid: &[f64], visited: &mut [bool], size: usize, r: usize, c: usiz
         visited[idx] = true;
 
         // 4-connected neighbors
-        if cr > 0 { stack.push((cr - 1, cc)); }
-        if cr + 1 < size { stack.push((cr + 1, cc)); }
-        if cc > 0 { stack.push((cr, cc - 1)); }
-        if cc + 1 < size { stack.push((cr, cc + 1)); }
+        if cr > 0 {
+            stack.push((cr - 1, cc));
+        }
+        if cr + 1 < size {
+            stack.push((cr + 1, cc));
+        }
+        if cc > 0 {
+            stack.push((cr, cc - 1));
+        }
+        if cc + 1 < size {
+            stack.push((cr, cc + 1));
+        }
     }
 }
 
@@ -284,8 +292,8 @@ fn build_output(
 ) -> Result<Raster<f64>> {
     let mut output = template.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() = Array2::from_shape_vec((rows, cols), data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() =
+        Array2::from_shape_vec((rows, cols), data).map_err(|e| Error::Other(e.to_string()))?;
     Ok(output)
 }
 
@@ -330,11 +338,22 @@ mod tests {
     fn test_shannon_diverse() {
         let r = class_raster();
         // Window centered at (4,4) with radius=1 should see classes 1,2,3,4
-        let result = shannon_diversity(&r, DiversityParams { radius: 1, circular: false }).unwrap();
+        let result = shannon_diversity(
+            &r,
+            DiversityParams {
+                radius: 1,
+                circular: false,
+            },
+        )
+        .unwrap();
         let v = result.get(4, 4).unwrap();
         // 4 classes equally: H = -4 * (0.25 * ln(0.25)) = ln(4) ≈ 1.386
         // But window may not be perfectly split... let's just check > 0
-        assert!(v > 0.0, "Shannon at class boundary should be > 0, got {}", v);
+        assert!(
+            v > 0.0,
+            "Shannon at class boundary should be > 0, got {}",
+            v
+        );
     }
 
     #[test]
@@ -348,9 +367,20 @@ mod tests {
     #[test]
     fn test_simpson_diverse() {
         let r = class_raster();
-        let result = simpson_diversity(&r, DiversityParams { radius: 1, circular: false }).unwrap();
+        let result = simpson_diversity(
+            &r,
+            DiversityParams {
+                radius: 1,
+                circular: false,
+            },
+        )
+        .unwrap();
         let v = result.get(4, 4).unwrap();
-        assert!(v > 0.0, "Simpson at class boundary should be > 0, got {}", v);
+        assert!(
+            v > 0.0,
+            "Simpson at class boundary should be > 0, got {}",
+            v
+        );
     }
 
     #[test]
@@ -360,7 +390,11 @@ mod tests {
         let v = result.get(5, 5).unwrap();
         // Uniform = 1 patch / n cells
         let expected = 1.0 / 49.0; // 7x7 window
-        assert!((v - expected).abs() < 1e-10, "Patch density of uniform should be 1/n, got {}", v);
+        assert!(
+            (v - expected).abs() < 1e-10,
+            "Patch density of uniform should be 1/n, got {}",
+            v
+        );
     }
 
     #[test]
@@ -374,18 +408,56 @@ mod tests {
             }
         }
 
-        let result = patch_density(&r, DiversityParams { radius: 1, circular: false }).unwrap();
+        let result = patch_density(
+            &r,
+            DiversityParams {
+                radius: 1,
+                circular: false,
+            },
+        )
+        .unwrap();
         let v = result.get(5, 5).unwrap();
         // Checkerboard with radius=1: each cell is its own patch in 4-connected
         // 9 cells / 9 cells = 1.0 (assuming all are isolated patches)
-        assert!(v > 0.5, "Checkerboard should have high patch density, got {}", v);
+        assert!(
+            v > 0.5,
+            "Checkerboard should have high patch density, got {}",
+            v
+        );
     }
 
     #[test]
     fn test_diversity_radius_zero() {
         let r = uniform_class_raster();
-        assert!(shannon_diversity(&r, DiversityParams { radius: 0, circular: false }).is_err());
-        assert!(simpson_diversity(&r, DiversityParams { radius: 0, circular: false }).is_err());
-        assert!(patch_density(&r, DiversityParams { radius: 0, circular: false }).is_err());
+        assert!(
+            shannon_diversity(
+                &r,
+                DiversityParams {
+                    radius: 0,
+                    circular: false
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            simpson_diversity(
+                &r,
+                DiversityParams {
+                    radius: 0,
+                    circular: false
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            patch_density(
+                &r,
+                DiversityParams {
+                    radius: 0,
+                    circular: false
+                }
+            )
+            .is_err()
+        );
     }
 }

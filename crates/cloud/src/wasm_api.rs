@@ -41,8 +41,7 @@ mod inner {
             .await
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
-        write_geotiff_to_buffer(&raster, None)
-            .map_err(|e| JsValue::from_str(&e.to_string()))
+        write_geotiff_to_buffer(&raster, None).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 
     /// Get metadata from a remote COG as a JSON string.
@@ -123,8 +122,7 @@ mod inner {
             .await
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
-        serde_json::to_string(&results)
-            .map_err(|e| JsValue::from_str(&e.to_string()))
+        serde_json::to_string(&results).map_err(|e| JsValue::from_str(&e.to_string()))
     }
 }
 

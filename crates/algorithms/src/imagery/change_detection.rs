@@ -4,8 +4,8 @@
 //! - Raster Difference with categorical thresholds
 //! - Change Vector Analysis (CVA) for multi-band data
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -56,7 +56,10 @@ pub fn raster_difference(
     let (rows, cols) = before.shape();
     if after.shape() != (rows, cols) {
         return Err(Error::SizeMismatch {
-            er: rows, ec: cols, ar: after.rows(), ac: after.cols(),
+            er: rows,
+            ec: cols,
+            ar: after.rows(),
+            ac: after.cols(),
         });
     }
 
@@ -90,13 +93,13 @@ pub fn raster_difference(
 
     let mut diff_raster = before.with_same_meta::<f64>(rows, cols);
     diff_raster.set_nodata(Some(f64::NAN));
-    *diff_raster.data_mut() = Array2::from_shape_vec((rows, cols), diff_data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *diff_raster.data_mut() =
+        Array2::from_shape_vec((rows, cols), diff_data).map_err(|e| Error::Other(e.to_string()))?;
 
     let mut cat_raster = before.with_same_meta::<f64>(rows, cols);
     cat_raster.set_nodata(Some(f64::NAN));
-    *cat_raster.data_mut() = Array2::from_shape_vec((rows, cols), cat_data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *cat_raster.data_mut() =
+        Array2::from_shape_vec((rows, cols), cat_data).map_err(|e| Error::Other(e.to_string()))?;
 
     Ok((diff_raster, cat_raster))
 }
@@ -126,10 +129,19 @@ pub fn change_vector_analysis(
     let (rows, cols) = band1_before.shape();
 
     // Verify dimensions
-    for (name, r) in [("band1_after", band1_after), ("band2_before", band2_before), ("band2_after", band2_after)] {
+    for (name, r) in [
+        ("band1_after", band1_after),
+        ("band2_before", band2_before),
+        ("band2_after", band2_after),
+    ] {
         if r.shape() != (rows, cols) {
             return Err(Error::Algorithm(format!(
-                "{} dimensions {}x{} don't match {}x{}", name, r.rows(), r.cols(), rows, cols
+                "{} dimensions {}x{} don't match {}x{}",
+                name,
+                r.rows(),
+                r.cols(),
+                rows,
+                cols
             )));
         }
     }
@@ -161,13 +173,13 @@ pub fn change_vector_analysis(
 
     let mut mag_raster = band1_before.with_same_meta::<f64>(rows, cols);
     mag_raster.set_nodata(Some(f64::NAN));
-    *mag_raster.data_mut() = Array2::from_shape_vec((rows, cols), mag_data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *mag_raster.data_mut() =
+        Array2::from_shape_vec((rows, cols), mag_data).map_err(|e| Error::Other(e.to_string()))?;
 
     let mut dir_raster = band1_before.with_same_meta::<f64>(rows, cols);
     dir_raster.set_nodata(Some(f64::NAN));
-    *dir_raster.data_mut() = Array2::from_shape_vec((rows, cols), dir_data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *dir_raster.data_mut() =
+        Array2::from_shape_vec((rows, cols), dir_data).map_err(|e| Error::Other(e.to_string()))?;
 
     Ok((mag_raster, dir_raster))
 }
@@ -202,10 +214,15 @@ mod tests {
         let before = make_band(5, 5, 20.0);
         let after = make_band(5, 5, 10.0);
 
-        let (_, cat) = raster_difference(&before, &after, RasterDiffParams {
-            decrease_threshold: -5.0,
-            increase_threshold: 5.0,
-        }).unwrap();
+        let (_, cat) = raster_difference(
+            &before,
+            &after,
+            RasterDiffParams {
+                decrease_threshold: -5.0,
+                increase_threshold: 5.0,
+            },
+        )
+        .unwrap();
 
         let c = cat.get(2, 2).unwrap();
         assert!((c - CHANGE_DECREASE).abs() < 1e-10, "Should be decrease");
@@ -214,18 +231,29 @@ mod tests {
     #[test]
     fn test_cva() {
         let b1_before = make_band(5, 5, 0.2);
-        let b1_after = make_band(5, 5, 0.5);   // +0.3 in band 1
+        let b1_after = make_band(5, 5, 0.5); // +0.3 in band 1
         let b2_before = make_band(5, 5, 0.3);
-        let b2_after = make_band(5, 5, 0.7);   // +0.4 in band 2
+        let b2_after = make_band(5, 5, 0.7); // +0.4 in band 2
 
-        let (mag, dir) = change_vector_analysis(&b1_before, &b1_after, &b2_before, &b2_after).unwrap();
+        let (mag, dir) =
+            change_vector_analysis(&b1_before, &b1_after, &b2_before, &b2_after).unwrap();
 
         let m = mag.get(2, 2).unwrap();
         let expected_mag = (0.3_f64.powi(2) + 0.4_f64.powi(2)).sqrt(); // 0.5
-        assert!((m - expected_mag).abs() < 1e-10, "Magnitude should be {}, got {}", expected_mag, m);
+        assert!(
+            (m - expected_mag).abs() < 1e-10,
+            "Magnitude should be {}, got {}",
+            expected_mag,
+            m
+        );
 
         let d = dir.get(2, 2).unwrap();
         let expected_dir = (0.4_f64).atan2(0.3);
-        assert!((d - expected_dir).abs() < 1e-10, "Direction should be {}, got {}", expected_dir, d);
+        assert!(
+            (d - expected_dir).abs() < 1e-10,
+            "Direction should be {}, got {}",
+            expected_dir,
+            d
+        );
     }
 }

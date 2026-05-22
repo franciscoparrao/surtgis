@@ -6,8 +6,8 @@
 //! Each direction produces a ternary value (+1, 0, -1) creating a pattern
 //! ("geomorphon") that maps to a landform class.
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -108,8 +108,13 @@ pub fn geomorphons(dem: &Raster<f64>, params: GeomorphonParams) -> Result<Raster
                             break;
                         }
 
-                        let dist = step as f64 * cell_size
-                            * if dr != 0 && dc != 0 { std::f64::consts::SQRT_2 } else { 1.0 };
+                        let dist = step as f64
+                            * cell_size
+                            * if dr != 0 && dc != 0 {
+                                std::f64::consts::SQRT_2
+                            } else {
+                                1.0
+                            };
                         let dz = z - z0;
                         let angle = (dz / dist).atan();
 
@@ -126,11 +131,11 @@ pub fn geomorphons(dem: &Raster<f64>, params: GeomorphonParams) -> Result<Raster
                     // -1 = terrain is lower (looking down dominates)
                     //  0 = flat (both angles below threshold)
                     if max_up_angle > threshold_rad && max_up_angle >= max_down_angle {
-                        pattern[dir_idx] = 1;  // Higher
+                        pattern[dir_idx] = 1; // Higher
                     } else if max_down_angle > threshold_rad && max_down_angle > max_up_angle {
                         pattern[dir_idx] = -1; // Lower
                     } else {
-                        pattern[dir_idx] = 0;  // Flat
+                        pattern[dir_idx] = 0; // Flat
                     }
                 }
 
@@ -165,9 +170,9 @@ fn classify_pattern(pattern: &[i8; 8]) -> u8 {
     let minus_segments = count_segments(pattern, -1);
 
     match (n_plus, n_minus, n_zero) {
-        (8, 0, 0) => class::PIT,       // All higher → pit
-        (0, 8, 0) => class::PEAK,      // All lower → peak
-        (0, 0, 8) => class::FLAT,      // All flat → flat
+        (8, 0, 0) => class::PIT,  // All higher → pit
+        (0, 8, 0) => class::PEAK, // All lower → peak
+        (0, 0, 8) => class::FLAT, // All flat → flat
 
         // Ridge-like: mostly lower, no higher
         (0, n, _) if n >= 6 => class::RIDGE,
@@ -252,13 +257,26 @@ mod tests {
             for col in 0..21 {
                 let dx = col as f64 - 10.0;
                 let dy = row as f64 - 10.0;
-                dem.set(row, col, 100.0 - (dx * dx + dy * dy).sqrt() * 5.0).unwrap();
+                dem.set(row, col, 100.0 - (dx * dx + dy * dy).sqrt() * 5.0)
+                    .unwrap();
             }
         }
 
-        let result = geomorphons(&dem, GeomorphonParams { radius: 8, flatness_threshold: 1.0 }).unwrap();
+        let result = geomorphons(
+            &dem,
+            GeomorphonParams {
+                radius: 8,
+                flatness_threshold: 1.0,
+            },
+        )
+        .unwrap();
         let center = result.get(10, 10).unwrap();
-        assert_eq!(center, class::PEAK, "Center of hill should be peak, got {}", center);
+        assert_eq!(
+            center,
+            class::PEAK,
+            "Center of hill should be peak, got {}",
+            center
+        );
     }
 
     #[test]
@@ -273,23 +291,56 @@ mod tests {
             }
         }
 
-        let result = geomorphons(&dem, GeomorphonParams { radius: 8, flatness_threshold: 1.0 }).unwrap();
+        let result = geomorphons(
+            &dem,
+            GeomorphonParams {
+                radius: 8,
+                flatness_threshold: 1.0,
+            },
+        )
+        .unwrap();
         let center = result.get(10, 10).unwrap();
-        assert_eq!(center, class::PIT, "Center of depression should be pit, got {}", center);
+        assert_eq!(
+            center,
+            class::PIT,
+            "Center of depression should be pit, got {}",
+            center
+        );
     }
 
     #[test]
     fn test_geomorphons_flat() {
         let dem = Raster::filled(21, 21, 100.0_f64);
-        let result = geomorphons(&dem, GeomorphonParams { radius: 5, flatness_threshold: 1.0 }).unwrap();
+        let result = geomorphons(
+            &dem,
+            GeomorphonParams {
+                radius: 5,
+                flatness_threshold: 1.0,
+            },
+        )
+        .unwrap();
         let center = result.get(10, 10).unwrap();
-        assert_eq!(center, class::FLAT, "Flat surface should be FLAT, got {}", center);
+        assert_eq!(
+            center,
+            class::FLAT,
+            "Flat surface should be FLAT, got {}",
+            center
+        );
     }
 
     #[test]
     fn test_geomorphons_radius_zero() {
         let dem = Raster::filled(5, 5, 100.0_f64);
-        assert!(geomorphons(&dem, GeomorphonParams { radius: 0, flatness_threshold: 1.0 }).is_err());
+        assert!(
+            geomorphons(
+                &dem,
+                GeomorphonParams {
+                    radius: 0,
+                    flatness_threshold: 1.0
+                }
+            )
+            .is_err()
+        );
     }
 
     #[test]

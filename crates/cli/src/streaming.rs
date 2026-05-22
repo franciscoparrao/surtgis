@@ -88,7 +88,10 @@ pub fn validate_asset_key(band: &str, collection: &str) -> Result<String> {
 /// Multi-collection band name aliases: common name -> catalog-specific keys.
 /// Tries the exact key first (case-insensitive), then aliases.
 #[cfg(feature = "cloud")]
-pub fn resolve_asset_key<'a>(item: &'a StacItem, key: &'a str) -> Option<(&'a str, &'a surtgis_cloud::stac_models::StacAsset)> {
+pub fn resolve_asset_key<'a>(
+    item: &'a StacItem,
+    key: &'a str,
+) -> Option<(&'a str, &'a surtgis_cloud::stac_models::StacAsset)> {
     // Try exact key first
     if let Some(asset) = item.asset(key) {
         return Some((key, asset));
@@ -105,31 +108,31 @@ pub fn resolve_asset_key<'a>(item: &'a StacItem, key: &'a str) -> Option<(&'a st
     // Alias table: common name <-> collection-specific band codes
     let aliases: &[(&str, &[&str])] = &[
         // === Sentinel-2 ===
-        ("red",     &["B04", "b04", "Red", "SR_B4"]),
-        ("green",   &["B03", "b03", "Green", "SR_B3"]),
-        ("blue",    &["B02", "b02", "Blue", "SR_B2"]),
-        ("nir",     &["B08", "b08", "nir08", "Nir", "SR_B5"]),
-        ("nir08",   &["B08", "b08", "nir", "SR_B5"]),
-        ("nir09",   &["B09", "b09"]),
-        ("rededge1",&["B05", "b05"]),
-        ("rededge2",&["B06", "b06"]),
-        ("rededge3",&["B07", "b07"]),
-        ("swir16",  &["B11", "b11", "swir1", "SWIR1", "SR_B6"]),
-        ("swir22",  &["B12", "b12", "swir2", "SWIR2", "SR_B7"]),
-        ("scl",     &["SCL"]),
+        ("red", &["B04", "b04", "Red", "SR_B4"]),
+        ("green", &["B03", "b03", "Green", "SR_B3"]),
+        ("blue", &["B02", "b02", "Blue", "SR_B2"]),
+        ("nir", &["B08", "b08", "nir08", "Nir", "SR_B5"]),
+        ("nir08", &["B08", "b08", "nir", "SR_B5"]),
+        ("nir09", &["B09", "b09"]),
+        ("rededge1", &["B05", "b05"]),
+        ("rededge2", &["B06", "b06"]),
+        ("rededge3", &["B07", "b07"]),
+        ("swir16", &["B11", "b11", "swir1", "SWIR1", "SR_B6"]),
+        ("swir22", &["B12", "b12", "swir2", "SWIR2", "SR_B7"]),
+        ("scl", &["SCL"]),
         ("coastal", &["B01", "b01", "SR_B1"]),
-        ("wvp",     &["B09", "b09"]),
+        ("wvp", &["B09", "b09"]),
         // Reverse S2: band code -> common name
-        ("B02",  &["blue", "Blue"]),
-        ("B03",  &["green", "Green"]),
-        ("B04",  &["red", "Red"]),
-        ("B08",  &["nir", "nir08"]),
-        ("B05",  &["rededge1"]),
-        ("B06",  &["rededge2"]),
-        ("B07",  &["rededge3"]),
-        ("B11",  &["swir16", "swir1"]),
-        ("B12",  &["swir22", "swir2"]),
-        ("SCL",  &["scl"]),
+        ("B02", &["blue", "Blue"]),
+        ("B03", &["green", "Green"]),
+        ("B04", &["red", "Red"]),
+        ("B08", &["nir", "nir08"]),
+        ("B05", &["rededge1"]),
+        ("B06", &["rededge2"]),
+        ("B07", &["rededge3"]),
+        ("B11", &["swir16", "swir1"]),
+        ("B12", &["swir22", "swir2"]),
+        ("SCL", &["scl"]),
         // === Landsat ===
         ("SR_B1", &["coastal", "B01"]),
         ("SR_B2", &["blue", "Blue", "B02"]),
@@ -165,22 +168,10 @@ mod tests {
 
     #[test]
     fn test_validate_s2_bands() {
-        assert_eq!(
-            validate_asset_key("B04", "sentinel-2-l2a").unwrap(),
-            "B04"
-        );
-        assert_eq!(
-            validate_asset_key("red", "sentinel-2-l2a").unwrap(),
-            "B04"
-        );
-        assert_eq!(
-            validate_asset_key("B02", "sentinel-2-l2a").unwrap(),
-            "B02"
-        );
-        assert_eq!(
-            validate_asset_key("blue", "sentinel-2-l2a").unwrap(),
-            "B02"
-        );
+        assert_eq!(validate_asset_key("B04", "sentinel-2-l2a").unwrap(), "B04");
+        assert_eq!(validate_asset_key("red", "sentinel-2-l2a").unwrap(), "B04");
+        assert_eq!(validate_asset_key("B02", "sentinel-2-l2a").unwrap(), "B02");
+        assert_eq!(validate_asset_key("blue", "sentinel-2-l2a").unwrap(), "B02");
         assert!(validate_asset_key("INVALID", "sentinel-2-l2a").is_err());
     }
 
@@ -190,14 +181,8 @@ mod tests {
             validate_asset_key("SR_B4", "landsat-c2-l2").unwrap(),
             "SR_B4"
         );
-        assert_eq!(
-            validate_asset_key("red", "landsat-c2-l2").unwrap(),
-            "SR_B4"
-        );
-        assert_eq!(
-            validate_asset_key("nir", "landsat-c2-l2").unwrap(),
-            "SR_B5"
-        );
+        assert_eq!(validate_asset_key("red", "landsat-c2-l2").unwrap(), "SR_B4");
+        assert_eq!(validate_asset_key("nir", "landsat-c2-l2").unwrap(), "SR_B5");
         assert!(validate_asset_key("B04", "landsat-c2-l2").is_err());
     }
 
@@ -223,14 +208,15 @@ pub fn fetch_stac_asset(
     bbox: &BBox,
     client: &StacClientBlocking,
 ) -> Result<surtgis_core::Raster<f64>> {
-    let (resolved_key, stac_asset) = resolve_asset_key(item, asset_key)
-        .ok_or_else(|| {
-            let available: Vec<&str> = item.assets.keys().map(|k| k.as_str()).collect();
-            anyhow::anyhow!(
-                "Item {} missing asset '{}'. Available: {}",
-                item.id, asset_key, available.join(", ")
-            )
-        })?;
+    let (resolved_key, stac_asset) = resolve_asset_key(item, asset_key).ok_or_else(|| {
+        let available: Vec<&str> = item.assets.keys().map(|k| k.as_str()).collect();
+        anyhow::anyhow!(
+            "Item {} missing asset '{}'. Available: {}",
+            item.id,
+            asset_key,
+            available.join(", ")
+        )
+    })?;
 
     if resolved_key != asset_key {
         info!("Resolved asset '{}' -> '{}'", asset_key, resolved_key);
@@ -243,8 +229,7 @@ pub fn fetch_stac_asset(
         .context("Failed to sign asset URL")?;
 
     let opts = CogReaderOptions::default();
-    let mut reader =
-        CogReaderBlocking::open(&href, opts).context("Failed to open remote COG")?;
+    let mut reader = CogReaderBlocking::open(&href, opts).context("Failed to open remote COG")?;
 
     // Auto-reproject bbox if COG is in a projected CRS
     let read_bb = {

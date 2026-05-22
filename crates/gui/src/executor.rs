@@ -8,53 +8,50 @@ use std::time::Instant;
 
 use crossbeam_channel::Sender;
 
+use surtgis_algorithms::classification::{
+    IsodataParams, KmeansParams, isodata, kmeans_raster, maximum_likelihood, minimum_distance,
+    signatures_from_training,
+};
 use surtgis_algorithms::hydrology::{
-    breach_depressions, fill_sinks, flow_accumulation, flow_accumulation_mfd,
-    flow_accumulation_mfd_adaptive, flow_accumulation_tfga, flow_dinf, flow_direction,
-    flow_direction_dinf, hand, nested_depressions, priority_flood_flat, stream_network, watershed,
-    strahler_order, flow_path_length, isobasins, flood_fill_simulation,
-    AdaptiveMfdParams, BreachParams, FillSinksParams, HandParams, MfdParams,
-    NestedDepressionParams, StreamNetworkParams, TfgaParams, WatershedParams,
-    IsobasinParams, FloodSimParams,
+    AdaptiveMfdParams, BreachParams, FillSinksParams, FloodSimParams, HandParams, IsobasinParams,
+    MfdParams, NestedDepressionParams, StreamNetworkParams, TfgaParams, WatershedParams,
+    breach_depressions, fill_sinks, flood_fill_simulation, flow_accumulation,
+    flow_accumulation_mfd, flow_accumulation_mfd_adaptive, flow_accumulation_tfga, flow_dinf,
+    flow_direction, flow_direction_dinf, flow_path_length, hand, isobasins, nested_depressions,
+    priority_flood_flat, strahler_order, stream_network, watershed,
 };
 use surtgis_algorithms::imagery::{
-    band_math_binary, bsi, evi, evi2, gndvi, mndwi, msavi, nbr, ndbi, ndmi, ndre, ndsi,
-    ndvi, ndwi, ngrdi, normalized_difference, reci, reclassify, savi, BandMathOp, EviParams,
-    ReclassEntry, ReclassifyParams, SaviParams,
-    raster_difference, change_vector_analysis, RasterDiffParams,
-};
-use surtgis_algorithms::classification::{
-    kmeans_raster, isodata, minimum_distance, maximum_likelihood,
-    signatures_from_training, KmeansParams, IsodataParams,
-};
-use surtgis_algorithms::texture::{
-    haralick_glcm, sobel_edge, laplacian, GlcmParams, GlcmTexture,
-};
-use surtgis_algorithms::landscape::{
-    shannon_diversity, simpson_diversity, patch_density, DiversityParams,
+    BandMathOp, EviParams, RasterDiffParams, ReclassEntry, ReclassifyParams, SaviParams,
+    band_math_binary, bsi, change_vector_analysis, evi, evi2, gndvi, mndwi, msavi, nbr, ndbi, ndmi,
+    ndre, ndsi, ndvi, ndwi, ngrdi, normalized_difference, raster_difference, reci, reclassify,
+    savi,
 };
 use surtgis_algorithms::interpolation::{
-    idw, natural_neighbor, nearest_neighbor, ordinary_kriging, tin_interpolation,
-    tps_interpolation, IdwParams, NaturalNeighborParams, NearestNeighborParams,
-    OrdinaryKrigingParams, SamplePoint, TinParams, TpsParams,
+    IdwParams, NaturalNeighborParams, NearestNeighborParams, OrdinaryKrigingParams, SamplePoint,
+    TinParams, TpsParams, idw, natural_neighbor, nearest_neighbor, ordinary_kriging,
+    tin_interpolation, tps_interpolation,
+};
+use surtgis_algorithms::landscape::{
+    DiversityParams, patch_density, shannon_diversity, simpson_diversity,
 };
 use surtgis_algorithms::morphology::{
-    black_hat, closing, dilate, erode, gradient, opening, top_hat, StructuringElement,
+    StructuringElement, black_hat, closing, dilate, erode, gradient, opening, top_hat,
 };
 use surtgis_algorithms::statistics::{
-    focal_statistics, global_morans_i, local_getis_ord, FocalParams, FocalStatistic,
+    FocalParams, FocalStatistic, focal_statistics, global_morans_i, local_getis_ord,
 };
 use surtgis_algorithms::terrain::{
-    advanced_curvatures, aspect, contour_lines, convergence_index, cost_distance, curvature,
-    curvedness, dev, eastness, geomorphons, hillshade, landform_classification,
-    lineament_detection, multidirectional_hillshade, mrvbf, negative_openness, northness,
-    positive_openness, shape_index, sky_view_factor, slope, solar_radiation, spi, sti, tpi,
-    tri, viewshed, vrm, wind_exposure, AdvancedCurvatureType, AspectOutput, ContourParams,
-    ConvergenceParams, CostDistanceParams, CurvatureParams, CurvatureType, DevParams,
-    GeomorphonParams, HillshadeParams, LandformParams, LineamentParams, MultiHillshadeParams,
-    MrvbfParams, OpennessParams, SlopeParams, SlopeUnits, SolarParams, StiParams, SvfParams,
-    TpiParams, TriParams, ViewshedParams, VrmParams, WindExposureParams,
+    AdvancedCurvatureType, AspectOutput, ContourParams, ConvergenceParams, CostDistanceParams,
+    CurvatureParams, CurvatureType, DevParams, GeomorphonParams, HillshadeParams, LandformParams,
+    LineamentParams, MrvbfParams, MultiHillshadeParams, OpennessParams, SlopeParams, SlopeUnits,
+    SolarParams, StiParams, SvfParams, TpiParams, TriParams, ViewshedParams, VrmParams,
+    WindExposureParams, advanced_curvatures, aspect, contour_lines, convergence_index,
+    cost_distance, curvature, curvedness, dev, eastness, geomorphons, hillshade,
+    landform_classification, lineament_detection, mrvbf, multidirectional_hillshade,
+    negative_openness, northness, positive_openness, shape_index, sky_view_factor, slope,
+    solar_radiation, spi, sti, tpi, tri, viewshed, vrm, wind_exposure,
 };
+use surtgis_algorithms::texture::{GlcmParams, GlcmTexture, haralick_glcm, laplacian, sobel_edge};
 use surtgis_core::raster::{GeoTransform, Raster};
 
 use crate::registry::ParamValue;
@@ -90,7 +87,12 @@ pub fn dispatch_algorithm(
                     _ => SlopeUnits::Degrees,
                 };
                 let z_factor = get_f64(&params, "z_factor", 1.0);
-                dispatch_f64(&tx, "Slope", start, slope(&input, SlopeParams { units, z_factor }));
+                dispatch_f64(
+                    &tx,
+                    "Slope",
+                    start,
+                    slope(&input, SlopeParams { units, z_factor }),
+                );
             }
 
             "aspect" => {
@@ -102,17 +104,29 @@ pub fn dispatch_algorithm(
             }
 
             "hillshade" => {
-                dispatch_f64(&tx, "Hillshade", start, hillshade(&input, HillshadeParams {
-                    azimuth: get_f64(&params, "azimuth", 315.0),
-                    altitude: get_f64(&params, "altitude", 45.0),
-                    z_factor: get_f64(&params, "z_factor", 1.0),
-                    normalized: false,
-                }));
+                dispatch_f64(
+                    &tx,
+                    "Hillshade",
+                    start,
+                    hillshade(
+                        &input,
+                        HillshadeParams {
+                            azimuth: get_f64(&params, "azimuth", 315.0),
+                            altitude: get_f64(&params, "altitude", 45.0),
+                            z_factor: get_f64(&params, "z_factor", 1.0),
+                            normalized: false,
+                        },
+                    ),
+                );
             }
 
             "multidirectional_hillshade" => {
-                dispatch_f64(&tx, "Multidirectional Hillshade", start,
-                    multidirectional_hillshade(&input, MultiHillshadeParams::default()));
+                dispatch_f64(
+                    &tx,
+                    "Multidirectional Hillshade",
+                    start,
+                    multidirectional_hillshade(&input, MultiHillshadeParams::default()),
+                );
             }
 
             "curvature" => {
@@ -121,23 +135,47 @@ pub fn dispatch_algorithm(
                     2 => CurvatureType::Plan,
                     _ => CurvatureType::General,
                 };
-                dispatch_f64(&tx, "Curvature", start, curvature(&input, CurvatureParams {
-                    curvature_type: ct,
-                    z_factor: get_f64(&params, "z_factor", 1.0),
-                    ..Default::default()
-                }));
+                dispatch_f64(
+                    &tx,
+                    "Curvature",
+                    start,
+                    curvature(
+                        &input,
+                        CurvatureParams {
+                            curvature_type: ct,
+                            z_factor: get_f64(&params, "z_factor", 1.0),
+                            ..Default::default()
+                        },
+                    ),
+                );
             }
 
             "tpi" => {
-                dispatch_f64(&tx, "TPI", start, tpi(&input, TpiParams {
-                    radius: get_usize(&params, "radius", 3),
-                }));
+                dispatch_f64(
+                    &tx,
+                    "TPI",
+                    start,
+                    tpi(
+                        &input,
+                        TpiParams {
+                            radius: get_usize(&params, "radius", 3),
+                        },
+                    ),
+                );
             }
 
             "tri" => {
-                dispatch_f64(&tx, "TRI", start, tri(&input, TriParams {
-                    radius: get_usize(&params, "radius", 1),
-                }));
+                dispatch_f64(
+                    &tx,
+                    "TRI",
+                    start,
+                    tri(
+                        &input,
+                        TriParams {
+                            radius: get_usize(&params, "radius", 1),
+                        },
+                    ),
+                );
             }
 
             "twi" => {
@@ -148,68 +186,131 @@ pub fn dispatch_algorithm(
                     let filled = fill_sinks(&input, FillSinksParams { min_slope: 0.01 })?;
                     let fdir = flow_direction(&filled)?;
                     let facc = flow_accumulation(&fdir)?;
-                    let slope_rad = slope(&filled, SlopeParams {
-                        units: SlopeUnits::Radians, z_factor: 1.0,
-                    })?;
+                    let slope_rad = slope(
+                        &filled,
+                        SlopeParams {
+                            units: SlopeUnits::Radians,
+                            z_factor: 1.0,
+                        },
+                    )?;
                     Ok(surtgis_algorithms::terrain::twi(&facc, &slope_rad)?)
                 })();
                 dispatch_f64(&tx, "TWI", start, res);
             }
 
             "geomorphons" => {
-                let result = geomorphons(&input, GeomorphonParams {
-                    radius: get_usize(&params, "radius", 10),
-                    flatness_threshold: get_f64(&params, "flatness", 1.0),
-                });
+                let result = geomorphons(
+                    &input,
+                    GeomorphonParams {
+                        radius: get_usize(&params, "radius", 10),
+                        flatness_threshold: get_f64(&params, "flatness", 1.0),
+                    },
+                );
                 dispatch_u8(&tx, "Geomorphons", start, result);
             }
 
             "dev" => {
-                dispatch_f64(&tx, "DEV", start, dev(&input, DevParams {
-                    radius: get_usize(&params, "radius", 10),
-                }));
+                dispatch_f64(
+                    &tx,
+                    "DEV",
+                    start,
+                    dev(
+                        &input,
+                        DevParams {
+                            radius: get_usize(&params, "radius", 10),
+                        },
+                    ),
+                );
             }
 
             "landform" => {
-                dispatch_f64(&tx, "Landform", start, landform_classification(&input, LandformParams {
-                    small_radius: get_usize(&params, "small_radius", 3),
-                    large_radius: get_usize(&params, "large_radius", 10),
-                    tpi_threshold: get_f64(&params, "threshold", 1.0),
-                    slope_threshold: get_f64(&params, "slope_threshold", 6.0),
-                }));
+                dispatch_f64(
+                    &tx,
+                    "Landform",
+                    start,
+                    landform_classification(
+                        &input,
+                        LandformParams {
+                            small_radius: get_usize(&params, "small_radius", 3),
+                            large_radius: get_usize(&params, "large_radius", 10),
+                            tpi_threshold: get_f64(&params, "threshold", 1.0),
+                            slope_threshold: get_f64(&params, "slope_threshold", 6.0),
+                        },
+                    ),
+                );
             }
 
             "sky_view_factor" => {
-                dispatch_f64(&tx, "Sky View Factor", start, sky_view_factor(&input, SvfParams {
-                    radius: get_usize(&params, "radius", 10),
-                    directions: get_usize(&params, "directions", 16),
-                }));
+                dispatch_f64(
+                    &tx,
+                    "Sky View Factor",
+                    start,
+                    sky_view_factor(
+                        &input,
+                        SvfParams {
+                            radius: get_usize(&params, "radius", 10),
+                            directions: get_usize(&params, "directions", 16),
+                        },
+                    ),
+                );
             }
 
             "positive_openness" => {
-                dispatch_f64(&tx, "Positive Openness", start, positive_openness(&input, OpennessParams {
-                    radius: get_usize(&params, "radius", 10),
-                    directions: get_usize(&params, "directions", 8),
-                }));
+                dispatch_f64(
+                    &tx,
+                    "Positive Openness",
+                    start,
+                    positive_openness(
+                        &input,
+                        OpennessParams {
+                            radius: get_usize(&params, "radius", 10),
+                            directions: get_usize(&params, "directions", 8),
+                        },
+                    ),
+                );
             }
 
             "negative_openness" => {
-                dispatch_f64(&tx, "Negative Openness", start, negative_openness(&input, OpennessParams {
-                    radius: get_usize(&params, "radius", 10),
-                    directions: get_usize(&params, "directions", 8),
-                }));
+                dispatch_f64(
+                    &tx,
+                    "Negative Openness",
+                    start,
+                    negative_openness(
+                        &input,
+                        OpennessParams {
+                            radius: get_usize(&params, "radius", 10),
+                            directions: get_usize(&params, "directions", 8),
+                        },
+                    ),
+                );
             }
 
             "convergence_index" => {
-                dispatch_f64(&tx, "Convergence Index", start, convergence_index(&input, ConvergenceParams {
-                    radius: get_usize(&params, "radius", 1),
-                }));
+                dispatch_f64(
+                    &tx,
+                    "Convergence Index",
+                    start,
+                    convergence_index(
+                        &input,
+                        ConvergenceParams {
+                            radius: get_usize(&params, "radius", 1),
+                        },
+                    ),
+                );
             }
 
             "vrm" => {
-                dispatch_f64(&tx, "VRM", start, vrm(&input, VrmParams {
-                    radius: get_usize(&params, "radius", 1),
-                }));
+                dispatch_f64(
+                    &tx,
+                    "VRM",
+                    start,
+                    vrm(
+                        &input,
+                        VrmParams {
+                            radius: get_usize(&params, "radius", 1),
+                        },
+                    ),
+                );
             }
 
             "shape_index" => {
@@ -232,8 +333,12 @@ pub fn dispatch_algorithm(
             // HYDROLOGY
             // ═══════════════════════════════════════════════════
             "fill_sinks" => {
-                dispatch_f64(&tx, "Fill Sinks", start,
-                    fill_sinks(&input, FillSinksParams { min_slope: 0.01 }));
+                dispatch_f64(
+                    &tx,
+                    "Fill Sinks",
+                    start,
+                    fill_sinks(&input, FillSinksParams { min_slope: 0.01 }),
+                );
             }
 
             "priority_flood" => {
@@ -265,7 +370,14 @@ pub fn dispatch_algorithm(
                     let filled = fill_sinks(&input, FillSinksParams { min_slope: 0.01 })?;
                     let fdir = flow_direction(&filled)?;
                     let facc = flow_accumulation(&fdir)?;
-                    Ok(hand(&filled, &fdir, &facc, HandParams { stream_threshold: threshold })?)
+                    Ok(hand(
+                        &filled,
+                        &fdir,
+                        &facc,
+                        HandParams {
+                            stream_threshold: threshold,
+                        },
+                    )?)
                 })();
                 dispatch_f64(&tx, "HAND", start, res);
             }
@@ -274,46 +386,88 @@ pub fn dispatch_algorithm(
             // IMAGERY
             // ═══════════════════════════════════════════════════
             "ndvi" => {
-                require_extra(&tx, "NDVI", &extra_inputs, &["nir"], |inputs| {
-                    ndvi(inputs["nir"], &input)
-                }, start);
+                require_extra(
+                    &tx,
+                    "NDVI",
+                    &extra_inputs,
+                    &["nir"],
+                    |inputs| ndvi(inputs["nir"], &input),
+                    start,
+                );
             }
 
             "ndwi" => {
-                require_extra(&tx, "NDWI", &extra_inputs, &["green"], |inputs| {
-                    ndwi(inputs["green"], &input)
-                }, start);
+                require_extra(
+                    &tx,
+                    "NDWI",
+                    &extra_inputs,
+                    &["green"],
+                    |inputs| ndwi(inputs["green"], &input),
+                    start,
+                );
             }
 
             "mndwi" => {
-                require_extra(&tx, "MNDWI", &extra_inputs, &["green", "swir"], |inputs| {
-                    mndwi(inputs["green"], inputs["swir"])
-                }, start);
+                require_extra(
+                    &tx,
+                    "MNDWI",
+                    &extra_inputs,
+                    &["green", "swir"],
+                    |inputs| mndwi(inputs["green"], inputs["swir"]),
+                    start,
+                );
             }
 
             "nbr" => {
-                require_extra(&tx, "NBR", &extra_inputs, &["nir", "swir"], |inputs| {
-                    nbr(inputs["nir"], inputs["swir"])
-                }, start);
+                require_extra(
+                    &tx,
+                    "NBR",
+                    &extra_inputs,
+                    &["nir", "swir"],
+                    |inputs| nbr(inputs["nir"], inputs["swir"]),
+                    start,
+                );
             }
 
             "savi" => {
                 let l_factor = get_f64(&params, "l_factor", 0.5);
-                require_extra(&tx, "SAVI", &extra_inputs, &["nir", "red"], |inputs| {
-                    savi(inputs["nir"], inputs["red"], SaviParams { l_factor })
-                }, start);
+                require_extra(
+                    &tx,
+                    "SAVI",
+                    &extra_inputs,
+                    &["nir", "red"],
+                    |inputs| savi(inputs["nir"], inputs["red"], SaviParams { l_factor }),
+                    start,
+                );
             }
 
             "evi" => {
-                require_extra(&tx, "EVI", &extra_inputs, &["nir", "red", "blue"], |inputs| {
-                    evi(inputs["nir"], inputs["red"], inputs["blue"], EviParams::default())
-                }, start);
+                require_extra(
+                    &tx,
+                    "EVI",
+                    &extra_inputs,
+                    &["nir", "red", "blue"],
+                    |inputs| {
+                        evi(
+                            inputs["nir"],
+                            inputs["red"],
+                            inputs["blue"],
+                            EviParams::default(),
+                        )
+                    },
+                    start,
+                );
             }
 
             "bsi" => {
-                require_extra(&tx, "BSI", &extra_inputs, &["swir", "red", "nir", "blue"], |inputs| {
-                    bsi(inputs["swir"], inputs["red"], inputs["nir"], inputs["blue"])
-                }, start);
+                require_extra(
+                    &tx,
+                    "BSI",
+                    &extra_inputs,
+                    &["swir", "red", "nir", "blue"],
+                    |inputs| bsi(inputs["swir"], inputs["red"], inputs["nir"], inputs["blue"]),
+                    start,
+                );
             }
 
             "band_math" => {
@@ -326,9 +480,14 @@ pub fn dispatch_algorithm(
                     5 => BandMathOp::Max,
                     _ => BandMathOp::Add,
                 };
-                require_extra(&tx, "Band Math", &extra_inputs, &["a", "b"], |inputs| {
-                    band_math_binary(inputs["a"], inputs["b"], op)
-                }, start);
+                require_extra(
+                    &tx,
+                    "Band Math",
+                    &extra_inputs,
+                    &["a", "b"],
+                    |inputs| band_math_binary(inputs["a"], inputs["b"], op),
+                    start,
+                );
             }
 
             // ═══════════════════════════════════════════════════
@@ -373,67 +532,130 @@ pub fn dispatch_algorithm(
             // STATISTICS
             // ═══════════════════════════════════════════════════
             "focal_mean" => {
-                dispatch_focal(&tx, start, &input, &params, FocalStatistic::Mean, "Focal Mean");
+                dispatch_focal(
+                    &tx,
+                    start,
+                    &input,
+                    &params,
+                    FocalStatistic::Mean,
+                    "Focal Mean",
+                );
             }
 
             "focal_std" => {
-                dispatch_focal(&tx, start, &input, &params, FocalStatistic::StdDev, "Focal Std Dev");
+                dispatch_focal(
+                    &tx,
+                    start,
+                    &input,
+                    &params,
+                    FocalStatistic::StdDev,
+                    "Focal Std Dev",
+                );
             }
 
             "focal_range" => {
-                dispatch_focal(&tx, start, &input, &params, FocalStatistic::Range, "Focal Range");
+                dispatch_focal(
+                    &tx,
+                    start,
+                    &input,
+                    &params,
+                    FocalStatistic::Range,
+                    "Focal Range",
+                );
             }
 
             "focal_median" => {
-                dispatch_focal(&tx, start, &input, &params, FocalStatistic::Median, "Focal Median");
+                dispatch_focal(
+                    &tx,
+                    start,
+                    &input,
+                    &params,
+                    FocalStatistic::Median,
+                    "Focal Median",
+                );
             }
 
             "focal_min" => {
-                dispatch_focal(&tx, start, &input, &params, FocalStatistic::Min, "Focal Min");
+                dispatch_focal(
+                    &tx,
+                    start,
+                    &input,
+                    &params,
+                    FocalStatistic::Min,
+                    "Focal Min",
+                );
             }
 
             "focal_max" => {
-                dispatch_focal(&tx, start, &input, &params, FocalStatistic::Max, "Focal Max");
+                dispatch_focal(
+                    &tx,
+                    start,
+                    &input,
+                    &params,
+                    FocalStatistic::Max,
+                    "Focal Max",
+                );
             }
 
             "focal_sum" => {
-                dispatch_focal(&tx, start, &input, &params, FocalStatistic::Sum, "Focal Sum");
+                dispatch_focal(
+                    &tx,
+                    start,
+                    &input,
+                    &params,
+                    FocalStatistic::Sum,
+                    "Focal Sum",
+                );
             }
 
             "focal_majority" => {
-                dispatch_focal(&tx, start, &input, &params, FocalStatistic::Majority, "Focal Majority");
+                dispatch_focal(
+                    &tx,
+                    start,
+                    &input,
+                    &params,
+                    FocalStatistic::Majority,
+                    "Focal Majority",
+                );
             }
 
             "zonal_statistics" => {
-                require_extra(&tx, "Zonal Statistics", &extra_inputs, &["zones"], |inputs| {
-                    let zones_f64 = inputs["zones"];
-                    // Convert f64 zones raster to i32
-                    let mut zones_i32 = Raster::<i32>::new(zones_f64.rows(), zones_f64.cols());
-                    zones_i32.set_transform(*zones_f64.transform());
-                    for r in 0..zones_f64.rows() {
-                        for c in 0..zones_f64.cols() {
-                            if let Ok(v) = zones_f64.get(r, c) {
-                                let _ = zones_i32.set(r, c, v as i32);
+                require_extra(
+                    &tx,
+                    "Zonal Statistics",
+                    &extra_inputs,
+                    &["zones"],
+                    |inputs| {
+                        let zones_f64 = inputs["zones"];
+                        // Convert f64 zones raster to i32
+                        let mut zones_i32 = Raster::<i32>::new(zones_f64.rows(), zones_f64.cols());
+                        zones_i32.set_transform(*zones_f64.transform());
+                        for r in 0..zones_f64.rows() {
+                            for c in 0..zones_f64.cols() {
+                                if let Ok(v) = zones_f64.get(r, c) {
+                                    let _ = zones_i32.set(r, c, v as i32);
+                                }
                             }
                         }
-                    }
-                    use surtgis_algorithms::statistics::zonal_statistics;
-                    let results = zonal_statistics(&input, &zones_i32)?;
-                    // Write mean values back to a raster (zone_id -> mean)
-                    let mut out = Raster::<f64>::new(input.rows(), input.cols());
-                    out.set_transform(*input.transform());
-                    out.set_crs(input.crs().cloned());
-                    for r in 0..input.rows() {
-                        for c in 0..input.cols() {
-                            if let Ok(zone_val) = zones_i32.get(r, c)
-                                && let Some(stats) = results.get(&zone_val)
-                            {
-                                let _ = out.set(r, c, stats.mean);
+                        use surtgis_algorithms::statistics::zonal_statistics;
+                        let results = zonal_statistics(&input, &zones_i32)?;
+                        // Write mean values back to a raster (zone_id -> mean)
+                        let mut out = Raster::<f64>::new(input.rows(), input.cols());
+                        out.set_transform(*input.transform());
+                        out.set_crs(input.crs().cloned());
+                        for r in 0..input.rows() {
+                            for c in 0..input.cols() {
+                                if let Ok(zone_val) = zones_i32.get(r, c)
+                                    && let Some(stats) = results.get(&zone_val)
+                                {
+                                    let _ = out.set(r, c, stats.mean);
+                                }
                             }
                         }
-                    }
-                    Ok(out)
-                }, start);
+                        Ok(out)
+                    },
+                    start,
+                );
             }
 
             "morans_i" => {
@@ -443,7 +665,10 @@ pub fn dispatch_algorithm(
                         let elapsed = start.elapsed();
                         let _ = tx.send(AppMessage::Log(LogEntry::success(format!(
                             "Moran's I = {:.6}, z = {:.3}, p = {:.6} ({:.2}s)",
-                            mi.i, mi.z_score, mi.p_value, elapsed.as_secs_f64()
+                            mi.i,
+                            mi.z_score,
+                            mi.p_value,
+                            elapsed.as_secs_f64()
                         ))));
                         // Return the input raster unchanged — result is in the log
                         let _ = tx.send(AppMessage::AlgoComplete {
@@ -467,7 +692,8 @@ pub fn dispatch_algorithm(
                             elapsed,
                         });
                         let _ = tx.send(AppMessage::Log(LogEntry::success(format!(
-                            "Getis-Ord Gi* completed in {:.2}s", elapsed.as_secs_f64()
+                            "Getis-Ord Gi* completed in {:.2}s",
+                            elapsed.as_secs_f64()
                         ))));
                     }
                     Err(e) => send_error(&tx, "Getis-Ord Gi*", e),
@@ -480,15 +706,28 @@ pub fn dispatch_algorithm(
             "breach_depressions" => {
                 let max_depth = get_f64(&params, "max_depth", f64::INFINITY);
                 let max_length = get_usize(&params, "max_length", 0);
-                dispatch_f64(&tx, "Breach Depressions", start, breach_depressions(&input, BreachParams {
-                    max_depth,
-                    max_length,
-                    fill_remaining: true,
-                }));
+                dispatch_f64(
+                    &tx,
+                    "Breach Depressions",
+                    start,
+                    breach_depressions(
+                        &input,
+                        BreachParams {
+                            max_depth,
+                            max_length,
+                            fill_remaining: true,
+                        },
+                    ),
+                );
             }
 
             "flow_direction_dinf" => {
-                dispatch_f64(&tx, "Flow Direction (D-inf)", start, flow_direction_dinf(&input));
+                dispatch_f64(
+                    &tx,
+                    "Flow Direction (D-inf)",
+                    start,
+                    flow_direction_dinf(&input),
+                );
             }
 
             "flow_accumulation_mfd" => {
@@ -510,10 +749,13 @@ pub fn dispatch_algorithm(
                 )));
                 let res = (|| -> anyhow::Result<Raster<f64>> {
                     let filled = fill_sinks(&input, FillSinksParams { min_slope: 0.01 })?;
-                    Ok(flow_accumulation_mfd_adaptive(&filled, AdaptiveMfdParams {
-                        scale_factor,
-                        ..AdaptiveMfdParams::default()
-                    })?)
+                    Ok(flow_accumulation_mfd_adaptive(
+                        &filled,
+                        AdaptiveMfdParams {
+                            scale_factor,
+                            ..AdaptiveMfdParams::default()
+                        },
+                    )?)
                 })();
                 dispatch_f64(&tx, "Flow Accumulation (Adaptive MFD)", start, res);
             }
@@ -558,12 +800,20 @@ pub fn dispatch_algorithm(
             "nested_depressions" => {
                 let min_depth = get_f64(&params, "min_depth", 0.1);
                 let min_area = get_usize(&params, "min_area", 10);
-                match nested_depressions(&input, NestedDepressionParams { min_depth, min_area }) {
+                match nested_depressions(
+                    &input,
+                    NestedDepressionParams {
+                        min_depth,
+                        min_area,
+                    },
+                ) {
                     Ok(result) => {
                         let elapsed = start.elapsed();
                         let n = result.depressions.len();
                         let _ = tx.send(AppMessage::Log(LogEntry::success(format!(
-                            "Found {} nested depressions in {:.2}s", n, elapsed.as_secs_f64()
+                            "Found {} nested depressions in {:.2}s",
+                            n,
+                            elapsed.as_secs_f64()
                         ))));
                         // Return depth raster
                         let _ = tx.send(AppMessage::AlgoComplete {
@@ -587,7 +837,8 @@ pub fn dispatch_algorithm(
                             elapsed,
                         });
                         let _ = tx.send(AppMessage::Log(LogEntry::success(format!(
-                            "D-inf flow completed in {:.2}s", elapsed.as_secs_f64()
+                            "D-inf flow completed in {:.2}s",
+                            elapsed.as_secs_f64()
                         ))));
                     }
                     Err(e) => send_error(&tx, "D-inf Flow", e),
@@ -598,33 +849,58 @@ pub fn dispatch_algorithm(
             // IMAGERY — new
             // ═══════════════════════════════════════════════════
             "ndre" => {
-                require_extra(&tx, "NDRE", &extra_inputs, &["nir", "red_edge"], |inputs| {
-                    ndre(inputs["nir"], inputs["red_edge"])
-                }, start);
+                require_extra(
+                    &tx,
+                    "NDRE",
+                    &extra_inputs,
+                    &["nir", "red_edge"],
+                    |inputs| ndre(inputs["nir"], inputs["red_edge"]),
+                    start,
+                );
             }
 
             "gndvi" => {
-                require_extra(&tx, "GNDVI", &extra_inputs, &["nir", "green"], |inputs| {
-                    gndvi(inputs["nir"], inputs["green"])
-                }, start);
+                require_extra(
+                    &tx,
+                    "GNDVI",
+                    &extra_inputs,
+                    &["nir", "green"],
+                    |inputs| gndvi(inputs["nir"], inputs["green"]),
+                    start,
+                );
             }
 
             "ngrdi" => {
-                require_extra(&tx, "NGRDI", &extra_inputs, &["green", "red"], |inputs| {
-                    ngrdi(inputs["green"], inputs["red"])
-                }, start);
+                require_extra(
+                    &tx,
+                    "NGRDI",
+                    &extra_inputs,
+                    &["green", "red"],
+                    |inputs| ngrdi(inputs["green"], inputs["red"]),
+                    start,
+                );
             }
 
             "reci" => {
-                require_extra(&tx, "RECI", &extra_inputs, &["nir", "red_edge"], |inputs| {
-                    reci(inputs["nir"], inputs["red_edge"])
-                }, start);
+                require_extra(
+                    &tx,
+                    "RECI",
+                    &extra_inputs,
+                    &["nir", "red_edge"],
+                    |inputs| reci(inputs["nir"], inputs["red_edge"]),
+                    start,
+                );
             }
 
             "normalized_difference" => {
-                require_extra(&tx, "Normalized Difference", &extra_inputs, &["a", "b"], |inputs| {
-                    normalized_difference(inputs["a"], inputs["b"])
-                }, start);
+                require_extra(
+                    &tx,
+                    "Normalized Difference",
+                    &extra_inputs,
+                    &["a", "b"],
+                    |inputs| normalized_difference(inputs["a"], inputs["b"]),
+                    start,
+                );
             }
 
             "reclassify" => {
@@ -651,10 +927,13 @@ pub fn dispatch_algorithm(
                             value: (i + 1) as f64,
                         })
                         .collect();
-                    Ok(reclassify(&input, ReclassifyParams {
-                        classes,
-                        default_value: 0.0,
-                    })?)
+                    Ok(reclassify(
+                        &input,
+                        ReclassifyParams {
+                            classes,
+                            default_value: 0.0,
+                        },
+                    )?)
                 })();
                 dispatch_f64(&tx, "Reclassify", start, res);
             }
@@ -663,8 +942,12 @@ pub fn dispatch_algorithm(
                 let op_idx = get_choice(&params, "operation");
                 let res = match op_idx {
                     0 => surtgis_algorithms::imagery::band_math(&input, |v| v.sqrt()),
-                    1 => surtgis_algorithms::imagery::band_math(&input, |v| if v > 0.0 { v.ln() } else { f64::NAN }),
-                    2 => surtgis_algorithms::imagery::band_math(&input, |v| if v > 0.0 { v.log10() } else { f64::NAN }),
+                    1 => surtgis_algorithms::imagery::band_math(&input, |v| {
+                        if v > 0.0 { v.ln() } else { f64::NAN }
+                    }),
+                    2 => surtgis_algorithms::imagery::band_math(&input, |v| {
+                        if v > 0.0 { v.log10() } else { f64::NAN }
+                    }),
                     3 => surtgis_algorithms::imagery::band_math(&input, |v| v.abs()),
                     4 => surtgis_algorithms::imagery::band_math(&input, |v| -v),
                     5 => surtgis_algorithms::imagery::band_math(&input, |v| v * v),
@@ -686,46 +969,86 @@ pub fn dispatch_algorithm(
                         if range.abs() < 1e-12 {
                             surtgis_algorithms::imagery::band_math(&input, |_| 0.0)
                         } else {
-                            surtgis_algorithms::imagery::band_math(&input, move |v| (v - vmin) / range)
+                            surtgis_algorithms::imagery::band_math(&input, move |v| {
+                                (v - vmin) / range
+                            })
                         }
                     }
                     _ => surtgis_algorithms::imagery::band_math(&input, |v| v),
                 };
-                let name = ["sqrt", "log", "log10", "abs", "negate", "square", "normalize"];
-                dispatch_f64(&tx, &format!("Band Math ({})", name.get(op_idx).unwrap_or(&"?")), start, res);
+                let name = [
+                    "sqrt",
+                    "log",
+                    "log10",
+                    "abs",
+                    "negate",
+                    "square",
+                    "normalize",
+                ];
+                dispatch_f64(
+                    &tx,
+                    &format!("Band Math ({})", name.get(op_idx).unwrap_or(&"?")),
+                    start,
+                    res,
+                );
             }
 
             // ═══════════════════════════════════════════════════
             // IMAGERY — Fase B
             // ═══════════════════════════════════════════════════
             "ndsi" => {
-                require_extra(&tx, "NDSI", &extra_inputs, &["green", "swir"], |inputs| {
-                    ndsi(inputs["green"], inputs["swir"])
-                }, start);
+                require_extra(
+                    &tx,
+                    "NDSI",
+                    &extra_inputs,
+                    &["green", "swir"],
+                    |inputs| ndsi(inputs["green"], inputs["swir"]),
+                    start,
+                );
             }
 
             "ndbi" => {
-                require_extra(&tx, "NDBI", &extra_inputs, &["swir", "nir"], |inputs| {
-                    ndbi(inputs["swir"], inputs["nir"])
-                }, start);
+                require_extra(
+                    &tx,
+                    "NDBI",
+                    &extra_inputs,
+                    &["swir", "nir"],
+                    |inputs| ndbi(inputs["swir"], inputs["nir"]),
+                    start,
+                );
             }
 
             "ndmi" => {
-                require_extra(&tx, "NDMI", &extra_inputs, &["nir", "swir"], |inputs| {
-                    ndmi(inputs["nir"], inputs["swir"])
-                }, start);
+                require_extra(
+                    &tx,
+                    "NDMI",
+                    &extra_inputs,
+                    &["nir", "swir"],
+                    |inputs| ndmi(inputs["nir"], inputs["swir"]),
+                    start,
+                );
             }
 
             "msavi" => {
-                require_extra(&tx, "MSAVI", &extra_inputs, &["nir", "red"], |inputs| {
-                    msavi(inputs["nir"], inputs["red"])
-                }, start);
+                require_extra(
+                    &tx,
+                    "MSAVI",
+                    &extra_inputs,
+                    &["nir", "red"],
+                    |inputs| msavi(inputs["nir"], inputs["red"]),
+                    start,
+                );
             }
 
             "evi2" => {
-                require_extra(&tx, "EVI2", &extra_inputs, &["nir", "red"], |inputs| {
-                    evi2(inputs["nir"], inputs["red"])
-                }, start);
+                require_extra(
+                    &tx,
+                    "EVI2",
+                    &extra_inputs,
+                    &["nir", "red"],
+                    |inputs| evi2(inputs["nir"], inputs["red"]),
+                    start,
+                );
             }
 
             // ═══════════════════════════════════════════════════
@@ -739,9 +1062,13 @@ pub fn dispatch_algorithm(
                     let filled = fill_sinks(&input, FillSinksParams { min_slope: 0.01 })?;
                     let fdir = flow_direction(&filled)?;
                     let facc = flow_accumulation(&fdir)?;
-                    let slope_rad = slope(&filled, SlopeParams {
-                        units: SlopeUnits::Radians, z_factor: 1.0,
-                    })?;
+                    let slope_rad = slope(
+                        &filled,
+                        SlopeParams {
+                            units: SlopeUnits::Radians,
+                            z_factor: 1.0,
+                        },
+                    )?;
                     Ok(spi(&facc, &slope_rad)?)
                 })();
                 dispatch_f64(&tx, "SPI", start, res);
@@ -757,9 +1084,13 @@ pub fn dispatch_algorithm(
                     let filled = fill_sinks(&input, FillSinksParams { min_slope: 0.01 })?;
                     let fdir = flow_direction(&filled)?;
                     let facc = flow_accumulation(&fdir)?;
-                    let slope_rad = slope(&filled, SlopeParams {
-                        units: SlopeUnits::Radians, z_factor: 1.0,
-                    })?;
+                    let slope_rad = slope(
+                        &filled,
+                        SlopeParams {
+                            units: SlopeUnits::Radians,
+                            z_factor: 1.0,
+                        },
+                    )?;
                     Ok(sti(&facc, &slope_rad, StiParams { m, n })?)
                 })();
                 dispatch_f64(&tx, "STI", start, res);
@@ -771,23 +1102,34 @@ pub fn dispatch_algorithm(
                 let observer_height = get_f64(&params, "observer_height", 1.7);
                 let target_height = get_f64(&params, "target_height", 0.0);
                 let max_radius = get_usize(&params, "max_radius", 0);
-                dispatch_u8(&tx, "Viewshed", start, viewshed(&input, ViewshedParams {
-                    observer_row,
-                    observer_col,
-                    observer_height,
-                    target_height,
-                    max_radius,
-                }));
+                dispatch_u8(
+                    &tx,
+                    "Viewshed",
+                    start,
+                    viewshed(
+                        &input,
+                        ViewshedParams {
+                            observer_row,
+                            observer_col,
+                            observer_height,
+                            target_height,
+                            max_radius,
+                        },
+                    ),
+                );
             }
 
             "mrvbf" => {
                 let t_slope = get_f64(&params, "t_slope", 16.0);
                 let steps = get_usize(&params, "steps", 3);
-                match mrvbf(&input, MrvbfParams {
-                    initial_slope_threshold: t_slope,
-                    steps,
-                    ..MrvbfParams::default()
-                }) {
+                match mrvbf(
+                    &input,
+                    MrvbfParams {
+                        initial_slope_threshold: t_slope,
+                        steps,
+                        ..MrvbfParams::default()
+                    },
+                ) {
                     Ok((mrvbf_raster, _mrrtf_raster)) => {
                         let elapsed = start.elapsed();
                         let _ = tx.send(AppMessage::AlgoComplete {
@@ -796,7 +1138,8 @@ pub fn dispatch_algorithm(
                             elapsed,
                         });
                         let _ = tx.send(AppMessage::Log(LogEntry::success(format!(
-                            "MRVBF completed in {:.2}s", elapsed.as_secs_f64()
+                            "MRVBF completed in {:.2}s",
+                            elapsed.as_secs_f64()
                         ))));
                     }
                     Err(e) => send_error(&tx, "MRVBF", e),
@@ -806,12 +1149,20 @@ pub fn dispatch_algorithm(
             "wind_exposure" => {
                 let radius = get_usize(&params, "radius", 30);
                 let directions = get_usize(&params, "directions", 8);
-                dispatch_f64(&tx, "Wind Exposure", start, wind_exposure(&input, WindExposureParams {
-                    radius,
-                    directions,
-                    wind_direction: None,
-                    wind_window: 45.0,
-                }));
+                dispatch_f64(
+                    &tx,
+                    "Wind Exposure",
+                    start,
+                    wind_exposure(
+                        &input,
+                        WindExposureParams {
+                            radius,
+                            directions,
+                            wind_direction: None,
+                            wind_window: 45.0,
+                        },
+                    ),
+                );
             }
 
             "solar_radiation" => {
@@ -822,16 +1173,24 @@ pub fn dispatch_algorithm(
                     "Computing slope + aspect for solar radiation...",
                 )));
                 let res = (|| -> anyhow::Result<Raster<f64>> {
-                    let slope_rad = slope(&input, SlopeParams {
-                        units: SlopeUnits::Radians, z_factor: 1.0,
-                    })?;
+                    let slope_rad = slope(
+                        &input,
+                        SlopeParams {
+                            units: SlopeUnits::Radians,
+                            z_factor: 1.0,
+                        },
+                    )?;
                     let aspect_rad = aspect(&input, AspectOutput::Radians)?;
-                    let result = solar_radiation(&slope_rad, &aspect_rad, SolarParams {
-                        day,
-                        latitude,
-                        transmittance,
-                        ..SolarParams::default()
-                    })?;
+                    let result = solar_radiation(
+                        &slope_rad,
+                        &aspect_rad,
+                        SolarParams {
+                            day,
+                            latitude,
+                            transmittance,
+                            ..SolarParams::default()
+                        },
+                    )?;
                     Ok(result.total)
                 })();
                 dispatch_f64(&tx, "Solar Radiation (total)", start, res);
@@ -843,15 +1202,22 @@ pub fn dispatch_algorithm(
                     "Computing curvatures for lineament detection...",
                 )));
                 let res = (|| -> anyhow::Result<Raster<u8>> {
-                    let plan = curvature(&input, CurvatureParams {
-                        curvature_type: CurvatureType::Plan,
-                        ..Default::default()
-                    })?;
-                    let profile = curvature(&input, CurvatureParams {
-                        curvature_type: CurvatureType::Profile,
-                        ..Default::default()
-                    })?;
-                    let result = lineament_detection(&plan, &profile, LineamentParams { min_length })?;
+                    let plan = curvature(
+                        &input,
+                        CurvatureParams {
+                            curvature_type: CurvatureType::Plan,
+                            ..Default::default()
+                        },
+                    )?;
+                    let profile = curvature(
+                        &input,
+                        CurvatureParams {
+                            curvature_type: CurvatureType::Profile,
+                            ..Default::default()
+                        },
+                    )?;
+                    let result =
+                        lineament_detection(&plan, &profile, LineamentParams { min_length })?;
                     Ok(result.classified)
                 })();
                 dispatch_u8(&tx, "Lineament Detection", start, res);
@@ -875,7 +1241,12 @@ pub fn dispatch_algorithm(
                     13 => AdvancedCurvatureType::Laplacian,
                     _ => AdvancedCurvatureType::MeanH,
                 };
-                dispatch_f64(&tx, "Advanced Curvature", start, advanced_curvatures(&input, curv_type));
+                dispatch_f64(
+                    &tx,
+                    "Advanced Curvature",
+                    start,
+                    advanced_curvatures(&input, curv_type),
+                );
             }
 
             // ═══════════════════════════════════════════════════
@@ -884,18 +1255,28 @@ pub fn dispatch_algorithm(
             "contour_lines" => {
                 let interval = get_f64(&params, "interval", 10.0);
                 let base = get_f64(&params, "base", 0.0);
-                dispatch_f64(&tx, "Contour Lines", start, contour_lines(&input, ContourParams {
-                    interval,
-                    base,
-                }));
+                dispatch_f64(
+                    &tx,
+                    "Contour Lines",
+                    start,
+                    contour_lines(&input, ContourParams { interval, base }),
+                );
             }
 
             "cost_distance" => {
                 let source_row = get_usize(&params, "source_row", 0);
                 let source_col = get_usize(&params, "source_col", 0);
-                dispatch_f64(&tx, "Cost Distance", start, cost_distance(&input, CostDistanceParams {
-                    sources: vec![(source_row, source_col)],
-                }));
+                dispatch_f64(
+                    &tx,
+                    "Cost Distance",
+                    start,
+                    cost_distance(
+                        &input,
+                        CostDistanceParams {
+                            sources: vec![(source_row, source_col)],
+                        },
+                    ),
+                );
             }
 
             // ═══════════════════════════════════════════════════
@@ -903,26 +1284,50 @@ pub fn dispatch_algorithm(
             // ═══════════════════════════════════════════════════
             "shannon_diversity" => {
                 let radius = get_usize(&params, "radius", 3);
-                dispatch_f64(&tx, "Shannon Diversity", start, shannon_diversity(&input, DiversityParams {
-                    radius,
-                    circular: false,
-                }));
+                dispatch_f64(
+                    &tx,
+                    "Shannon Diversity",
+                    start,
+                    shannon_diversity(
+                        &input,
+                        DiversityParams {
+                            radius,
+                            circular: false,
+                        },
+                    ),
+                );
             }
 
             "simpson_diversity" => {
                 let radius = get_usize(&params, "radius", 3);
-                dispatch_f64(&tx, "Simpson Diversity", start, simpson_diversity(&input, DiversityParams {
-                    radius,
-                    circular: false,
-                }));
+                dispatch_f64(
+                    &tx,
+                    "Simpson Diversity",
+                    start,
+                    simpson_diversity(
+                        &input,
+                        DiversityParams {
+                            radius,
+                            circular: false,
+                        },
+                    ),
+                );
             }
 
             "patch_density" => {
                 let radius = get_usize(&params, "radius", 3);
-                dispatch_f64(&tx, "Patch Density", start, patch_density(&input, DiversityParams {
-                    radius,
-                    circular: false,
-                }));
+                dispatch_f64(
+                    &tx,
+                    "Patch Density",
+                    start,
+                    patch_density(
+                        &input,
+                        DiversityParams {
+                            radius,
+                            circular: false,
+                        },
+                    ),
+                );
             }
 
             // ═══════════════════════════════════════════════════
@@ -931,11 +1336,19 @@ pub fn dispatch_algorithm(
             "kmeans" => {
                 let k = get_usize(&params, "k", 5);
                 let max_iterations = get_usize(&params, "max_iterations", 100);
-                dispatch_f64(&tx, "K-Means", start, kmeans_raster(&input, KmeansParams {
-                    k,
-                    max_iterations,
-                    ..KmeansParams::default()
-                }));
+                dispatch_f64(
+                    &tx,
+                    "K-Means",
+                    start,
+                    kmeans_raster(
+                        &input,
+                        KmeansParams {
+                            k,
+                            max_iterations,
+                            ..KmeansParams::default()
+                        },
+                    ),
+                );
             }
 
             "isodata" => {
@@ -944,36 +1357,63 @@ pub fn dispatch_algorithm(
                 let max_k = get_usize(&params, "max_k", 10);
                 let max_std_dev = get_f64(&params, "max_std_dev", 10.0);
                 let min_merge_distance = get_f64(&params, "min_merge_dist", 5.0);
-                dispatch_f64(&tx, "ISODATA", start, isodata(&input, IsodataParams {
-                    initial_k,
-                    min_k,
-                    max_k,
-                    max_std_dev,
-                    min_merge_distance,
-                    ..IsodataParams::default()
-                }));
+                dispatch_f64(
+                    &tx,
+                    "ISODATA",
+                    start,
+                    isodata(
+                        &input,
+                        IsodataParams {
+                            initial_k,
+                            min_k,
+                            max_k,
+                            max_std_dev,
+                            min_merge_distance,
+                            ..IsodataParams::default()
+                        },
+                    ),
+                );
             }
 
             "minimum_distance" => {
-                require_extra(&tx, "Minimum Distance", &extra_inputs, &["training"], |inputs| {
-                    let training = inputs["training"];
-                    let sigs = signatures_from_training(training, &input)?;
-                    minimum_distance(&input, &sigs)
-                }, start);
+                require_extra(
+                    &tx,
+                    "Minimum Distance",
+                    &extra_inputs,
+                    &["training"],
+                    |inputs| {
+                        let training = inputs["training"];
+                        let sigs = signatures_from_training(training, &input)?;
+                        minimum_distance(&input, &sigs)
+                    },
+                    start,
+                );
             }
 
             "maximum_likelihood" => {
-                require_extra(&tx, "Maximum Likelihood", &extra_inputs, &["training"], |inputs| {
-                    let training = inputs["training"];
-                    let sigs = signatures_from_training(training, &input)?;
-                    maximum_likelihood(&input, &sigs)
-                }, start);
+                require_extra(
+                    &tx,
+                    "Maximum Likelihood",
+                    &extra_inputs,
+                    &["training"],
+                    |inputs| {
+                        let training = inputs["training"];
+                        let sigs = signatures_from_training(training, &input)?;
+                        maximum_likelihood(&input, &sigs)
+                    },
+                    start,
+                );
             }
 
             "pca" => {
-                use surtgis_algorithms::classification::{pca, PcaParams};
+                use surtgis_algorithms::classification::{PcaParams, pca};
                 let res = (|| -> anyhow::Result<Raster<f64>> {
-                    let result = pca(&[&input], PcaParams { n_components: Some(1) })?;
+                    let result = pca(
+                        &[&input],
+                        PcaParams {
+                            n_components: Some(1),
+                        },
+                    )?;
                     Ok(result.components.into_iter().next().unwrap())
                 })();
                 dispatch_f64(&tx, "PCA (PC1)", start, res);
@@ -994,12 +1434,20 @@ pub fn dispatch_algorithm(
                     5 => GlcmTexture::Dissimilarity,
                     _ => GlcmTexture::Contrast,
                 };
-                dispatch_f64(&tx, "GLCM Texture", start, haralick_glcm(&input, GlcmParams {
-                    radius,
-                    n_levels,
-                    distance: 1,
-                    texture,
-                }));
+                dispatch_f64(
+                    &tx,
+                    "GLCM Texture",
+                    start,
+                    haralick_glcm(
+                        &input,
+                        GlcmParams {
+                            radius,
+                            n_levels,
+                            distance: 1,
+                            texture,
+                        },
+                    ),
+                );
             }
 
             "sobel_edge" => {
@@ -1015,23 +1463,43 @@ pub fn dispatch_algorithm(
             // ═══════════════════════════════════════════════════
             "raster_difference" => {
                 let threshold = get_f64(&params, "threshold", 0.1);
-                require_extra(&tx, "Raster Difference", &extra_inputs, &["after"], |inputs| {
-                    let (diff, _categorical) = raster_difference(&input, inputs["after"],
-                        RasterDiffParams {
-                            decrease_threshold: -threshold,
-                            increase_threshold: threshold,
-                        })?;
-                    Ok(diff)
-                }, start);
+                require_extra(
+                    &tx,
+                    "Raster Difference",
+                    &extra_inputs,
+                    &["after"],
+                    |inputs| {
+                        let (diff, _categorical) = raster_difference(
+                            &input,
+                            inputs["after"],
+                            RasterDiffParams {
+                                decrease_threshold: -threshold,
+                                increase_threshold: threshold,
+                            },
+                        )?;
+                        Ok(diff)
+                    },
+                    start,
+                );
             }
 
             "change_vector_analysis" => {
-                require_extra(&tx, "CVA", &extra_inputs, &["b1_after", "b2_before", "b2_after"], |inputs| {
-                    let (magnitude, _direction) = change_vector_analysis(
-                        &input, inputs["b1_after"], inputs["b2_before"], inputs["b2_after"],
-                    )?;
-                    Ok(magnitude)
-                }, start);
+                require_extra(
+                    &tx,
+                    "CVA",
+                    &extra_inputs,
+                    &["b1_after", "b2_before", "b2_after"],
+                    |inputs| {
+                        let (magnitude, _direction) = change_vector_analysis(
+                            &input,
+                            inputs["b1_after"],
+                            inputs["b2_before"],
+                            inputs["b2_after"],
+                        )?;
+                        Ok(magnitude)
+                    },
+                    start,
+                );
             }
 
             // ═══════════════════════════════════════════════════
@@ -1080,8 +1548,12 @@ pub fn dispatch_algorithm(
 
             "flood_fill_simulation" => {
                 let water_level = get_f64(&params, "water_level", 10.0);
-                dispatch_f64(&tx, "Flood Simulation", start,
-                    flood_fill_simulation(&input, FloodSimParams { water_level }));
+                dispatch_f64(
+                    &tx,
+                    "Flood Simulation",
+                    start,
+                    flood_fill_simulation(&input, FloodSimParams { water_level }),
+                );
             }
 
             // ═══════════════════════════════════════════════════
@@ -1092,79 +1564,134 @@ pub fn dispatch_algorithm(
             "interp_idw" => {
                 let power = get_f64(&params, "power", 2.0);
                 let max_points = get_usize(&params, "max_points", 12);
-                dispatch_interpolation(&tx, "IDW Interpolation", start, &input, |points, params_grid| {
-                    Ok(idw(&points, IdwParams {
-                        power,
-                        max_points: Some(max_points),
-                        rows: params_grid.0,
-                        cols: params_grid.1,
-                        transform: params_grid.2,
-                        ..IdwParams::default()
-                    })?)
-                });
+                dispatch_interpolation(
+                    &tx,
+                    "IDW Interpolation",
+                    start,
+                    &input,
+                    |points, params_grid| {
+                        Ok(idw(
+                            &points,
+                            IdwParams {
+                                power,
+                                max_points: Some(max_points),
+                                rows: params_grid.0,
+                                cols: params_grid.1,
+                                transform: params_grid.2,
+                                ..IdwParams::default()
+                            },
+                        )?)
+                    },
+                );
             }
 
             "interp_nearest" => {
-                dispatch_interpolation(&tx, "Nearest Neighbor", start, &input, |points, params_grid| {
-                    Ok(nearest_neighbor(&points, NearestNeighborParams {
-                        max_radius: None,
-                        rows: params_grid.0,
-                        cols: params_grid.1,
-                        transform: params_grid.2,
-                    })?)
-                });
+                dispatch_interpolation(
+                    &tx,
+                    "Nearest Neighbor",
+                    start,
+                    &input,
+                    |points, params_grid| {
+                        Ok(nearest_neighbor(
+                            &points,
+                            NearestNeighborParams {
+                                max_radius: None,
+                                rows: params_grid.0,
+                                cols: params_grid.1,
+                                transform: params_grid.2,
+                            },
+                        )?)
+                    },
+                );
             }
 
             "interp_natural" => {
-                dispatch_interpolation(&tx, "Natural Neighbor", start, &input, |points, params_grid| {
-                    Ok(natural_neighbor(&points, NaturalNeighborParams {
-                        rows: params_grid.0,
-                        cols: params_grid.1,
-                        transform: params_grid.2,
-                        ..NaturalNeighborParams::default()
-                    })?)
-                });
+                dispatch_interpolation(
+                    &tx,
+                    "Natural Neighbor",
+                    start,
+                    &input,
+                    |points, params_grid| {
+                        Ok(natural_neighbor(
+                            &points,
+                            NaturalNeighborParams {
+                                rows: params_grid.0,
+                                cols: params_grid.1,
+                                transform: params_grid.2,
+                                ..NaturalNeighborParams::default()
+                            },
+                        )?)
+                    },
+                );
             }
 
             "interp_tin" => {
-                dispatch_interpolation(&tx, "TIN Interpolation", start, &input, |points, params_grid| {
-                    Ok(tin_interpolation(&points, TinParams {
-                        rows: params_grid.0,
-                        cols: params_grid.1,
-                        transform: params_grid.2,
-                    })?)
-                });
+                dispatch_interpolation(
+                    &tx,
+                    "TIN Interpolation",
+                    start,
+                    &input,
+                    |points, params_grid| {
+                        Ok(tin_interpolation(
+                            &points,
+                            TinParams {
+                                rows: params_grid.0,
+                                cols: params_grid.1,
+                                transform: params_grid.2,
+                            },
+                        )?)
+                    },
+                );
             }
 
             "interp_tps" => {
                 let smoothing = get_f64(&params, "smoothing", 0.0);
-                dispatch_interpolation(&tx, "Thin Plate Spline", start, &input, |points, params_grid| {
-                    Ok(tps_interpolation(&points, TpsParams {
-                        rows: params_grid.0,
-                        cols: params_grid.1,
-                        transform: params_grid.2,
-                        smoothing,
-                    })?)
-                });
+                dispatch_interpolation(
+                    &tx,
+                    "Thin Plate Spline",
+                    start,
+                    &input,
+                    |points, params_grid| {
+                        Ok(tps_interpolation(
+                            &points,
+                            TpsParams {
+                                rows: params_grid.0,
+                                cols: params_grid.1,
+                                transform: params_grid.2,
+                                smoothing,
+                            },
+                        )?)
+                    },
+                );
             }
 
             "interp_kriging" => {
                 let max_points = get_usize(&params, "max_points", 16);
-                dispatch_interpolation(&tx, "Ordinary Kriging", start, &input, |points, params_grid| {
-                    use surtgis_algorithms::interpolation::{
-                        empirical_variogram, fit_best_variogram, VariogramParams,
-                    };
-                    let variogram = empirical_variogram(&points, VariogramParams::default())?;
-                    let fitted = fit_best_variogram(&variogram)?;
-                    let result = ordinary_kriging(&points, &fitted, OrdinaryKrigingParams {
-                        rows: params_grid.0,
-                        cols: params_grid.1,
-                        transform: params_grid.2,
-                        max_points,
-                        ..OrdinaryKrigingParams::default()
-                    })?;
-                    Ok(result.estimate)
-                });
+                dispatch_interpolation(
+                    &tx,
+                    "Ordinary Kriging",
+                    start,
+                    &input,
+                    |points, params_grid| {
+                        use surtgis_algorithms::interpolation::{
+                            VariogramParams, empirical_variogram, fit_best_variogram,
+                        };
+                        let variogram = empirical_variogram(&points, VariogramParams::default())?;
+                        let fitted = fit_best_variogram(&variogram)?;
+                        let result = ordinary_kriging(
+                            &points,
+                            &fitted,
+                            OrdinaryKrigingParams {
+                                rows: params_grid.0,
+                                cols: params_grid.1,
+                                transform: params_grid.2,
+                                max_points,
+                                ..OrdinaryKrigingParams::default()
+                            },
+                        )?;
+                        Ok(result.estimate)
+                    },
+                );
             }
 
             _ => {
@@ -1215,7 +1742,9 @@ fn dispatch_f64<E: std::fmt::Display>(
                 elapsed,
             });
             let _ = tx.send(AppMessage::Log(LogEntry::success(format!(
-                "{} completed in {:.2}s", name, elapsed.as_secs_f64()
+                "{} completed in {:.2}s",
+                name,
+                elapsed.as_secs_f64()
             ))));
         }
         Err(e) => send_error(tx, name, e),
@@ -1237,7 +1766,9 @@ fn dispatch_u8<E: std::fmt::Display>(
                 elapsed,
             });
             let _ = tx.send(AppMessage::Log(LogEntry::success(format!(
-                "{} completed in {:.2}s", name, elapsed.as_secs_f64()
+                "{} completed in {:.2}s",
+                name,
+                elapsed.as_secs_f64()
             ))));
         }
         Err(e) => send_error(tx, name, e),
@@ -1252,11 +1783,19 @@ fn dispatch_focal(
     statistic: FocalStatistic,
     name: &str,
 ) {
-    dispatch_f64(tx, name, start, focal_statistics(input, FocalParams {
-        radius: get_usize(params, "radius", 3),
-        statistic,
-        circular: false,
-    }));
+    dispatch_f64(
+        tx,
+        name,
+        start,
+        focal_statistics(
+            input,
+            FocalParams {
+                radius: get_usize(params, "radius", 3),
+                statistic,
+                circular: false,
+            },
+        ),
+    );
 }
 
 /// Helper for multi-input algorithms: checks all required extra inputs exist.
@@ -1273,7 +1812,9 @@ fn require_extra<F>(
     let mut inputs = HashMap::new();
     for &key in required {
         match extra_inputs.get(key) {
-            Some(r) => { inputs.insert(key, r); }
+            Some(r) => {
+                inputs.insert(key, r);
+            }
             None => {
                 send_error(tx, name, format!("Missing input: {}", key));
                 return;
@@ -1298,7 +1839,9 @@ fn dispatch_i32<E: std::fmt::Display>(
                 elapsed,
             });
             let _ = tx.send(AppMessage::Log(LogEntry::success(format!(
-                "{} completed in {:.2}s", name, elapsed.as_secs_f64()
+                "{} completed in {:.2}s",
+                name,
+                elapsed.as_secs_f64()
             ))));
         }
         Err(e) => send_error(tx, name, e),
@@ -1327,20 +1870,32 @@ fn dispatch_interpolation<F>(
             if let Ok(v) = input.get(r, c)
                 && v.is_finite()
             {
-                let x = transform.origin_x + c as f64 * transform.pixel_width + r as f64 * transform.row_rotation;
-                let y = transform.origin_y + c as f64 * transform.col_rotation + r as f64 * transform.pixel_height;
+                let x = transform.origin_x
+                    + c as f64 * transform.pixel_width
+                    + r as f64 * transform.row_rotation;
+                let y = transform.origin_y
+                    + c as f64 * transform.col_rotation
+                    + r as f64 * transform.pixel_height;
                 points.push(SamplePoint::new(x, y, v));
             }
         }
     }
 
     if points.is_empty() {
-        send_error(tx, name, "No valid (non-NaN) pixels found for interpolation");
+        send_error(
+            tx,
+            name,
+            "No valid (non-NaN) pixels found for interpolation",
+        );
         return;
     }
 
     let _ = tx.send(AppMessage::Log(LogEntry::info(format!(
-        "{}: {} sample points from {}x{} raster", name, points.len(), rows, cols
+        "{}: {} sample points from {}x{} raster",
+        name,
+        points.len(),
+        rows,
+        cols
     ))));
 
     let res: anyhow::Result<Raster<f64>> = interp_fn(points, (rows, cols, transform));

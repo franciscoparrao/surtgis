@@ -28,9 +28,7 @@ pub fn decompress_tile(
     expected_raw_size: usize,
 ) -> Result<Vec<u8>> {
     match compression_code {
-        compression::NONE => {
-            Ok(data.to_vec())
-        }
+        compression::NONE => Ok(data.to_vec()),
 
         #[cfg(feature = "deflate")]
         compression::DEFLATE | compression::ADOBE_DEFLATE => {
@@ -60,7 +58,8 @@ pub fn decompress_tile(
 
         #[cfg(feature = "lzw")]
         compression::LZW => {
-            let mut decoder = weezl::decode::Decoder::with_tiff_size_switch(weezl::BitOrder::Msb, 8);
+            let mut decoder =
+                weezl::decode::Decoder::with_tiff_size_switch(weezl::BitOrder::Msb, 8);
             let out = decoder
                 .decode(data)
                 .map_err(|e| CloudError::Decompress(format!("LZW: {}", e)))?;
@@ -68,9 +67,7 @@ pub fn decompress_tile(
         }
 
         #[cfg(not(feature = "lzw"))]
-        compression::LZW => {
-            Err(CloudError::UnsupportedCompression(compression_code))
-        }
+        compression::LZW => Err(CloudError::UnsupportedCompression(compression_code)),
 
         _ => Err(CloudError::UnsupportedCompression(compression_code)),
     }
@@ -81,12 +78,10 @@ pub fn decompress_tile(
 /// For each row, the first sample is stored as-is. Subsequent samples
 /// store the difference from the previous sample as a WHOLE SAMPLE
 /// (not individual bytes). For uint16, accumulate as u16 with wrapping.
-pub fn undo_horizontal_differencing(
-    data: &mut [u8],
-    tile_width: usize,
-    bytes_per_sample: usize,
-) {
-    if tile_width == 0 || bytes_per_sample == 0 { return; }
+pub fn undo_horizontal_differencing(data: &mut [u8], tile_width: usize, bytes_per_sample: usize) {
+    if tile_width == 0 || bytes_per_sample == 0 {
+        return;
+    }
     let row_bytes = tile_width * bytes_per_sample;
     for row_start in (0..data.len()).step_by(row_bytes) {
         let row_end = (row_start + row_bytes).min(data.len());
@@ -101,23 +96,29 @@ pub fn undo_horizontal_differencing(
                 // Accumulate as u16 to propagate carry between bytes
                 let samples = row.len() / 2;
                 for i in 1..samples {
-                    let prev = u16::from_le_bytes([row[(i-1)*2], row[(i-1)*2+1]]);
-                    let diff = u16::from_le_bytes([row[i*2], row[i*2+1]]);
+                    let prev = u16::from_le_bytes([row[(i - 1) * 2], row[(i - 1) * 2 + 1]]);
+                    let diff = u16::from_le_bytes([row[i * 2], row[i * 2 + 1]]);
                     let val = prev.wrapping_add(diff);
                     let bytes = val.to_le_bytes();
-                    row[i*2] = bytes[0];
-                    row[i*2+1] = bytes[1];
+                    row[i * 2] = bytes[0];
+                    row[i * 2 + 1] = bytes[1];
                 }
             }
             4 => {
                 let samples = row.len() / 4;
                 for i in 1..samples {
                     let off = i * 4;
-                    let prev = u32::from_le_bytes([row[off-4], row[off-3], row[off-2], row[off-1]]);
-                    let diff = u32::from_le_bytes([row[off], row[off+1], row[off+2], row[off+3]]);
+                    let prev = u32::from_le_bytes([
+                        row[off - 4],
+                        row[off - 3],
+                        row[off - 2],
+                        row[off - 1],
+                    ]);
+                    let diff =
+                        u32::from_le_bytes([row[off], row[off + 1], row[off + 2], row[off + 3]]);
                     let val = prev.wrapping_add(diff);
                     let bytes = val.to_le_bytes();
-                    row[off..off+4].copy_from_slice(&bytes);
+                    row[off..off + 4].copy_from_slice(&bytes);
                 }
             }
             _ => {
@@ -140,11 +141,7 @@ pub fn undo_horizontal_differencing(
 ///
 /// Matches the Rust `tiff` crate implementation (predict_f32) and libtiff.
 /// Used by Copernicus DEM GLO-30/90, NASADEM, and other f32 COGs.
-pub fn undo_floating_point_predictor(
-    data: &mut [u8],
-    tile_width: usize,
-    bytes_per_sample: usize,
-) {
+pub fn undo_floating_point_predictor(data: &mut [u8], tile_width: usize, bytes_per_sample: usize) {
     undo_floating_point_predictor_multi(data, tile_width, bytes_per_sample, 1)
 }
 
@@ -158,7 +155,9 @@ pub fn undo_floating_point_predictor_multi(
     bytes_per_sample: usize,
     samples_per_pixel: usize,
 ) {
-    if tile_width == 0 || bytes_per_sample <= 1 || samples_per_pixel == 0 { return; }
+    if tile_width == 0 || bytes_per_sample <= 1 || samples_per_pixel == 0 {
+        return;
+    }
     let row_bytes = tile_width * bytes_per_sample * samples_per_pixel;
     let mut tmp = vec![0u8; row_bytes];
     let n_samples_in_row = tile_width * samples_per_pixel;
@@ -166,7 +165,9 @@ pub fn undo_floating_point_predictor_multi(
     for row_start in (0..data.len()).step_by(row_bytes) {
         let row_end = (row_start + row_bytes).min(data.len());
         let row = &mut data[row_start..row_end];
-        if row.len() != row_bytes { continue; }
+        if row.len() != row_bytes {
+            continue;
+        }
 
         // Step 1: byte-wise cumsum with stride = samples_per_pixel.
         // (For grayscale, stride=1, so it's continuous byte-wise cumsum.)
@@ -270,7 +271,8 @@ pub fn bytes_to_typed<T: RasterElement>(
 fn unpack_packed_to_u16<T: RasterElement>(raw: &[u8], bps: u32) -> Result<Vec<T>> {
     if !(9..=16).contains(&bps) {
         return Err(CloudError::Decompress(format!(
-            "unpack_packed_to_u16 called with unsupported bps={}", bps
+            "unpack_packed_to_u16 called with unsupported bps={}",
+            bps
         )));
     }
     let total_bits = (raw.len() as u64) * 8;
@@ -278,7 +280,9 @@ fn unpack_packed_to_u16<T: RasterElement>(raw: &[u8], bps: u32) -> Result<Vec<T>
         return Err(CloudError::Decompress(format!(
             "raw data of {} bytes ({} bits) is not a clean multiple of {} bits per sample; \
              tile is likely truncated or the encoder padded samples in an unsupported way",
-            raw.len(), total_bits, bps,
+            raw.len(),
+            total_bits,
+            bps,
         )));
     }
     let n_samples = (total_bits / bps as u64) as usize;
@@ -293,8 +297,16 @@ fn unpack_packed_to_u16<T: RasterElement>(raw: &[u8], bps: u32) -> Result<Vec<T>
         // Read up to 3 bytes starting at byte_offset; for bps ≤ 16 plus any
         // 0..7 bit offset, the sample fits within 24 consecutive bits.
         let b0 = raw[byte_offset] as u32;
-        let b1 = if byte_offset + 1 < raw.len() { raw[byte_offset + 1] as u32 } else { 0 };
-        let b2 = if byte_offset + 2 < raw.len() { raw[byte_offset + 2] as u32 } else { 0 };
+        let b1 = if byte_offset + 1 < raw.len() {
+            raw[byte_offset + 1] as u32
+        } else {
+            0
+        };
+        let b2 = if byte_offset + 2 < raw.len() {
+            raw[byte_offset + 2] as u32
+        } else {
+            0
+        };
         let window: u32 = (b0 << 16) | (b1 << 8) | b2;
         let shift = 24 - bit_in_byte - bps;
         let sample = ((window >> shift) & mask) as u16;
@@ -428,10 +440,8 @@ mod tests {
     fn test_decompress_deflate() {
         use std::io::Write;
         let original = vec![42u8; 256];
-        let mut encoder = flate2::write::DeflateEncoder::new(
-            Vec::new(),
-            flate2::Compression::default(),
-        );
+        let mut encoder =
+            flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
         encoder.write_all(&original).unwrap();
         let compressed = encoder.finish().unwrap();
 
@@ -448,8 +458,7 @@ mod tests {
             raw.extend_from_slice(&v.to_le_bytes());
         }
 
-        let result: Vec<f64> =
-            bytes_to_typed(&raw, 32, sample_format::FLOAT).unwrap();
+        let result: Vec<f64> = bytes_to_typed(&raw, 32, sample_format::FLOAT).unwrap();
         assert_eq!(result.len(), 3);
         assert!((result[0] - 1.0).abs() < 1e-6);
         assert!((result[1] - 2.5).abs() < 1e-6);
@@ -464,8 +473,7 @@ mod tests {
             raw.extend_from_slice(&v.to_le_bytes());
         }
 
-        let result: Vec<f64> =
-            bytes_to_typed(&raw, 16, sample_format::UNSIGNED_INT).unwrap();
+        let result: Vec<f64> = bytes_to_typed(&raw, 16, sample_format::UNSIGNED_INT).unwrap();
         assert_eq!(result.len(), 3);
         assert!((result[0] - 100.0).abs() < 1e-6);
         assert!((result[1] - 200.0).abs() < 1e-6);
@@ -478,8 +486,8 @@ mod tests {
     fn test_bytes_to_typed_packed_15bit() {
         // 16 known samples, each fits in 15 bits (max 32767).
         let samples: [u16; 16] = [
-            0, 1, 2, 0x7FFF, 0x4000, 0x2AAA, 0x5555, 0x1234,
-            0x4321, 0x6789, 0x0FFF, 0x7000, 0x3CCC, 0x1248, 0x5A5A, 0x2727,
+            0, 1, 2, 0x7FFF, 0x4000, 0x2AAA, 0x5555, 0x1234, 0x4321, 0x6789, 0x0FFF, 0x7000,
+            0x3CCC, 0x1248, 0x5A5A, 0x2727,
         ];
 
         // Pack MSB-first: total bits = 16 × 15 = 240 → 30 bytes.
@@ -497,13 +505,13 @@ mod tests {
             }
         }
 
-        let unpacked: Vec<f64> =
-            bytes_to_typed(&packed, 15, sample_format::UNSIGNED_INT).unwrap();
+        let unpacked: Vec<f64> = bytes_to_typed(&packed, 15, sample_format::UNSIGNED_INT).unwrap();
         assert_eq!(unpacked.len(), 16, "unpacked length mismatch");
         for (i, &expected) in samples.iter().enumerate() {
             assert_eq!(
                 unpacked[i] as u16, expected,
-                "sample {i}: expected {expected}, got {}", unpacked[i] as u16,
+                "sample {i}: expected {expected}, got {}",
+                unpacked[i] as u16,
             );
         }
     }
@@ -520,9 +528,13 @@ mod tests {
         assert_eq!(raw_len, 491520, "expected sentinel-2 tile raw_len");
 
         let raw = vec![0xAAu8; raw_len];
-        let result: Vec<f64> =
-            bytes_to_typed(&raw, 15, sample_format::UNSIGNED_INT).unwrap();
-        assert_eq!(result.len(), n_samples, "must produce 262144 samples (got {})", result.len());
+        let result: Vec<f64> = bytes_to_typed(&raw, 15, sample_format::UNSIGNED_INT).unwrap();
+        assert_eq!(
+            result.len(),
+            n_samples,
+            "must produce 262144 samples (got {})",
+            result.len()
+        );
     }
 
     /// Truncated tile (raw_len not a clean multiple of bps bits) must fail
@@ -532,6 +544,9 @@ mod tests {
         // 100 bytes = 800 bits, not divisible by 15
         let raw = vec![0u8; 100];
         let result: Result<Vec<f64>> = bytes_to_typed(&raw, 15, sample_format::UNSIGNED_INT);
-        assert!(result.is_err(), "truncated 15-bit buffer should fail decode");
+        assert!(
+            result.is_err(),
+            "truncated 15-bit buffer should fail decode"
+        );
     }
 }

@@ -1,8 +1,8 @@
 //! Benchmarks for hydrology algorithms
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use surtgis_algorithms::hydrology::{
-    fill_sinks, flow_accumulation, flow_direction, FillSinksParams,
+    FillSinksParams, fill_sinks, flow_accumulation, flow_direction,
 };
 use surtgis_core::{GeoTransform, Raster};
 
@@ -29,13 +29,7 @@ fn bench_fill_sinks(c: &mut Criterion) {
     for size in [128, 256, 512, 1024] {
         let dem = create_basin_dem(size);
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
-            b.iter(|| {
-                fill_sinks(
-                    black_box(&dem),
-                    FillSinksParams { min_slope: 0.01 },
-                )
-                .unwrap()
-            })
+            b.iter(|| fill_sinks(black_box(&dem), FillSinksParams { min_slope: 0.01 }).unwrap())
         });
     }
     group.finish();

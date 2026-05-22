@@ -4,8 +4,8 @@
 //! Both use class signatures (mean and optional covariance) derived
 //! from training samples.
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -36,7 +36,9 @@ pub fn minimum_distance(
     signatures: &[ClassSignature],
 ) -> Result<Raster<f64>> {
     if signatures.len() < 2 {
-        return Err(Error::Algorithm("Minimum distance requires at least 2 class signatures".into()));
+        return Err(Error::Algorithm(
+            "Minimum distance requires at least 2 class signatures".into(),
+        ));
     }
 
     let (rows, cols) = raster.shape();
@@ -68,8 +70,8 @@ pub fn minimum_distance(
 
     let mut output = raster.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() = Array2::from_shape_vec((rows, cols), data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() =
+        Array2::from_shape_vec((rows, cols), data).map_err(|e| Error::Other(e.to_string()))?;
     Ok(output)
 }
 
@@ -91,14 +93,17 @@ pub fn maximum_likelihood(
     signatures: &[ClassSignature],
 ) -> Result<Raster<f64>> {
     if signatures.len() < 2 {
-        return Err(Error::Algorithm("Maximum likelihood requires at least 2 class signatures".into()));
+        return Err(Error::Algorithm(
+            "Maximum likelihood requires at least 2 class signatures".into(),
+        ));
     }
 
     // Verify all std_devs are positive
     for sig in signatures {
         if sig.std_dev <= 0.0 {
             return Err(Error::Algorithm(format!(
-                "Class {} has non-positive std_dev: {}", sig.label, sig.std_dev
+                "Class {} has non-positive std_dev: {}",
+                sig.label, sig.std_dev
             )));
         }
     }
@@ -106,7 +111,8 @@ pub fn maximum_likelihood(
     let (rows, cols) = raster.shape();
 
     // Precompute log-likelihood constants: -ln(σ) - 0.5*ln(2π)
-    let log_consts: Vec<f64> = signatures.iter()
+    let log_consts: Vec<f64> = signatures
+        .iter()
         .map(|sig| -sig.std_dev.ln() - 0.5 * (2.0 * std::f64::consts::PI).ln())
         .collect();
 
@@ -139,8 +145,8 @@ pub fn maximum_likelihood(
 
     let mut output = raster.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() = Array2::from_shape_vec((rows, cols), data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() =
+        Array2::from_shape_vec((rows, cols), data).map_err(|e| Error::Other(e.to_string()))?;
     Ok(output)
 }
 
@@ -159,7 +165,10 @@ pub fn signatures_from_training(
     let (rows, cols) = classified.shape();
     if values.shape() != (rows, cols) {
         return Err(Error::SizeMismatch {
-            er: rows, ec: cols, ar: values.rows(), ac: values.cols(),
+            er: rows,
+            ec: cols,
+            ar: values.rows(),
+            ac: values.cols(),
         });
     }
 
@@ -171,7 +180,10 @@ pub fn signatures_from_training(
             let class_val = unsafe { classified.get_unchecked(r, c) };
             let data_val = unsafe { values.get_unchecked(r, c) };
             if class_val.is_finite() && data_val.is_finite() {
-                class_data.entry(class_val.round() as i64).or_default().push(data_val);
+                class_data
+                    .entry(class_val.round() as i64)
+                    .or_default()
+                    .push(data_val);
             }
         }
     }
@@ -193,7 +205,11 @@ pub fn signatures_from_training(
         });
     }
 
-    signatures.sort_by(|a, b| a.label.partial_cmp(&b.label).unwrap_or(std::cmp::Ordering::Equal));
+    signatures.sort_by(|a, b| {
+        a.label
+            .partial_cmp(&b.label)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     Ok(signatures)
 }
 
@@ -204,9 +220,21 @@ mod tests {
 
     fn make_signatures() -> Vec<ClassSignature> {
         vec![
-            ClassSignature { label: 1.0, mean: 10.0, std_dev: 2.0 },
-            ClassSignature { label: 2.0, mean: 50.0, std_dev: 5.0 },
-            ClassSignature { label: 3.0, mean: 90.0, std_dev: 3.0 },
+            ClassSignature {
+                label: 1.0,
+                mean: 10.0,
+                std_dev: 2.0,
+            },
+            ClassSignature {
+                label: 2.0,
+                mean: 50.0,
+                std_dev: 5.0,
+            },
+            ClassSignature {
+                label: 3.0,
+                mean: 90.0,
+                std_dev: 3.0,
+            },
         ]
     }
 
@@ -216,9 +244,9 @@ mod tests {
         for row in 0..10 {
             for col in 0..10 {
                 let val = match row / 3 {
-                    0 => 12.0,  // Near class 1
-                    1 => 48.0,  // Near class 2
-                    _ => 88.0,  // Near class 3
+                    0 => 12.0, // Near class 1
+                    1 => 48.0, // Near class 2
+                    _ => 88.0, // Near class 3
                 };
                 r.set(row, col, val).unwrap();
             }
@@ -233,9 +261,9 @@ mod tests {
 
         let result = minimum_distance(&r, &sigs).unwrap();
 
-        assert!((result.get(0, 0).unwrap() - 1.0).abs() < 1e-10);  // Near class 1
-        assert!((result.get(4, 0).unwrap() - 2.0).abs() < 1e-10);  // Near class 2
-        assert!((result.get(9, 0).unwrap() - 3.0).abs() < 1e-10);  // Near class 3
+        assert!((result.get(0, 0).unwrap() - 1.0).abs() < 1e-10); // Near class 1
+        assert!((result.get(4, 0).unwrap() - 2.0).abs() < 1e-10); // Near class 2
+        assert!((result.get(9, 0).unwrap() - 3.0).abs() < 1e-10); // Near class 3
     }
 
     #[test]
@@ -260,7 +288,11 @@ mod tests {
         for row in 0..10 {
             for col in 0..10 {
                 let class = if row < 5 { 1.0 } else { 2.0 };
-                let val = if row < 5 { 10.0 + col as f64 } else { 50.0 + col as f64 };
+                let val = if row < 5 {
+                    10.0 + col as f64
+                } else {
+                    50.0 + col as f64
+                };
                 classified.set(row, col, class).unwrap();
                 values.set(row, col, val).unwrap();
             }

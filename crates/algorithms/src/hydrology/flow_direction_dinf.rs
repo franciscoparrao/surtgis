@@ -14,8 +14,8 @@
 //! *Water Resources Research*, 33(2), 309–319.
 
 use ndarray::Array2;
-use surtgis_core::raster::Raster;
 use surtgis_core::Result;
+use surtgis_core::raster::Raster;
 
 /// D8 neighbor offsets (E, NE, N, NW, W, SW, S, SE)
 const D8_OFFSETS: [(isize, isize); 8] = [
@@ -31,8 +31,14 @@ const D8_OFFSETS: [(isize, isize); 8] = [
 
 /// Distance factors for each D8 direction
 const D8_DIST: [f64; 8] = [
-    1.0, std::f64::consts::SQRT_2, 1.0, std::f64::consts::SQRT_2,
-    1.0, std::f64::consts::SQRT_2, 1.0, std::f64::consts::SQRT_2,
+    1.0,
+    std::f64::consts::SQRT_2,
+    1.0,
+    std::f64::consts::SQRT_2,
+    1.0,
+    std::f64::consts::SQRT_2,
+    1.0,
+    std::f64::consts::SQRT_2,
 ];
 
 /// Tarboton (1997) facet decomposition — matches TauDEM exactly.
@@ -165,8 +171,12 @@ pub fn flow_direction_dinf(dem: &Raster<f64>) -> Result<Raster<f64>> {
                     let mut angle = base_angle + sign * theta;
                     // Normalize to [0, 2π)
                     let two_pi = 2.0 * std::f64::consts::PI;
-                    if angle >= two_pi { angle -= two_pi; }
-                    if angle < 0.0 { angle += two_pi; }
+                    if angle >= two_pi {
+                        angle -= two_pi;
+                    }
+                    if angle < 0.0 {
+                        angle += two_pi;
+                    }
                     best_angle = angle;
                 }
             }
@@ -174,7 +184,8 @@ pub fn flow_direction_dinf(dem: &Raster<f64>) -> Result<Raster<f64>> {
             // Fallback for edge/nodata cells: D8-style single-direction
             if best_angle < 0.0 && !all_valid {
                 let cardinal_angles = [
-                    0.0, std::f64::consts::FRAC_PI_4,
+                    0.0,
+                    std::f64::consts::FRAC_PI_4,
                     std::f64::consts::FRAC_PI_2,
                     3.0 * std::f64::consts::FRAC_PI_4,
                     std::f64::consts::PI,
@@ -229,8 +240,7 @@ pub fn flow_dinf(dem: &Raster<f64>) -> Result<DinfResult> {
     for row in 0..rows {
         for col in 0..cols {
             let z = unsafe { dem.get_unchecked(row, col) };
-            let is_nd = z.is_nan()
-                || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
+            let is_nd = z.is_nan() || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
             if !is_nd {
                 cells.push((row, col, z));
             }
@@ -268,8 +278,12 @@ pub fn flow_dinf(dem: &Raster<f64>) -> Result<DinfResult> {
 
         // Angular offset within the sector [0, π/4]
         let mut alpha = angle - (lower_idx as f64) * pi4;
-        if alpha < 0.0 { alpha = 0.0; }
-        if alpha > pi4 { alpha = pi4; }
+        if alpha < 0.0 {
+            alpha = 0.0;
+        }
+        if alpha > pi4 {
+            alpha = pi4;
+        }
 
         // Proportional split
         let frac_upper = alpha / pi4;
@@ -296,8 +310,7 @@ pub fn flow_dinf(dem: &Raster<f64>) -> Result<DinfResult> {
     for row in 0..rows {
         for col in 0..cols {
             let z = unsafe { dem.get_unchecked(row, col) };
-            let is_nd = z.is_nan()
-                || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
+            let is_nd = z.is_nan() || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
             if !is_nd {
                 accumulation[(row, col)] -= 1.0;
                 if accumulation[(row, col)] < 0.0 {
@@ -363,7 +376,8 @@ mod tests {
         assert!(
             (center - target).abs() < 0.5,
             "Flow should point south (~{:.3} rad), got {}",
-            target, center
+            target,
+            center
         );
     }
 
@@ -430,11 +444,15 @@ mod tests {
         for row in 0..rows {
             for col in 0..cols {
                 let a = angles.get(row, col).unwrap();
-                if a.is_nan() { continue; }
+                if a.is_nan() {
+                    continue;
+                }
                 assert!(
                     a < 0.0 || (a >= 0.0 && a <= two_pi + 0.01),
                     "Angle at ({},{}) should be in [-1, 2π], got {}",
-                    row, col, a
+                    row,
+                    col,
+                    a
                 );
             }
         }

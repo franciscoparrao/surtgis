@@ -10,9 +10,9 @@
 //!
 //! Reference: WhiteboxTools `EdgeDensity`
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
 use crate::texture::sobel_edge;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -55,9 +55,7 @@ pub fn edge_density(dem: &Raster<f64>, params: EdgeDensityParams) -> Result<Rast
 
             for (col, out) in row_data.iter_mut().enumerate() {
                 let center = unsafe { dem.get_unchecked(row, col) };
-                if center.is_nan()
-                    || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON)
-                {
+                if center.is_nan() || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON) {
                     continue;
                 }
 
@@ -114,9 +112,20 @@ mod tests {
         let mut dem = Raster::filled(15, 15, 100.0);
         dem.set_transform(GeoTransform::new(0.0, 15.0, 1.0, -1.0));
 
-        let result = edge_density(&dem, EdgeDensityParams { radius: 2, threshold: 0.5 }).unwrap();
+        let result = edge_density(
+            &dem,
+            EdgeDensityParams {
+                radius: 2,
+                threshold: 0.5,
+            },
+        )
+        .unwrap();
         let v = result.get(7, 7).unwrap();
-        assert!((v - 0.0).abs() < 1e-10, "Flat surface should have 0 edge density, got {}", v);
+        assert!(
+            (v - 0.0).abs() < 1e-10,
+            "Flat surface should have 0 edge density, got {}",
+            v
+        );
     }
 
     #[test]
@@ -126,17 +135,30 @@ mod tests {
         for r in 0..20 {
             for c in 0..20 {
                 // Checkerboard creates lots of edges
-                dem.set(r, c, if (r + c) % 2 == 0 { 100.0 } else { 0.0 }).unwrap();
+                dem.set(r, c, if (r + c) % 2 == 0 { 100.0 } else { 0.0 })
+                    .unwrap();
             }
         }
 
-        let result = edge_density(&dem, EdgeDensityParams { radius: 2, threshold: 0.5 }).unwrap();
+        let result = edge_density(
+            &dem,
+            EdgeDensityParams {
+                radius: 2,
+                threshold: 0.5,
+            },
+        )
+        .unwrap();
         for r in 3..17 {
             for c in 3..17 {
                 let v = result.get(r, c).unwrap();
                 if !v.is_nan() {
-                    assert!(v >= 0.0 && v <= 1.0,
-                        "Edge density should be [0,1], got {} at ({},{})", v, r, c);
+                    assert!(
+                        v >= 0.0 && v <= 1.0,
+                        "Edge density should be [0,1], got {} at ({},{})",
+                        v,
+                        r,
+                        c
+                    );
                 }
             }
         }

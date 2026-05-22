@@ -14,9 +14,9 @@
 //! depression-filling and watershed-labeling algorithm for digital elevation
 //! models. *Computers & Geosciences*, 62, 117–127.
 
+use ndarray::Array2;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
-use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Algorithm, Error, Result};
 
@@ -46,16 +46,23 @@ impl PartialOrd for Cell {
 impl Ord for Cell {
     fn cmp(&self, other: &Self) -> Ordering {
         // Reverse: lower elevation has higher priority
-        other.elevation.partial_cmp(&self.elevation)
+        other
+            .elevation
+            .partial_cmp(&self.elevation)
             .unwrap_or(Ordering::Equal)
     }
 }
 
 /// D8 neighbor offsets
 const D8_OFFSETS: [(isize, isize); 8] = [
-    (-1, -1), (-1, 0), (-1, 1),
-    (0, -1),           (0, 1),
-    (1, -1),  (1, 0),  (1, 1),
+    (-1, -1),
+    (-1, 0),
+    (-1, 1),
+    (0, -1),
+    (0, 1),
+    (1, -1),
+    (1, 0),
+    (1, 1),
 ];
 
 /// Parameters for Priority-Flood filling
@@ -132,8 +139,7 @@ pub fn priority_flood(dem: &Raster<f64>, params: PriorityFloodParams) -> Result<
             let val = unsafe { dem.get_unchecked(row, col) };
 
             // Check if nodata
-            let is_nd = val.is_nan()
-                || nodata.is_some_and(|nd| (val - nd).abs() < f64::EPSILON);
+            let is_nd = val.is_nan() || nodata.is_some_and(|nd| (val - nd).abs() < f64::EPSILON);
 
             if is_nd {
                 visited[(row, col)] = true;
@@ -143,7 +149,11 @@ pub fn priority_flood(dem: &Raster<f64>, params: PriorityFloodParams) -> Result<
 
             // Border cells seed the queue
             if row == 0 || row == rows - 1 || col == 0 || col == cols - 1 {
-                heap.push(Cell { elevation: val, row, col });
+                heap.push(Cell {
+                    elevation: val,
+                    row,
+                    col,
+                });
                 visited[(row, col)] = true;
                 output[(row, col)] = val;
             }
@@ -222,13 +232,9 @@ mod tests {
         dem.set_transform(GeoTransform::new(0.0, 7.0, 1.0, -1.0));
 
         let values = [
-            9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0,
-            9.0, 8.0, 8.0, 8.0, 8.0, 8.0, 9.0,
-            9.0, 8.0, 7.0, 7.0, 7.0, 8.0, 9.0,
-            9.0, 8.0, 7.0, 3.0, 7.0, 8.0, 9.0,
-            9.0, 8.0, 7.0, 7.0, 7.0, 8.0, 9.0,
-            9.0, 8.0, 8.0, 8.0, 8.0, 8.0, 9.0,
-            9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0,
+            9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 8.0, 8.0, 8.0, 8.0, 8.0, 9.0, 9.0, 8.0, 7.0,
+            7.0, 7.0, 8.0, 9.0, 9.0, 8.0, 7.0, 3.0, 7.0, 8.0, 9.0, 9.0, 8.0, 7.0, 7.0, 7.0, 8.0,
+            9.0, 9.0, 8.0, 8.0, 8.0, 8.0, 8.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0, 9.0,
         ];
 
         for (idx, &val) in values.iter().enumerate() {
@@ -284,7 +290,10 @@ mod tests {
                 assert!(
                     (fill - orig).abs() < 1e-4,
                     "Clean DEM should be unchanged at ({}, {}): orig={}, fill={}",
-                    row, col, orig, fill
+                    row,
+                    col,
+                    orig,
+                    fill
                 );
             }
         }
@@ -311,7 +320,8 @@ mod tests {
         assert!(
             center > ring - 0.1,
             "Epsilon should create gradient: center={}, ring={}",
-            center, ring
+            center,
+            ring
         );
     }
 
@@ -329,7 +339,10 @@ mod tests {
                     assert!(
                         fill >= orig - 1e-10,
                         "Priority-Flood must never lower elevation at ({}, {}): orig={}, fill={}",
-                        row, col, orig, fill
+                        row,
+                        col,
+                        orig,
+                        fill
                     );
                 }
             }
@@ -345,7 +358,8 @@ mod tests {
         for row in 0..5 {
             for col in 0..5 {
                 let is_border = row == 0 || row == 4 || col == 0 || col == 4;
-                dem.set(row, col, if is_border { 10.0 } else { 5.0 }).unwrap();
+                dem.set(row, col, if is_border { 10.0 } else { 5.0 })
+                    .unwrap();
             }
         }
         dem.set(2, 2, 1.0).unwrap(); // Sink

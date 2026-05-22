@@ -1,9 +1,9 @@
 //! Class-level and landscape-level metrics: SHDI, SIDI, AI, COHESION.
 
 use super::patch_metrics::PatchStats;
+use std::collections::HashMap;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
-use std::collections::HashMap;
 
 /// Landscape-level metrics (whole landscape).
 #[derive(Debug, Clone)]
@@ -182,11 +182,7 @@ pub fn class_metrics(
             0.0
         };
         let num_p = cpatches.len();
-        let mean_area = if num_p > 0 {
-            area / num_p as f64
-        } else {
-            0.0
-        };
+        let mean_area = if num_p > 0 { area / num_p as f64 } else { 0.0 };
 
         // AI = (g_ii / max_g_ii) × 100
         // max_g_ii for n cells = 2n - 2√n (approximate for compact arrangement)
@@ -245,7 +241,7 @@ pub fn class_metrics(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::landscape::connected_components::{label_patches, Connectivity};
+    use crate::landscape::connected_components::{Connectivity, label_patches};
     use crate::landscape::patch_metrics::patch_metrics as compute_patches;
     use ndarray::Array2;
     use surtgis_core::GeoTransform;
@@ -264,10 +260,7 @@ mod tests {
     #[test]
     fn test_shdi_two_equal_classes() {
         // 50/50 split → SHDI = ln(2) ≈ 0.693
-        let r = make_class(vec![
-            vec![1.0, 1.0, 2.0, 2.0],
-            vec![1.0, 1.0, 2.0, 2.0],
-        ]);
+        let r = make_class(vec![vec![1.0, 1.0, 2.0, 2.0], vec![1.0, 1.0, 2.0, 2.0]]);
         let lm = landscape_metrics(&r).unwrap();
         assert!((lm.shdi - 2.0f64.ln()).abs() < 1e-6);
         assert!((lm.sidi - 0.5).abs() < 1e-6);

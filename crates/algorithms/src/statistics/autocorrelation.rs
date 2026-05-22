@@ -3,8 +3,8 @@
 //! - **Global Moran's I**: Overall spatial clustering measure
 //! - **Local Getis-Ord Gi***: Hotspot/coldspot detection
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -94,11 +94,15 @@ pub fn global_morans_i(raster: &Raster<f64>) -> Result<MoransIResult> {
                 }
                 let nr = row as isize + dr;
                 let nc = col as isize + dc;
-                if nr >= 0 && nc >= 0 && (nr as usize) < rows && (nc as usize) < cols
-                    && let Some(j_idx) = grid[(nr as usize, nc as usize)] {
-                        numerator += dev_i * deviations[j_idx];
-                        w_sum += 1.0;
-                    }
+                if nr >= 0
+                    && nc >= 0
+                    && (nr as usize) < rows
+                    && (nc as usize) < cols
+                    && let Some(j_idx) = grid[(nr as usize, nc as usize)]
+                {
+                    numerator += dev_i * deviations[j_idx];
+                    w_sum += 1.0;
+                }
             }
         }
     }
@@ -108,22 +112,31 @@ pub fn global_morans_i(raster: &Raster<f64>) -> Result<MoransIResult> {
 
     // Variance under randomization assumption
     let s1 = 2.0 * w_sum; // Each w_ij=1, so s1 = 2*W (sum of (w_ij + w_ji)^2)
-    let s2_part: f64 = values.iter().map(|&(row, col, _)| {
-        let mut neighbors = 0.0_f64;
-        for dr in -1_isize..=1 {
-            for dc in -1_isize..=1 {
-                if dr == 0 && dc == 0 { continue; }
-                let nr = row as isize + dr;
-                let nc = col as isize + dc;
-                if nr >= 0 && nc >= 0 && (nr as usize) < rows && (nc as usize) < cols
-                    && grid[(nr as usize, nc as usize)].is_some() {
+    let s2_part: f64 = values
+        .iter()
+        .map(|&(row, col, _)| {
+            let mut neighbors = 0.0_f64;
+            for dr in -1_isize..=1 {
+                for dc in -1_isize..=1 {
+                    if dr == 0 && dc == 0 {
+                        continue;
+                    }
+                    let nr = row as isize + dr;
+                    let nc = col as isize + dc;
+                    if nr >= 0
+                        && nc >= 0
+                        && (nr as usize) < rows
+                        && (nc as usize) < cols
+                        && grid[(nr as usize, nc as usize)].is_some()
+                    {
                         neighbors += 1.0;
                     }
+                }
             }
-        }
-        let total = neighbors * 2.0; // in-degree + out-degree
-        total * total
-    }).sum::<f64>();
+            let total = neighbors * 2.0; // in-degree + out-degree
+            total * total
+        })
+        .sum::<f64>();
 
     let s0 = w_sum;
     let nn = n;
@@ -136,7 +149,11 @@ pub fn global_morans_i(raster: &Raster<f64>) -> Result<MoransIResult> {
         - 6.0 * s0 * s0)
         / ((nn - 1.0) * (nn - 2.0) * (nn - 3.0) * s0 * s0);
 
-    let var_i_safe = if var_i > 0.0 { var_i } else { 1.0 / (nn1 * nn1) };
+    let var_i_safe = if var_i > 0.0 {
+        var_i
+    } else {
+        1.0 / (nn1 * nn1)
+    };
     let z_score = (morans_i - expected_i) / var_i_safe.sqrt();
 
     // Two-tailed p-value approximation using normal distribution
@@ -254,7 +271,8 @@ pub fn local_getis_ord(raster: &Raster<f64>, radius: usize) -> Result<GetisOrdRe
         .map_err(|e| Error::Other(e.to_string()))?;
 
     // P-values from z-scores
-    let p_data: Vec<f64> = z_data.iter()
+    let p_data: Vec<f64> = z_data
+        .iter()
         .map(|&z| {
             if z.is_nan() {
                 f64::NAN
@@ -266,8 +284,8 @@ pub fn local_getis_ord(raster: &Raster<f64>, radius: usize) -> Result<GetisOrdRe
 
     let mut p_values = raster.with_same_meta::<f64>(rows, cols);
     p_values.set_nodata(Some(f64::NAN));
-    *p_values.data_mut() = Array2::from_shape_vec((rows, cols), p_data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *p_values.data_mut() =
+        Array2::from_shape_vec((rows, cols), p_data).map_err(|e| Error::Other(e.to_string()))?;
 
     Ok(GetisOrdResult { z_scores, p_values })
 }
@@ -275,17 +293,18 @@ pub fn local_getis_ord(raster: &Raster<f64>, radius: usize) -> Result<GetisOrdRe
 /// Approximate CDF of standard normal distribution
 /// Uses Abramowitz & Stegun approximation (error < 7.5e-8)
 fn normal_cdf(x: f64) -> f64 {
-    if x < -8.0 { return 0.0; }
-    if x > 8.0 { return 1.0; }
+    if x < -8.0 {
+        return 0.0;
+    }
+    if x > 8.0 {
+        return 1.0;
+    }
 
     let t = 1.0 / (1.0 + 0.2316419 * x.abs());
     let d = 0.3989422804014327; // 1/sqrt(2*pi)
-    let p = d * (-x * x / 2.0).exp()
-        * (t * (0.3193815
-            + t * (-0.3565638
-                + t * (1.781478
-                    + t * (-1.821256
-                        + t * 1.330274)))));
+    let p = d
+        * (-x * x / 2.0).exp()
+        * (t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274)))));
 
     if x > 0.0 { 1.0 - p } else { p }
 }
@@ -314,7 +333,11 @@ mod tests {
             }
         }
         let result = global_morans_i(&r).unwrap();
-        assert!(result.i > 0.5, "Clustered data should have high positive I, got {}", result.i);
+        assert!(
+            result.i > 0.5,
+            "Clustered data should have high positive I, got {}",
+            result.i
+        );
     }
 
     #[test]
@@ -332,8 +355,15 @@ mod tests {
         let center_z = result.z_scores.get(10, 10).unwrap();
         let edge_z = result.z_scores.get(0, 0).unwrap();
 
-        assert!(center_z > edge_z, "Center hotspot should have higher z-score");
-        assert!(center_z > 1.96, "Center should be significant at p<0.05, z={}", center_z);
+        assert!(
+            center_z > edge_z,
+            "Center hotspot should have higher z-score"
+        );
+        assert!(
+            center_z > 1.96,
+            "Center should be significant at p<0.05, z={}",
+            center_z
+        );
     }
 
     #[test]

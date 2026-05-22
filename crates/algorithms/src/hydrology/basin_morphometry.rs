@@ -10,9 +10,9 @@
 //! These metrics characterize watershed shape, which influences
 //! hydrological response (peak flow timing, flood susceptibility).
 
+use std::collections::HashMap;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
-use std::collections::HashMap;
 
 /// Morphometric parameters for a single basin
 #[derive(Debug, Clone)]
@@ -79,8 +79,7 @@ pub fn basin_morphometry(
                     // Border edge
                     *perimeter.entry(ws_id).or_insert(0) += 1;
                 } else {
-                    let neighbor_id =
-                        unsafe { watersheds.get_unchecked(nr as usize, nc as usize) };
+                    let neighbor_id = unsafe { watersheds.get_unchecked(nr as usize, nc as usize) };
                     if neighbor_id != ws_id {
                         *perimeter.entry(ws_id).or_insert(0) += 1;
                     }

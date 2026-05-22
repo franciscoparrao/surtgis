@@ -263,10 +263,7 @@ mod tests {
 
     #[test]
     fn test_single_class() {
-        let r = make_class(vec![
-            vec![5.0, 5.0, 5.0],
-            vec![5.0, 5.0, 5.0],
-        ]);
+        let r = make_class(vec![vec![5.0, 5.0, 5.0], vec![5.0, 5.0, 5.0]]);
         let (_, count) = label_patches(&r, Connectivity::Four).unwrap();
         assert_eq!(count, 1);
     }

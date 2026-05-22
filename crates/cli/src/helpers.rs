@@ -3,14 +3,14 @@
 use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::path::PathBuf;
-use tracing::{info, Level};
+use tracing::{Level, info};
 use tracing_subscriber::FmtSubscriber;
 
 use surtgis_algorithms::imagery::{BandMathOp, ReclassEntry};
 use surtgis_algorithms::landscape::Connectivity;
 use surtgis_algorithms::morphology::StructuringElement;
 use surtgis_algorithms::terrain::AdvancedCurvatureType;
-use surtgis_core::io::{read_geotiff, write_geotiff, GeoTiffOptions};
+use surtgis_core::io::{GeoTiffOptions, read_geotiff, write_geotiff};
 
 #[cfg(feature = "cloud")]
 use surtgis_cloud::BBox;
@@ -54,19 +54,26 @@ pub fn read_u8(path: &PathBuf) -> Result<surtgis_core::Raster<u8>> {
 }
 
 pub fn write_opts(compress: bool) -> GeoTiffOptions {
+    // GeoTiffOptions has different field sets between native and gdal feature
+    // paths. Start from Default and only override `compression` so the helper
+    // works under either feature configuration.
     GeoTiffOptions {
         compression: if compress {
             "deflate".to_string()
         } else {
             "NONE".to_string()
         },
+        ..Default::default()
     }
 }
 
-pub fn write_result(raster: &surtgis_core::Raster<f64>, path: &PathBuf, compress: bool) -> Result<()> {
+pub fn write_result(
+    raster: &surtgis_core::Raster<f64>,
+    path: &PathBuf,
+    compress: bool,
+) -> Result<()> {
     let pb = spinner("Writing output...");
-    write_geotiff(raster, path, Some(write_opts(compress)))
-        .context("Failed to write output")?;
+    write_geotiff(raster, path, Some(write_opts(compress))).context("Failed to write output")?;
     pb.finish_and_clear();
     Ok(())
 }
@@ -77,8 +84,7 @@ pub fn write_result_u8(
     compress: bool,
 ) -> Result<()> {
     let pb = spinner("Writing output...");
-    write_geotiff(raster, path, Some(write_opts(compress)))
-        .context("Failed to write output")?;
+    write_geotiff(raster, path, Some(write_opts(compress))).context("Failed to write output")?;
     pb.finish_and_clear();
     Ok(())
 }
@@ -89,8 +95,7 @@ pub fn write_result_i32(
     compress: bool,
 ) -> Result<()> {
     let pb = spinner("Writing output...");
-    write_geotiff(raster, path, Some(write_opts(compress)))
-        .context("Failed to write output")?;
+    write_geotiff(raster, path, Some(write_opts(compress))).context("Failed to write output")?;
     pb.finish_and_clear();
     Ok(())
 }

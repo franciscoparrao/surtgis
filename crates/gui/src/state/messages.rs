@@ -10,10 +10,7 @@ use super::DatasetId;
 /// Messages sent from background threads to the main UI loop.
 pub enum AppMessage {
     /// A raster was loaded from disk.
-    RasterLoaded {
-        path: PathBuf,
-        raster: Raster<f64>,
-    },
+    RasterLoaded { path: PathBuf, raster: Raster<f64> },
     /// An algorithm completed successfully.
     AlgoComplete {
         name: String,
@@ -36,10 +33,7 @@ pub enum AppMessage {
         elapsed: Duration,
     },
     /// An algorithm or IO operation failed.
-    Error {
-        context: String,
-        message: String,
-    },
+    Error { context: String, message: String },
     /// A log message for the console.
     Log(LogEntry),
     /// A raster was saved to disk.
@@ -61,9 +55,7 @@ pub enum AppMessage {
         raster: Raster<f64>,
     },
     /// A STAC operation failed.
-    StacError {
-        message: String,
-    },
+    StacError { message: String },
 }
 
 /// Log level for console messages.

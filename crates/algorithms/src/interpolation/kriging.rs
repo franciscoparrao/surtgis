@@ -24,8 +24,8 @@ use ndarray::Array2;
 use surtgis_core::raster::{GeoTransform, Raster};
 use surtgis_core::{Error, Result};
 
-use super::variogram::FittedVariogram;
 use super::SamplePoint;
+use super::variogram::FittedVariogram;
 
 /// Parameters for Ordinary Kriging interpolation
 #[derive(Debug, Clone)]
@@ -221,8 +221,8 @@ pub fn ordinary_kriging(
     let mut estimate = Raster::new(rows, cols);
     estimate.set_transform(transform);
     estimate.set_nodata(Some(f64::NAN));
-    *estimate.data_mut() = Array2::from_shape_vec((rows, cols), est_data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *estimate.data_mut() =
+        Array2::from_shape_vec((rows, cols), est_data).map_err(|e| Error::Other(e.to_string()))?;
 
     let variance = if compute_var {
         let var_data: Vec<f64> = output.iter().map(|(_, v)| *v).collect();
@@ -293,12 +293,14 @@ fn kriging_solve(n: usize, mat: &mut [f64], rhs: &mut [f64]) -> Result<Vec<f64>>
 
 #[cfg(test)]
 mod tests {
+    use super::super::variogram::{VariogramParams, empirical_variogram, fit_best_variogram};
     use super::*;
-    use super::super::variogram::{
-        empirical_variogram, fit_best_variogram, VariogramParams,
-    };
 
-    fn make_params(rows: usize, cols: usize, extent: (f64, f64, f64, f64)) -> OrdinaryKrigingParams {
+    fn make_params(
+        rows: usize,
+        cols: usize,
+        extent: (f64, f64, f64, f64),
+    ) -> OrdinaryKrigingParams {
         let (x_min, y_min, x_max, y_max) = extent;
         let x_res = (x_max - x_min) / cols as f64;
         let y_res = -(y_max - y_min) / rows as f64;
@@ -314,13 +316,18 @@ mod tests {
         let mut points = Vec::with_capacity(n);
         let mut rng = seed;
         for _ in 0..n {
-            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let x = (rng >> 33) as f64 / (1u64 << 31) as f64 * 100.0;
-            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let y = (rng >> 33) as f64 / (1u64 << 31) as f64 * 100.0;
-            let value = 0.5 * x + 0.3 * y
-                + 10.0 * ((x / 20.0).sin() + (y / 20.0).sin());
-            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let value = 0.5 * x + 0.3 * y + 10.0 * ((x / 20.0).sin() + (y / 20.0).sin());
+            rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             let noise = (rng >> 33) as f64 / (1u64 << 31) as f64 * 2.0 - 1.0;
             points.push(SamplePoint::new(x, y, value + noise));
         }
@@ -349,7 +356,11 @@ mod tests {
                 }
             }
         }
-        assert!(nan_count == 0, "Interior should have no NaN, got {}", nan_count);
+        assert!(
+            nan_count == 0,
+            "Interior should have no NaN, got {}",
+            nan_count
+        );
     }
 
     #[test]
@@ -392,7 +403,10 @@ mod tests {
         };
 
         let result = ordinary_kriging(&points, &variogram, params).unwrap();
-        assert!(result.variance.is_some(), "Variance raster should be present");
+        assert!(
+            result.variance.is_some(),
+            "Variance raster should be present"
+        );
 
         let var = result.variance.unwrap();
         // Variance should be non-negative
@@ -400,7 +414,13 @@ mod tests {
             for col in 0..10 {
                 let v = var.get(row, col).unwrap();
                 if !v.is_nan() {
-                    assert!(v >= 0.0, "Variance should be >= 0, got {:.4} at ({},{})", v, row, col);
+                    assert!(
+                        v >= 0.0,
+                        "Variance should be >= 0, got {:.4} at ({},{})",
+                        v,
+                        row,
+                        col
+                    );
                 }
             }
         }
@@ -433,7 +453,11 @@ mod tests {
 
         // Far cells should be NaN
         let far = result.estimate.get(9, 9).unwrap();
-        assert!(far.is_nan(), "Far cell should be NaN with small radius, got {:.2}", far);
+        assert!(
+            far.is_nan(),
+            "Far cell should be NaN with small radius, got {:.2}",
+            far
+        );
     }
 
     #[test]
@@ -483,7 +507,9 @@ mod tests {
                     assert!(
                         (v - 42.0).abs() < 1.0,
                         "Constant field should give ~42.0, got {:.2} at ({},{})",
-                        v, row, col
+                        v,
+                        row,
+                        col
                     );
                 }
             }

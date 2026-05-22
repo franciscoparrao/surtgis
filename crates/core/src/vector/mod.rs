@@ -11,10 +11,10 @@
 pub mod geojson_reader;
 pub mod rasterize;
 
-#[cfg(feature = "shapefile")]
-pub mod shapefile_reader;
 #[cfg(feature = "geopackage")]
 pub mod gpkg_reader;
+#[cfg(feature = "shapefile")]
+pub mod shapefile_reader;
 
 use geo_types::Geometry;
 use serde::{Deserialize, Serialize};
@@ -23,10 +23,10 @@ use std::collections::HashMap;
 pub use geojson_reader::{parse_geojson, read_geojson};
 pub use rasterize::{clip_raster, clip_raster_by_polygon, rasterize_polygons};
 
+#[cfg(feature = "geopackage")]
+pub use gpkg_reader::{list_gpkg_layers, read_gpkg};
 #[cfg(feature = "shapefile")]
 pub use shapefile_reader::read_shapefile;
-#[cfg(feature = "geopackage")]
-pub use gpkg_reader::{read_gpkg, list_gpkg_layers};
 
 /// Attribute value types
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,7 +87,9 @@ pub struct FeatureCollection {
 
 impl FeatureCollection {
     pub fn new() -> Self {
-        Self { features: Vec::new() }
+        Self {
+            features: Vec::new(),
+        }
     }
 
     pub fn push(&mut self, feature: Feature) {
@@ -146,6 +148,11 @@ pub fn read_vector(path: &std::path::Path) -> crate::error::Result<FeatureCollec
         #[cfg(feature = "geopackage")]
         "gpkg" => gpkg_reader::read_gpkg(path, None),
         _ => {
+            // `mut` is needed when shapefile/geopackage features are on; without
+            // them the .push() calls are #[cfg]'d out and the binding becomes
+            // unused-mut. -D warnings in CI promotes that to an error, so the
+            // allow is intentional and feature-conditional.
+            #[allow(unused_mut)]
             let mut supported = vec![".geojson", ".json"];
             #[cfg(feature = "shapefile")]
             {

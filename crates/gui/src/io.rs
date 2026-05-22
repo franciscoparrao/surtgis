@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use crossbeam_channel::Sender;
 
-use surtgis_core::io::{read_geotiff, write_geotiff, GeoTiffOptions};
+use surtgis_core::io::{GeoTiffOptions, read_geotiff, write_geotiff};
 use surtgis_core::raster::Raster;
 
 use crate::state::{AppMessage, DatasetId, LogEntry};

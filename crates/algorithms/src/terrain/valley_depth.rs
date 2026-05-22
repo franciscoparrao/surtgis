@@ -16,7 +16,7 @@ use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
-use crate::hydrology::{priority_flood, PriorityFloodParams};
+use crate::hydrology::{PriorityFloodParams, priority_flood};
 
 /// Compute valley depth by inverting the DEM and filling depressions.
 ///
@@ -126,10 +126,7 @@ mod tests {
             !center_depth.is_nan(),
             "Center should have valid valley depth"
         );
-        assert!(
-            !edge_depth.is_nan(),
-            "Edge should have valid valley depth"
-        );
+        assert!(!edge_depth.is_nan(), "Edge should have valid valley depth");
         // Center should have >= edge depth (valley is deeper)
         assert!(
             center_depth >= edge_depth - 0.01,

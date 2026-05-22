@@ -3,13 +3,13 @@
 use anyhow::{Context, Result};
 use std::time::Instant;
 
-use surtgis_algorithms::hydrology::{fill_sinks, FillSinksParams};
+use surtgis_algorithms::hydrology::{FillSinksParams, fill_sinks};
 use surtgis_algorithms::terrain::{
-    aspect, hillshade, slope, tpi, AspectOutput, HillshadeParams, SlopeParams, SlopeUnits,
-    TpiParams,
+    AspectOutput, HillshadeParams, SlopeParams, SlopeUnits, TpiParams, aspect, hillshade, slope,
+    tpi,
 };
-use surtgis_cloud::blocking::CogReaderBlocking;
 use surtgis_cloud::CogReaderOptions;
+use surtgis_cloud::blocking::CogReaderBlocking;
 
 use crate::commands::CogCommands;
 use crate::helpers::{done, parse_bbox, spinner, write_result};
@@ -20,8 +20,8 @@ pub fn handle(action: CogCommands, compress: bool) -> Result<()> {
         CogCommands::Info { url } => {
             let pb = spinner("Opening remote COG...");
             let opts = CogReaderOptions::default();
-            let reader = CogReaderBlocking::open(&url, opts)
-                .context("Failed to open remote COG")?;
+            let reader =
+                CogReaderBlocking::open(&url, opts).context("Failed to open remote COG")?;
             pb.finish_and_clear();
 
             let meta = reader.metadata();
@@ -77,8 +77,8 @@ pub fn handle(action: CogCommands, compress: bool) -> Result<()> {
             let bbox = parse_bbox(&bbox)?;
             let pb = spinner("Fetching COG tiles...");
             let opts = CogReaderOptions::default();
-            let mut reader = CogReaderBlocking::open(&url, opts)
-                .context("Failed to open remote COG")?;
+            let mut reader =
+                CogReaderBlocking::open(&url, opts).context("Failed to open remote COG")?;
             let start = Instant::now();
             let raster: surtgis_core::Raster<f64> = reader
                 .read_bbox(&bbox, overview)
@@ -135,8 +135,7 @@ pub fn handle(action: CogCommands, compress: bool) -> Result<()> {
                 }
             };
             let start = Instant::now();
-            let result =
-                aspect(&dem, fmt).context("Failed to calculate aspect")?;
+            let result = aspect(&dem, fmt).context("Failed to calculate aspect")?;
             let elapsed = start.elapsed();
             write_result(&result, &output, compress)?;
             done("COG aspect", &output, elapsed);
@@ -177,8 +176,7 @@ pub fn handle(action: CogCommands, compress: bool) -> Result<()> {
             let bbox = parse_bbox(&bbox)?;
             let dem = read_cog_dem(&url, &bbox)?;
             let start = Instant::now();
-            let result = tpi(&dem, TpiParams { radius })
-                .context("Failed to calculate TPI")?;
+            let result = tpi(&dem, TpiParams { radius }).context("Failed to calculate TPI")?;
             let elapsed = start.elapsed();
             write_result(&result, &output, compress)?;
             done("COG TPI", &output, elapsed);
@@ -193,8 +191,8 @@ pub fn handle(action: CogCommands, compress: bool) -> Result<()> {
             let bbox = parse_bbox(&bbox)?;
             let dem = read_cog_dem(&url, &bbox)?;
             let start = Instant::now();
-            let result = fill_sinks(&dem, FillSinksParams { min_slope })
-                .context("Failed to fill sinks")?;
+            let result =
+                fill_sinks(&dem, FillSinksParams { min_slope }).context("Failed to fill sinks")?;
             let elapsed = start.elapsed();
             write_result(&result, &output, compress)?;
             done("COG fill-sinks", &output, elapsed);

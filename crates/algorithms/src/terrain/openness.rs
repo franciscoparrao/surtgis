@@ -4,8 +4,8 @@
 //! Negative openness: mean of nadir angles in all directions.
 //! Both expressed in degrees (0-180).
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -83,11 +83,31 @@ fn compute_openness(
 
                 for &(dc_step, dr_step) in &dir_vectors {
                     let angle = if positive {
-                        compute_positive_angle(dem, row, col, z0, dr_step, dc_step,
-                                               params.radius, cell_size, rows, cols)
+                        compute_positive_angle(
+                            dem,
+                            row,
+                            col,
+                            z0,
+                            dr_step,
+                            dc_step,
+                            params.radius,
+                            cell_size,
+                            rows,
+                            cols,
+                        )
                     } else {
-                        compute_negative_angle(dem, row, col, z0, dr_step, dc_step,
-                                               params.radius, cell_size, rows, cols)
+                        compute_negative_angle(
+                            dem,
+                            row,
+                            col,
+                            z0,
+                            dr_step,
+                            dc_step,
+                            params.radius,
+                            cell_size,
+                            rows,
+                            cols,
+                        )
                     };
                     angle_sum += angle;
                 }
@@ -111,10 +131,15 @@ fn compute_openness(
 #[allow(clippy::too_many_arguments)]
 fn compute_positive_angle(
     dem: &Raster<f64>,
-    row: usize, col: usize, z0: f64,
-    dr_step: f64, dc_step: f64,
-    radius: usize, cell_size: f64,
-    rows: usize, cols: usize,
+    row: usize,
+    col: usize,
+    z0: f64,
+    dr_step: f64,
+    dc_step: f64,
+    radius: usize,
+    cell_size: f64,
+    rows: usize,
+    cols: usize,
 ) -> f64 {
     let mut max_angle = 0.0_f64;
 
@@ -129,10 +154,14 @@ fn compute_positive_angle(
         }
 
         let z = unsafe { dem.get_unchecked(nr as usize, nc as usize) };
-        if z.is_nan() { break; }
+        if z.is_nan() {
+            break;
+        }
 
         let dist = ((fr - row as f64).powi(2) + (fc - col as f64).powi(2)).sqrt() * cell_size;
-        if dist < f64::EPSILON { continue; }
+        if dist < f64::EPSILON {
+            continue;
+        }
 
         let angle = ((z - z0) / dist).atan();
         if angle > max_angle {
@@ -147,10 +176,15 @@ fn compute_positive_angle(
 #[allow(clippy::too_many_arguments)]
 fn compute_negative_angle(
     dem: &Raster<f64>,
-    row: usize, col: usize, z0: f64,
-    dr_step: f64, dc_step: f64,
-    radius: usize, cell_size: f64,
-    rows: usize, cols: usize,
+    row: usize,
+    col: usize,
+    z0: f64,
+    dr_step: f64,
+    dc_step: f64,
+    radius: usize,
+    cell_size: f64,
+    rows: usize,
+    cols: usize,
 ) -> f64 {
     let mut max_angle = 0.0_f64;
 
@@ -165,10 +199,14 @@ fn compute_negative_angle(
         }
 
         let z = unsafe { dem.get_unchecked(nr as usize, nc as usize) };
-        if z.is_nan() { break; }
+        if z.is_nan() {
+            break;
+        }
 
         let dist = ((fr - row as f64).powi(2) + (fc - col as f64).powi(2)).sqrt() * cell_size;
-        if dist < f64::EPSILON { continue; }
+        if dist < f64::EPSILON {
+            continue;
+        }
 
         let angle = ((z0 - z) / dist).atan(); // Looking DOWN
         if angle > max_angle {
@@ -191,7 +229,11 @@ mod tests {
 
         let result = positive_openness(&dem, OpennessParams::default()).unwrap();
         let v = result.get(10, 10).unwrap();
-        assert!((v - 90.0).abs() < 1.0, "Flat openness should be ~90°, got {}", v);
+        assert!(
+            (v - 90.0).abs() < 1.0,
+            "Flat openness should be ~90°, got {}",
+            v
+        );
     }
 
     #[test]
@@ -202,13 +244,18 @@ mod tests {
             for col in 0..21 {
                 let dx = col as f64 - 10.0;
                 let dy = row as f64 - 10.0;
-                dem.set(row, col, (dx * dx + dy * dy).sqrt() * 10.0).unwrap();
+                dem.set(row, col, (dx * dx + dy * dy).sqrt() * 10.0)
+                    .unwrap();
             }
         }
 
         let result = positive_openness(&dem, OpennessParams::default()).unwrap();
         let center = result.get(10, 10).unwrap();
-        assert!(center < 80.0, "Pit should have lower positive openness, got {}", center);
+        assert!(
+            center < 80.0,
+            "Pit should have lower positive openness, got {}",
+            center
+        );
     }
 
     #[test]
@@ -219,12 +266,17 @@ mod tests {
             for col in 0..21 {
                 let dx = col as f64 - 10.0;
                 let dy = row as f64 - 10.0;
-                dem.set(row, col, 100.0 - (dx * dx + dy * dy).sqrt() * 5.0).unwrap();
+                dem.set(row, col, 100.0 - (dx * dx + dy * dy).sqrt() * 5.0)
+                    .unwrap();
             }
         }
 
         let result = negative_openness(&dem, OpennessParams::default()).unwrap();
         let center = result.get(10, 10).unwrap();
-        assert!(center < 80.0, "Peak should have lower negative openness, got {}", center);
+        assert!(
+            center < 80.0,
+            "Peak should have lower negative openness, got {}",
+            center
+        );
     }
 }

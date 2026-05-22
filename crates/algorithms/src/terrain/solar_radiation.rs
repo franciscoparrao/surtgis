@@ -4,8 +4,8 @@
 //! terrain slope, aspect, and topographic shadows.
 //! Simplified model inspired by Hofierka & Šúri (2002) / r.sun.
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -14,8 +14,7 @@ use std::f64::consts::PI;
 use super::horizon_angles::HorizonAngles;
 
 /// Diffuse radiation model
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum DiffuseModel {
     /// Isotropic sky model: uniform diffuse from all sky directions.
     /// Simple but underestimates near-sun and near-horizon brightness.
@@ -33,7 +32,6 @@ pub enum DiffuseModel {
     /// they are estimated from `transmittance` and `diffuse_proportion`.
     Perez,
 }
-
 
 /// Parameters for solar radiation model
 #[derive(Debug, Clone)]
@@ -93,12 +91,17 @@ pub struct SolarRadiationResult {
 
 /// Compute beam normal irradiance for a given air mass using either
 /// simple transmittance or Linke turbidity (Kasten 1996) model.
-fn beam_normal_irradiance(solar_constant: f64, air_mass: f64, transmittance: f64, linke_turbidity: Option<f64>) -> f64 {
+fn beam_normal_irradiance(
+    solar_constant: f64,
+    air_mass: f64,
+    transmittance: f64,
+    linke_turbidity: Option<f64>,
+) -> f64 {
     if let Some(tl) = linke_turbidity {
         // Kasten (1996) Rayleigh optical depth
         let m = air_mass;
-        let delta_r = 1.0 / (6.6296 + 1.7513 * m - 0.1202 * m.powi(2)
-            + 0.0065 * m.powi(3) - 0.00013 * m.powi(4));
+        let delta_r = 1.0
+            / (6.6296 + 1.7513 * m - 0.1202 * m.powi(2) + 0.0065 * m.powi(3) - 0.00013 * m.powi(4));
         solar_constant * (-0.8662 * tl * delta_r).exp()
     } else {
         solar_constant * transmittance.powf(air_mass)
@@ -112,19 +115,19 @@ const PEREZ_COEFFS: [[f64; 6]; 8] = [
     // ε bin 1: 1.000 ≤ ε < 1.065 (overcast)
     [-0.008, 0.588, -0.062, -0.060, 0.072, -0.022],
     // ε bin 2: 1.065 ≤ ε < 1.230
-    [ 0.130, 0.683, -0.151, -0.019, 0.066, -0.029],
+    [0.130, 0.683, -0.151, -0.019, 0.066, -0.029],
     // ε bin 3: 1.230 ≤ ε < 1.500
-    [ 0.330, 0.487, -0.221,  0.055,-0.064, -0.026],
+    [0.330, 0.487, -0.221, 0.055, -0.064, -0.026],
     // ε bin 4: 1.500 ≤ ε < 1.950
-    [ 0.568, 0.187, -0.295,  0.109,-0.152, -0.014],
+    [0.568, 0.187, -0.295, 0.109, -0.152, -0.014],
     // ε bin 5: 1.950 ≤ ε < 2.800
-    [ 0.873,-0.392, -0.362,  0.226,-0.462,  0.001],
+    [0.873, -0.392, -0.362, 0.226, -0.462, 0.001],
     // ε bin 6: 2.800 ≤ ε < 4.500
-    [ 1.133,-1.237, -0.412,  0.288,-0.823,  0.056],
+    [1.133, -1.237, -0.412, 0.288, -0.823, 0.056],
     // ε bin 7: 4.500 ≤ ε < 6.200
-    [ 1.060,-1.600, -0.359,  0.264,-1.127,  0.131],
+    [1.060, -1.600, -0.359, 0.264, -1.127, 0.131],
     // ε bin 8: ε ≥ 6.200 (clear)
-    [ 0.678,-0.327, -0.250,  0.156,-1.377,  0.251],
+    [0.678, -0.327, -0.250, 0.156, -1.377, 0.251],
 ];
 
 /// ε bin boundaries for Perez model
@@ -145,9 +148,13 @@ fn perez_bin(epsilon: f64) -> usize {
 /// Returns diffuse irradiance on tilted surface.
 #[allow(clippy::too_many_arguments)]
 fn perez_diffuse(
-    dhi: f64, _ghi: f64, dni: f64,
-    theta_z: f64, cos_inc: f64,
-    slope: f64, air_mass: f64,
+    dhi: f64,
+    _ghi: f64,
+    dni: f64,
+    theta_z: f64,
+    cos_inc: f64,
+    slope: f64,
+    air_mass: f64,
     solar_constant: f64,
 ) -> f64 {
     if dhi < 1e-6 {
@@ -155,8 +162,8 @@ fn perez_diffuse(
     }
 
     // Clearness index ε
-    let epsilon = ((dhi + dni) / dhi + 5.535e-6 * theta_z.powi(3))
-        / (1.0 + 5.535e-6 * theta_z.powi(3));
+    let epsilon =
+        ((dhi + dni) / dhi + 5.535e-6 * theta_z.powi(3)) / (1.0 + 5.535e-6 * theta_z.powi(3));
 
     // Sky brightness Δ
     let i0_ext = solar_constant; // extraterrestrial on horizontal
@@ -207,8 +214,10 @@ pub fn solar_radiation(
 
     if rows_s != rows_a || cols_s != cols_a {
         return Err(Error::SizeMismatch {
-            er: rows_s, ec: cols_s,
-            ar: rows_a, ac: cols_a,
+            er: rows_s,
+            ec: cols_s,
+            ar: rows_a,
+            ac: cols_a,
         });
     }
 
@@ -222,8 +231,10 @@ pub fn solar_radiation(
     // Solar declination (Spencer 1971)
     let gamma = 2.0 * PI * (params.day as f64 - 1.0) / 365.0;
     let declination = 0.006918 - 0.399912 * gamma.cos() + 0.070257 * gamma.sin()
-        - 0.006758 * (2.0 * gamma).cos() + 0.000907 * (2.0 * gamma).sin()
-        - 0.002697 * (3.0 * gamma).cos() + 0.00148 * (3.0 * gamma).sin();
+        - 0.006758 * (2.0 * gamma).cos()
+        + 0.000907 * (2.0 * gamma).sin()
+        - 0.002697 * (3.0 * gamma).cos()
+        + 0.00148 * (3.0 * gamma).sin();
 
     let lat_rad = params.latitude.to_radians();
 
@@ -248,14 +259,23 @@ pub fn solar_radiation(
     let mut ghi_flat_daily = 0.0;
     for step in 0..=num_steps {
         let hour = sunrise_hour + step as f64 * dt;
-        if hour > sunset_hour { break; }
+        if hour > sunset_hour {
+            break;
+        }
         let omega = (hour - 12.0) * 15.0_f64.to_radians();
-        let sin_alt = lat_rad.sin() * declination.sin()
-            + lat_rad.cos() * declination.cos() * omega.cos();
-        if sin_alt <= 0.0 { continue; }
+        let sin_alt =
+            lat_rad.sin() * declination.sin() + lat_rad.cos() * declination.cos() * omega.cos();
+        if sin_alt <= 0.0 {
+            continue;
+        }
         let alt = sin_alt.asin();
         let air_mass = 1.0 / (sin_alt + 0.50572 * (alt.to_degrees() + 6.07995).powf(-1.6364));
-        let beam_n = beam_normal_irradiance(params.solar_constant, air_mass, params.transmittance, params.linke_turbidity);
+        let beam_n = beam_normal_irradiance(
+            params.solar_constant,
+            air_mass,
+            params.transmittance,
+            params.linke_turbidity,
+        );
         let beam_horiz = beam_n * sin_alt;
         let dhi = params.solar_constant * sin_alt * params.diffuse_proportion;
         ghi_flat_daily += (beam_horiz + dhi) * dt;
@@ -275,10 +295,10 @@ pub fn solar_radiation(
         dhi: f64,
         ghi: f64,
         theta_z: f64,
-        sin3_tz: f64,     // for Klucher
-        f_clear: f64,     // for Klucher
-        dni: f64,         // for Perez
-        air_mass: f64,    // for Perez
+        sin3_tz: f64,  // for Klucher
+        f_clear: f64,  // for Klucher
+        dni: f64,      // for Perez
+        air_mass: f64, // for Perez
         is_above_horizon: bool,
     }
 
@@ -289,15 +309,23 @@ pub fn solar_radiation(
                 return None;
             }
             let omega = (hour - 12.0) * 15.0_f64.to_radians();
-            let sin_alt = lat_rad.sin() * declination.sin()
-                + lat_rad.cos() * declination.cos() * omega.cos();
+            let sin_alt =
+                lat_rad.sin() * declination.sin() + lat_rad.cos() * declination.cos() * omega.cos();
 
             if sin_alt <= 0.0 {
                 return Some(SunStep {
-                    sin_alt: 0.0, cos_alt: 1.0, az: 0.0,
-                    beam_normal: 0.0, dhi: 0.0, ghi: 0.0,
-                    theta_z: PI / 2.0, sin3_tz: 0.0, f_clear: 0.0,
-                    dni: 0.0, air_mass: 0.0, is_above_horizon: false,
+                    sin_alt: 0.0,
+                    cos_alt: 1.0,
+                    az: 0.0,
+                    beam_normal: 0.0,
+                    dhi: 0.0,
+                    ghi: 0.0,
+                    theta_z: PI / 2.0,
+                    sin3_tz: 0.0,
+                    f_clear: 0.0,
+                    dni: 0.0,
+                    air_mass: 0.0,
+                    is_above_horizon: false,
                 });
             }
 
@@ -313,7 +341,10 @@ pub fn solar_radiation(
 
             let air_mass = 1.0 / (sin_alt + 0.50572 * (alt.to_degrees() + 6.07995).powf(-1.6364));
             let beam_normal = beam_normal_irradiance(
-                params.solar_constant, air_mass, params.transmittance, params.linke_turbidity,
+                params.solar_constant,
+                air_mass,
+                params.transmittance,
+                params.linke_turbidity,
             );
 
             let i0 = params.solar_constant * sin_alt;
@@ -321,13 +352,30 @@ pub fn solar_radiation(
             let dhi = ghi * params.diffuse_proportion;
             let theta_z = (PI / 2.0) - alt;
             let sin3_tz = theta_z.sin().powi(3);
-            let f_clear = if ghi > 1e-6 { 1.0 - (dhi / ghi).powi(2) } else { 0.0 };
-            let dni = if sin_alt > 0.01 { (ghi - dhi) / sin_alt } else { 0.0 };
+            let f_clear = if ghi > 1e-6 {
+                1.0 - (dhi / ghi).powi(2)
+            } else {
+                0.0
+            };
+            let dni = if sin_alt > 0.01 {
+                (ghi - dhi) / sin_alt
+            } else {
+                0.0
+            };
 
             Some(SunStep {
-                sin_alt, cos_alt, az,
-                beam_normal, dhi, ghi, theta_z, sin3_tz, f_clear,
-                dni, air_mass, is_above_horizon: true,
+                sin_alt,
+                cos_alt,
+                az,
+                beam_normal,
+                dhi,
+                ghi,
+                theta_z,
+                sin3_tz,
+                f_clear,
+                dni,
+                air_mass,
+                is_above_horizon: true,
             })
         })
         .collect();
@@ -356,31 +404,38 @@ pub fn solar_radiation(
                 let mut diffuse_daily = 0.0;
 
                 for sun in &sun_steps {
-                    if !sun.is_above_horizon { continue; }
+                    if !sun.is_above_horizon {
+                        continue;
+                    }
 
                     // Incidence angle: the ONLY expensive op left in inner loop
-                    let cos_inc = sun.sin_alt * slp_cos
-                        + sun.cos_alt * slp_sin * (sun.az - asp).cos();
+                    let cos_inc =
+                        sun.sin_alt * slp_cos + sun.cos_alt * slp_sin * (sun.az - asp).cos();
 
                     if cos_inc > 0.0 {
                         beam_daily += sun.beam_normal * cos_inc * dt;
                     }
 
                     let diffuse_inst = match params.diffuse_model {
-                        DiffuseModel::Isotropic => {
-                            sun.dhi * svf_approx
-                        }
+                        DiffuseModel::Isotropic => sun.dhi * svf_approx,
                         DiffuseModel::Klucher => {
                             let cos_theta = cos_inc.max(0.0);
                             let cos2_theta = cos_theta * cos_theta;
-                            sun.dhi * svf_approx
+                            sun.dhi
+                                * svf_approx
                                 * (1.0 + sun.f_clear * cos2_theta * sun.sin3_tz)
                                 * (1.0 + sun.f_clear * half_slope_sin3)
                         }
-                        DiffuseModel::Perez => {
-                            perez_diffuse(sun.dhi, sun.ghi, sun.dni, sun.theta_z, cos_inc,
-                                slp, sun.air_mass, params.solar_constant)
-                        }
+                        DiffuseModel::Perez => perez_diffuse(
+                            sun.dhi,
+                            sun.ghi,
+                            sun.dni,
+                            sun.theta_z,
+                            cos_inc,
+                            slp,
+                            sun.air_mass,
+                            params.solar_constant,
+                        ),
                     };
 
                     diffuse_daily += diffuse_inst * dt;
@@ -429,7 +484,12 @@ pub fn solar_radiation(
     *reflected.data_mut() = refl_data;
     *total.data_mut() = total_data;
 
-    Ok(SolarRadiationResult { beam, diffuse, reflected, total })
+    Ok(SolarRadiationResult {
+        beam,
+        diffuse,
+        reflected,
+        total,
+    })
 }
 
 /// Compute daily solar radiation with topographic shadow casting.
@@ -461,16 +521,20 @@ pub fn solar_radiation_shadowed(
 
     if rows_s != rows_a || cols_s != cols_a {
         return Err(Error::SizeMismatch {
-            er: rows_s, ec: cols_s,
-            ar: rows_a, ac: cols_a,
+            er: rows_s,
+            ec: cols_s,
+            ar: rows_a,
+            ac: cols_a,
         });
     }
 
     let (h_rows, h_cols) = horizon.shape();
     if rows_s != h_rows || cols_s != h_cols {
         return Err(Error::SizeMismatch {
-            er: rows_s, ec: cols_s,
-            ar: h_rows, ac: h_cols,
+            er: rows_s,
+            ec: cols_s,
+            ar: h_rows,
+            ac: h_cols,
         });
     }
 
@@ -484,8 +548,10 @@ pub fn solar_radiation_shadowed(
     // Solar declination (Spencer 1971)
     let gamma = 2.0 * PI * (params.day as f64 - 1.0) / 365.0;
     let declination = 0.006918 - 0.399912 * gamma.cos() + 0.070257 * gamma.sin()
-        - 0.006758 * (2.0 * gamma).cos() + 0.000907 * (2.0 * gamma).sin()
-        - 0.002697 * (3.0 * gamma).cos() + 0.00148 * (3.0 * gamma).sin();
+        - 0.006758 * (2.0 * gamma).cos()
+        + 0.000907 * (2.0 * gamma).sin()
+        - 0.002697 * (3.0 * gamma).cos()
+        + 0.00148 * (3.0 * gamma).sin();
 
     let lat_rad = params.latitude.to_radians();
 
@@ -509,14 +575,23 @@ pub fn solar_radiation_shadowed(
     let mut ghi_flat_daily = 0.0;
     for step in 0..=num_steps {
         let hour = sunrise_hour + step as f64 * dt;
-        if hour > sunset_hour { break; }
+        if hour > sunset_hour {
+            break;
+        }
         let omega = (hour - 12.0) * 15.0_f64.to_radians();
-        let sin_alt = lat_rad.sin() * declination.sin()
-            + lat_rad.cos() * declination.cos() * omega.cos();
-        if sin_alt <= 0.0 { continue; }
+        let sin_alt =
+            lat_rad.sin() * declination.sin() + lat_rad.cos() * declination.cos() * omega.cos();
+        if sin_alt <= 0.0 {
+            continue;
+        }
         let alt = sin_alt.asin();
         let air_mass = 1.0 / (sin_alt + 0.50572 * (alt.to_degrees() + 6.07995).powf(-1.6364));
-        let beam_n = beam_normal_irradiance(params.solar_constant, air_mass, params.transmittance, params.linke_turbidity);
+        let beam_n = beam_normal_irradiance(
+            params.solar_constant,
+            air_mass,
+            params.transmittance,
+            params.linke_turbidity,
+        );
         let beam_horiz = beam_n * sin_alt;
         let dhi = params.solar_constant * sin_alt * params.diffuse_proportion;
         ghi_flat_daily += (beam_horiz + dhi) * dt;
@@ -540,7 +615,9 @@ pub fn solar_radiation_shadowed(
 
                 for step in 0..=num_steps {
                     let hour = sunrise_hour + step as f64 * dt;
-                    if hour > sunset_hour { break; }
+                    if hour > sunset_hour {
+                        break;
+                    }
 
                     let omega = (hour - 12.0) * 15.0_f64.to_radians();
 
@@ -548,13 +625,15 @@ pub fn solar_radiation_shadowed(
                     let sin_alt = lat_rad.sin() * declination.sin()
                         + lat_rad.cos() * declination.cos() * omega.cos();
 
-                    if sin_alt <= 0.0 { continue; }
+                    if sin_alt <= 0.0 {
+                        continue;
+                    }
 
                     let alt = sin_alt.asin();
 
                     // Solar azimuth (0=N, clockwise)
-                    let cos_az = (declination.sin() - lat_rad.sin() * sin_alt)
-                        / (lat_rad.cos() * alt.cos());
+                    let cos_az =
+                        (declination.sin() - lat_rad.sin() * sin_alt) / (lat_rad.cos() * alt.cos());
                     let az = if omega > 0.0 {
                         2.0 * PI - cos_az.clamp(-1.0, 1.0).acos()
                     } else {
@@ -566,14 +645,17 @@ pub fn solar_radiation_shadowed(
                     let in_shadow = !horizon_at_sun.is_nan() && alt < horizon_at_sun;
 
                     // Incidence angle on sloped surface
-                    let cos_inc = sin_alt * slp.cos()
-                        + alt.cos() * slp.sin() * (az - asp).cos();
+                    let cos_inc = sin_alt * slp.cos() + alt.cos() * slp.sin() * (az - asp).cos();
 
                     // Direct beam (only if sun hits surface AND not in cast shadow)
                     if cos_inc > 0.0 && !in_shadow {
-                        let air_mass = 1.0 / (sin_alt + 0.50572 * (alt.to_degrees() + 6.07995).powf(-1.6364));
+                        let air_mass =
+                            1.0 / (sin_alt + 0.50572 * (alt.to_degrees() + 6.07995).powf(-1.6364));
                         let beam_normal = beam_normal_irradiance(
-                            params.solar_constant, air_mass, params.transmittance, params.linke_turbidity,
+                            params.solar_constant,
+                            air_mass,
+                            params.transmittance,
+                            params.linke_turbidity,
                         );
                         beam_daily += beam_normal * cos_inc * dt;
                     }
@@ -585,9 +667,7 @@ pub fn solar_radiation_shadowed(
                     let svf_approx = (1.0 + slp.cos()) / 2.0;
 
                     let diffuse_inst = match params.diffuse_model {
-                        DiffuseModel::Isotropic => {
-                            dhi * svf_approx
-                        }
+                        DiffuseModel::Isotropic => dhi * svf_approx,
                         DiffuseModel::Klucher => {
                             let f_clear = if ghi > 1e-6 {
                                 1.0 - (dhi / ghi).powi(2)
@@ -606,15 +686,23 @@ pub fn solar_radiation_shadowed(
                         }
                         DiffuseModel::Perez => {
                             let theta_z = (PI / 2.0) - alt;
-                            let air_mass = 1.0 / (sin_alt + 0.50572
-                                * (alt.to_degrees() + 6.07995).powf(-1.6364));
+                            let air_mass = 1.0
+                                / (sin_alt + 0.50572 * (alt.to_degrees() + 6.07995).powf(-1.6364));
                             let dni = if sin_alt > 0.01 {
                                 (ghi - dhi) / sin_alt
                             } else {
                                 0.0
                             };
-                            perez_diffuse(dhi, ghi, dni, theta_z, cos_inc,
-                                slp, air_mass, params.solar_constant)
+                            perez_diffuse(
+                                dhi,
+                                ghi,
+                                dni,
+                                theta_z,
+                                cos_inc,
+                                slp,
+                                air_mass,
+                                params.solar_constant,
+                            )
                         }
                     };
 
@@ -664,7 +752,12 @@ pub fn solar_radiation_shadowed(
     *reflected.data_mut() = refl_data;
     *total.data_mut() = total_data;
 
-    Ok(SolarRadiationResult { beam, diffuse, reflected, total })
+    Ok(SolarRadiationResult {
+        beam,
+        diffuse,
+        reflected,
+        total,
+    })
 }
 
 /// Compute annual solar radiation only (memory-efficient).
@@ -921,18 +1014,25 @@ pub struct Vec3 {
 }
 
 impl Vec3 {
-    fn new(x: f64, y: f64, z: f64) -> Self { Self { x, y, z } }
-    fn dot(self, other: Self) -> f64 { self.x * other.x + self.y * other.y + self.z * other.z }
+    fn new(x: f64, y: f64, z: f64) -> Self {
+        Self { x, y, z }
+    }
+    fn dot(self, other: Self) -> f64 {
+        self.x * other.x + self.y * other.y + self.z * other.z
+    }
     #[allow(dead_code)]
-    fn length(self) -> f64 { self.dot(self).sqrt() }
+    fn length(self) -> f64 {
+        self.dot(self).sqrt()
+    }
     #[allow(dead_code)]
     fn normalized(self) -> Self {
         let l = self.length();
-        if l < 1e-15 { return Self::new(0.0, 0.0, 1.0); }
+        if l < 1e-15 {
+            return Self::new(0.0, 0.0, 1.0);
+        }
         Self::new(self.x / l, self.y / l, self.z / l)
     }
 }
-
 
 /// Rotate vector around Z axis by angle θ
 fn rotate_z(v: Vec3, theta: f64) -> Vec3 {
@@ -952,8 +1052,7 @@ fn rotate_z(v: Vec3, theta: f64) -> Vec3 {
 /// * `latitude` — Latitude in radians
 pub fn solar_vector(day: u32, hour: f64, latitude: f64) -> (Vec3, f64) {
     // Solar declination
-    let decl = 23.45_f64.to_radians()
-        * ((360.0 * (284.0 + day as f64) / 365.0).to_radians().sin());
+    let decl = 23.45_f64.to_radians() * ((360.0 * (284.0 + day as f64) / 365.0).to_radians().sin());
 
     // Hour angle (radians): 0 at noon, positive afternoon
     let hour_angle = (hour - 12.0) * 15.0_f64.to_radians();
@@ -983,9 +1082,9 @@ pub fn solar_vector(day: u32, hour: f64, latitude: f64) -> (Vec3, f64) {
 
     // Build sun unit vector in ENU (x=East, y=North, z=Up)
     let sun = Vec3::new(
-        cos_alt * sin_az,  // East component
-        cos_alt * cos_az,  // North component
-        sin_alt,           // Up component
+        cos_alt * sin_az, // East component
+        cos_alt * cos_az, // North component
+        sin_alt,          // Up component
     );
 
     (sun, sin_alt)
@@ -1036,7 +1135,11 @@ mod tests {
 
         let result = solar_radiation(&slope_r, &aspect_r, SolarParams::default()).unwrap();
         let total = result.total.get(2, 2).unwrap();
-        assert!(total > 0.0, "Flat terrain should receive radiation, got {}", total);
+        assert!(
+            total > 0.0,
+            "Flat terrain should receive radiation, got {}",
+            total
+        );
     }
 
     #[test]
@@ -1051,14 +1154,24 @@ mod tests {
         let mut north_aspect = Raster::filled(5, 5, 0.0_f64); // North
         north_aspect.set_transform(GeoTransform::new(0.0, 5.0, 1.0, -1.0));
 
-        let south_result = solar_radiation(&slope_r, &south_aspect, SolarParams {
-            latitude: 45.0,
-            ..Default::default()
-        }).unwrap();
-        let north_result = solar_radiation(&slope_r, &north_aspect, SolarParams {
-            latitude: 45.0,
-            ..Default::default()
-        }).unwrap();
+        let south_result = solar_radiation(
+            &slope_r,
+            &south_aspect,
+            SolarParams {
+                latitude: 45.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let north_result = solar_radiation(
+            &slope_r,
+            &north_aspect,
+            SolarParams {
+                latitude: 45.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let south_total = south_result.total.get(2, 2).unwrap();
         let north_total = north_result.total.get(2, 2).unwrap();
@@ -1066,7 +1179,8 @@ mod tests {
         assert!(
             south_total > north_total,
             "South slope should get more sun than north: {} vs {}",
-            south_total, north_total
+            south_total,
+            north_total
         );
     }
 
@@ -1077,17 +1191,36 @@ mod tests {
         let mut aspect_r = Raster::filled(3, 3, 0.0_f64);
         aspect_r.set_transform(GeoTransform::new(0.0, 3.0, 1.0, -1.0));
 
-        let summer = solar_radiation(&slope_r, &aspect_r, SolarParams {
-            day: 172, latitude: 45.0, ..Default::default()
-        }).unwrap();
-        let winter = solar_radiation(&slope_r, &aspect_r, SolarParams {
-            day: 355, latitude: 45.0, ..Default::default()
-        }).unwrap();
+        let summer = solar_radiation(
+            &slope_r,
+            &aspect_r,
+            SolarParams {
+                day: 172,
+                latitude: 45.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let winter = solar_radiation(
+            &slope_r,
+            &aspect_r,
+            SolarParams {
+                day: 355,
+                latitude: 45.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let s = summer.total.get(1, 1).unwrap();
         let w = winter.total.get(1, 1).unwrap();
 
-        assert!(s > w, "Summer should have more radiation than winter: {} vs {}", s, w);
+        assert!(
+            s > w,
+            "Summer should have more radiation than winter: {} vs {}",
+            s,
+            w
+        );
     }
 
     #[test]
@@ -1099,14 +1232,24 @@ mod tests {
         let mut aspect_r = Raster::filled(5, 5, PI); // South
         aspect_r.set_transform(GeoTransform::new(0.0, 5.0, 1.0, -1.0));
 
-        let iso = solar_radiation(&slope_r, &aspect_r, SolarParams {
-            diffuse_model: DiffuseModel::Isotropic,
-            ..Default::default()
-        }).unwrap();
-        let klu = solar_radiation(&slope_r, &aspect_r, SolarParams {
-            diffuse_model: DiffuseModel::Klucher,
-            ..Default::default()
-        }).unwrap();
+        let iso = solar_radiation(
+            &slope_r,
+            &aspect_r,
+            SolarParams {
+                diffuse_model: DiffuseModel::Isotropic,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let klu = solar_radiation(
+            &slope_r,
+            &aspect_r,
+            SolarParams {
+                diffuse_model: DiffuseModel::Klucher,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let iso_diff = iso.diffuse.get(2, 2).unwrap();
         let klu_diff = klu.diffuse.get(2, 2).unwrap();
@@ -1115,7 +1258,8 @@ mod tests {
         assert!(
             (iso_diff - klu_diff).abs() > 0.1,
             "Klucher should differ from isotropic: iso={:.1}, klu={:.1}",
-            iso_diff, klu_diff
+            iso_diff,
+            klu_diff
         );
     }
 
@@ -1127,13 +1271,22 @@ mod tests {
         let mut aspect_r = Raster::filled(5, 5, 0.0_f64);
         aspect_r.set_transform(GeoTransform::new(0.0, 5.0, 1.0, -1.0));
 
-        let result = solar_radiation(&slope_r, &aspect_r, SolarParams {
-            albedo: 0.2,
-            ..Default::default()
-        }).unwrap();
+        let result = solar_radiation(
+            &slope_r,
+            &aspect_r,
+            SolarParams {
+                albedo: 0.2,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let refl = result.reflected.get(2, 2).unwrap();
-        assert!(refl.abs() < 1e-10, "Reflected on flat should be 0, got {}", refl);
+        assert!(
+            refl.abs() < 1e-10,
+            "Reflected on flat should be 0, got {}",
+            refl
+        );
     }
 
     #[test]
@@ -1144,24 +1297,39 @@ mod tests {
         let mut aspect_r = Raster::filled(5, 5, PI);
         aspect_r.set_transform(GeoTransform::new(0.0, 5.0, 1.0, -1.0));
 
-        let result = solar_radiation(&slope_r, &aspect_r, SolarParams {
-            albedo: 0.2,
-            ..Default::default()
-        }).unwrap();
+        let result = solar_radiation(
+            &slope_r,
+            &aspect_r,
+            SolarParams {
+                albedo: 0.2,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let refl = result.reflected.get(2, 2).unwrap();
-        assert!(refl > 0.0, "Reflected on slope should be positive, got {}", refl);
+        assert!(
+            refl > 0.0,
+            "Reflected on slope should be positive, got {}",
+            refl
+        );
 
         // Higher albedo → more reflected
-        let result_snow = solar_radiation(&slope_r, &aspect_r, SolarParams {
-            albedo: 0.7,
-            ..Default::default()
-        }).unwrap();
+        let result_snow = solar_radiation(
+            &slope_r,
+            &aspect_r,
+            SolarParams {
+                albedo: 0.7,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let refl_snow = result_snow.reflected.get(2, 2).unwrap();
         assert!(
             refl_snow > refl,
             "Snow albedo (0.7) should reflect more than vegetation (0.2): {} vs {}",
-            refl_snow, refl
+            refl_snow,
+            refl
         );
     }
 
@@ -1173,21 +1341,32 @@ mod tests {
         let mut aspect_r = Raster::filled(5, 5, 0.0_f64);
         aspect_r.set_transform(GeoTransform::new(0.0, 5.0, 1.0, -1.0));
 
-        let clear = solar_radiation(&slope_r, &aspect_r, SolarParams {
-            linke_turbidity: Some(2.0), // very clear
-            ..Default::default()
-        }).unwrap();
-        let hazy = solar_radiation(&slope_r, &aspect_r, SolarParams {
-            linke_turbidity: Some(5.0), // polluted/hazy
-            ..Default::default()
-        }).unwrap();
+        let clear = solar_radiation(
+            &slope_r,
+            &aspect_r,
+            SolarParams {
+                linke_turbidity: Some(2.0), // very clear
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let hazy = solar_radiation(
+            &slope_r,
+            &aspect_r,
+            SolarParams {
+                linke_turbidity: Some(5.0), // polluted/hazy
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let beam_clear = clear.beam.get(2, 2).unwrap();
         let beam_hazy = hazy.beam.get(2, 2).unwrap();
         assert!(
             beam_clear > beam_hazy,
             "Clear sky (TL=2) should have more beam than hazy (TL=5): {} vs {}",
-            beam_clear, beam_hazy
+            beam_clear,
+            beam_hazy
         );
     }
 
@@ -1199,15 +1378,25 @@ mod tests {
         let mut aspect_r = Raster::filled(5, 5, 0.0_f64);
         aspect_r.set_transform(GeoTransform::new(0.0, 5.0, 1.0, -1.0));
 
-        let simple = solar_radiation(&slope_r, &aspect_r, SolarParams {
-            linke_turbidity: None,
-            transmittance: 0.7,
-            ..Default::default()
-        }).unwrap();
-        let linke = solar_radiation(&slope_r, &aspect_r, SolarParams {
-            linke_turbidity: Some(3.0),
-            ..Default::default()
-        }).unwrap();
+        let simple = solar_radiation(
+            &slope_r,
+            &aspect_r,
+            SolarParams {
+                linke_turbidity: None,
+                transmittance: 0.7,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let linke = solar_radiation(
+            &slope_r,
+            &aspect_r,
+            SolarParams {
+                linke_turbidity: Some(3.0),
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let beam_s = simple.beam.get(2, 2).unwrap();
         let beam_l = linke.beam.get(2, 2).unwrap();
@@ -1216,7 +1405,8 @@ mod tests {
         assert!(
             (beam_s - beam_l).abs() > 1.0,
             "Linke and simple should differ: simple={:.1}, linke={:.1}",
-            beam_s, beam_l
+            beam_s,
+            beam_l
         );
     }
 
@@ -1224,16 +1414,24 @@ mod tests {
     fn test_solar_invalid_day() {
         let slope_r = Raster::filled(3, 3, 0.0_f64);
         let aspect_r = Raster::filled(3, 3, 0.0_f64);
-        assert!(solar_radiation(&slope_r, &aspect_r, SolarParams {
-            day: 0, ..Default::default()
-        }).is_err());
+        assert!(
+            solar_radiation(
+                &slope_r,
+                &aspect_r,
+                SolarParams {
+                    day: 0,
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn test_shadowed_reduces_beam() {
         // Flat terrain with shadow casting from a valley DEM
         // Valley cell should get less beam than ridge cell
-        use crate::terrain::horizon_angles::{horizon_angles, HorizonParams};
+        use crate::terrain::horizon_angles::{HorizonParams, horizon_angles};
 
         let size = 21;
         // V-shaped valley: center column is lowest
@@ -1251,10 +1449,14 @@ mod tests {
         let mut aspect_r = Raster::filled(size, size, 0.0_f64);
         aspect_r.set_transform(GeoTransform::new(0.0, size as f64, 1.0, -1.0));
 
-        let horizon = horizon_angles(&dem, HorizonParams {
-            radius: 10,
-            directions: 36,
-        }).unwrap();
+        let horizon = horizon_angles(
+            &dem,
+            HorizonParams {
+                radius: 10,
+                directions: 36,
+            },
+        )
+        .unwrap();
 
         let params = SolarParams {
             latitude: 45.0,
@@ -1262,9 +1464,7 @@ mod tests {
         };
 
         let no_shadow = solar_radiation(&slope_r, &aspect_r, params.clone()).unwrap();
-        let with_shadow = solar_radiation_shadowed(
-            &slope_r, &aspect_r, params, &horizon,
-        ).unwrap();
+        let with_shadow = solar_radiation_shadowed(&slope_r, &aspect_r, params, &horizon).unwrap();
 
         // Valley center (col=10) should have reduced beam with shadows
         let beam_no = no_shadow.beam.get(10, 10).unwrap();
@@ -1273,7 +1473,8 @@ mod tests {
         assert!(
             beam_sh < beam_no,
             "Shadow casting should reduce beam: without={:.1}, with={:.1}",
-            beam_no, beam_sh
+            beam_no,
+            beam_sh
         );
 
         // Ridge top (col=0 or col=20) should have similar or same beam
@@ -1283,7 +1484,7 @@ mod tests {
     #[test]
     fn test_shadowed_flat_same_as_unshadowed() {
         // On perfectly flat terrain, shadow casting should not change results
-        use crate::terrain::horizon_angles::{horizon_angles, HorizonParams};
+        use crate::terrain::horizon_angles::{HorizonParams, horizon_angles};
 
         let mut dem = Raster::filled(11, 11, 100.0_f64);
         dem.set_transform(GeoTransform::new(0.0, 11.0, 1.0, -1.0));
@@ -1293,17 +1494,19 @@ mod tests {
         let mut aspect_r = Raster::filled(11, 11, 0.0_f64);
         aspect_r.set_transform(GeoTransform::new(0.0, 11.0, 1.0, -1.0));
 
-        let horizon = horizon_angles(&dem, HorizonParams {
-            radius: 5,
-            directions: 36,
-        }).unwrap();
+        let horizon = horizon_angles(
+            &dem,
+            HorizonParams {
+                radius: 5,
+                directions: 36,
+            },
+        )
+        .unwrap();
 
         let params = SolarParams::default();
 
         let no_shadow = solar_radiation(&slope_r, &aspect_r, params.clone()).unwrap();
-        let with_shadow = solar_radiation_shadowed(
-            &slope_r, &aspect_r, params, &horizon,
-        ).unwrap();
+        let with_shadow = solar_radiation_shadowed(&slope_r, &aspect_r, params, &horizon).unwrap();
 
         let ns = no_shadow.total.get(5, 5).unwrap();
         let ws = with_shadow.total.get(5, 5).unwrap();
@@ -1311,7 +1514,8 @@ mod tests {
         assert!(
             (ns - ws).abs() < 0.1,
             "Flat terrain: shadowed should match unshadowed: no={:.1}, sh={:.1}",
-            ns, ws
+            ns,
+            ws
         );
     }
 
@@ -1322,10 +1526,15 @@ mod tests {
         let mut aspect_r = Raster::filled(3, 3, 0.0_f64);
         aspect_r.set_transform(GeoTransform::new(0.0, 3.0, 1.0, -1.0));
 
-        let result = solar_radiation_annual(&slope_r, &aspect_r, SolarParams {
-            latitude: 45.0,
-            ..Default::default()
-        }).unwrap();
+        let result = solar_radiation_annual(
+            &slope_r,
+            &aspect_r,
+            SolarParams {
+                latitude: 45.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         assert_eq!(result.months.len(), 12);
         // Annual should be positive
@@ -1340,10 +1549,15 @@ mod tests {
         let mut aspect_r = Raster::filled(3, 3, 0.0_f64);
         aspect_r.set_transform(GeoTransform::new(0.0, 3.0, 1.0, -1.0));
 
-        let result = solar_radiation_annual(&slope_r, &aspect_r, SolarParams {
-            latitude: 45.0,
-            ..Default::default()
-        }).unwrap();
+        let result = solar_radiation_annual(
+            &slope_r,
+            &aspect_r,
+            SolarParams {
+                latitude: 45.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let june = result.months[5].total.get(1, 1).unwrap(); // June
         let dec = result.months[11].total.get(1, 1).unwrap(); // December
@@ -1351,7 +1565,8 @@ mod tests {
         assert!(
             june > dec,
             "June should have more radiation than December at lat 45: June={:.0}, Dec={:.0}",
-            june, dec
+            june,
+            dec
         );
     }
 
@@ -1365,14 +1580,17 @@ mod tests {
         let result = solar_radiation_annual(&slope_r, &aspect_r, SolarParams::default()).unwrap();
 
         let annual = result.annual.total.get(1, 1).unwrap();
-        let month_sum: f64 = result.months.iter()
+        let month_sum: f64 = result
+            .months
+            .iter()
             .map(|m| m.total.get(1, 1).unwrap())
             .sum();
 
         assert!(
             (annual - month_sum).abs() < 1.0,
             "Annual should equal sum of months: annual={:.0}, sum={:.0}",
-            annual, month_sum
+            annual,
+            month_sum
         );
     }
 
@@ -1387,14 +1605,24 @@ mod tests {
         let mut aspect_r = Raster::filled(5, 5, PI);
         aspect_r.set_transform(GeoTransform::new(0.0, 5.0, 1.0, -1.0));
 
-        let iso = solar_radiation(&slope_r, &aspect_r, SolarParams {
-            diffuse_model: DiffuseModel::Isotropic,
-            ..Default::default()
-        }).unwrap();
-        let perez = solar_radiation(&slope_r, &aspect_r, SolarParams {
-            diffuse_model: DiffuseModel::Perez,
-            ..Default::default()
-        }).unwrap();
+        let iso = solar_radiation(
+            &slope_r,
+            &aspect_r,
+            SolarParams {
+                diffuse_model: DiffuseModel::Isotropic,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let perez = solar_radiation(
+            &slope_r,
+            &aspect_r,
+            SolarParams {
+                diffuse_model: DiffuseModel::Perez,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let iso_d = iso.diffuse.get(2, 2).unwrap();
         let perez_d = perez.diffuse.get(2, 2).unwrap();
@@ -1402,7 +1630,8 @@ mod tests {
         assert!(
             (iso_d - perez_d).abs() > 0.01,
             "Perez should differ from isotropic: iso={:.1}, perez={:.1}",
-            iso_d, perez_d
+            iso_d,
+            perez_d
         );
     }
 
@@ -1413,10 +1642,15 @@ mod tests {
         let mut aspect_r = Raster::filled(3, 3, PI);
         aspect_r.set_transform(GeoTransform::new(0.0, 3.0, 1.0, -1.0));
 
-        let result = solar_radiation(&slope_r, &aspect_r, SolarParams {
-            diffuse_model: DiffuseModel::Perez,
-            ..Default::default()
-        }).unwrap();
+        let result = solar_radiation(
+            &slope_r,
+            &aspect_r,
+            SolarParams {
+                diffuse_model: DiffuseModel::Perez,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let d = result.diffuse.get(1, 1).unwrap();
         assert!(d > 0.0, "Perez diffuse should be positive, got {:.1}", d);

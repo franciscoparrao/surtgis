@@ -21,9 +21,7 @@ pub fn area(geom: &Geometry<f64>) -> f64 {
 pub fn length(geom: &Geometry<f64>) -> f64 {
     match geom {
         Geometry::LineString(ls) => ls.length::<Euclidean>(),
-        Geometry::MultiLineString(mls) => {
-            mls.0.iter().map(|ls| ls.length::<Euclidean>()).sum()
-        }
+        Geometry::MultiLineString(mls) => mls.0.iter().map(|ls| ls.length::<Euclidean>()).sum(),
         Geometry::Line(l) => {
             let dx = l.end.x - l.start.x;
             let dy = l.end.y - l.start.y;
@@ -59,12 +57,16 @@ pub fn perimeter(geom: &Geometry<f64>) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use geo::{Line, LineString, MultiLineString, Polygon, Coord};
+    use geo::{Coord, Line, LineString, MultiLineString, Polygon};
 
     fn square() -> Polygon<f64> {
         Polygon::new(
             LineString::from(vec![
-                (0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0),
+                (0.0, 0.0),
+                (10.0, 0.0),
+                (10.0, 10.0),
+                (0.0, 10.0),
+                (0.0, 0.0),
             ]),
             vec![],
         )
@@ -79,9 +81,7 @@ mod tests {
     #[test]
     fn test_area_triangle() {
         let triangle = Polygon::new(
-            LineString::from(vec![
-                (0.0, 0.0), (10.0, 0.0), (5.0, 10.0), (0.0, 0.0),
-            ]),
+            LineString::from(vec![(0.0, 0.0), (10.0, 0.0), (5.0, 10.0), (0.0, 0.0)]),
             vec![],
         );
         let a = area(&Geometry::Polygon(triangle));
@@ -96,9 +96,7 @@ mod tests {
 
     #[test]
     fn test_length_line() {
-        let line = Geometry::LineString(LineString::from(vec![
-            (0.0, 0.0), (3.0, 4.0),
-        ]));
+        let line = Geometry::LineString(LineString::from(vec![(0.0, 0.0), (3.0, 4.0)]));
         let l = length(&line);
         assert!((l - 5.0).abs() < 1e-10); // 3-4-5 triangle
     }
@@ -133,10 +131,18 @@ mod tests {
     fn test_perimeter_with_hole() {
         let poly = Polygon::new(
             LineString::from(vec![
-                (0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0),
+                (0.0, 0.0),
+                (10.0, 0.0),
+                (10.0, 10.0),
+                (0.0, 10.0),
+                (0.0, 0.0),
             ]),
             vec![LineString::from(vec![
-                (2.0, 2.0), (8.0, 2.0), (8.0, 8.0), (2.0, 8.0), (2.0, 2.0),
+                (2.0, 2.0),
+                (8.0, 2.0),
+                (8.0, 8.0),
+                (2.0, 8.0),
+                (2.0, 2.0),
             ])],
         );
         let p = perimeter(&Geometry::Polygon(poly));

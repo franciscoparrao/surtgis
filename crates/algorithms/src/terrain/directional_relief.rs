@@ -11,8 +11,8 @@
 //!
 //! Reference: WhiteboxTools `DirectionalRelief`
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -58,9 +58,7 @@ pub fn directional_relief(
 
             for (col, out) in row_data.iter_mut().enumerate() {
                 let center = unsafe { dem.get_unchecked(row, col) };
-                if center.is_nan()
-                    || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON)
-                {
+                if center.is_nan() || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON) {
                     continue;
                 }
 
@@ -71,7 +69,7 @@ pub fn directional_relief(
                     let az_rad = az_deg.to_radians();
                     // Direction components (azimuth: 0=N, 90=E)
                     let dy = -az_rad.cos(); // row direction (north = decreasing row)
-                    let dx = az_rad.sin();  // col direction
+                    let dx = az_rad.sin(); // col direction
 
                     // Find the maximum signed elevation change along the profile.
                     // For each cell on the line, compute (z_cell - z_center).
@@ -92,8 +90,7 @@ pub fn directional_relief(
                             }
 
                             let v = unsafe { dem.get_unchecked(nr as usize, nc as usize) };
-                            if v.is_nan()
-                                || nodata.is_some_and(|nd| (v - nd).abs() < f64::EPSILON)
+                            if v.is_nan() || nodata.is_some_and(|nd| (v - nd).abs() < f64::EPSILON)
                             {
                                 continue;
                             }
@@ -136,7 +133,14 @@ mod tests {
         let mut dem = Raster::filled(20, 20, 100.0);
         dem.set_transform(GeoTransform::new(0.0, 20.0, 1.0, -1.0));
 
-        let result = directional_relief(&dem, DirectionalReliefParams { radius: 5, azimuth: 0.0 }).unwrap();
+        let result = directional_relief(
+            &dem,
+            DirectionalReliefParams {
+                radius: 5,
+                azimuth: 0.0,
+            },
+        )
+        .unwrap();
         let v = result.get(10, 10).unwrap();
         assert!(v.abs() < 1e-10, "Flat DEM should have 0 relief, got {}", v);
     }
@@ -153,10 +157,21 @@ mod tests {
         }
 
         // Azimuth 180 = south → cells ahead are higher, max change is positive
-        let result = directional_relief(&dem, DirectionalReliefParams { radius: 5, azimuth: 180.0 }).unwrap();
+        let result = directional_relief(
+            &dem,
+            DirectionalReliefParams {
+                radius: 5,
+                azimuth: 180.0,
+            },
+        )
+        .unwrap();
         let v = result.get(10, 10).unwrap();
         // Max signed change along S: +50 (5 cells south × 10m/cell)
-        assert!(v.abs() > 30.0, "N-S slope should have large relief, got {}", v);
+        assert!(
+            v.abs() > 30.0,
+            "N-S slope should have large relief, got {}",
+            v
+        );
     }
 
     #[test]
@@ -176,7 +191,13 @@ mod tests {
             for c in 2..18 {
                 let v = result.get(r, c).unwrap();
                 // Values can be positive or negative (signed relief)
-                assert!(v.is_finite(), "Relief should be finite, got {} at ({},{})", v, r, c);
+                assert!(
+                    v.is_finite(),
+                    "Relief should be finite, got {} at ({},{})",
+                    v,
+                    r,
+                    c
+                );
             }
         }
     }

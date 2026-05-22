@@ -54,11 +54,17 @@ pub fn show_menu_bar(
             }
             ui.separator();
             ui.menu_button("Map Mode", |ui| {
-                if ui.selectable_label(current_map_mode == MapMode::Simple, "Simple").clicked() {
+                if ui
+                    .selectable_label(current_map_mode == MapMode::Simple, "Simple")
+                    .clicked()
+                {
                     action = MenuAction::ChangeMapMode(MapMode::Simple);
                     ui.close();
                 }
-                if ui.selectable_label(current_map_mode == MapMode::Basemap, "Basemap (OSM)").clicked() {
+                if ui
+                    .selectable_label(current_map_mode == MapMode::Basemap, "Basemap (OSM)")
+                    .clicked()
+                {
                     action = MenuAction::ChangeMapMode(MapMode::Basemap);
                     ui.close();
                 }

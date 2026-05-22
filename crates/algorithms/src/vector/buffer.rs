@@ -134,8 +134,20 @@ mod tests {
     fn test_buffer_distance_affects_size() {
         let point = Point::new(0.0, 0.0);
 
-        let small = buffer_points(&point, &BufferParams { distance: 1.0, segments: 32 });
-        let big = buffer_points(&point, &BufferParams { distance: 5.0, segments: 32 });
+        let small = buffer_points(
+            &point,
+            &BufferParams {
+                distance: 1.0,
+                segments: 32,
+            },
+        );
+        let big = buffer_points(
+            &point,
+            &BufferParams {
+                distance: 5.0,
+                segments: 32,
+            },
+        );
 
         assert!(
             big.unsigned_area() > small.unsigned_area() * 20.0,

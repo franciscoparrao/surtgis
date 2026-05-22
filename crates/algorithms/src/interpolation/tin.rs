@@ -144,7 +144,11 @@ fn delaunay(points: &[SamplePoint]) -> Vec<Triangle> {
         SamplePoint::new(max_x + 10.0 * delta, min_y - delta, 0.0),
     ];
 
-    let mut triangles: Vec<Triangle> = vec![Triangle { v0: 0, v1: 1, v2: 2 }];
+    let mut triangles: Vec<Triangle> = vec![Triangle {
+        v0: 0,
+        v1: 1,
+        v2: 2,
+    }];
 
     // Add each point incrementally
     for point in points {
@@ -170,11 +174,7 @@ fn delaunay(points: &[SamplePoint]) -> Vec<Triangle> {
 
         for &bi in &bad_triangles {
             let tri = &triangles[bi];
-            let edges = [
-                (tri.v0, tri.v1),
-                (tri.v1, tri.v2),
-                (tri.v2, tri.v0),
-            ];
+            let edges = [(tri.v0, tri.v1), (tri.v1, tri.v2), (tri.v2, tri.v0)];
 
             for &(ea, eb) in &edges {
                 let shared = bad_triangles.iter().any(|&oi| {
@@ -187,9 +187,8 @@ fn delaunay(points: &[SamplePoint]) -> Vec<Triangle> {
                         (other.v1, other.v2),
                         (other.v2, other.v0),
                     ];
-                    oe.iter().any(|&(oa, ob)| {
-                        (oa == ea && ob == eb) || (oa == eb && ob == ea)
-                    })
+                    oe.iter()
+                        .any(|&(oa, ob)| (oa == ea && ob == eb) || (oa == eb && ob == ea))
                 });
 
                 if !shared {
@@ -215,9 +214,7 @@ fn delaunay(points: &[SamplePoint]) -> Vec<Triangle> {
     }
 
     // Remove triangles that reference super-triangle vertices (0, 1, 2)
-    triangles.retain(|tri| {
-        tri.v0 >= 3 && tri.v1 >= 3 && tri.v2 >= 3
-    });
+    triangles.retain(|tri| tri.v0 >= 3 && tri.v1 >= 3 && tri.v2 >= 3);
 
     // Remap vertex indices (subtract 3 for the super-triangle offset)
     for tri in &mut triangles {
@@ -303,7 +300,7 @@ mod tests {
 
     fn corner_points() -> Vec<SamplePoint> {
         vec![
-            SamplePoint::new(0.0, 10.0, 10.0), // top-left
+            SamplePoint::new(0.0, 10.0, 10.0),  // top-left
             SamplePoint::new(10.0, 10.0, 20.0), // top-right
             SamplePoint::new(0.0, 0.0, 30.0),   // bottom-left
             SamplePoint::new(10.0, 0.0, 40.0),  // bottom-right
@@ -378,7 +375,9 @@ mod tests {
                     assert!(
                         val >= 5.0 && val <= 45.0,
                         "Value {} out of expected range at ({}, {})",
-                        val, row, col
+                        val,
+                        row,
+                        col
                     );
                 }
             }
@@ -421,11 +420,7 @@ mod tests {
         assert!(w.abs() < 1e-10);
 
         // At centroid (mean of vertices)
-        let (u, v, w) = barycentric(
-            10.0 / 3.0,
-            10.0 / 3.0,
-            &p0, &p1, &p2,
-        );
+        let (u, v, w) = barycentric(10.0 / 3.0, 10.0 / 3.0, &p0, &p1, &p2);
         assert!((u - 1.0 / 3.0).abs() < 1e-10);
         assert!((v - 1.0 / 3.0).abs() < 1e-10);
         assert!((w - 1.0 / 3.0).abs() < 1e-10);
@@ -454,6 +449,10 @@ mod tests {
             }
         }
 
-        assert!(valid > 50, "Should interpolate most cells, got {}/100", valid);
+        assert!(
+            valid > 50,
+            "Should interpolate most cells, got {}/100",
+            valid
+        );
     }
 }

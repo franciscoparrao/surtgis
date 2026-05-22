@@ -40,8 +40,8 @@ pub fn read_shapefile(path: &Path) -> Result<FeatureCollection> {
     let mut features = FeatureCollection::new();
 
     for result in reader.iter_shapes_and_records() {
-        let (shape, record) = result
-            .map_err(|e| Error::Other(format!("Error reading shapefile record: {}", e)))?;
+        let (shape, record) =
+            result.map_err(|e| Error::Other(format!("Error reading shapefile record: {}", e)))?;
 
         // Convert shapefile::Shape -> geo_types::Geometry via TryFrom (geo-types feature)
         let geometry: Option<Geometry<f64>> = match shape {
@@ -120,8 +120,8 @@ mod tests {
             Point::new(0.0, 0.0),
         ])]);
 
-        let table_builder = TableWriterBuilder::new()
-            .add_character_field(FieldName::try_from("name").unwrap(), 50);
+        let table_builder =
+            TableWriterBuilder::new().add_character_field(FieldName::try_from("name").unwrap(), 50);
 
         let mut writer = Writer::from_path(&shp_path, table_builder).unwrap();
 
@@ -157,8 +157,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let shp_path = dir.join("test_points.shp");
 
-        let table_builder = TableWriterBuilder::new()
-            .add_character_field(FieldName::try_from("id").unwrap(), 10);
+        let table_builder =
+            TableWriterBuilder::new().add_character_field(FieldName::try_from("id").unwrap(), 10);
 
         let mut writer = Writer::from_path(&shp_path, table_builder).unwrap();
 

@@ -13,8 +13,8 @@
 //!
 //! Reference: WhiteboxTools `DiffFromMeanElev`
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -44,9 +44,7 @@ pub fn diff_from_mean_elev(dem: &Raster<f64>, params: DiffFromMeanParams) -> Res
 
             for (col, out) in row_data.iter_mut().enumerate() {
                 let center = unsafe { dem.get_unchecked(row, col) };
-                if center.is_nan()
-                    || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON)
-                {
+                if center.is_nan() || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON) {
                     continue;
                 }
 
@@ -67,9 +65,7 @@ pub fn diff_from_mean_elev(dem: &Raster<f64>, params: DiffFromMeanParams) -> Res
                         let nr = (ri + dr) as usize;
                         let nc = (ci + dc) as usize;
                         let nv = unsafe { dem.get_unchecked(nr, nc) };
-                        if !nv.is_nan()
-                            && nodata.is_none_or(|nd| (nv - nd).abs() >= f64::EPSILON)
-                        {
+                        if !nv.is_nan() && nodata.is_none_or(|nd| (nv - nd).abs() >= f64::EPSILON) {
                             sum += nv;
                             count += 1;
                         }
@@ -141,8 +137,7 @@ impl surtgis_core::WindowAlgorithm for DiffFromMeanStreaming {
                 }
 
                 let center = input[[ir, c]];
-                if center.is_nan()
-                    || nodata.map_or(false, |nd| (center - nd).abs() < f64::EPSILON)
+                if center.is_nan() || nodata.map_or(false, |nd| (center - nd).abs() < f64::EPSILON)
                 {
                     output[[r, c]] = f64::NAN;
                     continue;
@@ -160,8 +155,7 @@ impl surtgis_core::WindowAlgorithm for DiffFromMeanStreaming {
                         let nr = (ir as isize + dr) as usize;
                         let nc = (ci + dc) as usize;
                         let nv = input[[nr, nc]];
-                        if !nv.is_nan()
-                            && nodata.map_or(true, |nd| (nv - nd).abs() >= f64::EPSILON)
+                        if !nv.is_nan() && nodata.map_or(true, |nd| (nv - nd).abs() >= f64::EPSILON)
                         {
                             sum += nv;
                             count += 1;
@@ -203,7 +197,11 @@ mod tests {
         let result = diff_from_mean_elev(&dem, DiffFromMeanParams { radius: 1 }).unwrap();
         let val = result.get(3, 3).unwrap();
         // center = 100, neighbors all 50, mean = 50, diff = 50
-        assert!((val - 50.0).abs() < 1e-10, "Peak diff should be 50, got {}", val);
+        assert!(
+            (val - 50.0).abs() < 1e-10,
+            "Peak diff should be 50, got {}",
+            val
+        );
     }
 
     #[test]
@@ -214,7 +212,11 @@ mod tests {
 
         let result = diff_from_mean_elev(&dem, DiffFromMeanParams { radius: 1 }).unwrap();
         let val = result.get(3, 3).unwrap();
-        assert!((val - (-50.0)).abs() < 1e-10, "Valley diff should be -50, got {}", val);
+        assert!(
+            (val - (-50.0)).abs() < 1e-10,
+            "Valley diff should be -50, got {}",
+            val
+        );
     }
 
     #[test]
@@ -231,6 +233,10 @@ mod tests {
         let result = diff_from_mean_elev(&dem, DiffFromMeanParams { radius: 2 }).unwrap();
         let val = result.get(5, 5).unwrap();
         // Center = 50, but result should be in meters, not dimensionless
-        assert!(val.abs() < 1.0, "Slope ramp should have near-zero diff from mean, got {}", val);
+        assert!(
+            val.abs() < 1.0,
+            "Slope ramp should have near-zero diff from mean, got {}",
+            val
+        );
     }
 }

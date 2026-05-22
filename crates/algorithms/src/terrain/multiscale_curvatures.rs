@@ -9,8 +9,8 @@
 //!
 //! Closed-form LS solution: Florinsky 2025, Eqs. 4.14–4.22.
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -81,18 +81,24 @@ pub fn multiscale_curvatures(
                 let mut has_nan = false;
                 for dr in -2_isize..=2 {
                     for dc in -2_isize..=2 {
-                        let v = unsafe { dem.get_unchecked(
-                            (row as isize + dr) as usize,
-                            (col as isize + dc) as usize,
-                        )};
+                        let v = unsafe {
+                            dem.get_unchecked(
+                                (row as isize + dr) as usize,
+                                (col as isize + dc) as usize,
+                            )
+                        };
                         if v.is_nan() {
                             has_nan = true;
                             break;
                         }
                     }
-                    if has_nan { break; }
+                    if has_nan {
+                        break;
+                    }
                 }
-                if has_nan { continue; }
+                if has_nan {
+                    continue;
+                }
 
                 // Fit cubic surface and get partial derivatives
                 let (p, q, r, s, t) = fit_cubic_5x5(dem, row, col, cs);
@@ -115,18 +121,18 @@ pub fn multiscale_curvatures(
                     }
                     MultiscaleCurvatureType::Profile => {
                         // kp = -(p²r + 2pqs + q²t) / ((p²+q²)(1+p²+q²)^1.5)
-                        if g2 < f64::EPSILON { 0.0 }
-                        else {
-                            -(p * p * r + 2.0 * p * q * s + q * q * t)
-                                / (g2 * (1.0 + g2).powf(1.5))
+                        if g2 < f64::EPSILON {
+                            0.0
+                        } else {
+                            -(p * p * r + 2.0 * p * q * s + q * q * t) / (g2 * (1.0 + g2).powf(1.5))
                         }
                     }
                     MultiscaleCurvatureType::Plan => {
                         // kh = -(q²r - 2pqs + p²t) / ((p²+q²)√(1+p²+q²))
-                        if g2 < f64::EPSILON { 0.0 }
-                        else {
-                            -(q * q * r - 2.0 * p * q * s + p * p * t)
-                                / (g2 * (1.0 + g2).sqrt())
+                        if g2 < f64::EPSILON {
+                            0.0
+                        } else {
+                            -(q * q * r - 2.0 * p * q * s + p * p * t) / (g2 * (1.0 + g2).sqrt())
                         }
                     }
                     MultiscaleCurvatureType::Maximal => {
@@ -176,14 +182,14 @@ fn fit_cubic_5x5(dem: &Raster<f64>, row: usize, col: usize, cs: f64) -> (f64, f6
     let h2 = h * h;
 
     // Accumulate weighted sums in grid coordinates (integer offsets)
-    let mut sz = 0.0;     // Σ z
-    let mut sx_z = 0.0;   // Σ x·z
-    let mut sy_z = 0.0;   // Σ y·z
-    let mut sx2_z = 0.0;  // Σ x²·z
-    let mut sy2_z = 0.0;  // Σ y²·z
-    let mut sxy_z = 0.0;  // Σ xy·z
-    let mut sx3_z = 0.0;  // Σ x³·z
-    let mut sy3_z = 0.0;  // Σ y³·z
+    let mut sz = 0.0; // Σ z
+    let mut sx_z = 0.0; // Σ x·z
+    let mut sy_z = 0.0; // Σ y·z
+    let mut sx2_z = 0.0; // Σ x²·z
+    let mut sy2_z = 0.0; // Σ y²·z
+    let mut sxy_z = 0.0; // Σ xy·z
+    let mut sx3_z = 0.0; // Σ x³·z
+    let mut sy3_z = 0.0; // Σ y³·z
     let mut sxy2_z = 0.0; // Σ xy²·z
     let mut sx2y_z = 0.0; // Σ x²y·z
 
@@ -191,10 +197,9 @@ fn fit_cubic_5x5(dem: &Raster<f64>, row: usize, col: usize, cs: f64) -> (f64, f6
         let y = di as f64;
         for dj in -2_isize..=2 {
             let x = dj as f64;
-            let v = unsafe { dem.get_unchecked(
-                (row as isize + di) as usize,
-                (col as isize + dj) as usize,
-            )};
+            let v = unsafe {
+                dem.get_unchecked((row as isize + di) as usize, (col as isize + dj) as usize)
+            };
             sz += v;
             sx_z += x * v;
             sy_z += y * v;
@@ -271,24 +276,40 @@ mod tests {
     #[test]
     fn test_multiscale_mean_curvature_bowl() {
         let dem = bowl_dem(20);
-        let result = multiscale_curvatures(&dem, MultiscaleCurvatureParams {
-            curvature_type: MultiscaleCurvatureType::Mean,
-        }).unwrap();
+        let result = multiscale_curvatures(
+            &dem,
+            MultiscaleCurvatureParams {
+                curvature_type: MultiscaleCurvatureType::Mean,
+            },
+        )
+        .unwrap();
 
         let v = result.get(10, 10).unwrap();
         // Bowl z=x²+y² → negative mean curvature (concave up in terrain convention)
-        assert!(v < 0.0, "Bowl should have negative mean curvature (concave), got {}", v);
+        assert!(
+            v < 0.0,
+            "Bowl should have negative mean curvature (concave), got {}",
+            v
+        );
     }
 
     #[test]
     fn test_multiscale_gaussian_bowl() {
         let dem = bowl_dem(20);
-        let result = multiscale_curvatures(&dem, MultiscaleCurvatureParams {
-            curvature_type: MultiscaleCurvatureType::Gaussian,
-        }).unwrap();
+        let result = multiscale_curvatures(
+            &dem,
+            MultiscaleCurvatureParams {
+                curvature_type: MultiscaleCurvatureType::Gaussian,
+            },
+        )
+        .unwrap();
 
         let v = result.get(10, 10).unwrap();
-        assert!(v > 0.0, "Bowl should have positive Gaussian curvature, got {}", v);
+        assert!(
+            v > 0.0,
+            "Bowl should have positive Gaussian curvature, got {}",
+            v
+        );
     }
 
     #[test]
@@ -296,9 +317,13 @@ mod tests {
         let mut dem = Raster::filled(20, 20, 100.0_f64);
         dem.set_transform(GeoTransform::new(0.0, 20.0, 1.0, -1.0));
 
-        let result = multiscale_curvatures(&dem, MultiscaleCurvatureParams {
-            curvature_type: MultiscaleCurvatureType::Mean,
-        }).unwrap();
+        let result = multiscale_curvatures(
+            &dem,
+            MultiscaleCurvatureParams {
+                curvature_type: MultiscaleCurvatureType::Mean,
+            },
+        )
+        .unwrap();
 
         let v = result.get(10, 10).unwrap();
         assert!(v.abs() < 0.01, "Flat should have ~0 curvature, got {}", v);
@@ -308,13 +333,21 @@ mod tests {
     fn test_multiscale_profile_plan() {
         let dem = bowl_dem(20);
 
-        let profile = multiscale_curvatures(&dem, MultiscaleCurvatureParams {
-            curvature_type: MultiscaleCurvatureType::Profile,
-        }).unwrap();
+        let profile = multiscale_curvatures(
+            &dem,
+            MultiscaleCurvatureParams {
+                curvature_type: MultiscaleCurvatureType::Profile,
+            },
+        )
+        .unwrap();
 
-        let plan = multiscale_curvatures(&dem, MultiscaleCurvatureParams {
-            curvature_type: MultiscaleCurvatureType::Plan,
-        }).unwrap();
+        let plan = multiscale_curvatures(
+            &dem,
+            MultiscaleCurvatureParams {
+                curvature_type: MultiscaleCurvatureType::Plan,
+            },
+        )
+        .unwrap();
 
         let pf = profile.get(10, 10).unwrap();
         let pl = plan.get(10, 10).unwrap();
@@ -330,7 +363,8 @@ mod tests {
         dem.set_transform(GeoTransform::new(0.0, 20.0, 1.0, -1.0));
         for row in 0..20 {
             for col in 0..20 {
-                dem.set(row, col, 3.0 * col as f64 + 2.0 * row as f64).unwrap();
+                dem.set(row, col, 3.0 * col as f64 + 2.0 * row as f64)
+                    .unwrap();
             }
         }
 
@@ -369,6 +403,10 @@ mod tests {
         let (p, _q, _r, _s, _t) = fit_cubic_5x5(&dem, 10, 10, 1.0);
         // Cubic fit should give p = 0 at center of z = x³
         // (quadratic fit would give biased nonzero value)
-        assert!(p.abs() < 1e-6, "Cubic fit should give p=0 for z=x³ at center, got {}", p);
+        assert!(
+            p.abs() < 1e-6,
+            "Cubic fit should give p=0 for z=x³ at center, got {}",
+            p
+        );
     }
 }

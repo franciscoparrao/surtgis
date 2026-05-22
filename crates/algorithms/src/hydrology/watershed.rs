@@ -6,9 +6,9 @@
 //! - All basins: label all independent drainage basins
 
 use ndarray::Array2;
+use std::collections::VecDeque;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Algorithm, Error, Result};
-use std::collections::VecDeque;
 
 /// D8 neighbor offsets matching flow direction encoding (1=E, 2=NE, ..., 8=SE)
 const D8_OFFSETS: [(isize, isize); 8] = [
@@ -24,19 +24,19 @@ const D8_OFFSETS: [(isize, isize); 8] = [
 
 /// Get the opposite direction index for D8
 fn opposite_dir(dir: u8) -> u8 {
-    if dir == 0 { return 0; }
+    if dir == 0 {
+        return 0;
+    }
     ((dir - 1 + 4) % 8) + 1
 }
 
 /// Parameters for watershed delineation
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct WatershedParams {
     /// Pour points as (row, col) coordinates.
     /// If empty, all independent basins are delineated.
     pub pour_points: Vec<(usize, usize)>,
 }
-
 
 /// Watershed delineation algorithm
 #[derive(Debug, Clone, Default)]

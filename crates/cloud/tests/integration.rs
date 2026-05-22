@@ -17,7 +17,9 @@ async fn test_read_public_cog_metadata() {
     let url = "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N00_00_W080_00_DEM/Copernicus_DSM_COG_10_N00_00_W080_00_DEM.tif";
 
     let opts = CogReaderOptions::default();
-    let reader = CogReader::open(url, opts).await.expect("failed to open COG");
+    let reader = CogReader::open(url, opts)
+        .await
+        .expect("failed to open COG");
 
     let meta = reader.metadata();
     assert!(meta.width > 0, "width should be positive");
@@ -25,10 +27,16 @@ async fn test_read_public_cog_metadata() {
     assert!(meta.tile_width > 0, "tile_width should be positive");
     assert!(meta.tile_height > 0, "tile_height should be positive");
 
-    println!("COG metadata: {}x{}, tiles {}x{}, compression={}, bps={}, sf={}",
-        meta.width, meta.height,
-        meta.tile_width, meta.tile_height,
-        meta.compression, meta.bits_per_sample, meta.sample_format);
+    println!(
+        "COG metadata: {}x{}, tiles {}x{}, compression={}, bps={}, sf={}",
+        meta.width,
+        meta.height,
+        meta.tile_width,
+        meta.tile_height,
+        meta.compression,
+        meta.bits_per_sample,
+        meta.sample_format
+    );
     println!("GeoTransform: {:?}", meta.geo_transform);
     println!("CRS: {:?}", meta.crs);
     println!("NoData: {:?}", meta.nodata);
@@ -42,7 +50,9 @@ async fn test_read_public_cog_bbox() {
     let url = "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N00_00_W080_00_DEM/Copernicus_DSM_COG_10_N00_00_W080_00_DEM.tif";
 
     let opts = CogReaderOptions::default();
-    let mut reader = CogReader::open(url, opts).await.expect("failed to open COG");
+    let mut reader = CogReader::open(url, opts)
+        .await
+        .expect("failed to open COG");
 
     // Read a small region (~0.1 degree square)
     let bbox = BBox::new(-79.95, 0.05, -79.85, 0.15);
@@ -57,7 +67,10 @@ async fn test_read_public_cog_bbox() {
     assert!(cols > 0);
 
     let stats = raster.statistics();
-    println!("Stats: min={:?}, max={:?}, mean={:?}", stats.min, stats.max, stats.mean);
+    println!(
+        "Stats: min={:?}, max={:?}, mean={:?}",
+        stats.min, stats.max, stats.mean
+    );
 }
 
 /// Unit-level: verify IFD parsing on a synthetic TIFF header.
@@ -115,10 +128,8 @@ fn test_deflate_roundtrip() {
 
     let original: Vec<u8> = (0..1024).map(|i| (i % 256) as u8).collect();
 
-    let mut encoder = flate2::write::DeflateEncoder::new(
-        Vec::new(),
-        flate2::Compression::default(),
-    );
+    let mut encoder =
+        flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
     encoder.write_all(&original).unwrap();
     let compressed = encoder.finish().unwrap();
 

@@ -70,12 +70,17 @@ impl Default for NaturalNeighborParams {
 ///
 /// # Returns
 /// Raster with interpolated values
-pub fn natural_neighbor(points: &[SamplePoint], params: NaturalNeighborParams) -> Result<Raster<f64>> {
+pub fn natural_neighbor(
+    points: &[SamplePoint],
+    params: NaturalNeighborParams,
+) -> Result<Raster<f64>> {
     if points.is_empty() {
         return Err(Error::Algorithm("No sample points provided".into()));
     }
     if points.len() < 3 {
-        return Err(Error::Algorithm("Natural Neighbor requires at least 3 points".into()));
+        return Err(Error::Algorithm(
+            "Natural Neighbor requires at least 3 points".into(),
+        ));
     }
 
     let rows = params.rows;
@@ -97,7 +102,8 @@ pub fn natural_neighbor(points: &[SamplePoint], params: NaturalNeighborParams) -
                 let (cx, cy) = params.transform.pixel_to_geo(col, row);
 
                 // Find k nearest points
-                let mut dists: Vec<(usize, f64)> = points.iter()
+                let mut dists: Vec<(usize, f64)> = points
+                    .iter()
                     .enumerate()
                     .map(|(i, p)| (i, p.dist_sq(cx, cy)))
                     .collect();
@@ -241,12 +247,16 @@ mod tests {
             SamplePoint::new(5.5, 5.5, 25.0),
         ];
 
-        let result = natural_neighbor(&points, NaturalNeighborParams {
-            rows: 10,
-            cols: 10,
-            transform: GeoTransform::new(0.0, 10.0, 1.0, -1.0),
-            ..Default::default()
-        }).unwrap();
+        let result = natural_neighbor(
+            &points,
+            NaturalNeighborParams {
+                rows: 10,
+                cols: 10,
+                transform: GeoTransform::new(0.0, 10.0, 1.0, -1.0),
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         // Cell (0,0) center is (0.5, 9.5) → should be exactly 10.0
         let v = result.get(0, 0).unwrap();
@@ -270,7 +280,9 @@ mod tests {
                     assert!(
                         val >= 9.0 && val <= 41.0,
                         "Value outside expected range: got {:.1} at ({}, {})",
-                        val, row, col
+                        val,
+                        row,
+                        col
                     );
                 }
             }
@@ -288,7 +300,8 @@ mod tests {
         assert!(
             (v1 - v2).abs() < 10.0,
             "Adjacent cells should be similar: {:.1} vs {:.1}",
-            v1, v2
+            v1,
+            v2
         );
     }
 
@@ -313,13 +326,17 @@ mod tests {
 
         let nn = natural_neighbor(&points, default_params()).unwrap();
 
-        use super::super::idw::{idw, IdwParams};
-        let idw_result = idw(&points, IdwParams {
-            rows: 10,
-            cols: 10,
-            transform: GeoTransform::new(0.0, 10.0, 1.0, -1.0),
-            ..Default::default()
-        }).unwrap();
+        use super::super::idw::{IdwParams, idw};
+        let idw_result = idw(
+            &points,
+            IdwParams {
+                rows: 10,
+                cols: 10,
+                transform: GeoTransform::new(0.0, 10.0, 1.0, -1.0),
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         // Both should produce valid results
         let nn_center = nn.get(5, 5).unwrap();

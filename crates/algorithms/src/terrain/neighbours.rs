@@ -12,8 +12,8 @@
 //! Reference: WhiteboxTools `MaxDownslopeElevChange`, `MinDownslopeElevChange`,
 //! `MaxUpslopeElevChange`, `NumDownslopeNeighbours`, `NumUpslopeNeighbours`
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -39,9 +39,7 @@ pub fn neighbour_stats(dem: &Raster<f64>) -> Result<NeighbourStatsResult> {
 
             for (col, out) in row_data.iter_mut().enumerate() {
                 let center = unsafe { dem.get_unchecked(row, col) };
-                if center.is_nan()
-                    || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON)
-                {
+                if center.is_nan() || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON) {
                     continue;
                 }
 
@@ -65,23 +63,27 @@ pub fn neighbour_stats(dem: &Raster<f64>) -> Result<NeighbourStatsResult> {
                         let nr = (row as isize + dr) as usize;
                         let nc = (col as isize + dc) as usize;
                         let nv = unsafe { dem.get_unchecked(nr, nc) };
-                        if nv.is_nan()
-                            || nodata.is_some_and(|nd| (nv - nd).abs() < f64::EPSILON)
-                        {
+                        if nv.is_nan() || nodata.is_some_and(|nd| (nv - nd).abs() < f64::EPSILON) {
                             continue;
                         }
 
                         if nv < center {
                             // Downslope neighbour
                             let change = center - nv;
-                            if change > max_down { max_down = change; }
-                            if change < min_down { min_down = change; }
+                            if change > max_down {
+                                max_down = change;
+                            }
+                            if change < min_down {
+                                min_down = change;
+                            }
                             n_down += 1.0;
                             has_down = true;
                         } else if nv > center {
                             // Upslope neighbour
                             let change = nv - center;
-                            if change > max_up { max_up = change; }
+                            if change > max_up {
+                                max_up = change;
+                            }
                             n_up += 1.0;
                             has_up = true;
                         }
@@ -103,8 +105,8 @@ pub fn neighbour_stats(dem: &Raster<f64>) -> Result<NeighbourStatsResult> {
         let data: Vec<f64> = output_data.iter().map(|v| v[idx]).collect();
         let mut out = dem.with_same_meta::<f64>(rows, cols);
         out.set_nodata(Some(f64::NAN));
-        *out.data_mut() = Array2::from_shape_vec((rows, cols), data)
-            .map_err(|e| Error::Other(e.to_string()))?;
+        *out.data_mut() =
+            Array2::from_shape_vec((rows, cols), data).map_err(|e| Error::Other(e.to_string()))?;
         Ok(out)
     };
 
@@ -129,9 +131,17 @@ mod tests {
 
         let result = neighbour_stats(&dem).unwrap();
         let v = result.max_downslope_change.get(2, 2).unwrap();
-        assert!((v - 0.0).abs() < 1e-10, "Flat: max_down should be 0, got {}", v);
+        assert!(
+            (v - 0.0).abs() < 1e-10,
+            "Flat: max_down should be 0, got {}",
+            v
+        );
         let n = result.num_downslope.get(2, 2).unwrap();
-        assert!((n - 0.0).abs() < 1e-10, "Flat: n_down should be 0, got {}", n);
+        assert!(
+            (n - 0.0).abs() < 1e-10,
+            "Flat: n_down should be 0, got {}",
+            n
+        );
     }
 
     #[test]
@@ -142,11 +152,23 @@ mod tests {
 
         let result = neighbour_stats(&dem).unwrap();
         let max_d = result.max_downslope_change.get(2, 2).unwrap();
-        assert!((max_d - 50.0).abs() < 1e-10, "Peak: max downslope should be 50, got {}", max_d);
+        assert!(
+            (max_d - 50.0).abs() < 1e-10,
+            "Peak: max downslope should be 50, got {}",
+            max_d
+        );
         let n_d = result.num_downslope.get(2, 2).unwrap();
-        assert!((n_d - 8.0).abs() < 1e-10, "Peak: all 8 neighbors downslope, got {}", n_d);
+        assert!(
+            (n_d - 8.0).abs() < 1e-10,
+            "Peak: all 8 neighbors downslope, got {}",
+            n_d
+        );
         let n_u = result.num_upslope.get(2, 2).unwrap();
-        assert!((n_u - 0.0).abs() < 1e-10, "Peak: no upslope neighbors, got {}", n_u);
+        assert!(
+            (n_u - 0.0).abs() < 1e-10,
+            "Peak: no upslope neighbors, got {}",
+            n_u
+        );
     }
 
     #[test]
@@ -157,9 +179,17 @@ mod tests {
 
         let result = neighbour_stats(&dem).unwrap();
         let max_u = result.max_upslope_change.get(2, 2).unwrap();
-        assert!((max_u - 50.0).abs() < 1e-10, "Valley: max upslope should be 50, got {}", max_u);
+        assert!(
+            (max_u - 50.0).abs() < 1e-10,
+            "Valley: max upslope should be 50, got {}",
+            max_u
+        );
         let n_u = result.num_upslope.get(2, 2).unwrap();
-        assert!((n_u - 8.0).abs() < 1e-10, "Valley: all 8 neighbors upslope, got {}", n_u);
+        assert!(
+            (n_u - 8.0).abs() < 1e-10,
+            "Valley: all 8 neighbors upslope, got {}",
+            n_u
+        );
     }
 
     #[test]
@@ -175,8 +205,16 @@ mod tests {
         let result = neighbour_stats(&dem).unwrap();
         let n_d = result.num_downslope.get(2, 2).unwrap();
         // Row above (3 cells) are lower → 3 downslope
-        assert!((n_d - 3.0).abs() < 1e-10, "Slope: 3 downslope neighbors, got {}", n_d);
+        assert!(
+            (n_d - 3.0).abs() < 1e-10,
+            "Slope: 3 downslope neighbors, got {}",
+            n_d
+        );
         let n_u = result.num_upslope.get(2, 2).unwrap();
-        assert!((n_u - 3.0).abs() < 1e-10, "Slope: 3 upslope neighbors, got {}", n_u);
+        assert!(
+            (n_u - 3.0).abs() < 1e-10,
+            "Slope: 3 upslope neighbors, got {}",
+            n_u
+        );
     }
 }

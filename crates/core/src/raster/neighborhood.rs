@@ -36,9 +36,7 @@ impl Neighborhood {
     pub fn contains(&self, dr: isize, dc: isize) -> bool {
         match self {
             Neighborhood::Queen3x3 => dr.abs() <= 1 && dc.abs() <= 1,
-            Neighborhood::Rook3x3 => {
-                (dr.abs() <= 1 && dc == 0) || (dr == 0 && dc.abs() <= 1)
-            }
+            Neighborhood::Rook3x3 => (dr.abs() <= 1 && dc == 0) || (dr == 0 && dc.abs() <= 1),
             Neighborhood::Queen5x5 => dr.abs() <= 2 && dc.abs() <= 2,
             Neighborhood::Square(r) => {
                 let r = *r as isize;
@@ -110,11 +108,7 @@ pub mod d8 {
 
     /// Get the opposite direction
     pub fn opposite(dir: u8) -> u8 {
-        if dir == 0 {
-            0
-        } else {
-            ((dir - 1 + 4) % 8) + 1
-        }
+        if dir == 0 { 0 } else { ((dir - 1 + 4) % 8) + 1 }
     }
 }
 

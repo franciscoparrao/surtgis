@@ -23,8 +23,8 @@
 //! - **Simplified**: Omits denominators. Only valid for gentle slopes (<10°).
 //!   Error >15% at 30°, >30% at 45°.
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Algorithm, Error, Result};
 
@@ -175,13 +175,9 @@ pub fn curvature(dem: &Raster<f64>, params: CurvatureParams) -> Result<Raster<f6
                     DerivativeMethod::EvansYoung => {
                         let p = (z3 + z6 + z9 - z1 - z4 - z7) / cs6;
                         let q = (z1 + z2 + z3 - z7 - z8 - z9) / cs6;
-                        let r = (z1 + z3 + z4 + z6 + z7 + z9
-                            - 2.0 * (z2 + z5 + z8))
-                            / cs2_3;
+                        let r = (z1 + z3 + z4 + z6 + z7 + z9 - 2.0 * (z2 + z5 + z8)) / cs2_3;
                         let s = (z3 + z7 - z1 - z9) / cs2_4;
-                        let t = (z1 + z2 + z3 + z7 + z8 + z9
-                            - 2.0 * (z4 + z5 + z6))
-                            / cs2_3;
+                        let t = (z1 + z2 + z3 + z7 + z8 + z9 - 2.0 * (z4 + z5 + z6)) / cs2_3;
                         (p, q, r, s, t)
                     }
                     DerivativeMethod::ZevenbergenThorne => {
@@ -202,16 +198,14 @@ pub fn curvature(dem: &Raster<f64>, params: CurvatureParams) -> Result<Raster<f6
                     // --- Full formulas (with denominators) ---
                     (CurvatureType::General, CurvatureFormula::Full) => {
                         let w = 1.0 + p2q2;
-                        -((1.0 + q2) * r - 2.0 * p * q * s + (1.0 + p2) * t)
-                            / (2.0 * w * w.sqrt())
+                        -((1.0 + q2) * r - 2.0 * p * q * s + (1.0 + p2) * t) / (2.0 * w * w.sqrt())
                     }
                     (CurvatureType::Profile, CurvatureFormula::Full) => {
                         if p2q2 < 1e-20 {
                             0.0
                         } else {
                             let w = 1.0 + p2q2;
-                            -(p2 * r + 2.0 * p * q * s + q2 * t)
-                                / (p2q2 * w * w.sqrt())
+                            -(p2 * r + 2.0 * p * q * s + q2 * t) / (p2q2 * w * w.sqrt())
                         }
                     }
                     (CurvatureType::Plan, CurvatureFormula::Full) => {
@@ -219,14 +213,11 @@ pub fn curvature(dem: &Raster<f64>, params: CurvatureParams) -> Result<Raster<f6
                             0.0
                         } else {
                             let w_sqrt = (1.0 + p2q2).sqrt();
-                            -(q2 * r - 2.0 * p * q * s + p2 * t)
-                                / (p2q2 * w_sqrt)
+                            -(q2 * r - 2.0 * p * q * s + p2 * t) / (p2q2 * w_sqrt)
                         }
                     }
                     // --- Simplified formulas (legacy Z&T, no denominators) ---
-                    (CurvatureType::General, CurvatureFormula::Simplified) => {
-                        -(r + t) / 2.0
-                    }
+                    (CurvatureType::General, CurvatureFormula::Simplified) => -(r + t) / 2.0,
                     (CurvatureType::Profile, CurvatureFormula::Simplified) => {
                         if p2q2 < 1e-20 {
                             0.0
@@ -326,9 +317,7 @@ impl surtgis_core::WindowAlgorithm for CurvatureStreaming {
                 }
 
                 let z5 = input[[ir, c]];
-                if z5.is_nan()
-                    || nodata.map_or(false, |nd| (z5 - nd).abs() < f64::EPSILON)
-                {
+                if z5.is_nan() || nodata.map_or(false, |nd| (z5 - nd).abs() < f64::EPSILON) {
                     output[[r, c]] = f64::NAN;
                     continue;
                 }
@@ -352,13 +341,9 @@ impl surtgis_core::WindowAlgorithm for CurvatureStreaming {
                     DerivativeMethod::EvansYoung => {
                         let p = (z3 + z6 + z9 - z1 - z4 - z7) / cs6;
                         let q = (z1 + z2 + z3 - z7 - z8 - z9) / cs6;
-                        let r_d = (z1 + z3 + z4 + z6 + z7 + z9
-                            - 2.0 * (z2 + z5 + z8))
-                            / cs2_3;
+                        let r_d = (z1 + z3 + z4 + z6 + z7 + z9 - 2.0 * (z2 + z5 + z8)) / cs2_3;
                         let s = (z3 + z7 - z1 - z9) / cs2_4;
-                        let t = (z1 + z2 + z3 + z7 + z8 + z9
-                            - 2.0 * (z4 + z5 + z6))
-                            / cs2_3;
+                        let t = (z1 + z2 + z3 + z7 + z8 + z9 - 2.0 * (z4 + z5 + z6)) / cs2_3;
                         (p, q, r_d, s, t)
                     }
                     DerivativeMethod::ZevenbergenThorne => {
@@ -387,8 +372,7 @@ impl surtgis_core::WindowAlgorithm for CurvatureStreaming {
                             0.0
                         } else {
                             let w = 1.0 + p2q2;
-                            -(p2 * r_d + 2.0 * p * q * s + q2 * t)
-                                / (p2q2 * w * w.sqrt())
+                            -(p2 * r_d + 2.0 * p * q * s + q2 * t) / (p2q2 * w * w.sqrt())
                         }
                     }
                     (CurvatureType::Plan, CurvatureFormula::Full) => {
@@ -396,14 +380,11 @@ impl surtgis_core::WindowAlgorithm for CurvatureStreaming {
                             0.0
                         } else {
                             let w_sqrt = (1.0 + p2q2).sqrt();
-                            -(q2 * r_d - 2.0 * p * q * s + p2 * t)
-                                / (p2q2 * w_sqrt)
+                            -(q2 * r_d - 2.0 * p * q * s + p2 * t) / (p2q2 * w_sqrt)
                         }
                     }
                     // --- Simplified formulas (legacy Z&T, no denominators) ---
-                    (CurvatureType::General, CurvatureFormula::Simplified) => {
-                        -(r_d + t) / 2.0
-                    }
+                    (CurvatureType::General, CurvatureFormula::Simplified) => -(r_d + t) / 2.0,
                     (CurvatureType::Profile, CurvatureFormula::Simplified) => {
                         if p2q2 < 1e-20 {
                             0.0
@@ -461,47 +442,72 @@ mod tests {
         let result = curvature(&dem, CurvatureParams::default()).unwrap();
         // Plane has zero curvature everywhere
         let val = result.get(5, 5).unwrap();
-        assert!(val.abs() < 1e-10, "Expected ~0 curvature for plane, got {}", val);
+        assert!(
+            val.abs() < 1e-10,
+            "Expected ~0 curvature for plane, got {}",
+            val
+        );
     }
 
     #[test]
     fn test_general_curvature_bowl() {
         let dem = bowl();
-        let result = curvature(&dem, CurvatureParams {
-            curvature_type: CurvatureType::General,
-            ..Default::default()
-        }).unwrap();
+        let result = curvature(
+            &dem,
+            CurvatureParams {
+                curvature_type: CurvatureType::General,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         // z = x² + y² → d²z/dx²=2, d²z/dy²=2 → general = -(2+2)/2 = -2
         let val = result.get(10, 10).unwrap();
         assert!(
             (val - (-2.0)).abs() < 1e-6,
-            "Expected -2.0 general curvature for bowl center, got {}", val
+            "Expected -2.0 general curvature for bowl center, got {}",
+            val
         );
     }
 
     #[test]
     fn test_profile_curvature_plane() {
         let dem = tilted_plane();
-        let result = curvature(&dem, CurvatureParams {
-            curvature_type: CurvatureType::Profile,
-            ..Default::default()
-        }).unwrap();
+        let result = curvature(
+            &dem,
+            CurvatureParams {
+                curvature_type: CurvatureType::Profile,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let val = result.get(5, 5).unwrap();
-        assert!(val.abs() < 1e-10, "Expected ~0 profile curvature for plane, got {}", val);
+        assert!(
+            val.abs() < 1e-10,
+            "Expected ~0 profile curvature for plane, got {}",
+            val
+        );
     }
 
     #[test]
     fn test_plan_curvature_plane() {
         let dem = tilted_plane();
-        let result = curvature(&dem, CurvatureParams {
-            curvature_type: CurvatureType::Plan,
-            ..Default::default()
-        }).unwrap();
+        let result = curvature(
+            &dem,
+            CurvatureParams {
+                curvature_type: CurvatureType::Plan,
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let val = result.get(5, 5).unwrap();
-        assert!(val.abs() < 1e-10, "Expected ~0 plan curvature for plane, got {}", val);
+        assert!(
+            val.abs() < 1e-10,
+            "Expected ~0 plan curvature for plane, got {}",
+            val
+        );
     }
 
     #[test]

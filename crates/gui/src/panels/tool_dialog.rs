@@ -81,19 +81,16 @@ pub fn show_tool_dialog(
 
         ui.horizontal(|ui| {
             ui.label(param.label);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                match (&param.kind, value) {
+            ui.with_layout(
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| match (&param.kind, value) {
                     (
                         ParamKind::Float {
                             min, max, speed, ..
                         },
                         ParamValue::Float(v),
                     ) => {
-                        ui.add(
-                            egui::DragValue::new(v)
-                                .range(*min..=*max)
-                                .speed(*speed),
-                        );
+                        ui.add(egui::DragValue::new(v).range(*min..=*max).speed(*speed));
                     }
                     (ParamKind::Int { min, max, .. }, ParamValue::Int(v)) => {
                         ui.add(egui::DragValue::new(v).range(*min..=*max));
@@ -113,9 +110,7 @@ pub fn show_tool_dialog(
                     }
                     (ParamKind::InputRaster, ParamValue::InputRaster(selected_id)) => {
                         let current_name = selected_id
-                            .and_then(|id| {
-                                dataset_names.iter().find(|(did, _)| *did == id)
-                            })
+                            .and_then(|id| dataset_names.iter().find(|(did, _)| *did == id))
                             .map(|(_, name)| name.as_str())
                             .unwrap_or("(select)");
 
@@ -124,10 +119,7 @@ pub fn show_tool_dialog(
                             .show_ui(ui, |ui| {
                                 for (did, name) in dataset_names {
                                     if ui
-                                        .selectable_label(
-                                            *selected_id == Some(*did),
-                                            name,
-                                        )
+                                        .selectable_label(*selected_id == Some(*did), name)
                                         .clicked()
                                     {
                                         *selected_id = Some(*did);
@@ -136,8 +128,8 @@ pub fn show_tool_dialog(
                             });
                     }
                     _ => {}
-                }
-            });
+                },
+            );
         });
     }
 

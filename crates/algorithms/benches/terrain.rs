@@ -1,10 +1,9 @@
 //! Benchmarks for terrain algorithms
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use surtgis_algorithms::terrain::{
-    aspect, curvature, hillshade, landform_classification, slope, tpi, tri, AspectOutput,
-    CurvatureParams, CurvatureType, HillshadeParams, LandformParams, SlopeParams, TpiParams,
-    TriParams,
+    AspectOutput, CurvatureParams, CurvatureType, HillshadeParams, LandformParams, SlopeParams,
+    TpiParams, TriParams, aspect, curvature, hillshade, landform_classification, slope, tpi, tri,
 };
 use surtgis_core::{GeoTransform, Raster};
 

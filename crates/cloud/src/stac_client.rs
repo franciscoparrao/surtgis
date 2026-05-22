@@ -41,7 +41,9 @@ impl SasTokenCache {
     /// Extract the container key from an Azure Blob Storage URL.
     /// `https://account.blob.core.windows.net/container/path/file.tif` → `account/container`
     fn container_key(href: &str) -> Option<String> {
-        let url = href.strip_prefix("https://").or_else(|| href.strip_prefix("http://"))?;
+        let url = href
+            .strip_prefix("https://")
+            .or_else(|| href.strip_prefix("http://"))?;
         let parts: Vec<&str> = url.splitn(3, '/').collect();
         if parts.len() >= 2 {
             Some(format!("{}/{}", parts[0], parts[1]))
@@ -106,9 +108,7 @@ impl StacCatalog {
             Self::PlanetaryComputer => {
                 "https://planetarycomputer.microsoft.com/api/stac/v1/search".to_string()
             }
-            Self::EarthSearch => {
-                "https://earth-search.aws.element84.com/v1/search".to_string()
-            }
+            Self::EarthSearch => "https://earth-search.aws.element84.com/v1/search".to_string(),
             Self::Custom(base) => {
                 let base = base.trim_end_matches('/');
                 if base.ends_with("/search") {
@@ -274,11 +274,7 @@ impl StacClient {
     /// throttle for most requests.
     ///
     /// For non-PC catalogs this is a no-op and returns the href unchanged.
-    pub async fn sign_asset_href(
-        &self,
-        href: &str,
-        _collection: &str,
-    ) -> Result<String> {
+    pub async fn sign_asset_href(&self, href: &str, _collection: &str) -> Result<String> {
         if !self.catalog.needs_signing() {
             return Ok(href.to_string());
         }
@@ -418,9 +414,8 @@ impl StacClient {
                         .text()
                         .await
                         .map_err(|e| CloudError::Network(format!("reading response body: {e}")))?;
-                    let col: StacItemCollection = serde_json::from_str(&body).map_err(|e| {
-                        CloudError::Network(format!("parsing STAC response: {e}"))
-                    })?;
+                    let col: StacItemCollection = serde_json::from_str(&body)
+                        .map_err(|e| CloudError::Network(format!("parsing STAC response: {e}")))?;
                     return Ok(col);
                 }
                 Ok(r) => {
@@ -437,7 +432,9 @@ impl StacClient {
                     }
                 }
                 Err(e) => {
-                    last_err = Some(CloudError::Network(format!("STAC search request failed: {e}")));
+                    last_err = Some(CloudError::Network(format!(
+                        "STAC search request failed: {e}"
+                    )));
                 }
             }
         }
@@ -451,11 +448,7 @@ impl StacClient {
         link: &StacLink,
         original_params: &StacSearchParams,
     ) -> Result<StacItemCollection> {
-        let method = link
-            .method
-            .as_deref()
-            .unwrap_or("GET")
-            .to_uppercase();
+        let method = link.method.as_deref().unwrap_or("GET").to_uppercase();
 
         if method == "POST" {
             // Build the body for the next request
@@ -554,7 +547,9 @@ impl StacClient {
                 let body = resp.text().await.unwrap_or_default();
                 last_err = Some(CloudError::Auth(format!(
                     "PC sign HTTP {} (attempt {}/{}): {}",
-                    status, attempt + 1, max_retries + 1,
+                    status,
+                    attempt + 1,
+                    max_retries + 1,
                     body.chars().take(200).collect::<String>()
                 )));
                 continue;
@@ -583,7 +578,6 @@ impl StacClient {
 
         Err(last_err.unwrap_or_else(|| CloudError::Auth("PC sign: all retries exhausted".into())))
     }
-
 }
 
 // ---------------------------------------------------------------------------

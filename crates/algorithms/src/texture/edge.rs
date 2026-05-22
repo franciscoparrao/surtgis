@@ -4,8 +4,8 @@
 //! - Sobel: first-derivative gradient magnitude
 //! - Laplacian: second-derivative zero-crossing detector
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -24,7 +24,9 @@ use surtgis_core::{Error, Result};
 pub fn sobel_edge(raster: &Raster<f64>) -> Result<Raster<f64>> {
     let (rows, cols) = raster.shape();
     if rows < 3 || cols < 3 {
-        return Err(Error::Algorithm("Sobel requires at least 3x3 raster".into()));
+        return Err(Error::Algorithm(
+            "Sobel requires at least 3x3 raster".into(),
+        ));
     }
 
     let data: Vec<f64> = (0..rows)
@@ -67,8 +69,8 @@ pub fn sobel_edge(raster: &Raster<f64>) -> Result<Raster<f64>> {
 
     let mut output = raster.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() = Array2::from_shape_vec((rows, cols), data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() =
+        Array2::from_shape_vec((rows, cols), data).map_err(|e| Error::Other(e.to_string()))?;
 
     Ok(output)
 }
@@ -92,7 +94,9 @@ pub fn sobel_edge(raster: &Raster<f64>) -> Result<Raster<f64>> {
 pub fn laplacian(raster: &Raster<f64>) -> Result<Raster<f64>> {
     let (rows, cols) = raster.shape();
     if rows < 3 || cols < 3 {
-        return Err(Error::Algorithm("Laplacian requires at least 3x3 raster".into()));
+        return Err(Error::Algorithm(
+            "Laplacian requires at least 3x3 raster".into(),
+        ));
     }
 
     let data: Vec<f64> = (0..rows)
@@ -128,8 +132,8 @@ pub fn laplacian(raster: &Raster<f64>) -> Result<Raster<f64>> {
 
     let mut output = raster.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() = Array2::from_shape_vec((rows, cols), data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() =
+        Array2::from_shape_vec((rows, cols), data).map_err(|e| Error::Other(e.to_string()))?;
 
     Ok(output)
 }
@@ -163,7 +167,11 @@ mod tests {
 
         // Interior cell of horizontal gradient should have positive edge value
         let v = result.get(5, 5).unwrap();
-        assert!(v > 0.0, "Horizontal gradient should produce edge, got {}", v);
+        assert!(
+            v > 0.0,
+            "Horizontal gradient should produce edge, got {}",
+            v
+        );
     }
 
     #[test]
@@ -172,7 +180,11 @@ mod tests {
         let result = sobel_edge(&r).unwrap();
 
         let v = result.get(5, 5).unwrap();
-        assert!(v.abs() < 1e-10, "Flat surface should have zero Sobel, got {}", v);
+        assert!(
+            v.abs() < 1e-10,
+            "Flat surface should have zero Sobel, got {}",
+            v
+        );
     }
 
     #[test]
@@ -181,7 +193,11 @@ mod tests {
         let result = laplacian(&r).unwrap();
 
         let v = result.get(5, 5).unwrap();
-        assert!(v.abs() < 1e-10, "Flat surface should have zero Laplacian, got {}", v);
+        assert!(
+            v.abs() < 1e-10,
+            "Flat surface should have zero Laplacian, got {}",
+            v
+        );
     }
 
     #[test]
@@ -200,8 +216,10 @@ mod tests {
         // At the edge (col=4→5 boundary), Laplacian should be non-zero
         let v4 = result.get(5, 4).unwrap();
         let v5 = result.get(5, 5).unwrap();
-        assert!(v4.abs() > 0.0 || v5.abs() > 0.0,
-            "Step edge should produce non-zero Laplacian");
+        assert!(
+            v4.abs() > 0.0 || v5.abs() > 0.0,
+            "Step edge should produce non-zero Laplacian"
+        );
     }
 
     #[test]

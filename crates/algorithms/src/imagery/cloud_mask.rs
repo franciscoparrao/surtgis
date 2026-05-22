@@ -250,8 +250,8 @@ pub fn cloud_mask_scl(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use surtgis_core::raster::Raster;
     use surtgis_core::GeoTransform;
+    use surtgis_core::raster::Raster;
 
     fn make_raster(data: Vec<Vec<f64>>) -> Raster<f64> {
         let rows = data.len();
@@ -267,25 +267,19 @@ mod tests {
     #[test]
     fn test_cloud_mask_scl() {
         // Data raster: all values = 100.0
-        let data = make_raster(vec![
-            vec![100.0, 100.0, 100.0],
-            vec![100.0, 100.0, 100.0],
-        ]);
+        let data = make_raster(vec![vec![100.0, 100.0, 100.0], vec![100.0, 100.0, 100.0]]);
         // SCL: 4=veg, 9=cloud, 5=bare soil, 3=shadow, 6=water, 8=cloud_med
-        let scl = make_raster(vec![
-            vec![4.0, 9.0, 5.0],
-            vec![3.0, 6.0, 8.0],
-        ]);
+        let scl = make_raster(vec![vec![4.0, 9.0, 5.0], vec![3.0, 6.0, 8.0]]);
 
         let result = cloud_mask_scl(&data, &scl, SCL_VALID_DEFAULT).unwrap();
         let d = result.data();
 
         assert!((d[[0, 0]] - 100.0).abs() < 1e-10); // class 4 = keep
-        assert!(d[[0, 1]].is_nan());                  // class 9 = cloud → NaN
+        assert!(d[[0, 1]].is_nan()); // class 9 = cloud → NaN
         assert!((d[[0, 2]] - 100.0).abs() < 1e-10); // class 5 = keep
-        assert!(d[[1, 0]].is_nan());                  // class 3 = shadow → NaN
+        assert!(d[[1, 0]].is_nan()); // class 3 = shadow → NaN
         assert!((d[[1, 1]] - 100.0).abs() < 1e-10); // class 6 = keep
-        assert!(d[[1, 2]].is_nan());                  // class 8 = cloud → NaN
+        assert!(d[[1, 2]].is_nan()); // class 8 = cloud → NaN
     }
 
     #[test]
@@ -300,10 +294,7 @@ mod tests {
         // SCL at 20m: 2x2 (half resolution)
         // top-left=4 (veg), top-right=9 (cloud)
         // bottom-left=9 (cloud), bottom-right=5 (soil)
-        let scl = make_raster(vec![
-            vec![4.0, 9.0],
-            vec![9.0, 5.0],
-        ]);
+        let scl = make_raster(vec![vec![4.0, 9.0], vec![9.0, 5.0]]);
 
         let result = cloud_mask_scl(&data, &scl, SCL_VALID_DEFAULT).unwrap();
         let d = result.data();
@@ -332,14 +323,8 @@ mod tests {
     #[test]
     fn test_s2_scl_mask_trait() {
         // Test CloudMaskStrategy trait for S2
-        let data = make_raster(vec![
-            vec![100.0, 100.0],
-            vec![100.0, 100.0],
-        ]);
-        let scl = make_raster(vec![
-            vec![4.0, 9.0],
-            vec![5.0, 8.0],
-        ]);
+        let data = make_raster(vec![vec![100.0, 100.0], vec![100.0, 100.0]]);
+        let scl = make_raster(vec![vec![4.0, 9.0], vec![5.0, 8.0]]);
 
         let strategy = S2SclMask::new();
         let result = strategy.mask(&data, &scl).unwrap();
@@ -364,13 +349,10 @@ mod tests {
         // QA=16 → exclude (bit 4 = shadow)
         // QA=64 → keep (bit 6 = clear, no excluded bits)
 
-        let data = make_raster(vec![
-            vec![100.0, 100.0, 100.0],
-            vec![100.0, 100.0, 0.0],
-        ]);
+        let data = make_raster(vec![vec![100.0, 100.0, 100.0], vec![100.0, 100.0, 0.0]]);
         let qa = make_raster(vec![
-            vec![0.0, 1.0, 64.0],   // no-classification, fill, clear
-            vec![2.0, 8.0, 64.0],   // dilated cloud, cloud, clear+data=0
+            vec![0.0, 1.0, 64.0], // no-classification, fill, clear
+            vec![2.0, 8.0, 64.0], // dilated cloud, cloud, clear+data=0
         ]);
 
         let strategy = LandsatQaMask::new();
@@ -388,10 +370,7 @@ mod tests {
     #[test]
     fn test_no_cloud_mask() {
         // Test CloudMaskStrategy trait for SAR (no-op)
-        let data = make_raster(vec![
-            vec![100.0, 200.0],
-            vec![300.0, 400.0],
-        ]);
+        let data = make_raster(vec![vec![100.0, 200.0], vec![300.0, 400.0]]);
         let dummy_mask = make_raster(vec![vec![0.0, 1.0], vec![1.0, 0.0]]);
 
         let strategy = NoCloudMask;

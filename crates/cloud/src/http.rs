@@ -20,10 +20,7 @@ use std::time::Duration;
 pub(crate) fn normalize_url(url: &str) -> Cow<'_, str> {
     if let Some(rest) = url.strip_prefix("s3://") {
         if let Some((bucket, key)) = rest.split_once('/') {
-            return Cow::Owned(format!(
-                "https://{}.s3.amazonaws.com/{}",
-                bucket, key
-            ));
+            return Cow::Owned(format!("https://{}.s3.amazonaws.com/{}", bucket, key));
         }
     }
     Cow::Borrowed(url)
@@ -89,11 +86,7 @@ impl HttpClient {
     }
 
     /// Send a HEAD request to discover file size and Range support.
-    pub async fn head(
-        &self,
-        url: &str,
-        auth: &dyn CloudAuth,
-    ) -> Result<HeadInfo> {
+    pub async fn head(&self, url: &str, auth: &dyn CloudAuth) -> Result<HeadInfo> {
         let url_norm = normalize_url(url);
         let url = url_norm.as_ref();
         let mut auth_headers = Vec::new();
@@ -142,10 +135,7 @@ impl HttpClient {
 
         let range_value = format!("bytes={}-{}", offset, offset + length - 1);
 
-        let mut req = self
-            .client
-            .get(url)
-            .header("Range", &range_value);
+        let mut req = self.client.get(url).header("Range", &range_value);
 
         for (key, value) in &auth_headers {
             req = req.header(key.as_str(), value.as_str());
@@ -198,10 +188,11 @@ impl HttpClient {
         }
 
         // Fetch coalesced ranges concurrently
-        let coalesced_ranges: Vec<(u64, u64)> = coalesced.iter()
-            .map(|g| (g.offset, g.length))
-            .collect();
-        let fetched = self.fetch_ranges_parallel(url, &coalesced_ranges, auth).await?;
+        let coalesced_ranges: Vec<(u64, u64)> =
+            coalesced.iter().map(|g| (g.offset, g.length)).collect();
+        let fetched = self
+            .fetch_ranges_parallel(url, &coalesced_ranges, auth)
+            .await?;
 
         // Split coalesced data back into original ranges
         let mut results = vec![Vec::new(); ranges.len()];
@@ -214,9 +205,9 @@ impl HttpClient {
                     results[orig_idx] = group_data[start..end].to_vec();
                 } else {
                     // Fallback: fetch individually if coalesced data is short
-                    results[orig_idx] = self.fetch_range(
-                        url, ranges[orig_idx].0, ranges[orig_idx].1, auth
-                    ).await?;
+                    results[orig_idx] = self
+                        .fetch_range(url, ranges[orig_idx].0, ranges[orig_idx].1, auth)
+                        .await?;
                 }
             }
         }
@@ -330,7 +321,8 @@ fn coalesce_ranges(ranges: &[(u64, u64)], gap_tolerance: u64) -> Vec<CoalescedRa
     }
 
     // Sort by offset, keeping track of original indices
-    let mut indexed: Vec<(usize, u64, u64)> = ranges.iter()
+    let mut indexed: Vec<(usize, u64, u64)> = ranges
+        .iter()
         .enumerate()
         .map(|(i, &(o, l))| (i, o, l))
         .collect();
@@ -375,7 +367,9 @@ mod tests {
 
     #[test]
     fn normalize_s3_scheme_to_https_virtual_hosted() {
-        let out = normalize_url("s3://copernicus-dem-30m/Copernicus_DSM_COG_10_S36_00_W071_00_DEM/Copernicus_DSM_COG_10_S36_00_W071_00_DEM.tif");
+        let out = normalize_url(
+            "s3://copernicus-dem-30m/Copernicus_DSM_COG_10_S36_00_W071_00_DEM/Copernicus_DSM_COG_10_S36_00_W071_00_DEM.tif",
+        );
         assert_eq!(
             out.as_ref(),
             "https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_S36_00_W071_00_DEM/Copernicus_DSM_COG_10_S36_00_W071_00_DEM.tif"

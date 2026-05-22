@@ -24,7 +24,9 @@ use rayon::prelude::*;
 /// across all inputs. Pixels where all inputs are NaN produce NaN.
 pub fn median_composite(rasters: &[&Raster<f64>]) -> Result<Raster<f64>> {
     if rasters.len() < 2 {
-        return Err(Error::Other("median_composite requires at least 2 rasters".into()));
+        return Err(Error::Other(
+            "median_composite requires at least 2 rasters".into(),
+        ));
     }
 
     // Check if all rasters have the same dimensions
@@ -184,8 +186,8 @@ fn compute_median(values: &mut Vec<f64>) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use surtgis_core::raster::Raster;
     use surtgis_core::GeoTransform;
+    use surtgis_core::raster::Raster;
 
     fn make_raster(data: Vec<Vec<f64>>) -> Raster<f64> {
         let rows = data.len();
@@ -234,16 +236,14 @@ mod tests {
     #[test]
     fn test_median_composite_different_extents() {
         // Scene 1: 2x3 at origin (0, 20)
-        let r1 = make_georaster(vec![
-            vec![10.0, 20.0, 30.0],
-            vec![40.0, 50.0, 60.0],
-        ], 0.0, 20.0);
+        let r1 = make_georaster(
+            vec![vec![10.0, 20.0, 30.0], vec![40.0, 50.0, 60.0]],
+            0.0,
+            20.0,
+        );
 
         // Scene 2: 2x2 at origin (10, 20) — shifted 1 col right, 1 col narrower
-        let r2 = make_georaster(vec![
-            vec![100.0, 200.0],
-            vec![300.0, 400.0],
-        ], 10.0, 20.0);
+        let r2 = make_georaster(vec![vec![100.0, 200.0], vec![300.0, 400.0]], 10.0, 20.0);
 
         let result = median_composite(&[&r1, &r2]).unwrap();
         let (rows, cols) = result.shape();

@@ -6,8 +6,8 @@
 //!
 //! High TWI values indicate areas prone to saturation.
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -25,8 +25,10 @@ pub fn twi(flow_acc: &Raster<f64>, slope_rad: &Raster<f64>) -> Result<Raster<f64
 
     if rows_a != rows_s || cols_a != cols_s {
         return Err(Error::SizeMismatch {
-            er: rows_a, ec: cols_a,
-            ar: rows_s, ac: cols_s,
+            er: rows_a,
+            ec: cols_a,
+            ar: rows_s,
+            ac: cols_s,
         });
     }
 

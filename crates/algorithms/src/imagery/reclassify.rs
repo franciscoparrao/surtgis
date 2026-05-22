@@ -2,8 +2,8 @@
 //!
 //! Reclassify raster values based on value ranges or exact matches.
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -83,9 +83,10 @@ pub fn reclassify(raster: &Raster<f64>, params: ReclassifyParams) -> Result<Rast
                     continue;
                 }
                 if let Some(nd) = nodata
-                    && (val - nd).abs() < f64::EPSILON {
-                        continue;
-                    }
+                    && (val - nd).abs() < f64::EPSILON
+                {
+                    continue;
+                }
 
                 // Find matching class
                 let mut classified = default;
@@ -126,11 +127,8 @@ mod tests {
     fn make_ndvi_raster() -> Raster<f64> {
         // NDVI-like values across a 5x5 grid
         let values = vec![
-            -0.5, -0.2, 0.0, 0.1, 0.15,
-            0.2, 0.25, 0.3, 0.35, 0.4,
-            0.45, 0.5, 0.55, 0.6, 0.65,
-            0.7, 0.75, 0.8, 0.85, 0.9,
-            -0.1, 0.0, 0.1, 0.5, 1.0,
+            -0.5, -0.2, 0.0, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7,
+            0.75, 0.8, 0.85, 0.9, -0.1, 0.0, 0.1, 0.5, 1.0,
         ];
         let mut r = Raster::from_vec(values, 5, 5).unwrap();
         r.set_transform(GeoTransform::new(0.0, 5.0, 1.0, -1.0));
@@ -140,10 +138,10 @@ mod tests {
     fn ndvi_classes() -> ReclassifyParams {
         ReclassifyParams {
             classes: vec![
-                ReclassEntry::new(-1.0, 0.0, 1.0),  // Water
-                ReclassEntry::new(0.0, 0.2, 2.0),   // Bare soil
-                ReclassEntry::new(0.2, 0.5, 3.0),   // Sparse vegetation
-                ReclassEntry::new(0.5, 1.01, 4.0),   // Dense vegetation
+                ReclassEntry::new(-1.0, 0.0, 1.0), // Water
+                ReclassEntry::new(0.0, 0.2, 2.0),  // Bare soil
+                ReclassEntry::new(0.2, 0.5, 3.0),  // Sparse vegetation
+                ReclassEntry::new(0.5, 1.01, 4.0), // Dense vegetation
             ],
             default_value: 0.0,
         }

@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use std::time::Instant;
 
 use surtgis_algorithms::classification::{
-    isodata, kmeans_raster, maximum_likelihood, minimum_distance, pca,
-    signatures_from_training, IsodataParams, KmeansParams, PcaParams,
+    IsodataParams, KmeansParams, PcaParams, isodata, kmeans_raster, maximum_likelihood,
+    minimum_distance, pca, signatures_from_training,
 };
 use surtgis_core::io::read_geotiff;
 
@@ -15,7 +15,12 @@ use crate::helpers::{done, read_dem, spinner, write_result};
 pub fn handle(algorithm: ClassificationCommands, compress: bool) -> Result<()> {
     match algorithm {
         ClassificationCommands::Kmeans {
-            input, output, classes, max_iter, convergence, seed,
+            input,
+            output,
+            classes,
+            max_iter,
+            convergence,
+            seed,
         } => {
             let raster = read_dem(&input)?;
             let start = Instant::now();
@@ -36,7 +41,12 @@ pub fn handle(algorithm: ClassificationCommands, compress: bool) -> Result<()> {
         }
 
         ClassificationCommands::Isodata {
-            input, output, classes, min_classes, max_classes, max_iter,
+            input,
+            output,
+            classes,
+            min_classes,
+            max_classes,
+            max_iter,
         } => {
             let raster = read_dem(&input)?;
             let start = Instant::now();
@@ -61,7 +71,9 @@ pub fn handle(algorithm: ClassificationCommands, compress: bool) -> Result<()> {
         }
 
         ClassificationCommands::Pca {
-            bands, output, components,
+            bands,
+            output,
+            components,
         } => {
             let paths: Vec<&str> = bands.split(',').map(|s| s.trim()).collect();
             let pb = spinner(&format!("Reading {} bands...", paths.len()));
@@ -74,8 +86,13 @@ pub fn handle(algorithm: ClassificationCommands, compress: bool) -> Result<()> {
             let refs: Vec<&surtgis_core::Raster<f64>> = rasters.iter().collect();
             let start = Instant::now();
             let pb = spinner("PCA...");
-            let result = pca(&refs, PcaParams { n_components: components })
-                .context("PCA failed")?;
+            let result = pca(
+                &refs,
+                PcaParams {
+                    n_components: components,
+                },
+            )
+            .context("PCA failed")?;
             pb.finish_and_clear();
 
             // Write each component
@@ -95,7 +112,9 @@ pub fn handle(algorithm: ClassificationCommands, compress: bool) -> Result<()> {
         }
 
         ClassificationCommands::MinDistance {
-            input, output, training,
+            input,
+            output,
+            training,
         } => {
             let raster = read_dem(&input)?;
             let training_raster = read_dem(&training)?;
@@ -107,15 +126,16 @@ pub fn handle(algorithm: ClassificationCommands, compress: bool) -> Result<()> {
             println!("  {} class signatures extracted", sigs.len());
 
             let pb = spinner("Minimum distance classification...");
-            let result = minimum_distance(&raster, &sigs)
-                .context("Minimum distance failed")?;
+            let result = minimum_distance(&raster, &sigs).context("Minimum distance failed")?;
             pb.finish_and_clear();
             write_result(&result, &output, compress)?;
             done("Minimum Distance", &output, start.elapsed());
         }
 
         ClassificationCommands::MaxLikelihood {
-            input, output, training,
+            input,
+            output,
+            training,
         } => {
             let raster = read_dem(&input)?;
             let training_raster = read_dem(&training)?;
@@ -127,8 +147,7 @@ pub fn handle(algorithm: ClassificationCommands, compress: bool) -> Result<()> {
             println!("  {} class signatures extracted", sigs.len());
 
             let pb = spinner("Maximum likelihood classification...");
-            let result = maximum_likelihood(&raster, &sigs)
-                .context("Maximum likelihood failed")?;
+            let result = maximum_likelihood(&raster, &sigs).context("Maximum likelihood failed")?;
             pb.finish_and_clear();
             write_result(&result, &output, compress)?;
             done("Maximum Likelihood", &output, start.elapsed());

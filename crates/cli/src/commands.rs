@@ -189,7 +189,8 @@ pub enum Commands {
         #[command(subcommand)]
         action: StacCommands,
     },
-    /// Pipeline: integrated workflows for specific use cases
+    /// Pipeline: integrated workflows for specific use cases (cloud feature only)
+    #[cfg(feature = "cloud")]
     Pipeline {
         #[command(subcommand)]
         action: PipelineCommands,
@@ -339,15 +340,9 @@ pub enum TerrainCommands {
         flatness: f64,
     },
     /// Northness: cos(aspect), north-facing = 1, south-facing = -1
-    Northness {
-        input: PathBuf,
-        output: PathBuf,
-    },
+    Northness { input: PathBuf, output: PathBuf },
     /// Eastness: sin(aspect), east-facing = 1, west-facing = -1
-    Eastness {
-        input: PathBuf,
-        output: PathBuf,
-    },
+    Eastness { input: PathBuf, output: PathBuf },
     /// Positive topographic openness (sky visibility above)
     OpennessPositive {
         input: PathBuf,
@@ -436,10 +431,7 @@ pub enum TerrainCommands {
         radius: usize,
     },
     /// Multi-directional hillshade (6 azimuths combined)
-    MultiHillshade {
-        input: PathBuf,
-        output: PathBuf,
-    },
+    MultiHillshade { input: PathBuf, output: PathBuf },
     /// LS-Factor for RUSLE soil erosion model
     LsFactor {
         /// Flow accumulation raster
@@ -455,10 +447,7 @@ pub enum TerrainCommands {
         cell_size: f64,
     },
     /// Valley depth: vertical distance to ridge surface
-    ValleyDepth {
-        input: PathBuf,
-        output: PathBuf,
-    },
+    ValleyDepth { input: PathBuf, output: PathBuf },
     /// Relative Slope Position (0=valley, 1=ridge)
     RelativeSlopePosition {
         /// HAND raster
@@ -529,15 +518,9 @@ pub enum TerrainCommands {
         output: PathBuf,
     },
     /// Shape index (concavity/convexity, -1 to +1)
-    ShapeIndex {
-        input: PathBuf,
-        output: PathBuf,
-    },
+    ShapeIndex { input: PathBuf, output: PathBuf },
     /// Curvedness (magnitude of curvature)
-    Curvedness {
-        input: PathBuf,
-        output: PathBuf,
-    },
+    Curvedness { input: PathBuf, output: PathBuf },
     /// Gaussian smoothing
     GaussianSmoothing {
         input: PathBuf,
@@ -583,10 +566,7 @@ pub enum TerrainCommands {
         radius: usize,
     },
     /// Accumulation zones (contributing area classification)
-    AccumulationZones {
-        input: PathBuf,
-        output: PathBuf,
-    },
+    AccumulationZones { input: PathBuf, output: PathBuf },
     /// Stream Power Index (SPI = A × tan(slope))
     Spi {
         /// Flow accumulation raster
@@ -618,10 +598,7 @@ pub enum TerrainCommands {
         output: PathBuf,
     },
     /// Log transform (ln(x+1))
-    LogTransform {
-        input: PathBuf,
-        output: PathBuf,
-    },
+    LogTransform { input: PathBuf, output: PathBuf },
     /// DEM uncertainty analysis (Monte Carlo)
     Uncertainty {
         input: PathBuf,
@@ -689,10 +666,7 @@ pub enum TerrainCommands {
         z_factor: f64,
     },
     /// Elevation relative to global min/max (normalized 0–1)
-    ElevRelative {
-        input: PathBuf,
-        output: PathBuf,
-    },
+    ElevRelative { input: PathBuf, output: PathBuf },
     /// Difference from mean elevation (non-normalized, in DEM units)
     DiffFromMean {
         input: PathBuf,
@@ -710,10 +684,7 @@ pub enum TerrainCommands {
         radius: usize,
     },
     /// Elevation above pit / depth in sink
-    ElevAbovePit {
-        input: PathBuf,
-        output: PathBuf,
-    },
+    ElevAbovePit { input: PathBuf, output: PathBuf },
     /// Circular variance of aspect (0=uniform, 1=dispersed)
     CircularVarianceAspect {
         input: PathBuf,
@@ -798,10 +769,7 @@ pub enum TerrainCommands {
         drop: f64,
     },
     /// Maximum upstream branch length (longest D8 flow path)
-    MaxBranchLength {
-        input: PathBuf,
-        output: PathBuf,
-    },
+    MaxBranchLength { input: PathBuf, output: PathBuf },
 }
 
 // ─── Hydrology subcommands ──────────────────────────────────────────────
@@ -865,10 +833,7 @@ pub enum HydrologyCommands {
         fill_remaining: bool,
     },
     /// D-infinity flow direction (Tarboton 1997, continuous angles)
-    FlowDirectionDinf {
-        input: PathBuf,
-        output: PathBuf,
-    },
+    FlowDirectionDinf { input: PathBuf, output: PathBuf },
     /// Multiple Flow Direction accumulation (Quinn et al. 1991)
     FlowAccumulationMfd {
         input: PathBuf,

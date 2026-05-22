@@ -71,14 +71,18 @@ pub fn hand(
 
     if rows != fd_rows || cols != fd_cols {
         return Err(Error::SizeMismatch {
-            er: rows, ec: cols,
-            ar: fd_rows, ac: fd_cols,
+            er: rows,
+            ec: cols,
+            ar: fd_rows,
+            ac: fd_cols,
         });
     }
     if rows != fa_rows || cols != fa_cols {
         return Err(Error::SizeMismatch {
-            er: rows, ec: cols,
-            ar: fa_rows, ac: fa_cols,
+            er: rows,
+            ec: cols,
+            ar: fa_rows,
+            ac: fa_cols,
         });
     }
 
@@ -207,8 +211,8 @@ pub fn hand(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hydrology::fill_sinks::{FillSinksParams, fill_sinks};
     use crate::hydrology::{flow_accumulation, flow_direction};
-    use crate::hydrology::fill_sinks::{fill_sinks, FillSinksParams};
     use surtgis_core::GeoTransform;
 
     /// V-shaped valley: elevation = |col - center|
@@ -237,7 +241,15 @@ mod tests {
         let facc = flow_accumulation(&fdir).unwrap();
 
         // Use a low threshold so center column cells become streams
-        let result = hand(&dem, &fdir, &facc, HandParams { stream_threshold: 3.0 }).unwrap();
+        let result = hand(
+            &dem,
+            &fdir,
+            &facc,
+            HandParams {
+                stream_threshold: 3.0,
+            },
+        )
+        .unwrap();
 
         // Stream cells (center column, high accumulation) should have HAND ≈ 0
         // Check a cell that is definitely a stream (bottom center has max acc)
@@ -256,17 +268,28 @@ mod tests {
         let fdir = flow_direction(&filled).unwrap();
         let facc = flow_accumulation(&fdir).unwrap();
 
-        let result = hand(&dem, &fdir, &facc, HandParams { stream_threshold: 3.0 }).unwrap();
+        let result = hand(
+            &dem,
+            &fdir,
+            &facc,
+            HandParams {
+                stream_threshold: 3.0,
+            },
+        )
+        .unwrap();
 
         // HAND should increase away from the center column
         // Compare a cell 1 step from center vs 3 steps from center (same row)
         let row = 5;
         let h_near = result.get(row, 4).unwrap(); // 1 col from center
-        let h_far = result.get(row, 2).unwrap();  // 3 cols from center
+        let h_far = result.get(row, 2).unwrap(); // 3 cols from center
 
         // Both should be non-NaN
         assert!(!h_near.is_nan(), "Near-stream cell should have valid HAND");
-        assert!(!h_far.is_nan(), "Far-from-stream cell should have valid HAND");
+        assert!(
+            !h_far.is_nan(),
+            "Far-from-stream cell should have valid HAND"
+        );
 
         // Far cell should have greater or equal HAND
         assert!(
@@ -284,7 +307,15 @@ mod tests {
         let fdir = flow_direction(&filled).unwrap();
         let facc = flow_accumulation(&fdir).unwrap();
 
-        let result = hand(&dem, &fdir, &facc, HandParams { stream_threshold: 3.0 }).unwrap();
+        let result = hand(
+            &dem,
+            &fdir,
+            &facc,
+            HandParams {
+                stream_threshold: 3.0,
+            },
+        )
+        .unwrap();
 
         let (rows, cols) = result.shape();
         for row in 0..rows {
@@ -294,7 +325,9 @@ mod tests {
                     assert!(
                         val >= 0.0,
                         "HAND must be >= 0 at ({}, {}), got {}",
-                        row, col, val
+                        row,
+                        col,
+                        val
                     );
                 }
             }

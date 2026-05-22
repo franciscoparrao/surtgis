@@ -10,11 +10,11 @@
 //! Reference: Mark, R.K. (1992) "A multidirectional, oblique-weighted,
 //! shaded-relief image of the Island of Hawaii" (USGS Open-File Report 92-422)
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
+use std::f64::consts::PI;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
-use std::f64::consts::PI;
 
 /// Parameters for multidirectional hillshade
 #[derive(Debug, Clone)]
@@ -115,8 +115,8 @@ pub fn multidirectional_hillshade(
                 let mut weight_total = 0.0;
 
                 for az in &azimuths_rad {
-                    let shade = cos_zenith * cos_slope
-                        + sin_zenith * sin_slope * (az - aspect_rad).cos();
+                    let shade =
+                        cos_zenith * cos_slope + sin_zenith * sin_slope * (az - aspect_rad).cos();
                     let shade = shade.max(0.0);
 
                     // Weight: highest when azimuth is perpendicular to aspect
@@ -222,9 +222,7 @@ impl surtgis_core::WindowAlgorithm for MultiHillshadeStreaming {
                 }
 
                 let e = input[[ir, c]];
-                if e.is_nan()
-                    || nodata.map_or(false, |nd| (e - nd).abs() < f64::EPSILON)
-                {
+                if e.is_nan() || nodata.map_or(false, |nd| (e - nd).abs() < f64::EPSILON) {
                     output[[r, c]] = f64::NAN;
                     continue;
                 }
@@ -263,8 +261,8 @@ impl surtgis_core::WindowAlgorithm for MultiHillshadeStreaming {
                 let mut weight_total = 0.0;
 
                 for az in &azimuths_rad {
-                    let shade = cos_zenith * cos_slope
-                        + sin_zenith * sin_slope * (az - aspect_rad).cos();
+                    let shade =
+                        cos_zenith * cos_slope + sin_zenith * sin_slope * (az - aspect_rad).cos();
                     let shade = shade.max(0.0);
 
                     // Weight: highest when azimuth is perpendicular to aspect
@@ -365,6 +363,9 @@ mod tests {
                 }
             }
         }
-        assert!(all_positive, "Multi-hillshade should avoid fully dark pixels");
+        assert!(
+            all_positive,
+            "Multi-hillshade should avoid fully dark pixels"
+        );
     }
 }

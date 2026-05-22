@@ -42,17 +42,8 @@ pub fn show_console(ui: &mut Ui, logs: &[LogEntry]) {
                             .monospace()
                             .size(11.0),
                     );
-                    ui.label(
-                        RichText::new(prefix)
-                            .color(color)
-                            .monospace()
-                            .size(11.0),
-                    );
-                    ui.label(
-                        RichText::new(&entry.message)
-                            .monospace()
-                            .size(11.0),
-                    );
+                    ui.label(RichText::new(prefix).color(color).monospace().size(11.0));
+                    ui.label(RichText::new(&entry.message).monospace().size(11.0));
                 });
             }
         });

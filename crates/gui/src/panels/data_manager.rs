@@ -2,8 +2,8 @@
 
 use egui::Ui;
 
-use crate::state::workspace::{DatasetRaster, Workspace};
 use crate::state::DatasetId;
+use crate::state::workspace::{DatasetRaster, Workspace};
 
 /// Show the data manager panel. Returns the dataset ID if one was clicked.
 pub fn show_data_manager(ui: &mut Ui, workspace: &Workspace) -> Option<DatasetId> {

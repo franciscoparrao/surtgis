@@ -16,7 +16,12 @@ pub struct ClipRect {
 
 impl ClipRect {
     pub fn new(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> Self {
-        Self { min_x, min_y, max_x, max_y }
+        Self {
+            min_x,
+            min_y,
+            max_x,
+            max_y,
+        }
     }
 
     fn contains(&self, x: f64, y: f64) -> bool {
@@ -52,19 +57,31 @@ impl Edge {
         match self {
             Edge::Left => {
                 let t = (rect.min_x - px) / dx;
-                Coord { x: rect.min_x, y: py + t * dy }
+                Coord {
+                    x: rect.min_x,
+                    y: py + t * dy,
+                }
             }
             Edge::Right => {
                 let t = (rect.max_x - px) / dx;
-                Coord { x: rect.max_x, y: py + t * dy }
+                Coord {
+                    x: rect.max_x,
+                    y: py + t * dy,
+                }
             }
             Edge::Bottom => {
                 let t = (rect.min_y - py) / dy;
-                Coord { x: px + t * dx, y: rect.min_y }
+                Coord {
+                    x: px + t * dx,
+                    y: rect.min_y,
+                }
             }
             Edge::Top => {
                 let t = (rect.max_y - py) / dy;
-                Coord { x: px + t * dx, y: rect.max_y }
+                Coord {
+                    x: px + t * dx,
+                    y: rect.max_y,
+                }
             }
         }
     }
@@ -127,9 +144,7 @@ pub fn clip_by_rect(geom: &Geometry<f64>, rect: ClipRect) -> Option<Geometry<f64
 
         Geometry::Polygon(poly) => {
             // Sutherland-Hodgman: clip against each edge
-            let mut vertices: Vec<Coord<f64>> = poly
-                .exterior()
-                .0.to_vec();
+            let mut vertices: Vec<Coord<f64>> = poly.exterior().0.to_vec();
 
             // Remove closing vertex for algorithm
             if vertices.len() > 1 && vertices.first() == vertices.last() {
@@ -188,10 +203,18 @@ const TOP: u8 = 0b1000;
 
 fn outcode(p: Coord<f64>, rect: &ClipRect) -> u8 {
     let mut code = INSIDE;
-    if p.x < rect.min_x { code |= LEFT; }
-    if p.x > rect.max_x { code |= RIGHT; }
-    if p.y < rect.min_y { code |= BOTTOM; }
-    if p.y > rect.max_y { code |= TOP; }
+    if p.x < rect.min_x {
+        code |= LEFT;
+    }
+    if p.x > rect.max_x {
+        code |= RIGHT;
+    }
+    if p.y < rect.min_y {
+        code |= BOTTOM;
+    }
+    if p.y > rect.max_y {
+        code |= TOP;
+    }
     code
 }
 
@@ -217,16 +240,28 @@ fn clip_segment(
 
         let new_point = if code_out & TOP != 0 {
             let t = (rect.max_y - p0.y) / dy;
-            Coord { x: p0.x + t * dx, y: rect.max_y }
+            Coord {
+                x: p0.x + t * dx,
+                y: rect.max_y,
+            }
         } else if code_out & BOTTOM != 0 {
             let t = (rect.min_y - p0.y) / dy;
-            Coord { x: p0.x + t * dx, y: rect.min_y }
+            Coord {
+                x: p0.x + t * dx,
+                y: rect.min_y,
+            }
         } else if code_out & RIGHT != 0 {
             let t = (rect.max_x - p0.x) / dx;
-            Coord { x: rect.max_x, y: p0.y + t * dy }
+            Coord {
+                x: rect.max_x,
+                y: p0.y + t * dy,
+            }
         } else {
             let t = (rect.min_x - p0.x) / dx;
-            Coord { x: rect.min_x, y: p0.y + t * dy }
+            Coord {
+                x: rect.min_x,
+                y: p0.y + t * dy,
+            }
         };
 
         if code_out == code0 {
@@ -266,7 +301,11 @@ mod tests {
     fn test_clip_polygon_fully_inside() {
         let poly = Geometry::Polygon(Polygon::new(
             LineString::from(vec![
-                (2.0, 2.0), (8.0, 2.0), (8.0, 8.0), (2.0, 8.0), (2.0, 2.0),
+                (2.0, 2.0),
+                (8.0, 2.0),
+                (8.0, 8.0),
+                (2.0, 8.0),
+                (2.0, 2.0),
             ]),
             vec![],
         ));
@@ -280,7 +319,11 @@ mod tests {
         // Polygon extends beyond the clip rect
         let poly = Geometry::Polygon(Polygon::new(
             LineString::from(vec![
-                (-5.0, -5.0), (5.0, -5.0), (5.0, 5.0), (-5.0, 5.0), (-5.0, -5.0),
+                (-5.0, -5.0),
+                (5.0, -5.0),
+                (5.0, 5.0),
+                (-5.0, 5.0),
+                (-5.0, -5.0),
             ]),
             vec![],
         ));
@@ -292,10 +335,13 @@ mod tests {
             // All clipped coordinates should be within the rect
             for coord in clipped.exterior().0.iter() {
                 assert!(
-                    coord.x >= -0.001 && coord.x <= 10.001
-                        && coord.y >= -0.001 && coord.y <= 10.001,
+                    coord.x >= -0.001
+                        && coord.x <= 10.001
+                        && coord.y >= -0.001
+                        && coord.y <= 10.001,
                     "Clipped coord ({}, {}) outside rect",
-                    coord.x, coord.y
+                    coord.x,
+                    coord.y
                 );
             }
         }
@@ -305,7 +351,11 @@ mod tests {
     fn test_clip_polygon_fully_outside() {
         let poly = Geometry::Polygon(Polygon::new(
             LineString::from(vec![
-                (20.0, 20.0), (30.0, 20.0), (30.0, 30.0), (20.0, 30.0), (20.0, 20.0),
+                (20.0, 20.0),
+                (30.0, 20.0),
+                (30.0, 30.0),
+                (20.0, 30.0),
+                (20.0, 20.0),
             ]),
             vec![],
         ));
@@ -316,9 +366,7 @@ mod tests {
 
     #[test]
     fn test_clip_line_partial() {
-        let line = Geometry::LineString(LineString::from(vec![
-            (-5.0, 5.0), (15.0, 5.0),
-        ]));
+        let line = Geometry::LineString(LineString::from(vec![(-5.0, 5.0), (15.0, 5.0)]));
 
         let result = clip_by_rect(&line, unit_rect());
         assert!(result.is_some());
@@ -333,9 +381,7 @@ mod tests {
 
     #[test]
     fn test_clip_line_fully_outside() {
-        let line = Geometry::LineString(LineString::from(vec![
-            (20.0, 20.0), (30.0, 30.0),
-        ]));
+        let line = Geometry::LineString(LineString::from(vec![(20.0, 20.0), (30.0, 30.0)]));
 
         let result = clip_by_rect(&line, unit_rect());
         assert!(result.is_none());

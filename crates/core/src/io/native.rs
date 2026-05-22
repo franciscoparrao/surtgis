@@ -64,14 +64,16 @@ where
         .map_err(|e| Error::Other(format!("TIFF decode error: {}", e)))?
         .with_limits(Limits::unlimited());
 
-    let (width, height) = decoder.dimensions()
+    let (width, height) = decoder
+        .dimensions()
         .map_err(|e| Error::Other(format!("Cannot read dimensions: {}", e)))?;
 
     let rows = height as usize;
     let cols = width as usize;
 
     // Read image data
-    let result = decoder.read_image()
+    let result = decoder
+        .read_image()
         .map_err(|e| Error::Other(format!("Cannot read image data: {}", e)))?;
 
     let data: Vec<T> = match result {
@@ -107,7 +109,11 @@ where
             .iter()
             .map(|&v| num_traits::cast(v).unwrap_or(T::default_nodata()))
             .collect(),
-        _ => return Err(Error::UnsupportedDataType("Unsupported TIFF pixel format".to_string())),
+        _ => {
+            return Err(Error::UnsupportedDataType(
+                "Unsupported TIFF pixel format".to_string(),
+            ));
+        }
     };
 
     if data.len() != rows * cols {
@@ -150,9 +156,7 @@ where
 }
 
 /// Attempt to read CRS EPSG code from GeoKeyDirectory tag
-fn read_crs<R: std::io::Read + std::io::Seek>(
-    decoder: &mut Decoder<R>,
-) -> Option<crate::crs::CRS> {
+fn read_crs<R: std::io::Read + std::io::Seek>(decoder: &mut Decoder<R>) -> Option<crate::crs::CRS> {
     let geokeys = decoder.get_tag_u16_vec(Tag::Unknown(34735)).ok()?;
     if geokeys.len() < 4 {
         return None;
@@ -201,7 +205,12 @@ fn read_geotransform<R: std::io::Read + std::io::Seek>(
         let pixel_width = scale[0];
         let pixel_height = -scale[1]; // Negative for north-up
 
-        return Ok(GeoTransform::new(origin_x, origin_y, pixel_width, pixel_height));
+        return Ok(GeoTransform::new(
+            origin_x,
+            origin_y,
+            pixel_width,
+            pixel_height,
+        ));
     }
 
     Err(Error::Other("Cannot determine geotransform".into()))
@@ -314,35 +323,54 @@ where
             if epsg == 4326 {
                 // Geographic CRS (WGS84)
                 vec![
-                    1, 1, 0, 3, // Version 1.1.0, 3 keys
-                    1024, 0, 1, 2,    // GTModelTypeGeoKey = ModelTypeGeographic
-                    1025, 0, 1, 1,    // GTRasterTypeGeoKey = RasterPixelIsArea
-                    2048, 0, 1, epsg as u16, // GeographicTypeGeoKey = EPSG code
+                    1,
+                    1,
+                    0,
+                    3, // Version 1.1.0, 3 keys
+                    1024,
+                    0,
+                    1,
+                    2, // GTModelTypeGeoKey = ModelTypeGeographic
+                    1025,
+                    0,
+                    1,
+                    1, // GTRasterTypeGeoKey = RasterPixelIsArea
+                    2048,
+                    0,
+                    1,
+                    epsg as u16, // GeographicTypeGeoKey = EPSG code
                 ]
             } else {
                 // Projected CRS (e.g., UTM zones EPSG:326xx/327xx)
                 vec![
-                    1, 1, 0, 3, // Version 1.1.0, 3 keys
-                    1024, 0, 1, 1,    // GTModelTypeGeoKey = ModelTypeProjected
-                    1025, 0, 1, 1,    // GTRasterTypeGeoKey = RasterPixelIsArea
-                    3072, 0, 1, epsg as u16, // ProjectedCSTypeGeoKey = EPSG code
+                    1,
+                    1,
+                    0,
+                    3, // Version 1.1.0, 3 keys
+                    1024,
+                    0,
+                    1,
+                    1, // GTModelTypeGeoKey = ModelTypeProjected
+                    1025,
+                    0,
+                    1,
+                    1, // GTRasterTypeGeoKey = RasterPixelIsArea
+                    3072,
+                    0,
+                    1,
+                    epsg as u16, // ProjectedCSTypeGeoKey = EPSG code
                 ]
             }
         } else {
             // CRS without EPSG code — write generic projected
             vec![
-                1, 1, 0, 2,
-                1024, 0, 1, 1, // ModelTypeProjected
+                1, 1, 0, 2, 1024, 0, 1, 1, // ModelTypeProjected
                 1025, 0, 1, 1, // RasterPixelIsArea
             ]
         }
     } else {
         // No CRS — write generic projected (backward compatible)
-        vec![
-            1, 1, 0, 2,
-            1024, 0, 1, 1,
-            1025, 0, 1, 1,
-        ]
+        vec![1, 1, 0, 2, 1024, 0, 1, 1, 1025, 0, 1, 1]
     };
     image
         .encoder()

@@ -7,12 +7,12 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use surtgis_algorithms::imagery::{
-    bsi, evi, evi2, EviParams, gndvi, mndwi, msavi, nbr, ndbi, ndmi, ndre, ndsi, ndvi, ndwi,
-    ngrdi, savi, SaviParams,
+    EviParams, SaviParams, bsi, evi, evi2, gndvi, mndwi, msavi, nbr, ndbi, ndmi, ndre, ndsi, ndvi,
+    ndwi, ngrdi, savi,
 };
 use surtgis_algorithms::terrain::{
-    accumulation_zones, landform_classification, surface_area_ratio, valley_depth, wind_exposure,
-    LandformParams, SarParams, WindExposureParams,
+    LandformParams, SarParams, WindExposureParams, accumulation_zones, landform_classification,
+    surface_area_ratio, valley_depth, wind_exposure,
 };
 use surtgis_core::Raster;
 
@@ -34,7 +34,14 @@ pub fn handle(
             max_scenes,
             scl_keep,
         } => handle_susceptibility(
-            &dem, &s2, &bbox, &datetime, &outdir, max_scenes, &scl_keep, compress,
+            &dem,
+            &s2,
+            &bbox,
+            &datetime,
+            &outdir,
+            max_scenes,
+            &scl_keep,
+            compress,
             mem_limit_bytes,
         ),
         PipelineCommands::Features {
@@ -52,13 +59,37 @@ pub fn handle(
         ),
         #[cfg(feature = "cloud")]
         PipelineCommands::Temporal {
-            catalog, bbox, collection, datetime, interval,
-            index, analysis, method, threshold, smooth, stats,
-            max_scenes, outdir, keep_intermediates, align_to,
+            catalog,
+            bbox,
+            collection,
+            datetime,
+            interval,
+            index,
+            analysis,
+            method,
+            threshold,
+            smooth,
+            stats,
+            max_scenes,
+            outdir,
+            keep_intermediates,
+            align_to,
         } => handle_temporal_pipeline(
-            &catalog, &bbox, &collection, &datetime, &interval,
-            &index, &analysis, &method, threshold, smooth, &stats,
-            max_scenes, &outdir, keep_intermediates, align_to.as_ref(),
+            &catalog,
+            &bbox,
+            &collection,
+            &datetime,
+            &interval,
+            &index,
+            &analysis,
+            &method,
+            threshold,
+            smooth,
+            &stats,
+            max_scenes,
+            &outdir,
+            keep_intermediates,
+            align_to.as_ref(),
             compress,
         ),
     }
@@ -106,8 +137,7 @@ pub fn handle_susceptibility(
             pb.finish_and_clear();
             return Err(anyhow::anyhow!("DEM file not found: {}", src.display()));
         }
-        std::fs::copy(&src, &output_dem)
-            .context("Failed to copy DEM to output directory")?;
+        std::fs::copy(&src, &output_dem).context("Failed to copy DEM to output directory")?;
         src
     } else {
         // STAC collection ID: download mosaic to output/dem.tif
@@ -123,11 +153,7 @@ pub fn handle_susceptibility(
         };
 
         let raster = super::stac::fetch_stac_band(
-            "pc",
-            bbox_str,
-            dem_source,
-            asset,
-            "", // DEM is static; no datetime filter
+            "pc", bbox_str, dem_source, asset, "", // DEM is static; no datetime filter
             1,  // single mosaic
             None,
         )
@@ -137,8 +163,13 @@ pub fn handle_susceptibility(
             &raster,
             &output_dem,
             if compress {
-                Some(surtgis_core::io::GeoTiffOptions { compression: "DEFLATE".into() })
-            } else { None },
+                Some(surtgis_core::io::GeoTiffOptions {
+                    compression: "DEFLATE".into(),
+                    ..Default::default()
+                })
+            } else {
+                None
+            },
         )
         .context("Failed to write downloaded DEM")?;
 
@@ -153,13 +184,21 @@ pub fn handle_susceptibility(
     let size_mb = (rows * cols * 8) as f64 / 1_000_000.0;
 
     pb.finish_and_clear();
-    println!("  ✅ DEM loaded: {}×{} pixels ({:.1}MB)", cols, rows, size_mb);
+    println!(
+        "  ✅ DEM loaded: {}×{} pixels ({:.1}MB)",
+        cols, rows, size_mb
+    );
 
     // ========== STEP 2: Terrain All ==========
     println!("\n📍 STEP 2: Terrain factors (17 products)...");
     let pb = helpers::spinner("Computing slope, aspect, curvature, etc.");
 
-    handle_terrain_all(&dem_path, &outdir.join("terrain"), compress, mem_limit_bytes)?;
+    handle_terrain_all(
+        &dem_path,
+        &outdir.join("terrain"),
+        compress,
+        mem_limit_bytes,
+    )?;
 
     pb.finish_and_clear();
     println!("  ✅ Terrain complete");
@@ -168,7 +207,12 @@ pub fn handle_susceptibility(
     println!("\n📍 STEP 3: Hydrology factors (8 products)...");
     let pb = helpers::spinner("Computing flow direction, flow accumulation, streams, etc.");
 
-    handle_hydrology_all(&dem_path, &outdir.join("hydrology"), compress, mem_limit_bytes)?;
+    handle_hydrology_all(
+        &dem_path,
+        &outdir.join("hydrology"),
+        compress,
+        mem_limit_bytes,
+    )?;
 
     pb.finish_and_clear();
     println!("  ✅ Hydrology complete");
@@ -198,7 +242,8 @@ pub fn handle_susceptibility(
 
                 // ========== STEP 5: Imagery Indices ==========
                 println!("\n📍 STEP 5: Computing spectral indices (10 indices)...");
-                let pb = helpers::spinner("NDVI, NDWI, MNDWI, NBR, SAVI, EVI, BSI, NDBI, NDMI, NDSI");
+                let pb =
+                    helpers::spinner("NDVI, NDWI, MNDWI, NBR, SAVI, EVI, BSI, NDBI, NDMI, NDSI");
 
                 compute_imagery_indices(&s2_bands, &outdir.join("imagery"), compress)?;
 
@@ -221,14 +266,50 @@ pub fn handle_susceptibility(
 
     // Count and list files
     let terrain_count = std::fs::read_dir(outdir.join("terrain"))
-        .map(|entries| entries.filter(|e| e.is_ok() && e.as_ref().unwrap().path().extension().map(|ext| ext == "tif").unwrap_or(false)).count())
+        .map(|entries| {
+            entries
+                .filter(|e| {
+                    e.is_ok()
+                        && e.as_ref()
+                            .unwrap()
+                            .path()
+                            .extension()
+                            .map(|ext| ext == "tif")
+                            .unwrap_or(false)
+                })
+                .count()
+        })
         .unwrap_or(0);
     let hydrology_count = std::fs::read_dir(outdir.join("hydrology"))
-        .map(|entries| entries.filter(|e| e.is_ok() && e.as_ref().unwrap().path().extension().map(|ext| ext == "tif").unwrap_or(false)).count())
+        .map(|entries| {
+            entries
+                .filter(|e| {
+                    e.is_ok()
+                        && e.as_ref()
+                            .unwrap()
+                            .path()
+                            .extension()
+                            .map(|ext| ext == "tif")
+                            .unwrap_or(false)
+                })
+                .count()
+        })
         .unwrap_or(0);
     let imagery_count = if s2_source != "skip" && outdir.join("imagery").exists() {
         std::fs::read_dir(outdir.join("imagery"))
-            .map(|entries| entries.filter(|e| e.is_ok() && e.as_ref().unwrap().path().extension().map(|ext| ext == "tif").unwrap_or(false)).count())
+            .map(|entries| {
+                entries
+                    .filter(|e| {
+                        e.is_ok()
+                            && e.as_ref()
+                                .unwrap()
+                                .path()
+                                .extension()
+                                .map(|ext| ext == "tif")
+                                .unwrap_or(false)
+                    })
+                    .count()
+            })
             .unwrap_or(0)
     } else {
         0
@@ -277,12 +358,12 @@ pub fn handle_hydrology_all(
 
 /// Container for Sentinel-2 bands required for spectral indices
 struct S2Bands {
-    blue: Raster<f64>,    // B02
-    green: Raster<f64>,   // B03
-    red: Raster<f64>,     // B04
-    nir: Raster<f64>,     // B08
-    swir1: Raster<f64>,   // B11
-    swir2: Raster<f64>,   // B12
+    blue: Raster<f64>,  // B02
+    green: Raster<f64>, // B03
+    red: Raster<f64>,   // B04
+    nir: Raster<f64>,   // B08
+    swir1: Raster<f64>, // B11
+    swir2: Raster<f64>, // B12
 }
 
 /// Fetch a single S2 band from STAC catalog (Planetary Computer)
@@ -292,10 +373,10 @@ struct S2Bands {
 /// - Downloads multiple scenes and composites (cloud-free)
 /// - Aligns to DEM grid
 fn fetch_s2_band(
-    collection: &str,     // "sentinel-2-l2a"
-    band: &str,           // "B04", "B08", etc.
-    bbox: &str,           // "west,south,east,north"
-    datetime: &str,       // "YYYY-MM-DD/YYYY-MM-DD"
+    collection: &str, // "sentinel-2-l2a"
+    band: &str,       // "B04", "B08", etc.
+    bbox: &str,       // "west,south,east,north"
+    datetime: &str,   // "YYYY-MM-DD/YYYY-MM-DD"
     max_scenes: usize,
     align_to: &Path,
 ) -> Result<Raster<f64>> {
@@ -305,13 +386,13 @@ fn fetch_s2_band(
 
     // Call the generic STAC handler (collection-agnostic with auto cloud masking)
     super::stac::fetch_stac_band(
-        "pc",  // Planetary Computer catalog
+        "pc", // Planetary Computer catalog
         bbox,
         collection,
-        &format!("B{:02}", &band[1..]),  // Band identifier (e.g., B04)
+        &format!("B{:02}", &band[1..]), // Band identifier (e.g., B04)
         datetime,
         max_scenes,
-        Some(&dem_ref),  // Align to DEM grid
+        Some(&dem_ref), // Align to DEM grid
     )
 }
 
@@ -333,22 +414,67 @@ fn download_s2_bands(
     };
 
     // Fetch 6 critical bands (B02, B03, B04, B08, B11, B12)
-    let blue = fetch_s2_band(collection, "B02", bbox_str, datetime_str, max_scenes, align_to)
-        .context("Failed to fetch Blue band (B02)")?;
-    let green = fetch_s2_band(collection, "B03", bbox_str, datetime_str, max_scenes, align_to)
-        .context("Failed to fetch Green band (B03)")?;
-    let red = fetch_s2_band(collection, "B04", bbox_str, datetime_str, max_scenes, align_to)
-        .context("Failed to fetch Red band (B04)")?;
-    let nir = fetch_s2_band(collection, "B08", bbox_str, datetime_str, max_scenes, align_to)
-        .context("Failed to fetch NIR band (B08)")?;
-    let swir1 = fetch_s2_band(collection, "B11", bbox_str, datetime_str, max_scenes, align_to)
-        .context("Failed to fetch SWIR1 band (B11)")?;
-    let swir2 = fetch_s2_band(collection, "B12", bbox_str, datetime_str, max_scenes, align_to)
-        .context("Failed to fetch SWIR2 band (B12)")?;
+    let blue = fetch_s2_band(
+        collection,
+        "B02",
+        bbox_str,
+        datetime_str,
+        max_scenes,
+        align_to,
+    )
+    .context("Failed to fetch Blue band (B02)")?;
+    let green = fetch_s2_band(
+        collection,
+        "B03",
+        bbox_str,
+        datetime_str,
+        max_scenes,
+        align_to,
+    )
+    .context("Failed to fetch Green band (B03)")?;
+    let red = fetch_s2_band(
+        collection,
+        "B04",
+        bbox_str,
+        datetime_str,
+        max_scenes,
+        align_to,
+    )
+    .context("Failed to fetch Red band (B04)")?;
+    let nir = fetch_s2_band(
+        collection,
+        "B08",
+        bbox_str,
+        datetime_str,
+        max_scenes,
+        align_to,
+    )
+    .context("Failed to fetch NIR band (B08)")?;
+    let swir1 = fetch_s2_band(
+        collection,
+        "B11",
+        bbox_str,
+        datetime_str,
+        max_scenes,
+        align_to,
+    )
+    .context("Failed to fetch SWIR1 band (B11)")?;
+    let swir2 = fetch_s2_band(
+        collection,
+        "B12",
+        bbox_str,
+        datetime_str,
+        max_scenes,
+        align_to,
+    )
+    .context("Failed to fetch SWIR2 band (B12)")?;
 
     // Validate all bands have same dimensions
-    if !(blue.rows() == green.rows() && green.rows() == red.rows() && red.rows() == nir.rows()
-        && nir.rows() == swir1.rows() && swir1.rows() == swir2.rows())
+    if !(blue.rows() == green.rows()
+        && green.rows() == red.rows()
+        && red.rows() == nir.rows()
+        && nir.rows() == swir1.rows()
+        && swir1.rows() == swir2.rows())
     {
         anyhow::bail!(
             "S2 bands have mismatched dimensions (rows). \
@@ -372,30 +498,25 @@ fn download_s2_bands(
 /// Saves results to outdir with standard filenames
 fn compute_imagery_indices(bands: &S2Bands, outdir: &Path, compress: bool) -> Result<()> {
     // Create imagery output directory
-    std::fs::create_dir_all(outdir)
-        .context("Failed to create imagery output directory")?;
+    std::fs::create_dir_all(outdir).context("Failed to create imagery output directory")?;
 
     // NDVI = (NIR - Red) / (NIR + Red)
-    let ndvi = ndvi(&bands.nir, &bands.red)
-        .context("Failed to compute NDVI")?;
+    let ndvi = ndvi(&bands.nir, &bands.red).context("Failed to compute NDVI")?;
     helpers::write_result(&ndvi, &outdir.join("ndvi.tif"), compress)
         .context("Failed to write NDVI")?;
 
     // NDWI = (Green - NIR) / (Green + NIR)
-    let ndwi = ndwi(&bands.green, &bands.nir)
-        .context("Failed to compute NDWI")?;
+    let ndwi = ndwi(&bands.green, &bands.nir).context("Failed to compute NDWI")?;
     helpers::write_result(&ndwi, &outdir.join("ndwi.tif"), compress)
         .context("Failed to write NDWI")?;
 
     // MNDWI = (Green - SWIR1) / (Green + SWIR1)
-    let mndwi = mndwi(&bands.green, &bands.swir1)
-        .context("Failed to compute MNDWI")?;
+    let mndwi = mndwi(&bands.green, &bands.swir1).context("Failed to compute MNDWI")?;
     helpers::write_result(&mndwi, &outdir.join("mndwi.tif"), compress)
         .context("Failed to write MNDWI")?;
 
     // NBR = (NIR - SWIR2) / (NIR + SWIR2)
-    let nbr = nbr(&bands.nir, &bands.swir2)
-        .context("Failed to compute NBR")?;
+    let nbr = nbr(&bands.nir, &bands.swir2).context("Failed to compute NBR")?;
     helpers::write_result(&nbr, &outdir.join("nbr.tif"), compress)
         .context("Failed to write NBR")?;
 
@@ -412,26 +533,23 @@ fn compute_imagery_indices(bands: &S2Bands, outdir: &Path, compress: bool) -> Re
         .context("Failed to write EVI")?;
 
     // BSI = ((SWIR2 + Red) - (NIR + Blue)) / ((SWIR2 + Red) + (NIR + Blue))
-    let bsi = bsi(&bands.swir2, &bands.red, &bands.nir, &bands.blue)
-        .context("Failed to compute BSI")?;
+    let bsi =
+        bsi(&bands.swir2, &bands.red, &bands.nir, &bands.blue).context("Failed to compute BSI")?;
     helpers::write_result(&bsi, &outdir.join("bsi.tif"), compress)
         .context("Failed to write BSI")?;
 
     // NDBI = (SWIR1 - NIR) / (SWIR1 + NIR)
-    let ndbi = ndbi(&bands.swir1, &bands.nir)
-        .context("Failed to compute NDBI")?;
+    let ndbi = ndbi(&bands.swir1, &bands.nir).context("Failed to compute NDBI")?;
     helpers::write_result(&ndbi, &outdir.join("ndbi.tif"), compress)
         .context("Failed to write NDBI")?;
 
     // NDMI = (NIR - SWIR1) / (NIR + SWIR1)
-    let ndmi = ndmi(&bands.nir, &bands.swir1)
-        .context("Failed to compute NDMI")?;
+    let ndmi = ndmi(&bands.nir, &bands.swir1).context("Failed to compute NDMI")?;
     helpers::write_result(&ndmi, &outdir.join("ndmi.tif"), compress)
         .context("Failed to write NDMI")?;
 
     // NDSI = (Green - SWIR1) / (Green + SWIR1)
-    let ndsi = ndsi(&bands.green, &bands.swir1)
-        .context("Failed to compute NDSI")?;
+    let ndsi = ndsi(&bands.green, &bands.swir1).context("Failed to compute NDSI")?;
     helpers::write_result(&ndsi, &outdir.join("ndsi.tif"), compress)
         .context("Failed to write NDSI")?;
 
@@ -543,8 +661,8 @@ pub fn handle_features_generate(
         println!("\nSTEP 2: Computing extra terrain features...");
         let step_start = Instant::now();
 
-        let dem = helpers::read_dem(&input.to_path_buf())
-            .context("Failed to read DEM for extras")?;
+        let dem =
+            helpers::read_dem(&input.to_path_buf()).context("Failed to read DEM for extras")?;
 
         let vd = valley_depth(&dem).context("Failed to compute valley depth")?;
         helpers::write_result(&vd, &terrain_dir.join("valley_depth.tif"), compress)
@@ -569,8 +687,7 @@ pub fn handle_features_generate(
             .context("Failed to write wind exposure")?;
         println!("  wind_exposure.tif");
 
-        let az = accumulation_zones(&dem)
-            .context("Failed to compute accumulation zones")?;
+        let az = accumulation_zones(&dem).context("Failed to compute accumulation zones")?;
         helpers::write_result(&az, &terrain_dir.join("accumulation_zones.tif"), compress)
             .context("Failed to write accumulation zones")?;
         println!("  accumulation_zones.tif");
@@ -616,7 +733,10 @@ pub fn handle_features_generate(
     // ========== STEP 3: Hydrology (optional) ==========
     if !skip_hydrology {
         let step_label = if extras { "STEP 3" } else { "STEP 2" };
-        println!("\n{}: Computing hydrology features (8 products)...", step_label);
+        println!(
+            "\n{}: Computing hydrology features (8 products)...",
+            step_label
+        );
         let step_start = Instant::now();
 
         super::hydrology::handle_hydrology_all(input, &hydro_dir, compress, mem_limit_bytes)
@@ -798,11 +918,21 @@ fn compute_index(index: &str, bands: &HashMap<&str, Raster<f64>>) -> Result<Rast
         "nbr" => nbr(&bands["nir"], &bands["swir22"]).context("NBR computation failed"),
         "savi" => savi(&bands["nir"], &bands["red"], SaviParams { l_factor: 0.5 })
             .context("SAVI computation failed"),
-        "evi" => evi(&bands["nir"], &bands["red"], &bands["blue"], EviParams::default())
-            .context("EVI computation failed"),
+        "evi" => evi(
+            &bands["nir"],
+            &bands["red"],
+            &bands["blue"],
+            EviParams::default(),
+        )
+        .context("EVI computation failed"),
         "evi2" => evi2(&bands["nir"], &bands["red"]).context("EVI2 computation failed"),
-        "bsi" => bsi(&bands["swir22"], &bands["red"], &bands["nir"], &bands["blue"])
-            .context("BSI computation failed"),
+        "bsi" => bsi(
+            &bands["swir22"],
+            &bands["red"],
+            &bands["nir"],
+            &bands["blue"],
+        )
+        .context("BSI computation failed"),
         "ndbi" => ndbi(&bands["nir"], &bands["swir16"]).context("NDBI computation failed"),
         "ndmi" => ndmi(&bands["nir"], &bands["swir16"]).context("NDMI computation failed"),
         "ndsi" => ndsi(&bands["green"], &bands["swir16"]).context("NDSI computation failed"),
@@ -851,12 +981,10 @@ fn handle_temporal_pipeline(
     align_to: Option<&PathBuf>,
     compress: bool,
 ) -> Result<()> {
+    use super::stac::{SimpleDate, format_date, parse_date, split_date_range};
     use surtgis_algorithms::temporal::{
-        linear_trend, mann_kendall, temporal_percentile, temporal_stats,
-        vegetation_phenology, PhenologyParams,
-    };
-    use super::stac::{
-        parse_date, format_date, split_date_range, SimpleDate,
+        PhenologyParams, linear_trend, mann_kendall, temporal_percentile, temporal_stats,
+        vegetation_phenology,
     };
 
     let total_start = Instant::now();
@@ -883,7 +1011,11 @@ fn handle_temporal_pipeline(
     let end_date = parse_date(parts[1])?;
     let intervals = split_date_range(&start_date, &end_date, interval)?;
 
-    let min_intervals = if analyses.contains(&"phenology") { 6 } else { 2 };
+    let min_intervals = if analyses.contains(&"phenology") {
+        6
+    } else {
+        2
+    };
 
     // ── 2. Print header ─────────────────────────────────────────────
     println!("SurtGIS Temporal Pipeline");
@@ -893,7 +1025,11 @@ fn handle_temporal_pipeline(
     println!("  BBox:       {}", bbox);
     println!("  Period:     {} to {}", parts[0], parts[1]);
     println!("  Interval:   {} ({} windows)", interval, intervals.len());
-    println!("  Index:      {} (bands: {})", index.to_uppercase(), band_names.join(", "));
+    println!(
+        "  Index:      {} (bands: {})",
+        index.to_uppercase(),
+        band_names.join(", ")
+    );
     println!("  Analysis:   {}", analyses.join(", "));
     if analyses.contains(&"trend") {
         println!("  Method:     {}", method);
@@ -946,7 +1082,9 @@ fn handle_temporal_pipeline(
         let mut bands_map: HashMap<&str, Raster<f64>> = HashMap::new();
         let mut band_failed = false;
         for handle in handles {
-            let (bn, result) = handle.join().map_err(|_| anyhow::anyhow!("band download thread panicked"))?;
+            let (bn, result) = handle
+                .join()
+                .map_err(|_| anyhow::anyhow!("band download thread panicked"))?;
             match result {
                 Ok(raster) => {
                     // Match band name back to static str
@@ -1007,8 +1145,18 @@ fn handle_temporal_pipeline(
         let (rows, cols) = index_raster.shape();
         let valid = index_raster.data().iter().filter(|v| v.is_finite()).count();
         let total = rows * cols;
-        let pct = if total > 0 { valid as f64 / total as f64 * 100.0 } else { 0.0 };
-        println!("  {} ({}x{}, {:.1}% valid)", index.to_uppercase(), cols, rows, pct);
+        let pct = if total > 0 {
+            valid as f64 / total as f64 * 100.0
+        } else {
+            0.0
+        };
+        println!(
+            "  {} ({}x{}, {:.1}% valid)",
+            index.to_uppercase(),
+            cols,
+            rows,
+            pct
+        );
 
         // Write intermediate if requested
         if keep_intermediates {
@@ -1022,8 +1170,12 @@ fn handle_temporal_pipeline(
     }
 
     println!();
-    println!("{}/{} intervals successful ({} failed)",
-        index_stack.len(), intervals.len(), failed.len());
+    println!(
+        "{}/{} intervals successful ({} failed)",
+        index_stack.len(),
+        intervals.len(),
+        failed.len()
+    );
 
     // ── 5. Validate stack ───────────────────────────────────────────
     if index_stack.len() < min_intervals {
@@ -1069,9 +1221,9 @@ fn handle_temporal_pipeline(
                 println!("\nComputing temporal statistics...");
 
                 let requested: Vec<&str> = stats_str.split(',').map(|s| s.trim()).collect();
-                let has_basic = requested.iter().any(|s| {
-                    matches!(*s, "mean" | "std" | "min" | "max" | "count")
-                });
+                let has_basic = requested
+                    .iter()
+                    .any(|s| matches!(*s, "mean" | "std" | "min" | "max" | "count"));
 
                 let mut count = 0usize;
                 if has_basic {
@@ -1121,14 +1273,36 @@ fn handle_temporal_pipeline(
                         let result = linear_trend(&refs, Some(&fractional_years))
                             .context("linear_trend failed")?;
 
-                        helpers::write_result(&result.slope, &trend_dir.join("slope.tif"), compress)?;
-                        helpers::write_result(&result.intercept, &trend_dir.join("intercept.tif"), compress)?;
-                        helpers::write_result(&result.r_squared, &trend_dir.join("r_squared.tif"), compress)?;
-                        helpers::write_result(&result.p_value, &trend_dir.join("p_value.tif"), compress)?;
+                        helpers::write_result(
+                            &result.slope,
+                            &trend_dir.join("slope.tif"),
+                            compress,
+                        )?;
+                        helpers::write_result(
+                            &result.intercept,
+                            &trend_dir.join("intercept.tif"),
+                            compress,
+                        )?;
+                        helpers::write_result(
+                            &result.r_squared,
+                            &trend_dir.join("r_squared.tif"),
+                            compress,
+                        )?;
+                        helpers::write_result(
+                            &result.p_value,
+                            &trend_dir.join("p_value.tif"),
+                            compress,
+                        )?;
 
                         println!("  slope     -> {}", trend_dir.join("slope.tif").display());
-                        println!("  intercept -> {}", trend_dir.join("intercept.tif").display());
-                        println!("  R2        -> {}", trend_dir.join("r_squared.tif").display());
+                        println!(
+                            "  intercept -> {}",
+                            trend_dir.join("intercept.tif").display()
+                        );
+                        println!(
+                            "  R2        -> {}",
+                            trend_dir.join("r_squared.tif").display()
+                        );
                         println!("  p-value   -> {}", trend_dir.join("p_value.tif").display());
 
                         output_summary.push(("Trend (linear)", trend_dir.display().to_string(), 4));
@@ -1138,16 +1312,41 @@ fn handle_temporal_pipeline(
                         let result = mann_kendall(&refs).context("mann_kendall failed")?;
 
                         helpers::write_result(&result.tau, &trend_dir.join("tau.tif"), compress)?;
-                        helpers::write_result(&result.p_value, &trend_dir.join("p_value.tif"), compress)?;
-                        helpers::write_result(&result.trend, &trend_dir.join("trend.tif"), compress)?;
-                        helpers::write_result(&result.sens_slope, &trend_dir.join("sens_slope.tif"), compress)?;
+                        helpers::write_result(
+                            &result.p_value,
+                            &trend_dir.join("p_value.tif"),
+                            compress,
+                        )?;
+                        helpers::write_result(
+                            &result.trend,
+                            &trend_dir.join("trend.tif"),
+                            compress,
+                        )?;
+                        helpers::write_result(
+                            &result.sens_slope,
+                            &trend_dir.join("sens_slope.tif"),
+                            compress,
+                        )?;
 
                         println!("  tau        -> {}", trend_dir.join("tau.tif").display());
-                        println!("  p-value    -> {}", trend_dir.join("p_value.tif").display());
-                        println!("  trend      -> {} (1=up, 0=none, -1=down)", trend_dir.join("trend.tif").display());
-                        println!("  Sen's slope -> {}", trend_dir.join("sens_slope.tif").display());
+                        println!(
+                            "  p-value    -> {}",
+                            trend_dir.join("p_value.tif").display()
+                        );
+                        println!(
+                            "  trend      -> {} (1=up, 0=none, -1=down)",
+                            trend_dir.join("trend.tif").display()
+                        );
+                        println!(
+                            "  Sen's slope -> {}",
+                            trend_dir.join("sens_slope.tif").display()
+                        );
 
-                        output_summary.push(("Trend (Mann-Kendall)", trend_dir.display().to_string(), 4));
+                        output_summary.push((
+                            "Trend (Mann-Kendall)",
+                            trend_dir.display().to_string(),
+                            4,
+                        ));
                     }
                     _ => anyhow::bail!(
                         "Unknown trend method: '{}'. Use: linear, mann-kendall",
@@ -1159,12 +1358,16 @@ fn handle_temporal_pipeline(
             "phenology" => {
                 let pheno_dir = outdir.join("phenology");
                 std::fs::create_dir_all(&pheno_dir)?;
-                println!("\nExtracting vegetation phenology ({} time steps)...", refs.len());
+                println!(
+                    "\nExtracting vegetation phenology ({} time steps)...",
+                    refs.len()
+                );
 
                 // Compute DOYs for phenology (fractional-year scale avoids wrap-around)
-                let doys: Vec<f64> = dates.iter().map(|d| {
-                    date_to_fractional_year(d) * 365.25
-                }).collect();
+                let doys: Vec<f64> = dates
+                    .iter()
+                    .map(|d| date_to_fractional_year(d) * 365.25)
+                    .collect();
 
                 let params = PhenologyParams {
                     threshold,
@@ -1246,8 +1449,11 @@ fn handle_temporal_pipeline(
         println!("  {} -> {} ({} files)", name, dir, count);
     }
     if keep_intermediates {
-        println!("  Intermediates -> {}/intermediates/ ({} files)",
-            outdir.display(), index_stack.len());
+        println!(
+            "  Intermediates -> {}/intermediates/ ({} files)",
+            outdir.display(),
+            index_stack.len()
+        );
     }
     println!("  Metadata -> {}", meta_path.display());
     println!();

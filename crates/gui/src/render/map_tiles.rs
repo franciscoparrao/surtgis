@@ -51,10 +51,7 @@ impl<'a> Plugin for RasterOverlay<'a> {
         let nw = projector.project(lon_lat(west, north));
         let se = projector.project(lon_lat(east, south));
 
-        let screen_rect = Rect::from_min_max(
-            egui::pos2(nw.x, nw.y),
-            egui::pos2(se.x, se.y),
-        );
+        let screen_rect = Rect::from_min_max(egui::pos2(nw.x, nw.y), egui::pos2(se.x, se.y));
 
         // Draw the raster texture with the given opacity.
         let tint = Color32::from_white_alpha((self.opacity * 255.0) as u8);

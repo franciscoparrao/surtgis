@@ -56,8 +56,8 @@ pub fn handle(
     if features_json_path.exists() {
         let features_json_str = std::fs::read_to_string(&features_json_path)
             .with_context(|| format!("Failed to read {}", features_json_path.display()))?;
-        let features_meta: serde_json::Value = serde_json::from_str(&features_json_str)
-            .context("Failed to parse features.json")?;
+        let features_meta: serde_json::Value =
+            serde_json::from_str(&features_json_str).context("Failed to parse features.json")?;
 
         if let Some(entries) = features_meta["features"].as_array() {
             println!("From features.json ({} entries):", entries.len());
@@ -71,11 +71,16 @@ pub fn handle(
 
                 let raster_path = features_dir.join(file);
                 if !raster_path.exists() {
-                    eprintln!("  WARNING: skipping missing raster: {}", raster_path.display());
+                    eprintln!(
+                        "  WARNING: skipping missing raster: {}",
+                        raster_path.display()
+                    );
                     continue;
                 }
 
-                let canonical = raster_path.canonicalize().unwrap_or_else(|_| raster_path.clone());
+                let canonical = raster_path
+                    .canonicalize()
+                    .unwrap_or_else(|_| raster_path.clone());
                 let raster = surtgis_core::io::read_geotiff::<f64, _>(&raster_path, None)
                     .with_context(|| format!("Failed to read raster: {}", raster_path.display()))?;
                 println!("  Loaded: {} ({}x{})", name, raster.cols(), raster.rows());
@@ -136,8 +141,8 @@ pub fn handle(
 
     // 3. Read vector points
     println!("Reading point locations...");
-    let fc = surtgis_core::vector::read_vector(points_path)
-        .context("Failed to read vector points")?;
+    let fc =
+        surtgis_core::vector::read_vector(points_path).context("Failed to read vector points")?;
     println!("  {} features read", fc.len());
 
     // 4. Extract pixel values at each point
@@ -240,7 +245,10 @@ pub fn handle(
     println!("EXTRACTION COMPLETE");
     println!("=========================================");
     println!("  Extracted: {} samples", extracted);
-    println!("  Skipped:   {} (out of bounds, NaN, missing target)", skipped);
+    println!(
+        "  Skipped:   {} (out of bounds, NaN, missing target)",
+        skipped
+    );
     println!("  Features:  {}", feature_names.len());
     println!("  Output:    {}", output.display());
     println!("  Time:      {:.1}s", start.elapsed().as_secs_f64());

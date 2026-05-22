@@ -116,7 +116,8 @@ mod inner {
 
         /// Sign an asset href for Planetary Computer (blocking).
         pub fn sign_asset_href(&self, href: &str, collection: &str) -> Result<String> {
-            self.rt.block_on(self.inner.sign_asset_href(href, collection))
+            self.rt
+                .block_on(self.inner.sign_asset_href(href, collection))
         }
 
         /// Get collection Zarr auth info (token, account, container) for PC (blocking).
@@ -125,7 +126,8 @@ mod inner {
             &self,
             collection: &str,
         ) -> Result<Option<(String, String, String)>> {
-            self.rt.block_on(self.inner.get_collection_zarr_auth(collection))
+            self.rt
+                .block_on(self.inner.get_collection_zarr_auth(collection))
         }
     }
 
@@ -141,7 +143,9 @@ mod inner {
             .build()
             .map_err(|e| crate::error::CloudError::Network(e.to_string()))?;
 
-        rt.block_on(crate::stac_reader::search_and_read(catalog, params, asset_key, bbox))
+        rt.block_on(crate::stac_reader::search_and_read(
+            catalog, params, asset_key, bbox,
+        ))
     }
 
     // ── CloudRasterReader trait impls ────────────────────────────────
@@ -185,11 +189,7 @@ mod zarr_inner {
 
     impl ZarrReaderBlocking {
         /// Open a Zarr store and select a variable (blocking).
-        pub fn open(
-            store_url: &str,
-            variable: &str,
-            options: ZarrReaderOptions,
-        ) -> Result<Self> {
+        pub fn open(store_url: &str, variable: &str, options: ZarrReaderOptions) -> Result<Self> {
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(2)
                 .enable_all()
@@ -201,11 +201,7 @@ mod zarr_inner {
         }
 
         /// Read a geographic bounding box at a specific time (blocking).
-        pub fn read_bbox(
-            &self,
-            bbox: &BBox,
-            time: &TimeReduction,
-        ) -> Result<Raster<f64>> {
+        pub fn read_bbox(&self, bbox: &BBox, time: &TimeReduction) -> Result<Raster<f64>> {
             self.rt.block_on(self.inner.read_bbox(bbox, time))
         }
 
@@ -221,10 +217,7 @@ mod zarr_inner {
     }
 
     /// One-shot: list variables in a Zarr store (blocking).
-    pub fn zarr_list_variables(
-        store_url: &str,
-        options: ZarrReaderOptions,
-    ) -> Result<Vec<String>> {
+    pub fn zarr_list_variables(store_url: &str, options: ZarrReaderOptions) -> Result<Vec<String>> {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -242,7 +235,10 @@ mod zarr_inner {
     }
 
     impl crate::cloud_reader::CloudRasterReader for ZarrReaderWithTime {
-        fn read_bbox_f64(&mut self, bbox: &crate::tile_index::BBox) -> crate::error::Result<surtgis_core::raster::Raster<f64>> {
+        fn read_bbox_f64(
+            &mut self,
+            bbox: &crate::tile_index::BBox,
+        ) -> crate::error::Result<surtgis_core::raster::Raster<f64>> {
             self.reader.read_bbox(bbox, &self.time)
         }
 
@@ -253,7 +249,11 @@ mod zarr_inner {
                 crs: m.crs.clone(),
                 nodata: m.nodata,
                 width: *m.shape.last().unwrap_or(&0) as usize,
-                height: m.shape.get(m.shape.len().wrapping_sub(2)).copied().unwrap_or(0) as usize,
+                height: m
+                    .shape
+                    .get(m.shape.len().wrapping_sub(2))
+                    .copied()
+                    .unwrap_or(0) as usize,
             }
         }
     }

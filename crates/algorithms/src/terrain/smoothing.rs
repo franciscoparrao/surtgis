@@ -3,8 +3,8 @@
 //! Removes noise while preserving breaks-in-slope (ridges, valleys, scarps).
 //! Based on Sun et al. (2007) feature-preserving mesh denoising adapted for DEMs.
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -101,7 +101,11 @@ pub fn feature_preserving_smoothing(
                             let nr = row as isize + dr;
                             let nc = col as isize + dc;
 
-                            if nr < 1 || nc < 1 || (nr as usize) >= rows - 1 || (nc as usize) >= cols - 1 {
+                            if nr < 1
+                                || nc < 1
+                                || (nr as usize) >= rows - 1
+                                || (nc as usize) >= cols - 1
+                            {
                                 continue;
                             }
 
@@ -115,8 +119,8 @@ pub fn feature_preserving_smoothing(
                             let nn = compute_normal(&prev, nr, nc, rows, cols, cs);
 
                             // Normal similarity: angle between normals
-                            let cos_angle = (n0.0 * nn.0 + n0.1 * nn.1 + n0.2 * nn.2)
-                                .clamp(-1.0, 1.0);
+                            let cos_angle =
+                                (n0.0 * nn.0 + n0.1 * nn.1 + n0.2 * nn.2).clamp(-1.0, 1.0);
                             let angle = cos_angle.acos();
 
                             if angle > threshold_rad {
@@ -129,7 +133,8 @@ pub fn feature_preserving_smoothing(
                             let spatial_w = (-dist_sq / (2.0 * sigma * sigma)).exp();
 
                             // Normal similarity weight
-                            let normal_w = (-(angle * angle) / (2.0 * threshold_rad * threshold_rad)).exp();
+                            let normal_w =
+                                (-(angle * angle) / (2.0 * threshold_rad * threshold_rad)).exp();
 
                             let w = spatial_w * normal_w;
                             sum_nx += nn.0 * w;
@@ -185,12 +190,16 @@ pub fn feature_preserving_smoothing(
 
                     for dr in -1_isize..=1 {
                         for dc in -1_isize..=1 {
-                            if dr == 0 && dc == 0 { continue; }
+                            if dr == 0 && dc == 0 {
+                                continue;
+                            }
 
                             let nr = (row as isize + dr) as usize;
                             let nc = (col as isize + dc) as usize;
                             let zn = prev[(nr, nc)];
-                            if zn.is_nan() { continue; }
+                            if zn.is_nan() {
+                                continue;
+                            }
 
                             // Displacement vector from cell i to neighbor j
                             let dx = dc as f64 * cs;
@@ -227,7 +236,14 @@ pub fn feature_preserving_smoothing(
 
 /// Compute approximate surface normal at a cell (nx, ny, nz).
 /// Uses central differences with proper cell_size scaling.
-fn compute_normal(data: &Array2<f64>, row: usize, col: usize, rows: usize, cols: usize, cs: f64) -> (f64, f64, f64) {
+fn compute_normal(
+    data: &Array2<f64>,
+    row: usize,
+    col: usize,
+    rows: usize,
+    cols: usize,
+    cs: f64,
+) -> (f64, f64, f64) {
     if row == 0 || row >= rows - 1 || col == 0 || col >= cols - 1 {
         return (0.0, 0.0, 1.0);
     }
@@ -424,15 +440,25 @@ pub fn iterative_mean_smoothing(
     // Distance weights for 3×3 neighborhood
     let sqrt2 = std::f64::consts::SQRT_2;
     let offsets: [(isize, isize, f64); 8] = [
-        (-1, -1, sqrt2), (-1, 0, 1.0), (-1, 1, sqrt2),
-        (0, -1, 1.0),                  (0, 1, 1.0),
-        (1, -1, sqrt2),  (1, 0, 1.0),  (1, 1, sqrt2),
+        (-1, -1, sqrt2),
+        (-1, 0, 1.0),
+        (-1, 1, sqrt2),
+        (0, -1, 1.0),
+        (0, 1, 1.0),
+        (1, -1, sqrt2),
+        (1, 0, 1.0),
+        (1, 1, sqrt2),
     ];
 
     // Precompute weights
-    let weights: Vec<f64> = offsets.iter().map(|&(_, _, d)| {
-        if m == 0 { 1.0 } else { 1.0 / d.powi(m as i32) }
-    }).collect();
+    let weights: Vec<f64> = offsets
+        .iter()
+        .map(
+            |&(_, _, d)| {
+                if m == 0 { 1.0 } else { 1.0 / d.powi(m as i32) }
+            },
+        )
+        .collect();
 
     let mut current = dem.data().clone();
 
@@ -450,7 +476,10 @@ pub fn iterative_mean_smoothing(
                         continue;
                     }
                     if let Some(nd) = nodata
-                        && (z0 - nd).abs() < f64::EPSILON { continue; }
+                        && (z0 - nd).abs() < f64::EPSILON
+                    {
+                        continue;
+                    }
 
                     // Border cells: preserve
                     if row == 0 || row == rows - 1 || col == 0 || col == cols - 1 {
@@ -466,9 +495,14 @@ pub fn iterative_mean_smoothing(
                         let nc = (col as isize + dc) as usize;
                         let z = prev[(nr, nc)];
 
-                        if z.is_nan() { continue; }
+                        if z.is_nan() {
+                            continue;
+                        }
                         if let Some(nd) = nodata
-                            && (z - nd).abs() < f64::EPSILON { continue; }
+                            && (z - nd).abs() < f64::EPSILON
+                        {
+                            continue;
+                        }
 
                         let w = weights[i];
                         sum += z * w;
@@ -533,18 +567,26 @@ impl Complex {
     }
 
     fn add(self, other: Self) -> Self {
-        Self { re: self.re + other.re, im: self.im + other.im }
+        Self {
+            re: self.re + other.re,
+            im: self.im + other.im,
+        }
     }
 
     fn sub(self, other: Self) -> Self {
-        Self { re: self.re - other.re, im: self.im - other.im }
+        Self {
+            re: self.re - other.re,
+            im: self.im - other.im,
+        }
     }
 }
 
 /// Next power of 2 >= n
 fn next_pow2(n: usize) -> usize {
     let mut p = 1;
-    while p < n { p <<= 1; }
+    while p < n {
+        p <<= 1;
+    }
     p
 }
 
@@ -617,10 +659,14 @@ fn fft_1d(data: &mut [Complex], inverse: bool) {
 pub fn fft_low_pass(dem: &Raster<f64>, params: FftLowPassParams) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
     if rows < 3 || cols < 3 {
-        return Err(Error::Algorithm("DEM must be at least 3×3 for FFT smoothing".into()));
+        return Err(Error::Algorithm(
+            "DEM must be at least 3×3 for FFT smoothing".into(),
+        ));
     }
     if params.cutoff_wavelength <= 0.0 {
-        return Err(Error::Algorithm("cutoff_wavelength must be positive".into()));
+        return Err(Error::Algorithm(
+            "cutoff_wavelength must be positive".into(),
+        ));
     }
 
     let data = dem.data();
@@ -667,8 +713,16 @@ pub fn fft_low_pass(dem: &Raster<f64>, params: FftLowPassParams) -> Result<Raste
     for (r, grid_row) in grid.iter_mut().enumerate() {
         for (c, cell) in grid_row.iter_mut().enumerate() {
             // Frequency indices (handle wrapping)
-            let fr = if r <= nrows / 2 { r as f64 } else { (nrows - r) as f64 };
-            let fc = if c <= ncols / 2 { c as f64 } else { (ncols - c) as f64 };
+            let fr = if r <= nrows / 2 {
+                r as f64
+            } else {
+                (nrows - r) as f64
+            };
+            let fc = if c <= ncols / 2 {
+                c as f64
+            } else {
+                (ncols - c) as f64
+            };
 
             // Normalized radial frequency
             let f_norm = ((fr / freq_cutoff_r).powi(2) + (fc / freq_cutoff_c).powi(2)).sqrt();
@@ -760,12 +814,26 @@ mod tests {
     #[test]
     fn test_smoothing_params_validation() {
         let dem = Raster::filled(10, 10, 100.0_f64);
-        assert!(feature_preserving_smoothing(&dem, SmoothingParams {
-            radius: 0, ..Default::default()
-        }).is_err());
-        assert!(feature_preserving_smoothing(&dem, SmoothingParams {
-            iterations: 0, ..Default::default()
-        }).is_err());
+        assert!(
+            feature_preserving_smoothing(
+                &dem,
+                SmoothingParams {
+                    radius: 0,
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            feature_preserving_smoothing(
+                &dem,
+                SmoothingParams {
+                    iterations: 0,
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
     }
 
     // === Gaussian smoothing tests ===
@@ -792,9 +860,14 @@ mod tests {
             }
         }
 
-        let result = gaussian_smoothing(&dem, GaussianSmoothingParams {
-            radius: 3, sigma: 1.5,
-        }).unwrap();
+        let result = gaussian_smoothing(
+            &dem,
+            GaussianSmoothingParams {
+                radius: 3,
+                sigma: 1.5,
+            },
+        )
+        .unwrap();
 
         // Variance should decrease after smoothing
         let orig_var = compute_variance(&dem);
@@ -802,16 +875,24 @@ mod tests {
         assert!(
             smooth_var < orig_var,
             "Gaussian should reduce variance: orig={:.2}, smooth={:.2}",
-            orig_var, smooth_var
+            orig_var,
+            smooth_var
         );
     }
 
     #[test]
     fn test_gaussian_params_validation() {
         let dem = Raster::filled(10, 10, 100.0_f64);
-        assert!(gaussian_smoothing(&dem, GaussianSmoothingParams {
-            radius: 0, sigma: 1.0,
-        }).is_err());
+        assert!(
+            gaussian_smoothing(
+                &dem,
+                GaussianSmoothingParams {
+                    radius: 0,
+                    sigma: 1.0,
+                }
+            )
+            .is_err()
+        );
     }
 
     // === Iterative mean smoothing tests ===
@@ -838,17 +919,22 @@ mod tests {
             }
         }
 
-        let result = iterative_mean_smoothing(&dem, IterativeMeanParams {
-            iterations: 5,
-            weight_exponent: 1,
-        }).unwrap();
+        let result = iterative_mean_smoothing(
+            &dem,
+            IterativeMeanParams {
+                iterations: 5,
+                weight_exponent: 1,
+            },
+        )
+        .unwrap();
 
         let orig_var = compute_variance(&dem);
         let smooth_var = compute_variance(&result);
         assert!(
             smooth_var < orig_var,
             "Iterative mean should reduce variance: orig={:.2}, smooth={:.2}",
-            orig_var, smooth_var
+            orig_var,
+            smooth_var
         );
     }
 
@@ -863,28 +949,46 @@ mod tests {
             }
         }
 
-        let r1 = iterative_mean_smoothing(&dem, IterativeMeanParams {
-            iterations: 1, weight_exponent: 1,
-        }).unwrap();
-        let r5 = iterative_mean_smoothing(&dem, IterativeMeanParams {
-            iterations: 5, weight_exponent: 1,
-        }).unwrap();
+        let r1 = iterative_mean_smoothing(
+            &dem,
+            IterativeMeanParams {
+                iterations: 1,
+                weight_exponent: 1,
+            },
+        )
+        .unwrap();
+        let r5 = iterative_mean_smoothing(
+            &dem,
+            IterativeMeanParams {
+                iterations: 5,
+                weight_exponent: 1,
+            },
+        )
+        .unwrap();
 
         let var1 = compute_variance(&r1);
         let var5 = compute_variance(&r5);
         assert!(
             var5 < var1,
             "More iterations should be smoother: var1={:.2}, var5={:.2}",
-            var1, var5
+            var1,
+            var5
         );
     }
 
     #[test]
     fn test_iterative_mean_params_validation() {
         let dem = Raster::filled(10, 10, 100.0_f64);
-        assert!(iterative_mean_smoothing(&dem, IterativeMeanParams {
-            iterations: 0, weight_exponent: 1,
-        }).is_err());
+        assert!(
+            iterative_mean_smoothing(
+                &dem,
+                IterativeMeanParams {
+                    iterations: 0,
+                    weight_exponent: 1,
+                }
+            )
+            .is_err()
+        );
     }
 
     /// Helper: compute variance of interior cells
@@ -903,7 +1007,9 @@ mod tests {
                 }
             }
         }
-        if count < 2.0 { return 0.0; }
+        if count < 2.0 {
+            return 0.0;
+        }
         let mean = sum / count;
         sum_sq / count - mean * mean
     }
@@ -916,17 +1022,21 @@ mod tests {
         for r in 0..size {
             for c in 0..size {
                 // Smooth trend + high-frequency noise
-                data[[r, c]] = r as f64 * 2.0 + c as f64
-                    + if (r + c) % 2 == 0 { 5.0 } else { -5.0 };
+                data[[r, c]] =
+                    r as f64 * 2.0 + c as f64 + if (r + c) % 2 == 0 { 5.0 } else { -5.0 };
             }
         }
         let mut dem = Raster::new(size, size);
         dem.set_transform(GeoTransform::new(0.0, size as f64, 1.0, -1.0));
         *dem.data_mut() = data;
 
-        let smoothed = fft_low_pass(&dem, FftLowPassParams {
-            cutoff_wavelength: 4.0,
-        }).unwrap();
+        let smoothed = fft_low_pass(
+            &dem,
+            FftLowPassParams {
+                cutoff_wavelength: 4.0,
+            },
+        )
+        .unwrap();
 
         let var_orig = compute_variance(&dem);
         let var_smooth = compute_variance(&smoothed);
@@ -934,7 +1044,8 @@ mod tests {
         assert!(
             var_smooth < var_orig,
             "FFT smoothing should reduce variance: orig={:.1}, smooth={:.1}",
-            var_orig, var_smooth
+            var_orig,
+            var_smooth
         );
     }
 
@@ -952,9 +1063,13 @@ mod tests {
         dem.set_transform(GeoTransform::new(0.0, size as f64, 1.0, -1.0));
         *dem.data_mut() = data;
 
-        let smoothed = fft_low_pass(&dem, FftLowPassParams {
-            cutoff_wavelength: 4.0,
-        }).unwrap();
+        let smoothed = fft_low_pass(
+            &dem,
+            FftLowPassParams {
+                cutoff_wavelength: 4.0,
+            },
+        )
+        .unwrap();
 
         // Center value should be close to original
         let orig = dem.get(16, 16).unwrap();
@@ -962,7 +1077,8 @@ mod tests {
         assert!(
             (orig - smth).abs() < 5.0,
             "Linear trend should be preserved: orig={:.1}, smooth={:.1}",
-            orig, smth
+            orig,
+            smth
         );
     }
 
@@ -980,7 +1096,11 @@ mod tests {
         assert!(smoothed.get(5, 5).unwrap().is_nan());
         // Non-NaN cells should be valid
         let v = smoothed.get(8, 8).unwrap();
-        assert!(!v.is_nan() && v.is_finite(), "Non-NaN cells should be valid, got {}", v);
+        assert!(
+            !v.is_nan() && v.is_finite(),
+            "Non-NaN cells should be valid, got {}",
+            v
+        );
     }
 
     #[test]
@@ -996,8 +1116,20 @@ mod tests {
         dem.set_transform(GeoTransform::new(0.0, size as f64, 1.0, -1.0));
         *dem.data_mut() = data;
 
-        let mild = fft_low_pass(&dem, FftLowPassParams { cutoff_wavelength: 4.0 }).unwrap();
-        let strong = fft_low_pass(&dem, FftLowPassParams { cutoff_wavelength: 16.0 }).unwrap();
+        let mild = fft_low_pass(
+            &dem,
+            FftLowPassParams {
+                cutoff_wavelength: 4.0,
+            },
+        )
+        .unwrap();
+        let strong = fft_low_pass(
+            &dem,
+            FftLowPassParams {
+                cutoff_wavelength: 16.0,
+            },
+        )
+        .unwrap();
 
         let var_mild = compute_variance(&mild);
         let var_strong = compute_variance(&strong);
@@ -1005,7 +1137,8 @@ mod tests {
         assert!(
             var_strong < var_mild,
             "Larger cutoff should smooth more: mild={:.1}, strong={:.1}",
-            var_mild, var_strong
+            var_mild,
+            var_strong
         );
     }
 }

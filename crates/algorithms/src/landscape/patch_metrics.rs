@@ -118,12 +118,19 @@ pub fn patch_metrics(
 
 /// Format patch metrics as CSV string.
 pub fn patches_to_csv(patches: &[PatchStats]) -> String {
-    let mut csv = String::from("label,class,area_cells,area_m2,perimeter_edges,perimeter_m,para,frac\n");
+    let mut csv =
+        String::from("label,class,area_cells,area_m2,perimeter_edges,perimeter_m,para,frac\n");
     for p in patches {
         csv.push_str(&format!(
             "{},{},{},{:.2},{},{:.2},{:.6},{:.4}\n",
-            p.label, p.class, p.area_cells, p.area_m2,
-            p.perimeter_edges, p.perimeter_m, p.para, p.frac
+            p.label,
+            p.class,
+            p.area_cells,
+            p.area_m2,
+            p.perimeter_edges,
+            p.perimeter_m,
+            p.para,
+            p.frac
         ));
     }
     csv
@@ -132,7 +139,7 @@ pub fn patches_to_csv(patches: &[PatchStats]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::landscape::connected_components::{label_patches, Connectivity};
+    use crate::landscape::connected_components::{Connectivity, label_patches};
     use ndarray::Array2;
     use surtgis_core::GeoTransform;
 
@@ -150,12 +157,10 @@ mod tests {
     #[test]
     fn test_square_patch() {
         // 4x4 all class 1 → 1 patch, area=16, perimeter=16 edges
-        let r = make_class(vec![
-            vec![1.0; 4],
-            vec![1.0; 4],
-            vec![1.0; 4],
-            vec![1.0; 4],
-        ], 10.0);
+        let r = make_class(
+            vec![vec![1.0; 4], vec![1.0; 4], vec![1.0; 4], vec![1.0; 4]],
+            10.0,
+        );
         let (labels, n) = label_patches(&r, Connectivity::Four).unwrap();
         let patches = patch_metrics(&r, &labels, n).unwrap();
         assert_eq!(patches.len(), 1);
@@ -167,10 +172,7 @@ mod tests {
     #[test]
     fn test_rectangle_patch() {
         // 2x5 all class 1 → 1 patch
-        let r = make_class(vec![
-            vec![1.0; 5],
-            vec![1.0; 5],
-        ], 1.0);
+        let r = make_class(vec![vec![1.0; 5], vec![1.0; 5]], 1.0);
         let (labels, n) = label_patches(&r, Connectivity::Four).unwrap();
         let patches = patch_metrics(&r, &labels, n).unwrap();
         assert_eq!(patches[0].area_cells, 10);
@@ -180,11 +182,14 @@ mod tests {
     #[test]
     fn test_single_pixel_patch() {
         // Single pixel surrounded by different class
-        let r = make_class(vec![
-            vec![0.0, 0.0, 0.0],
-            vec![0.0, 1.0, 0.0],
-            vec![0.0, 0.0, 0.0],
-        ], 10.0);
+        let r = make_class(
+            vec![
+                vec![0.0, 0.0, 0.0],
+                vec![0.0, 1.0, 0.0],
+                vec![0.0, 0.0, 0.0],
+            ],
+            10.0,
+        );
         let (labels, n) = label_patches(&r, Connectivity::Four).unwrap();
         let patches = patch_metrics(&r, &labels, n).unwrap();
         // Find the class-1 patch

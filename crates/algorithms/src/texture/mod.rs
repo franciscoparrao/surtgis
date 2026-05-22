@@ -4,8 +4,8 @@
 //! - **Sobel**: Edge detection using Sobel operator
 //! - **Laplacian**: Second-derivative edge enhancement
 
-mod glcm;
 mod edge;
+mod glcm;
 
-pub use glcm::{haralick_glcm, GlcmParams, GlcmTexture};
-pub use edge::{sobel_edge, laplacian};
+pub use edge::{laplacian, sobel_edge};
+pub use glcm::{GlcmParams, GlcmTexture, haralick_glcm};

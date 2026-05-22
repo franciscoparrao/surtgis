@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 
 use ndarray::Array2;
 
-use surtgis_core::raster::{GeoTransform, Raster};
 use surtgis_core::CRS;
+use surtgis_core::raster::{GeoTransform, Raster};
 
 use crate::error::{CloudError, Result};
 use crate::tile_index::BBox;
@@ -58,8 +58,8 @@ impl GribReader {
     pub fn read_message(&self, index: usize) -> Result<Raster<f64>> {
         use grib::LatLons;
 
-        let grib2 = grib::from_bytes(&self.data)
-            .map_err(|e| CloudError::Grib(format!("parse: {e}")))?;
+        let grib2 =
+            grib::from_bytes(&self.data).map_err(|e| CloudError::Grib(format!("parse: {e}")))?;
 
         let (_msg_idx, submessage) = grib2
             .iter()
@@ -92,7 +92,10 @@ impl GribReader {
         if values.len() != nrows * ncols {
             return Err(CloudError::Grib(format!(
                 "shape mismatch: {}x{}={} vs {} values",
-                nrows, ncols, nrows * ncols, values.len()
+                nrows,
+                ncols,
+                nrows * ncols,
+                values.len()
             )));
         }
 
@@ -116,13 +119,18 @@ impl GribReader {
             .find(|m| m.description.to_lowercase().contains(&lower))
             .map(|m| m.index)
             .ok_or_else(|| {
-                let avail: Vec<_> = self.metadata.messages.iter()
+                let avail: Vec<_> = self
+                    .metadata
+                    .messages
+                    .iter()
                     .take(20)
                     .map(|m| m.description.as_str())
                     .collect();
                 CloudError::Grib(format!(
                     "no message matching '{}'. First {}:\n  {}",
-                    param, avail.len(), avail.join("\n  ")
+                    param,
+                    avail.len(),
+                    avail.join("\n  ")
                 ))
             })?;
         self.read_message(idx)
@@ -140,15 +148,18 @@ impl GribReader {
         crop_raster(&full, bbox)
     }
 
-    pub fn metadata(&self) -> &GribMetadata { &self.metadata }
-    pub fn list_messages(&self) -> &[GribMessageInfo] { &self.metadata.messages }
+    pub fn metadata(&self) -> &GribMetadata {
+        &self.metadata
+    }
+    pub fn list_messages(&self) -> &[GribMessageInfo] {
+        &self.metadata.messages
+    }
 }
 
 // ─── Internal ────────────────────────────────────────────────────────
 
 fn index_messages(data: &[u8]) -> Result<Vec<GribMessageInfo>> {
-    let grib2 = grib::from_bytes(data)
-        .map_err(|e| CloudError::Grib(format!("parse: {e}")))?;
+    let grib2 = grib::from_bytes(data).map_err(|e| CloudError::Grib(format!("parse: {e}")))?;
 
     let mut messages = Vec::new();
     for (index, (msg_idx, submessage)) in grib2.iter().enumerate() {
@@ -182,7 +193,10 @@ fn infer_grid_shape(latlons: &[(f64, f64)]) -> Result<(usize, usize)> {
         let nrows = latlons.len() / ncols;
         if nrows * ncols != latlons.len() {
             return Err(CloudError::Grib(format!(
-                "non-regular grid: {} pts ≠ {}×{}", latlons.len(), nrows, ncols
+                "non-regular grid: {} pts ≠ {}×{}",
+                latlons.len(),
+                nrows,
+                ncols
             )));
         }
         Ok((nrows, ncols))
@@ -198,7 +212,10 @@ fn infer_grid_shape(latlons: &[(f64, f64)]) -> Result<(usize, usize)> {
         let ncols = latlons.len() / nrows;
         if nrows * ncols != latlons.len() {
             return Err(CloudError::Grib(format!(
-                "non-regular grid: {} pts ≠ {}×{}", latlons.len(), nrows, ncols
+                "non-regular grid: {} pts ≠ {}×{}",
+                latlons.len(),
+                nrows,
+                ncols
             )));
         }
         Ok((nrows, ncols))
@@ -234,8 +251,16 @@ fn crop_raster(raster: &Raster<f64>, bbox: &BBox) -> Result<Raster<f64>> {
     // Detect 0-360 convention and adjust bbox
     let (min_x, max_x) = if t.origin_x >= 0.0 && bbox.min_x < 0.0 {
         // Raster uses 0-360, bbox uses -180..180
-        let mx = if bbox.min_x < 0.0 { bbox.min_x + 360.0 } else { bbox.min_x };
-        let mxx = if bbox.max_x < 0.0 { bbox.max_x + 360.0 } else { bbox.max_x };
+        let mx = if bbox.min_x < 0.0 {
+            bbox.min_x + 360.0
+        } else {
+            bbox.min_x
+        };
+        let mxx = if bbox.max_x < 0.0 {
+            bbox.max_x + 360.0
+        } else {
+            bbox.max_x
+        };
         (mx, mxx)
     } else {
         (bbox.min_x, bbox.max_x)

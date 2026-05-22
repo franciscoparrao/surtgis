@@ -1,8 +1,8 @@
 //! Benchmarks for morphology algorithms
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use surtgis_algorithms::morphology::{
-    closing, dilate, erode, gradient, opening, StructuringElement,
+    StructuringElement, closing, dilate, erode, gradient, opening,
 };
 use surtgis_core::{GeoTransform, Raster};
 

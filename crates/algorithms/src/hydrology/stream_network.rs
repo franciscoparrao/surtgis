@@ -9,8 +9,8 @@
 //! including HAND, stream ordering, and sub-basin delineation.
 
 use ndarray::Array2;
-use surtgis_core::raster::Raster;
 use surtgis_core::Result;
+use surtgis_core::raster::Raster;
 
 /// Parameters for stream network extraction
 #[derive(Debug, Clone)]
@@ -60,8 +60,8 @@ pub fn stream_network(flow_acc: &Raster<f64>, params: StreamNetworkParams) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hydrology::fill_sinks::{FillSinksParams, fill_sinks};
     use crate::hydrology::{flow_accumulation, flow_direction};
-    use crate::hydrology::fill_sinks::{fill_sinks, FillSinksParams};
     use surtgis_core::GeoTransform;
 
     #[test]
@@ -84,7 +84,8 @@ mod tests {
         // Top row should have 0 accumulation → no stream
         for col in 0..10 {
             assert_eq!(
-                streams.get(0, col).unwrap(), 0,
+                streams.get(0, col).unwrap(),
+                0,
                 "Top row should not be stream at col {}",
                 col
             );

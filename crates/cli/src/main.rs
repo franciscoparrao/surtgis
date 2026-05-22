@@ -4,7 +4,12 @@ mod commands;
 mod handlers;
 mod helpers;
 mod memory;
+// streaming + stac_introspect import from surtgis_cloud unconditionally
+// and are consumed only by the cog/stac handlers (both cloud-gated).
+// Gate them too so --no-default-features builds cleanly.
+#[cfg(feature = "cloud")]
 mod stac_introspect;
+#[cfg(feature = "cloud")]
 mod streaming;
 
 // mimalloc: global allocator. glibc malloc tends to hold freed memory in
@@ -27,7 +32,8 @@ fn main() -> Result<()> {
     let verbose = cli.verbose;
 
     // Parse max_memory to bytes if provided
-    let mem_limit_bytes = cli.max_memory
+    let mem_limit_bytes = cli
+        .max_memory
         .as_ref()
         .map(|s| memory::parse_memory_size(s))
         .transpose()?;
@@ -36,35 +42,86 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Info { input } => handlers::info::handle(input)?,
-        Commands::Terrain { algorithm } => handlers::terrain::handle(algorithm, compress, streaming, mem_limit_bytes)?,
-        Commands::Hydrology { algorithm } => handlers::hydrology::handle(algorithm, compress, mem_limit_bytes)?,
+        Commands::Terrain { algorithm } => {
+            handlers::terrain::handle(algorithm, compress, streaming, mem_limit_bytes)?
+        }
+        Commands::Hydrology { algorithm } => {
+            handlers::hydrology::handle(algorithm, compress, mem_limit_bytes)?
+        }
         Commands::Imagery { algorithm } => handlers::imagery::handle(algorithm, compress)?,
         Commands::Morphology { algorithm } => handlers::morphology::handle(algorithm, compress)?,
         Commands::Landscape { algorithm } => handlers::landscape::handle(algorithm, compress)?,
-        Commands::Extract { features_dir, points, target, output } => handlers::extract::handle(&features_dir, &points, &target, &output)?,
+        Commands::Extract {
+            features_dir,
+            points,
+            target,
+            output,
+        } => handlers::extract::handle(&features_dir, &points, &target, &output)?,
         Commands::ExtractPatches {
-            features_dir, points, polygons, label_col, size, stride,
-            skip_nan_threshold, max_patches, seed, output,
+            features_dir,
+            points,
+            polygons,
+            label_col,
+            size,
+            stride,
+            skip_nan_threshold,
+            max_patches,
+            seed,
+            output,
         } => handlers::extract_patches::handle(
-            &features_dir, points.as_deref(), polygons.as_deref(),
-            &label_col, size, stride, skip_nan_threshold, max_patches, seed, &output,
+            &features_dir,
+            points.as_deref(),
+            polygons.as_deref(),
+            &label_col,
+            size,
+            stride,
+            skip_nan_threshold,
+            max_patches,
+            seed,
+            &output,
         )?,
-        Commands::Clip { input, polygon, bbox, output } => handlers::clip::handle_clip(input, polygon, bbox, output, compress, mem_limit_bytes)?,
+        Commands::Clip {
+            input,
+            polygon,
+            bbox,
+            output,
+        } => handlers::clip::handle_clip(input, polygon, bbox, output, compress, mem_limit_bytes)?,
         #[cfg(feature = "projections")]
-        Commands::Reproject { input, output, to, from, method, pixel_size } =>
-            handlers::reproject::handle(input, output, to, from, method, pixel_size, compress)?,
-        Commands::Rasterize { input, output, reference, attribute } => handlers::clip::handle_rasterize(input, output, reference, attribute, compress)?,
-        Commands::Resample { input, output, reference, method } => handlers::clip::handle_resample(input, output, reference, method, compress)?,
+        Commands::Reproject {
+            input,
+            output,
+            to,
+            from,
+            method,
+            pixel_size,
+        } => handlers::reproject::handle(input, output, to, from, method, pixel_size, compress)?,
+        Commands::Rasterize {
+            input,
+            output,
+            reference,
+            attribute,
+        } => handlers::clip::handle_rasterize(input, output, reference, attribute, compress)?,
+        Commands::Resample {
+            input,
+            output,
+            reference,
+            method,
+        } => handlers::clip::handle_resample(input, output, reference, method, compress)?,
         Commands::Mosaic { input, output } => handlers::mosaic::handle(input, output, compress)?,
         #[cfg(feature = "cloud")]
         Commands::Cog { action } => handlers::cog::handle(action, compress)?,
         #[cfg(feature = "cloud")]
         Commands::Stac { action } => handlers::stac::handle(action, compress)?,
-        Commands::Pipeline { action } => handlers::pipeline::handle(action, compress, mem_limit_bytes)?,
+        #[cfg(feature = "cloud")]
+        Commands::Pipeline { action } => {
+            handlers::pipeline::handle(action, compress, mem_limit_bytes)?
+        }
         Commands::Vector { action } => handlers::vector::handle(action)?,
         Commands::Interpolation { action } => handlers::interpolation::handle(action, compress)?,
         Commands::Temporal { action } => handlers::temporal::handle(action, compress)?,
-        Commands::Classification { algorithm } => handlers::classification::handle(algorithm, compress)?,
+        Commands::Classification { algorithm } => {
+            handlers::classification::handle(algorithm, compress)?
+        }
         Commands::Texture { algorithm } => handlers::texture::handle(algorithm, compress)?,
         Commands::Statistics { algorithm } => handlers::statistics::handle(algorithm, compress)?,
         #[cfg(feature = "ml")]

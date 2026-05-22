@@ -4,14 +4,13 @@ use anyhow::{Context, Result};
 use std::time::Instant;
 
 use surtgis_algorithms::hydrology::{
+    BreachParams, DrainageDensityParams, FillSinksParams, HandParams, MfdParams,
+    PriorityFloodParams, SedimentConnectivityParams, StreamNetworkParams, WatershedParams,
     basin_morphometry, breach_depressions, drainage_density, fill_sinks, flow_accumulation,
     flow_accumulation_mfd, flow_direction, flow_direction_dinf, hand, hypsometric_integral,
     priority_flood, sediment_connectivity, stream_network, watershed,
-    BreachParams, DrainageDensityParams,
-    FillSinksParams, HandParams, MfdParams, PriorityFloodParams, SedimentConnectivityParams,
-    StreamNetworkParams, WatershedParams,
 };
-use surtgis_algorithms::terrain::{slope, twi, SlopeParams, SlopeUnits};
+use surtgis_algorithms::terrain::{SlopeParams, SlopeUnits, slope, twi};
 
 use crate::commands::HydrologyCommands;
 use crate::helpers::{
@@ -19,7 +18,11 @@ use crate::helpers::{
 };
 use crate::memory;
 
-pub fn handle(algorithm: HydrologyCommands, compress: bool, mem_limit_bytes: Option<u64>) -> Result<()> {
+pub fn handle(
+    algorithm: HydrologyCommands,
+    compress: bool,
+    mem_limit_bytes: Option<u64>,
+) -> Result<()> {
     match algorithm {
         HydrologyCommands::FillSinks {
             input,
@@ -28,8 +31,8 @@ pub fn handle(algorithm: HydrologyCommands, compress: bool, mem_limit_bytes: Opt
         } => {
             let dem = read_dem(&input)?;
             let start = Instant::now();
-            let result = fill_sinks(&dem, FillSinksParams { min_slope })
-                .context("Failed to fill sinks")?;
+            let result =
+                fill_sinks(&dem, FillSinksParams { min_slope }).context("Failed to fill sinks")?;
             let elapsed = start.elapsed();
             write_result(&result, &output, compress)?;
             done("Fill sinks", &output, elapsed);
@@ -38,8 +41,7 @@ pub fn handle(algorithm: HydrologyCommands, compress: bool, mem_limit_bytes: Opt
         HydrologyCommands::FlowDirection { input, output } => {
             let dem = read_dem(&input)?;
             let start = Instant::now();
-            let result =
-                flow_direction(&dem).context("Failed to calculate flow direction")?;
+            let result = flow_direction(&dem).context("Failed to calculate flow direction")?;
             let elapsed = start.elapsed();
             write_result_u8(&result, &output, compress)?;
             done("Flow direction", &output, elapsed);
@@ -48,8 +50,8 @@ pub fn handle(algorithm: HydrologyCommands, compress: bool, mem_limit_bytes: Opt
         HydrologyCommands::FlowAccumulation { input, output } => {
             let flow_dir = read_u8(&input)?;
             let start = Instant::now();
-            let result = flow_accumulation(&flow_dir)
-                .context("Failed to calculate flow accumulation")?;
+            let result =
+                flow_accumulation(&flow_dir).context("Failed to calculate flow accumulation")?;
             let elapsed = start.elapsed();
             write_result(&result, &output, compress)?;
             done("Flow accumulation", &output, elapsed);
@@ -118,8 +120,8 @@ pub fn handle(algorithm: HydrologyCommands, compress: bool, mem_limit_bytes: Opt
         HydrologyCommands::FlowDirectionDinf { input, output } => {
             let dem = read_dem(&input)?;
             let start = Instant::now();
-            let result = flow_direction_dinf(&dem)
-                .context("Failed to compute D-infinity flow direction")?;
+            let result =
+                flow_direction_dinf(&dem).context("Failed to compute D-infinity flow direction")?;
             let elapsed = start.elapsed();
             write_result(&result, &output, compress)?;
             done("Flow direction (D-inf)", &output, elapsed);
@@ -143,13 +145,10 @@ pub fn handle(algorithm: HydrologyCommands, compress: bool, mem_limit_bytes: Opt
             let dem = read_dem(&input)?;
             let start = Instant::now();
             // Internal pipeline: fill -> flow_dir -> flow_acc -> slope -> twi
-            let filled =
-                priority_flood(&dem, PriorityFloodParams { epsilon: 0.0001 })
-                    .context("Failed to fill depressions")?;
-            let fdir =
-                flow_direction(&filled).context("Failed to compute flow direction")?;
-            let facc = flow_accumulation(&fdir)
-                .context("Failed to compute flow accumulation")?;
+            let filled = priority_flood(&dem, PriorityFloodParams { epsilon: 0.0001 })
+                .context("Failed to fill depressions")?;
+            let fdir = flow_direction(&filled).context("Failed to compute flow direction")?;
+            let facc = flow_accumulation(&fdir).context("Failed to compute flow accumulation")?;
             let slope_rad = slope(
                 &filled,
                 SlopeParams {
@@ -171,13 +170,10 @@ pub fn handle(algorithm: HydrologyCommands, compress: bool, mem_limit_bytes: Opt
         } => {
             let dem = read_dem(&input)?;
             let start = Instant::now();
-            let filled =
-                priority_flood(&dem, PriorityFloodParams { epsilon: 0.0001 })
-                    .context("Failed to fill depressions")?;
-            let fdir =
-                flow_direction(&filled).context("Failed to compute flow direction")?;
-            let facc = flow_accumulation(&fdir)
-                .context("Failed to compute flow accumulation")?;
+            let filled = priority_flood(&dem, PriorityFloodParams { epsilon: 0.0001 })
+                .context("Failed to fill depressions")?;
+            let fdir = flow_direction(&filled).context("Failed to compute flow direction")?;
+            let facc = flow_accumulation(&fdir).context("Failed to compute flow accumulation")?;
             let result = hand(
                 &dem,
                 &fdir,
@@ -199,13 +195,10 @@ pub fn handle(algorithm: HydrologyCommands, compress: bool, mem_limit_bytes: Opt
         } => {
             let dem = read_dem(&input)?;
             let start = Instant::now();
-            let filled =
-                priority_flood(&dem, PriorityFloodParams { epsilon: 0.0001 })
-                    .context("Failed to fill depressions")?;
-            let fdir =
-                flow_direction(&filled).context("Failed to compute flow direction")?;
-            let facc = flow_accumulation(&fdir)
-                .context("Failed to compute flow accumulation")?;
+            let filled = priority_flood(&dem, PriorityFloodParams { epsilon: 0.0001 })
+                .context("Failed to fill depressions")?;
+            let fdir = flow_direction(&filled).context("Failed to compute flow direction")?;
+            let facc = flow_accumulation(&fdir).context("Failed to compute flow accumulation")?;
             let result = stream_network(&facc, StreamNetworkParams { threshold })
                 .context("Failed to extract stream network")?;
             let elapsed = start.elapsed();
@@ -213,7 +206,12 @@ pub fn handle(algorithm: HydrologyCommands, compress: bool, mem_limit_bytes: Opt
             done("Stream network", &output, elapsed);
         }
 
-        HydrologyCommands::DrainageDensity { input, output, radius, cell_size } => {
+        HydrologyCommands::DrainageDensity {
+            input,
+            output,
+            radius,
+            cell_size,
+        } => {
             let streams = read_dem(&input)?;
             let start = Instant::now();
             let result = drainage_density(&streams, DrainageDensityParams { radius, cell_size })
@@ -241,17 +239,28 @@ pub fn handle(algorithm: HydrologyCommands, compress: bool, mem_limit_bytes: Opt
             println!("\n  Processing time: {:.2?}", elapsed);
         }
 
-        HydrologyCommands::SedimentConnectivity { slope, flow_acc, flow_dir, output, threshold } => {
+        HydrologyCommands::SedimentConnectivity {
+            slope,
+            flow_acc,
+            flow_dir,
+            output,
+            threshold,
+        } => {
             let slp = read_dem(&slope)?;
             let facc = read_dem(&flow_acc)?;
             let fdir: surtgis_core::Raster<u8> = surtgis_core::io::read_geotiff(&flow_dir, None)
                 .context("Failed to read flow direction")?;
             let start = Instant::now();
             let result = sediment_connectivity(
-                &slp, &facc, &fdir,
-                SedimentConnectivityParams { stream_threshold: threshold },
+                &slp,
+                &facc,
+                &fdir,
+                SedimentConnectivityParams {
+                    stream_threshold: threshold,
+                },
                 None,
-            ).context("Failed to compute sediment connectivity")?;
+            )
+            .context("Failed to compute sediment connectivity")?;
             let elapsed = start.elapsed();
             write_result(&result, &output, compress)?;
             done("Sediment connectivity", &output, elapsed);
@@ -264,13 +273,21 @@ pub fn handle(algorithm: HydrologyCommands, compress: bool, mem_limit_bytes: Opt
             let metrics = basin_morphometry(&ws_r, cell_size)
                 .context("Failed to compute basin morphometry")?;
             let elapsed = start.elapsed();
-            println!("{:<8} {:>10} {:>10} {:>10} {:>10} {:>10}",
-                "Basin", "Area(m2)", "Perim(m)", "Circular", "Elongat", "Compact");
+            println!(
+                "{:<8} {:>10} {:>10} {:>10} {:>10} {:>10}",
+                "Basin", "Area(m2)", "Perim(m)", "Circular", "Elongat", "Compact"
+            );
             println!("{}", "-".repeat(68));
             for m in &metrics {
-                println!("{:<8} {:>10.1} {:>10.1} {:>10.4} {:>10.4} {:>10.4}",
-                    m.watershed_id, m.area_m2, m.perimeter_m,
-                    m.circularity, m.elongation, m.compactness);
+                println!(
+                    "{:<8} {:>10.1} {:>10.1} {:>10.4} {:>10.4} {:>10.4}",
+                    m.watershed_id,
+                    m.area_m2,
+                    m.perimeter_m,
+                    m.circularity,
+                    m.elongation,
+                    m.compactness
+                );
             }
             println!("\n  Processing time: {:.2?}", elapsed);
         }
@@ -280,16 +297,20 @@ pub fn handle(algorithm: HydrologyCommands, compress: bool, mem_limit_bytes: Opt
             outdir,
             threshold,
         } => {
-            std::fs::create_dir_all(&outdir)
-                .context("Failed to create output directory")?;
+            std::fs::create_dir_all(&outdir).context("Failed to create output directory")?;
 
             // Check if DEM exceeds memory limit
             if let Some(limit) = mem_limit_bytes {
                 if let Ok(est_size) = memory::estimate_decompressed_size(&input) {
                     if est_size > limit {
-                        eprintln!("Warning: DEM size ({:.2} GB) exceeds --max-memory limit ({:.2} GB)",
-                                 est_size as f64 / 1e9, limit as f64 / 1e9);
-                        eprintln!("Note: Hydrology 'all' pipeline requires full in-memory processing");
+                        eprintln!(
+                            "Warning: DEM size ({:.2} GB) exceeds --max-memory limit ({:.2} GB)",
+                            est_size as f64 / 1e9,
+                            limit as f64 / 1e9
+                        );
+                        eprintln!(
+                            "Note: Hydrology 'all' pipeline requires full in-memory processing"
+                        );
                     }
                 }
             }
@@ -300,8 +321,7 @@ pub fn handle(algorithm: HydrologyCommands, compress: bool, mem_limit_bytes: Opt
             println!("Computing full hydrology pipeline...");
 
             let filled =
-                priority_flood(&dem, PriorityFloodParams { epsilon: 0.0001 })
-                    .context("fill")?;
+                priority_flood(&dem, PriorityFloodParams { epsilon: 0.0001 }).context("fill")?;
             write_result(&filled, &outdir.join("filled.tif"), compress)?;
             println!("  filled.tif");
 
@@ -309,8 +329,7 @@ pub fn handle(algorithm: HydrologyCommands, compress: bool, mem_limit_bytes: Opt
             write_result_u8(&fdir, &outdir.join("flow_direction_d8.tif"), compress)?;
             println!("  flow_direction_d8.tif");
 
-            let fdir_dinf =
-                flow_direction_dinf(&filled).context("flow direction dinf")?;
+            let fdir_dinf = flow_direction_dinf(&filled).context("flow direction dinf")?;
             write_result(
                 &fdir_dinf,
                 &outdir.join("flow_direction_dinf.tif"),
@@ -343,8 +362,8 @@ pub fn handle(algorithm: HydrologyCommands, compress: bool, mem_limit_bytes: Opt
             write_result(&twi_r, &outdir.join("twi.tif"), compress)?;
             println!("  twi.tif");
 
-            let streams = stream_network(&facc, StreamNetworkParams { threshold })
-                .context("streams")?;
+            let streams =
+                stream_network(&facc, StreamNetworkParams { threshold }).context("streams")?;
             write_result_u8(&streams, &outdir.join("stream_network.tif"), compress)?;
             println!("  stream_network.tif");
 
@@ -361,10 +380,7 @@ pub fn handle(algorithm: HydrologyCommands, compress: bool, mem_limit_bytes: Opt
             println!("  hand.tif");
 
             let elapsed = start.elapsed();
-            println!(
-                "\nFull hydrology pipeline saved to: {}",
-                outdir.display()
-            );
+            println!("\nFull hydrology pipeline saved to: {}", outdir.display());
             println!("  8 products, processing time: {:.2?}", elapsed);
         }
     }
@@ -379,15 +395,17 @@ pub fn handle_hydrology_all(
     compress: bool,
     mem_limit_bytes: Option<u64>,
 ) -> Result<()> {
-    std::fs::create_dir_all(outdir)
-        .context("Failed to create output directory")?;
+    std::fs::create_dir_all(outdir).context("Failed to create output directory")?;
 
     // Check if DEM exceeds memory limit
     if let Some(limit) = mem_limit_bytes {
         if let Ok(est_size) = memory::estimate_decompressed_size(input) {
             if est_size > limit {
-                eprintln!("Warning: DEM size ({:.2} GB) exceeds --max-memory limit ({:.2} GB)",
-                         est_size as f64 / 1e9, limit as f64 / 1e9);
+                eprintln!(
+                    "Warning: DEM size ({:.2} GB) exceeds --max-memory limit ({:.2} GB)",
+                    est_size as f64 / 1e9,
+                    limit as f64 / 1e9
+                );
                 eprintln!("Note: Hydrology 'all' pipeline requires full in-memory processing");
             }
         }
@@ -398,9 +416,7 @@ pub fn handle_hydrology_all(
 
     println!("Computing full hydrology pipeline...");
 
-    let filled =
-        priority_flood(&dem, PriorityFloodParams { epsilon: 0.0001 })
-            .context("fill")?;
+    let filled = priority_flood(&dem, PriorityFloodParams { epsilon: 0.0001 }).context("fill")?;
     write_result(&filled, &outdir.join("filled.tif"), compress)?;
     println!("  filled.tif");
 
@@ -408,8 +424,7 @@ pub fn handle_hydrology_all(
     write_result_u8(&fdir, &outdir.join("flow_direction_d8.tif"), compress)?;
     println!("  flow_direction_d8.tif");
 
-    let fdir_dinf =
-        flow_direction_dinf(&filled).context("flow direction dinf")?;
+    let fdir_dinf = flow_direction_dinf(&filled).context("flow direction dinf")?;
     write_result(
         &fdir_dinf,
         &outdir.join("flow_direction_dinf.tif"),
@@ -421,8 +436,8 @@ pub fn handle_hydrology_all(
     write_result(&facc, &outdir.join("flow_accumulation.tif"), compress)?;
     println!("  flow_accumulation.tif");
 
-    let facc_mfd = flow_accumulation_mfd(&filled, MfdParams { exponent: 1.1 })
-        .context("mfd accumulation")?;
+    let facc_mfd =
+        flow_accumulation_mfd(&filled, MfdParams { exponent: 1.1 }).context("mfd accumulation")?;
     write_result(
         &facc_mfd,
         &outdir.join("flow_accumulation_mfd.tif"),
@@ -442,8 +457,8 @@ pub fn handle_hydrology_all(
     write_result(&twi_r, &outdir.join("twi.tif"), compress)?;
     println!("  twi.tif");
 
-    let streams = stream_network(&facc, StreamNetworkParams { threshold: 1000.0 })
-        .context("streams")?;
+    let streams =
+        stream_network(&facc, StreamNetworkParams { threshold: 1000.0 }).context("streams")?;
     write_result_u8(&streams, &outdir.join("stream_network.tif"), compress)?;
     println!("  stream_network.tif");
 
@@ -460,10 +475,7 @@ pub fn handle_hydrology_all(
     println!("  hand.tif");
 
     let elapsed = start.elapsed();
-    println!(
-        "\nFull hydrology pipeline saved to: {}",
-        outdir.display()
-    );
+    println!("\nFull hydrology pipeline saved to: {}", outdir.display());
     println!("  8 products, processing time: {:.2?}", elapsed);
 
     Ok(())

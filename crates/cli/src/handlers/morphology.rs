@@ -81,8 +81,7 @@ pub fn handle(algorithm: MorphologyCommands, compress: bool) -> Result<()> {
             let se = parse_se(&shape, radius)?;
             let raster = read_dem(&input)?;
             let start = Instant::now();
-            let result =
-                gradient(&raster, &se).context("Failed to compute gradient")?;
+            let result = gradient(&raster, &se).context("Failed to compute gradient")?;
             let elapsed = start.elapsed();
             write_result(&result, &output, compress)?;
             done("Gradient", &output, elapsed);
@@ -97,8 +96,7 @@ pub fn handle(algorithm: MorphologyCommands, compress: bool) -> Result<()> {
             let se = parse_se(&shape, radius)?;
             let raster = read_dem(&input)?;
             let start = Instant::now();
-            let result =
-                top_hat(&raster, &se).context("Failed to compute top-hat")?;
+            let result = top_hat(&raster, &se).context("Failed to compute top-hat")?;
             let elapsed = start.elapsed();
             write_result(&result, &output, compress)?;
             done("Top-hat", &output, elapsed);
@@ -113,8 +111,7 @@ pub fn handle(algorithm: MorphologyCommands, compress: bool) -> Result<()> {
             let se = parse_se(&shape, radius)?;
             let raster = read_dem(&input)?;
             let start = Instant::now();
-            let result =
-                black_hat(&raster, &se).context("Failed to compute black-hat")?;
+            let result = black_hat(&raster, &se).context("Failed to compute black-hat")?;
             let elapsed = start.elapsed();
             write_result(&result, &output, compress)?;
             done("Black-hat", &output, elapsed);

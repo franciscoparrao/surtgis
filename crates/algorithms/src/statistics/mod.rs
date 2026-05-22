@@ -4,10 +4,10 @@
 //! - **zonal**: Statistics by zones
 //! - **autocorrelation**: Spatial autocorrelation (Moran's I, Getis-Ord Gi*)
 
+pub mod autocorrelation;
 pub mod focal;
 pub mod zonal;
-pub mod autocorrelation;
 
-pub use focal::{focal_statistics, FocalStatistic, FocalParams};
-pub use zonal::{zonal_statistics, ZonalResult, ZonalStatistic};
-pub use autocorrelation::{global_morans_i, local_getis_ord, MoransIResult, GetisOrdResult};
+pub use autocorrelation::{GetisOrdResult, MoransIResult, global_morans_i, local_getis_ord};
+pub use focal::{FocalParams, FocalStatistic, focal_statistics};
+pub use zonal::{ZonalResult, ZonalStatistic, zonal_statistics};

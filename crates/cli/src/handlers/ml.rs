@@ -65,8 +65,8 @@ fn handle_extract_samples(
     let features_json_path = features_dir.join("features.json");
     let features_json_str = std::fs::read_to_string(&features_json_path)
         .with_context(|| format!("Failed to read {}", features_json_path.display()))?;
-    let features_meta: serde_json::Value = serde_json::from_str(&features_json_str)
-        .context("Failed to parse features.json")?;
+    let features_meta: serde_json::Value =
+        serde_json::from_str(&features_json_str).context("Failed to parse features.json")?;
 
     let feature_entries = features_meta["features"]
         .as_array()
@@ -87,7 +87,10 @@ fn handle_extract_samples(
 
         let raster_path = features_dir.join(file);
         if !raster_path.exists() {
-            eprintln!("  WARNING: skipping missing raster: {}", raster_path.display());
+            eprintln!(
+                "  WARNING: skipping missing raster: {}",
+                raster_path.display()
+            );
             continue;
         }
 
@@ -108,8 +111,8 @@ fn handle_extract_samples(
 
     // 3. Read vector points
     println!("\nReading point locations...");
-    let fc = surtgis_core::vector::read_vector(points_path)
-        .context("Failed to read vector points")?;
+    let fc =
+        surtgis_core::vector::read_vector(points_path).context("Failed to read vector points")?;
     println!("  {} features read", fc.len());
 
     // 4. Extract pixel values at each point
@@ -212,7 +215,10 @@ fn handle_extract_samples(
     println!("EXTRACTION COMPLETE");
     println!("=========================================");
     println!("  Extracted: {} samples", extracted);
-    println!("  Skipped:   {} (out of bounds, NaN, missing target)", skipped);
+    println!(
+        "  Skipped:   {} (out of bounds, NaN, missing target)",
+        skipped
+    );
     println!("  Features:  {}", feature_names.len());
     println!("  Output:    {}", output.display());
     println!("  Time:      {:.1}s", start.elapsed().as_secs_f64());
@@ -238,7 +244,10 @@ fn handle_train(
     println!("=========================================");
     println!("  Input:       {}", input.display());
     println!("  Target:      {}", target_col);
-    println!("  Model:       {} (n_estimators={})", model_type, n_estimators);
+    println!(
+        "  Model:       {} (n_estimators={})",
+        model_type, n_estimators
+    );
     println!("  Task:        {}", task_type);
     println!("  CV folds:    {}", folds);
     println!("  Output:      {}", output.display());
@@ -258,10 +267,7 @@ fn handle_train(
 
         let n_samples = task.n_samples();
         let n_features = task.n_features();
-        println!(
-            "  Loaded: {} samples x {} features",
-            n_samples, n_features
-        );
+        println!("  Loaded: {} samples x {} features", n_samples, n_features);
 
         // 2. Cross-validation
         println!("\nCross-validation ({} folds)...", folds);
@@ -336,10 +342,7 @@ fn handle_train(
 
         let n_samples = task.n_samples();
         let n_features = task.n_features();
-        println!(
-            "  Loaded: {} samples x {} features",
-            n_samples, n_features
-        );
+        println!("  Loaded: {} samples x {} features", n_samples, n_features);
 
         // 2. Cross-validation
         println!("\nCross-validation ({} folds)...", folds);
@@ -434,8 +437,8 @@ fn handle_predict(
     let features_json_path = features_dir.join("features.json");
     let features_json_str = std::fs::read_to_string(&features_json_path)
         .with_context(|| format!("Failed to read {}", features_json_path.display()))?;
-    let features_meta: serde_json::Value = serde_json::from_str(&features_json_str)
-        .context("Failed to parse features.json")?;
+    let features_meta: serde_json::Value =
+        serde_json::from_str(&features_json_str).context("Failed to parse features.json")?;
 
     let feature_entries = features_meta["features"]
         .as_array()
@@ -454,7 +457,11 @@ fn handle_predict(
 
         let raster_path = features_dir.join(file);
         if !raster_path.exists() {
-            anyhow::bail!("Missing required raster: {} ({})", name, raster_path.display());
+            anyhow::bail!(
+                "Missing required raster: {} ({})",
+                name,
+                raster_path.display()
+            );
         }
 
         let raster = surtgis_core::io::read_geotiff::<f64, _>(&raster_path, None)
@@ -570,12 +577,7 @@ fn handle_predict(
 // ─── Benchmark ─────────────────────────────────────────────────────────
 
 /// Compare multiple learners on a dataset using cross-validation.
-fn handle_benchmark(
-    input: &Path,
-    target_col: &str,
-    folds: usize,
-    task_type: &str,
-) -> Result<()> {
+fn handle_benchmark(input: &Path, target_col: &str, folds: usize, task_type: &str) -> Result<()> {
     let start = Instant::now();
 
     println!("SurtGIS ML: Benchmark");
@@ -589,12 +591,7 @@ fn handle_benchmark(
     let is_classification = task_type == "classification";
 
     // Learners to compare
-    let configs: Vec<(&str, usize)> = vec![
-        ("rf", 10),
-        ("rf", 50),
-        ("rf", 100),
-        ("rf", 200),
-    ];
+    let configs: Vec<(&str, usize)> = vec![("rf", 10), ("rf", 50), ("rf", 100), ("rf", 200)];
 
     if is_classification {
         let task = CsvLoader::from_path(input)
@@ -627,12 +624,10 @@ fn handle_benchmark(
                 let train_target: Vec<usize> =
                     train_idx.iter().map(|&i| task.target()[i]).collect();
                 let test_features = select_rows(task.features(), test_idx);
-                let test_target: Vec<usize> =
-                    test_idx.iter().map(|&i| task.target()[i]).collect();
+                let test_target: Vec<usize> = test_idx.iter().map(|&i| task.target()[i]).collect();
 
-                let fold_task =
-                    ClassificationTask::new("bench", train_features, train_target)
-                        .context("Failed to create fold task")?;
+                let fold_task = ClassificationTask::new("bench", train_features, train_target)
+                    .context("Failed to create fold task")?;
 
                 let model = learner
                     .train_classif(&fold_task)
@@ -667,10 +662,7 @@ fn handle_benchmark(
         let n_features = task.n_features();
         println!("Dataset: {} samples x {} features\n", n_samples, n_features);
 
-        println!(
-            "{:<20} {:>10} {:>10}",
-            "Model", "RMSE", "Time(s)"
-        );
+        println!("{:<20} {:>10} {:>10}", "Model", "RMSE", "Time(s)");
         println!("{}", "-".repeat(42));
 
         let cv = CrossValidation::new(folds).with_seed(42);
@@ -684,15 +676,12 @@ fn handle_benchmark(
 
             for (train_idx, test_idx) in splits.iter() {
                 let train_features = select_rows(task.features(), train_idx);
-                let train_target: Vec<f64> =
-                    train_idx.iter().map(|&i| task.target()[i]).collect();
+                let train_target: Vec<f64> = train_idx.iter().map(|&i| task.target()[i]).collect();
                 let test_features = select_rows(task.features(), test_idx);
-                let test_target: Vec<f64> =
-                    test_idx.iter().map(|&i| task.target()[i]).collect();
+                let test_target: Vec<f64> = test_idx.iter().map(|&i| task.target()[i]).collect();
 
-                let fold_task =
-                    RegressionTask::new("bench", train_features, train_target)
-                        .context("Failed to create fold task")?;
+                let fold_task = RegressionTask::new("bench", train_features, train_target)
+                    .context("Failed to create fold task")?;
 
                 let model = learner
                     .train_regress(&fold_task)

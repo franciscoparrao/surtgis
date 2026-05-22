@@ -3,8 +3,8 @@
 //! Computes statistics within a moving window centered on each cell.
 //! Supports: Mean, StdDev, Min, Max, Range, Sum, Count, Median, Percentile.
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -71,9 +71,12 @@ pub fn focal_statistics(raster: &Raster<f64>, params: FocalParams) -> Result<Ras
     }
 
     if let FocalStatistic::Percentile(p) = params.statistic
-        && !(0.0..=100.0).contains(&p) {
-            return Err(Error::Algorithm("Percentile must be between 0 and 100".into()));
-        }
+        && !(0.0..=100.0).contains(&p)
+    {
+        return Err(Error::Algorithm(
+            "Percentile must be between 0 and 100".into(),
+        ));
+    }
 
     let (rows, cols) = raster.shape();
     let r = params.radius as isize;
@@ -144,31 +147,21 @@ fn compute_statistic(values: &mut [f64], stat: &FocalStatistic) -> f64 {
     let n = values.len() as f64;
 
     match stat {
-        FocalStatistic::Mean => {
-            values.iter().sum::<f64>() / n
-        }
+        FocalStatistic::Mean => values.iter().sum::<f64>() / n,
         FocalStatistic::StdDev => {
             let mean = values.iter().sum::<f64>() / n;
             let var = values.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / n;
             var.sqrt()
         }
-        FocalStatistic::Min => {
-            values.iter().cloned().fold(f64::INFINITY, f64::min)
-        }
-        FocalStatistic::Max => {
-            values.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
-        }
+        FocalStatistic::Min => values.iter().cloned().fold(f64::INFINITY, f64::min),
+        FocalStatistic::Max => values.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
         FocalStatistic::Range => {
             let min = values.iter().cloned().fold(f64::INFINITY, f64::min);
             let max = values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
             max - min
         }
-        FocalStatistic::Sum => {
-            values.iter().sum::<f64>()
-        }
-        FocalStatistic::Count => {
-            n
-        }
+        FocalStatistic::Sum => values.iter().sum::<f64>(),
+        FocalStatistic::Count => n,
         FocalStatistic::Median => {
             values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             let mid = values.len() / 2;
@@ -237,28 +230,44 @@ mod tests {
     #[test]
     fn test_focal_mean_uniform() {
         let r = uniform_raster(10, 5.0);
-        let result = focal_statistics(&r, FocalParams {
-            radius: 1,
-            statistic: FocalStatistic::Mean,
-            circular: false,
-        }).unwrap();
+        let result = focal_statistics(
+            &r,
+            FocalParams {
+                radius: 1,
+                statistic: FocalStatistic::Mean,
+                circular: false,
+            },
+        )
+        .unwrap();
         let v = result.get(5, 5).unwrap();
-        assert!((v - 5.0).abs() < 1e-10, "Mean of uniform should be 5.0, got {}", v);
+        assert!(
+            (v - 5.0).abs() < 1e-10,
+            "Mean of uniform should be 5.0, got {}",
+            v
+        );
     }
 
     #[test]
     fn test_focal_min_max() {
         let r = gradient_raster(10);
-        let min_result = focal_statistics(&r, FocalParams {
-            radius: 1,
-            statistic: FocalStatistic::Min,
-            circular: false,
-        }).unwrap();
-        let max_result = focal_statistics(&r, FocalParams {
-            radius: 1,
-            statistic: FocalStatistic::Max,
-            circular: false,
-        }).unwrap();
+        let min_result = focal_statistics(
+            &r,
+            FocalParams {
+                radius: 1,
+                statistic: FocalStatistic::Min,
+                circular: false,
+            },
+        )
+        .unwrap();
+        let max_result = focal_statistics(
+            &r,
+            FocalParams {
+                radius: 1,
+                statistic: FocalStatistic::Max,
+                circular: false,
+            },
+        )
+        .unwrap();
 
         let min_v = min_result.get(5, 5).unwrap();
         let max_v = max_result.get(5, 5).unwrap();
@@ -270,11 +279,15 @@ mod tests {
     #[test]
     fn test_focal_std_uniform() {
         let r = uniform_raster(10, 5.0);
-        let result = focal_statistics(&r, FocalParams {
-            radius: 1,
-            statistic: FocalStatistic::StdDev,
-            circular: false,
-        }).unwrap();
+        let result = focal_statistics(
+            &r,
+            FocalParams {
+                radius: 1,
+                statistic: FocalStatistic::StdDev,
+                circular: false,
+            },
+        )
+        .unwrap();
         let v = result.get(5, 5).unwrap();
         assert!(v.abs() < 1e-10, "StdDev of uniform should be 0, got {}", v);
     }
@@ -282,11 +295,15 @@ mod tests {
     #[test]
     fn test_focal_range() {
         let r = gradient_raster(10);
-        let result = focal_statistics(&r, FocalParams {
-            radius: 1,
-            statistic: FocalStatistic::Range,
-            circular: false,
-        }).unwrap();
+        let result = focal_statistics(
+            &r,
+            FocalParams {
+                radius: 1,
+                statistic: FocalStatistic::Range,
+                circular: false,
+            },
+        )
+        .unwrap();
         let v = result.get(5, 5).unwrap();
         assert!((v - 22.0).abs() < 1e-10, "Range should be 22, got {}", v);
     }
@@ -294,11 +311,15 @@ mod tests {
     #[test]
     fn test_focal_sum() {
         let r = uniform_raster(10, 1.0);
-        let result = focal_statistics(&r, FocalParams {
-            radius: 1,
-            statistic: FocalStatistic::Sum,
-            circular: false,
-        }).unwrap();
+        let result = focal_statistics(
+            &r,
+            FocalParams {
+                radius: 1,
+                statistic: FocalStatistic::Sum,
+                circular: false,
+            },
+        )
+        .unwrap();
         // Interior cell: 3x3 = 9 cells
         let v = result.get(5, 5).unwrap();
         assert!((v - 9.0).abs() < 1e-10, "Sum should be 9, got {}", v);
@@ -307,11 +328,15 @@ mod tests {
     #[test]
     fn test_focal_count() {
         let r = uniform_raster(10, 1.0);
-        let result = focal_statistics(&r, FocalParams {
-            radius: 1,
-            statistic: FocalStatistic::Count,
-            circular: false,
-        }).unwrap();
+        let result = focal_statistics(
+            &r,
+            FocalParams {
+                radius: 1,
+                statistic: FocalStatistic::Count,
+                circular: false,
+            },
+        )
+        .unwrap();
         let v = result.get(5, 5).unwrap();
         assert!((v - 9.0).abs() < 1e-10);
     }
@@ -319,11 +344,15 @@ mod tests {
     #[test]
     fn test_focal_median() {
         let r = gradient_raster(10);
-        let result = focal_statistics(&r, FocalParams {
-            radius: 1,
-            statistic: FocalStatistic::Median,
-            circular: false,
-        }).unwrap();
+        let result = focal_statistics(
+            &r,
+            FocalParams {
+                radius: 1,
+                statistic: FocalStatistic::Median,
+                circular: false,
+            },
+        )
+        .unwrap();
         // Median of 3x3 window around (5,5)=55 should be 55
         let v = result.get(5, 5).unwrap();
         assert!((v - 55.0).abs() < 1e-10, "Median should be 55, got {}", v);
@@ -332,25 +361,36 @@ mod tests {
     #[test]
     fn test_focal_circular() {
         let r = uniform_raster(10, 1.0);
-        let result = focal_statistics(&r, FocalParams {
-            radius: 2,
-            statistic: FocalStatistic::Count,
-            circular: true,
-        }).unwrap();
+        let result = focal_statistics(
+            &r,
+            FocalParams {
+                radius: 2,
+                statistic: FocalStatistic::Count,
+                circular: true,
+            },
+        )
+        .unwrap();
         // Circular window r=2: offsets with dr²+dc² <= 4
         // (0,0),(±1,0),(0,±1),(±1,±1),(±2,0),(0,±2) = 13 cells
         let v = result.get(5, 5).unwrap();
-        assert!((v - 13.0).abs() < 1e-10, "Circular r=2 should have 13 cells, got {}", v);
+        assert!(
+            (v - 13.0).abs() < 1e-10,
+            "Circular r=2 should have 13 cells, got {}",
+            v
+        );
     }
 
     #[test]
     fn test_focal_radius_zero_error() {
         let r = uniform_raster(5, 1.0);
-        let result = focal_statistics(&r, FocalParams {
-            radius: 0,
-            statistic: FocalStatistic::Mean,
-            circular: false,
-        });
+        let result = focal_statistics(
+            &r,
+            FocalParams {
+                radius: 0,
+                statistic: FocalStatistic::Mean,
+                circular: false,
+            },
+        );
         assert!(result.is_err());
     }
 
@@ -375,11 +415,15 @@ mod tests {
         r.set(3, 2, 2.0).unwrap();
         r.set(3, 3, 2.0).unwrap();
 
-        let result = focal_statistics(&r, FocalParams {
-            radius: 1,
-            statistic: FocalStatistic::Majority,
-            circular: false,
-        }).unwrap();
+        let result = focal_statistics(
+            &r,
+            FocalParams {
+                radius: 1,
+                statistic: FocalStatistic::Majority,
+                circular: false,
+            },
+        )
+        .unwrap();
 
         let v = result.get(2, 2).unwrap();
         assert!((v - 2.0).abs() < 1e-10, "Majority should be 2.0, got {}", v);

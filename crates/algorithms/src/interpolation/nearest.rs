@@ -44,7 +44,10 @@ impl Default for NearestNeighborParams {
 ///
 /// # Returns
 /// Raster with interpolated values
-pub fn nearest_neighbor(points: &[SamplePoint], params: NearestNeighborParams) -> Result<Raster<f64>> {
+pub fn nearest_neighbor(
+    points: &[SamplePoint],
+    params: NearestNeighborParams,
+) -> Result<Raster<f64>> {
     if points.is_empty() {
         return Err(Error::Algorithm("No sample points provided".into()));
     }
@@ -74,9 +77,10 @@ pub fn nearest_neighbor(points: &[SamplePoint], params: NearestNeighborParams) -
 
                 // Check max radius
                 if let Some(max_sq) = max_radius_sq
-                    && min_dist_sq > max_sq {
-                        continue;
-                    }
+                    && min_dist_sq > max_sq
+                {
+                    continue;
+                }
 
                 *row_data_col = nearest_val;
             }
@@ -98,10 +102,10 @@ mod tests {
 
     fn sample_points() -> Vec<SamplePoint> {
         vec![
-            SamplePoint::new(2.0, 8.0, 10.0),  // top-left quadrant
-            SamplePoint::new(8.0, 8.0, 20.0),  // top-right quadrant
-            SamplePoint::new(2.0, 2.0, 30.0),  // bottom-left quadrant
-            SamplePoint::new(8.0, 2.0, 40.0),  // bottom-right quadrant
+            SamplePoint::new(2.0, 8.0, 10.0), // top-left quadrant
+            SamplePoint::new(8.0, 8.0, 20.0), // top-right quadrant
+            SamplePoint::new(2.0, 2.0, 30.0), // bottom-left quadrant
+            SamplePoint::new(8.0, 2.0, 40.0), // bottom-right quadrant
         ]
     }
 
@@ -126,7 +130,9 @@ mod tests {
                 assert!(
                     val == 10.0 || val == 20.0 || val == 30.0 || val == 40.0,
                     "Unexpected value {} at ({}, {})",
-                    val, row, col
+                    val,
+                    row,
+                    col
                 );
             }
         }

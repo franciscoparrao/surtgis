@@ -1,20 +1,25 @@
-pub mod terrain;
-pub mod hydrology;
-pub mod imagery;
-pub mod landscape;
-pub mod morphology;
-pub mod mosaic;
-pub mod info;
+pub mod classification;
 pub mod clip;
 pub mod extract;
 pub mod extract_patches;
-pub mod pipeline;
-pub mod temporal;
+pub mod hydrology;
+pub mod imagery;
+pub mod info;
 pub mod interpolation;
-pub mod vector;
-pub mod classification;
-pub mod texture;
+pub mod landscape;
+pub mod morphology;
+pub mod mosaic;
+// Pipeline workflows depend on STAC for input data acquisition; without
+// the cloud feature there's no useful pipeline operation available, and
+// compiling it triggers unresolved imports for super::stac. Gate the
+// whole module to match cog/stac.
+#[cfg(feature = "cloud")]
+pub mod pipeline;
 pub mod statistics;
+pub mod temporal;
+pub mod terrain;
+pub mod texture;
+pub mod vector;
 
 #[cfg(feature = "cloud")]
 pub mod cog;

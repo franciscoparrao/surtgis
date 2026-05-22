@@ -6,8 +6,8 @@
 //! The algorithm iteratively smooths the DEM at increasing scales and
 //! classifies cells based on slope and elevation percentile thresholds.
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -175,7 +175,8 @@ fn compute_slope_percent(data: &Array2<f64>, rows: usize, cols: usize, cs: f64) 
 
 fn compute_percentiles(
     data: &Array2<f64>,
-    rows: usize, cols: usize,
+    rows: usize,
+    cols: usize,
     radius: usize,
 ) -> (Array2<f64>, Array2<f64>) {
     let mut low = Array2::from_elem((rows, cols), f64::NAN);
@@ -185,7 +186,9 @@ fn compute_percentiles(
     for row in 0..rows {
         for col in 0..cols {
             let z0 = data[(row, col)];
-            if z0.is_nan() { continue; }
+            if z0.is_nan() {
+                continue;
+            }
 
             let mut lower = 0;
             let mut total = 0;
@@ -198,9 +201,13 @@ fn compute_percentiles(
                         continue;
                     }
                     let z = data[(nr as usize, nc as usize)];
-                    if z.is_nan() { continue; }
+                    if z.is_nan() {
+                        continue;
+                    }
                     total += 1;
-                    if z < z0 { lower += 1; }
+                    if z < z0 {
+                        lower += 1;
+                    }
                 }
             }
 
@@ -265,7 +272,8 @@ mod tests {
         assert!(
             valley_bottom > slope_side,
             "Valley bottom should have higher MRVBF: {} vs {}",
-            valley_bottom, slope_side
+            valley_bottom,
+            slope_side
         );
     }
 
@@ -289,13 +297,23 @@ mod tests {
         assert!(
             ridge_top > slope_side,
             "Ridge top should have higher MRRTF: {} vs {}",
-            ridge_top, slope_side
+            ridge_top,
+            slope_side
         );
     }
 
     #[test]
     fn test_mrvbf_steps_zero() {
         let dem = Raster::filled(10, 10, 100.0_f64);
-        assert!(mrvbf(&dem, MrvbfParams { steps: 0, ..Default::default() }).is_err());
+        assert!(
+            mrvbf(
+                &dem,
+                MrvbfParams {
+                    steps: 0,
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
     }
 }

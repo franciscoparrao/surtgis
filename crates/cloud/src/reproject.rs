@@ -116,23 +116,20 @@ pub fn wgs84_to_utm(lon_deg: f64, lat_deg: f64, zone: u32, north: bool) -> (f64,
     let a6 = a4 * a2;
 
     // Easting (Snyder eq. 8-9)
-    let easting = K0 * n
+    let easting = K0
+        * n
         * (a_coeff
             + (1.0 - t + c) * a2 * a_coeff / 6.0
-            + (5.0 - 18.0 * t + t * t + 72.0 * c - 58.0 * E_PRIME2)
-                * a4
-                * a_coeff
-                / 120.0)
+            + (5.0 - 18.0 * t + t * t + 72.0 * c - 58.0 * E_PRIME2) * a4 * a_coeff / 120.0)
         + FALSE_EASTING;
 
     // Northing (Snyder eq. 8-10)
     let northing = K0
-        * (m
-            + n
-                * tan_lat
-                * (a2 / 2.0
-                    + (5.0 - t + 9.0 * c + 4.0 * c * c) * a4 / 24.0
-                    + (61.0 - 58.0 * t + t * t + 600.0 * c - 330.0 * E_PRIME2) * a6 / 720.0));
+        * (m + n
+            * tan_lat
+            * (a2 / 2.0
+                + (5.0 - t + 9.0 * c + 4.0 * c * c) * a4 / 24.0
+                + (61.0 - 58.0 * t + t * t + 600.0 * c - 330.0 * E_PRIME2) * a6 / 720.0));
 
     let northing = if north {
         northing
@@ -147,7 +144,11 @@ pub fn wgs84_to_utm(lon_deg: f64, lat_deg: f64, zone: u32, north: bool) -> (f64,
 /// Snyder 1987, inverse formulas.
 pub fn utm_to_wgs84(easting: f64, northing: f64, zone: u32, north: bool) -> (f64, f64) {
     let x = easting - FALSE_EASTING;
-    let y = if north { northing } else { northing - FALSE_NORTHING_SOUTH };
+    let y = if north {
+        northing
+    } else {
+        northing - FALSE_NORTHING_SOUTH
+    };
 
     let m = y / K0;
     let mu = m / (A * (1.0 - E2 / 4.0 - 3.0 * E2 * E2 / 64.0 - 5.0 * E2 * E2 * E2 / 256.0));
@@ -176,7 +177,9 @@ pub fn utm_to_wgs84(easting: f64, northing: f64, zone: u32, north: bool) -> (f64
         - (n1 * tan_phi1 / r1)
             * (d2 / 2.0
                 - (5.0 + 3.0 * t1 + 10.0 * c1 - 4.0 * c1 * c1 - 9.0 * E_PRIME2) * d4 / 24.0
-                + (61.0 + 90.0 * t1 + 298.0 * c1 + 45.0 * t1 * t1 - 252.0 * E_PRIME2 - 3.0 * c1 * c1)
+                + (61.0 + 90.0 * t1 + 298.0 * c1 + 45.0 * t1 * t1
+                    - 252.0 * E_PRIME2
+                    - 3.0 * c1 * c1)
                     * d6
                     / 720.0);
 
@@ -187,7 +190,7 @@ pub fn utm_to_wgs84(easting: f64, northing: f64, zone: u32, north: bool) -> (f64
                 * d4
                 * d
                 / 120.0)
-        / cos_phi1;
+            / cos_phi1;
 
     (lon.to_degrees(), lat.to_degrees())
 }
@@ -195,9 +198,12 @@ pub fn utm_to_wgs84(easting: f64, northing: f64, zone: u32, north: bool) -> (f64
 /// Reproject a single point from one UTM zone to another.
 /// Returns (easting, northing) in the target zone.
 pub fn reproject_utm_to_utm(
-    easting: f64, northing: f64,
-    src_zone: u32, src_north: bool,
-    dst_zone: u32, dst_north: bool,
+    easting: f64,
+    northing: f64,
+    src_zone: u32,
+    src_north: bool,
+    dst_zone: u32,
+    dst_north: bool,
 ) -> (f64, f64) {
     let (lon, lat) = utm_to_wgs84(easting, northing, src_zone, src_north);
     wgs84_to_utm(lon, lat, dst_zone, dst_north)
@@ -218,9 +224,9 @@ fn meridional_arc(lat: f64) -> f64 {
 
 // ── Raster reprojection between UTM zones ────────────────────────────────
 
-use surtgis_core::raster::GeoTransform;
-use surtgis_core::crs::CRS;
 use surtgis_core::Raster;
+use surtgis_core::crs::CRS;
+use surtgis_core::raster::GeoTransform;
 
 /// Reproject a raster from one UTM zone to another using bilinear interpolation.
 ///
@@ -247,7 +253,10 @@ pub fn reproject_raster_utm(
         (gt.origin_x, gt.origin_y),
         (gt.origin_x + cols as f64 * gt.pixel_width, gt.origin_y),
         (gt.origin_x, gt.origin_y + rows as f64 * gt.pixel_height),
-        (gt.origin_x + cols as f64 * gt.pixel_width, gt.origin_y + rows as f64 * gt.pixel_height),
+        (
+            gt.origin_x + cols as f64 * gt.pixel_width,
+            gt.origin_y + rows as f64 * gt.pixel_height,
+        ),
     ];
 
     let mut min_e = f64::MAX;
@@ -298,7 +307,8 @@ pub fn reproject_raster_utm(
             let dst_e = min_e + (out_c as f64 + 0.5) * px_w;
             let dst_n = max_n - (out_r as f64 + 0.5) * px_h;
 
-            let (src_e, src_n) = reproject_utm_to_utm(dst_e, dst_n, dst_zone, dst_north, src_zone, src_north);
+            let (src_e, src_n) =
+                reproject_utm_to_utm(dst_e, dst_n, dst_zone, dst_north, src_zone, src_north);
 
             let src_col_f = (src_e - src_gt.origin_x) / src_gt.pixel_width - 0.5;
             let src_row_f = (src_n - src_gt.origin_y) / src_gt.pixel_height - 0.5;
@@ -507,7 +517,11 @@ mod tests {
         let bbox = BBox::new(-3.75, 40.40, -3.70, 40.45);
         let result = reproject_bbox_to_cog(&bbox, 3857);
         // Web Mercator: coordinates in metres
-        assert!(result.min_x.abs() > 1000.0, "expected metres, got {}", result.min_x);
+        assert!(
+            result.min_x.abs() > 1000.0,
+            "expected metres, got {}",
+            result.min_x
+        );
     }
 
     #[test]
@@ -523,7 +537,10 @@ mod tests {
 
         // Width should be roughly 4km (0.05° lon at 40°N ≈ 4.3 km)
         let width = result.max_x - result.min_x;
-        assert!(width > 3_000.0 && width < 6_000.0, "width ~4km, got {width}");
+        assert!(
+            width > 3_000.0 && width < 6_000.0,
+            "width ~4km, got {width}"
+        );
 
         // Height should be roughly 5.5km (0.05° lat ≈ 5.5 km)
         let height = result.max_y - result.min_y;
@@ -542,10 +559,21 @@ mod tests {
         let result = super::reproject_bbox_proj4rs(&bbox, 2154);
         assert!(result.is_some(), "proj4rs returned None for EPSG:2154");
         let r = result.unwrap();
-        eprintln!("Lambert-93 result: ({}, {}) to ({}, {})", r.min_x, r.min_y, r.max_x, r.max_y);
+        eprintln!(
+            "Lambert-93 result: ({}, {}) to ({}, {})",
+            r.min_x, r.min_y, r.max_x, r.max_y
+        );
         // Lambert-93 Paris: x ~600000-700000, y ~6800000-6900000
-        assert!(r.min_x > 500_000.0, "expected metres x > 500000, got {}", r.min_x);
-        assert!(r.min_y > 6_000_000.0, "expected metres y > 6M, got {}", r.min_y);
+        assert!(
+            r.min_x > 500_000.0,
+            "expected metres x > 500000, got {}",
+            r.min_x
+        );
+        assert!(
+            r.min_y > 6_000_000.0,
+            "expected metres y > 6M, got {}",
+            r.min_y
+        );
     }
 
     #[test]

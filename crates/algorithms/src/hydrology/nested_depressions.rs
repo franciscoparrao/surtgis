@@ -17,8 +17,8 @@
 //! *Water Resources Research*, 55(3).
 
 use ndarray::Array2;
-use surtgis_core::raster::Raster;
 use surtgis_core::Result;
+use surtgis_core::raster::Raster;
 
 /// A depression in the hierarchy
 #[derive(Debug, Clone)]
@@ -131,9 +131,14 @@ impl UnionFind {
 }
 
 const NEIGHBORS: [(isize, isize); 8] = [
-    (-1, -1), (-1, 0), (-1, 1),
-    (0, -1),           (0, 1),
-    (1, -1),  (1, 0),  (1, 1),
+    (-1, -1),
+    (-1, 0),
+    (-1, 1),
+    (0, -1),
+    (0, 1),
+    (1, -1),
+    (1, 0),
+    (1, 1),
 ];
 
 /// Delineate nested depressions using level-set union-find.
@@ -252,13 +257,15 @@ pub fn nested_depressions(
                     };
                     // Set parent for children
                     if let Some(id) = dep_n
-                        && let Some(d) = depressions.iter_mut().find(|d| d.id == id) {
-                            d.parent = Some(parent_id);
-                        }
+                        && let Some(d) = depressions.iter_mut().find(|d| d.id == id)
+                    {
+                        d.parent = Some(parent_id);
+                    }
                     if let Some(id) = dep_c
-                        && let Some(d) = depressions.iter_mut().find(|d| d.id == id) {
-                            d.parent = Some(parent_id);
-                        }
+                        && let Some(d) = depressions.iter_mut().find(|d| d.id == id)
+                    {
+                        d.parent = Some(parent_id);
+                    }
                     depressions.push(parent);
                     component_depression[new_root] = Some(parent_id);
                     depression_id_counter += 1;
@@ -282,7 +289,8 @@ pub fn nested_depressions(
 
     // Only label leaf depressions (no children)
     // Collect leaf info to avoid borrow issues
-    let leaf_info: Vec<(u32, f64, (usize, usize))> = depressions.iter()
+    let leaf_info: Vec<(u32, f64, (usize, usize))> = depressions
+        .iter()
         .filter(|d| d.children.is_empty())
         .map(|d| (d.id, d.spill_elevation, d.min_location))
         .collect();
@@ -374,25 +382,39 @@ mod tests {
     #[test]
     fn test_nested_depressions_finds_pits() {
         let dem = make_dem_with_pits();
-        let result = nested_depressions(&dem, NestedDepressionParams {
-            min_depth: 0.5,
-            min_area: 1,
-        }).unwrap();
+        let result = nested_depressions(
+            &dem,
+            NestedDepressionParams {
+                min_depth: 0.5,
+                min_area: 1,
+            },
+        )
+        .unwrap();
 
         // Should find at least one depression
-        let leaf_count = result.depressions.iter()
+        let leaf_count = result
+            .depressions
+            .iter()
             .filter(|d| d.children.is_empty())
             .count();
-        assert!(leaf_count >= 1, "Should find at least 1 depression, got {}", leaf_count);
+        assert!(
+            leaf_count >= 1,
+            "Should find at least 1 depression, got {}",
+            leaf_count
+        );
     }
 
     #[test]
     fn test_nested_depth_raster() {
         let dem = make_dem_with_pits();
-        let result = nested_depressions(&dem, NestedDepressionParams {
-            min_depth: 0.1,
-            min_area: 1,
-        }).unwrap();
+        let result = nested_depressions(
+            &dem,
+            NestedDepressionParams {
+                min_depth: 0.1,
+                min_area: 1,
+            },
+        )
+        .unwrap();
 
         // Pit centers should have positive depth
         let d1 = result.depth.get(5, 3).unwrap();
@@ -401,7 +423,8 @@ mod tests {
         assert!(
             d1 > 0.0 || d2 > 0.0,
             "At least one pit center should have depth > 0: d1={}, d2={}",
-            d1, d2
+            d1,
+            d2
         );
     }
 
@@ -411,11 +434,17 @@ mod tests {
         let mut dem = Raster::filled(11, 11, 100.0_f64);
         dem.set_transform(GeoTransform::new(0.0, 11.0, 1.0, -1.0));
 
-        let result = nested_depressions(&dem, NestedDepressionParams {
-            min_depth: 0.1,
-            min_area: 3,
-        }).unwrap();
-        let leaf_count = result.depressions.iter()
+        let result = nested_depressions(
+            &dem,
+            NestedDepressionParams {
+                min_depth: 0.1,
+                min_area: 3,
+            },
+        )
+        .unwrap();
+        let leaf_count = result
+            .depressions
+            .iter()
             .filter(|d| d.children.is_empty() && d.depth >= 0.1)
             .count();
         assert_eq!(leaf_count, 0, "Flat terrain should have no depressions");
@@ -432,13 +461,19 @@ mod tests {
         dem.set(3, 2, 5.0).unwrap();
         dem.set(3, 4, 5.0).unwrap();
 
-        let result = nested_depressions(&dem, NestedDepressionParams {
-            min_depth: 0.5,
-            min_area: 1,
-        }).unwrap();
+        let result = nested_depressions(
+            &dem,
+            NestedDepressionParams {
+                min_depth: 0.5,
+                min_area: 1,
+            },
+        )
+        .unwrap();
 
         // Should detect the pit
-        let has_depression = result.depressions.iter()
+        let has_depression = result
+            .depressions
+            .iter()
             .any(|d| d.children.is_empty() && d.depth > 1.0);
         assert!(has_depression, "Should detect the deep pit");
     }
@@ -446,13 +481,19 @@ mod tests {
     #[test]
     fn test_depression_hierarchy() {
         let dem = make_dem_with_pits();
-        let result = nested_depressions(&dem, NestedDepressionParams {
-            min_depth: 0.1,
-            min_area: 1,
-        }).unwrap();
+        let result = nested_depressions(
+            &dem,
+            NestedDepressionParams {
+                min_depth: 0.1,
+                min_area: 1,
+            },
+        )
+        .unwrap();
 
         // Check hierarchy: some depressions should have parents
-        let with_parent = result.depressions.iter()
+        let with_parent = result
+            .depressions
+            .iter()
             .filter(|d| d.parent.is_some())
             .count();
         // If two pits were found and merged, there should be a parent
@@ -460,8 +501,10 @@ mod tests {
         // the structure is valid
         for dep in &result.depressions {
             assert!(dep.depth >= 0.0, "Depth should be non-negative");
-            assert!(dep.spill_elevation >= dep.min_elevation,
-                "Spill should be >= min elevation");
+            assert!(
+                dep.spill_elevation >= dep.min_elevation,
+                "Spill should be >= min elevation"
+            );
         }
         let _ = with_parent; // Use the variable
     }

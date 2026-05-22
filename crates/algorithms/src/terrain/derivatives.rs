@@ -94,8 +94,7 @@ impl Derivatives {
             return 0.0;
         }
         let w = 1.0 + p2q2;
-        -(p2 * self.r + 2.0 * self.p * self.q * self.s + q2 * self.t)
-            / (p2q2 * w * w.sqrt())
+        -(p2 * self.r + 2.0 * self.p * self.q * self.s + q2 * self.t) / (p2q2 * w * w.sqrt())
     }
 
     /// Plan (tangential) curvature (perpendicular to slope)
@@ -109,8 +108,7 @@ impl Derivatives {
             return 0.0;
         }
         let w = 1.0 + p2q2;
-        -(q2 * self.r - 2.0 * self.p * self.q * self.s + p2 * self.t)
-            / (p2q2 * w.sqrt())
+        -(q2 * self.r - 2.0 * self.p * self.q * self.s + p2 * self.t) / (p2q2 * w.sqrt())
     }
 
     /// Gaussian curvature
@@ -217,9 +215,15 @@ pub fn extract_window(data: &ndarray::Array2<f64>, row: usize, col: usize) -> Op
     let z8 = data[[row + 1, col]];
     let z9 = data[[row + 1, col + 1]];
 
-    if z1.is_nan() || z2.is_nan() || z3.is_nan()
-        || z4.is_nan() || z5.is_nan() || z6.is_nan()
-        || z7.is_nan() || z8.is_nan() || z9.is_nan()
+    if z1.is_nan()
+        || z2.is_nan()
+        || z3.is_nan()
+        || z4.is_nan()
+        || z5.is_nan()
+        || z6.is_nan()
+        || z7.is_nan()
+        || z8.is_nan()
+        || z9.is_nan()
     {
         return None;
     }
@@ -243,9 +247,9 @@ mod tests {
     fn tilted_x_window() -> [f64; 9] {
         // col offsets: -1, 0, +1  →  elevations: -20, 0, +20 from center
         [
-            80.0, 100.0, 120.0,  // row-1
-            80.0, 100.0, 120.0,  // row
-            80.0, 100.0, 120.0,  // row+1
+            80.0, 100.0, 120.0, // row-1
+            80.0, 100.0, 120.0, // row
+            80.0, 100.0, 120.0, // row+1
         ]
     }
 
@@ -253,20 +257,16 @@ mod tests {
     // row-1 is north (+y), so has higher elevation
     fn tilted_y_window() -> [f64; 9] {
         [
-            130.0, 130.0, 130.0,  // north (row-1)
-            100.0, 100.0, 100.0,  // center
-            70.0,  70.0,  70.0,   // south (row+1)
+            130.0, 130.0, 130.0, // north (row-1)
+            100.0, 100.0, 100.0, // center
+            70.0, 70.0, 70.0, // south (row+1)
         ]
     }
 
     // Parabolic bowl: z = x² + y² (minimum at center)
     // For cellsize=10: z(±1,0)=100, z(0,±1)=100, z(±1,±1)=200
     fn bowl_window() -> [f64; 9] {
-        [
-            200.0, 100.0, 200.0,
-            100.0,   0.0, 100.0,
-            200.0, 100.0, 200.0,
-        ]
+        [200.0, 100.0, 200.0, 100.0, 0.0, 100.0, 200.0, 100.0, 200.0]
     }
 
     #[test]
@@ -283,11 +283,7 @@ mod tests {
     fn test_evans_young_tilted_x() {
         let d = evans_young(tilted_x_window(), CS);
         // z = 2x, so dz/dx = 2, dz/dy = 0
-        assert!(
-            (d.p - 2.0).abs() < 0.01,
-            "p should be ~2.0, got {:.4}",
-            d.p
-        );
+        assert!((d.p - 2.0).abs() < 0.01, "p should be ~2.0, got {:.4}", d.p);
         assert!(d.q.abs() < 0.01, "q should be ~0, got {:.4}", d.q);
         assert!(d.r.abs() < 0.01, "r should be ~0, got {:.4}", d.r);
         assert!(d.t.abs() < 0.01, "t should be ~0, got {:.4}", d.t);
@@ -297,11 +293,7 @@ mod tests {
     fn test_evans_young_tilted_y() {
         let d = evans_young(tilted_y_window(), CS);
         assert!(d.p.abs() < 0.01, "p should be ~0, got {:.4}", d.p);
-        assert!(
-            (d.q - 3.0).abs() < 0.01,
-            "q should be ~3.0, got {:.4}",
-            d.q
-        );
+        assert!((d.q - 3.0).abs() < 0.01, "q should be ~3.0, got {:.4}", d.q);
     }
 
     #[test]
@@ -311,16 +303,8 @@ mod tests {
         // Evans-Young: r = (z1+z3+z4+z6+z7+z9 - 2(z2+z5+z8)) / (3*cs²)
         // = (200+200+100+100+200+200 - 2*(100+0+100)) / (3*100)
         // = (1000 - 400) / 300 = 2.0
-        assert!(
-            (d.r - 2.0).abs() < 0.01,
-            "r should be ~2.0, got {:.4}",
-            d.r
-        );
-        assert!(
-            (d.t - 2.0).abs() < 0.01,
-            "t should be ~2.0, got {:.4}",
-            d.t
-        );
+        assert!((d.r - 2.0).abs() < 0.01, "r should be ~2.0, got {:.4}", d.r);
+        assert!((d.t - 2.0).abs() < 0.01, "t should be ~2.0, got {:.4}", d.t);
         assert!(d.s.abs() < 0.01, "s should be ~0, got {:.4}", d.s);
     }
 
@@ -338,11 +322,7 @@ mod tests {
     fn test_zevenbergen_thorne_tilted_x() {
         let d = zevenbergen_thorne(tilted_x_window(), CS);
         // ZT: p = (z6 - z4) / (2*cs) = (120-80)/(20) = 2.0
-        assert!(
-            (d.p - 2.0).abs() < 0.01,
-            "p should be ~2.0, got {:.4}",
-            d.p
-        );
+        assert!((d.p - 2.0).abs() < 0.01, "p should be ~2.0, got {:.4}", d.p);
         assert!(d.q.abs() < 0.01, "q should be ~0, got {:.4}", d.q);
     }
 
@@ -350,16 +330,8 @@ mod tests {
     fn test_zevenbergen_thorne_bowl() {
         let d = zevenbergen_thorne(bowl_window(), CS);
         // ZT: r = (z4 - 2z5 + z6) / cs² = (100 - 0 + 100) / 100 = 2.0
-        assert!(
-            (d.r - 2.0).abs() < 0.01,
-            "r should be ~2.0, got {:.4}",
-            d.r
-        );
-        assert!(
-            (d.t - 2.0).abs() < 0.01,
-            "t should be ~2.0, got {:.4}",
-            d.t
-        );
+        assert!((d.r - 2.0).abs() < 0.01, "r should be ~2.0, got {:.4}", d.r);
+        assert!((d.t - 2.0).abs() < 0.01, "t should be ~2.0, got {:.4}", d.t);
     }
 
     #[test]
@@ -374,11 +346,7 @@ mod tests {
         let d = horn(tilted_x_window(), CS);
         // Horn: p = ((z3+2z6+z9) - (z1+2z4+z7)) / (8*cs)
         // = ((120+240+120) - (80+160+80)) / 80 = (480-320)/80 = 2.0
-        assert!(
-            (d.p - 2.0).abs() < 0.01,
-            "p should be ~2.0, got {:.4}",
-            d.p
-        );
+        assert!((d.p - 2.0).abs() < 0.01, "p should be ~2.0, got {:.4}", d.p);
         assert!(d.q.abs() < 0.01, "q should be ~0, got {:.4}", d.q);
     }
 
@@ -429,7 +397,11 @@ mod tests {
     fn test_slope_magnitude() {
         let d = evans_young(tilted_x_window(), CS);
         let s = d.slope_magnitude();
-        assert!((s - 2.0).abs() < 0.01, "Slope magnitude should be ~2.0, got {:.4}", s);
+        assert!(
+            (s - 2.0).abs() < 0.01,
+            "Slope magnitude should be ~2.0, got {:.4}",
+            s
+        );
 
         let d_flat = evans_young(flat_window(), CS);
         assert!(d_flat.slope_magnitude() < 1e-10, "Flat slope should be ~0");
@@ -455,12 +427,14 @@ mod tests {
         assert!(
             (ey.p - zt.p).abs() < 0.5,
             "EY and ZT p should agree: {:.4} vs {:.4}",
-            ey.p, zt.p
+            ey.p,
+            zt.p
         );
         assert!(
             (ey.p - h.p).abs() < 0.5,
             "EY and Horn p should agree: {:.4} vs {:.4}",
-            ey.p, h.p
+            ey.p,
+            h.p
         );
     }
 }

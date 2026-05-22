@@ -4,8 +4,8 @@
 //! Similar to plan curvature but smoother. Negative values indicate
 //! convergent flow (valleys), positive values indicate divergent flow (ridges).
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -70,7 +70,8 @@ pub fn convergence_index(dem: &Raster<f64>, params: ConvergenceParams) -> Result
                         }
 
                         // Compute aspect at neighbor
-                        let aspect_n = compute_aspect_at(data, nr as usize, nc as usize, rows, cols);
+                        let aspect_n =
+                            compute_aspect_at(data, nr as usize, nc as usize, rows, cols);
                         if aspect_n.is_nan() {
                             continue;
                         }
@@ -80,7 +81,11 @@ pub fn convergence_index(dem: &Raster<f64>, params: ConvergenceParams) -> Result
                         // East component = -dc, North component = dr (row goes south = -north)
                         let dir_to_center = (-(dc as f64)).atan2(dr as f64);
                         let dir_deg = dir_to_center.to_degrees();
-                        let dir_deg = if dir_deg < 0.0 { dir_deg + 360.0 } else { dir_deg };
+                        let dir_deg = if dir_deg < 0.0 {
+                            dir_deg + 360.0
+                        } else {
+                            dir_deg
+                        };
 
                         // Angular difference
                         let mut diff = (aspect_n - dir_deg).abs();
@@ -243,9 +248,7 @@ impl surtgis_core::WindowAlgorithm for ConvergenceStreaming {
                 }
 
                 let z0 = input[[ir, c]];
-                if z0.is_nan()
-                    || nodata.map_or(false, |nd| (z0 - nd).abs() < f64::EPSILON)
-                {
+                if z0.is_nan() || nodata.map_or(false, |nd| (z0 - nd).abs() < f64::EPSILON) {
                     output[[row_out, c]] = f64::NAN;
                     continue;
                 }
@@ -272,7 +275,11 @@ impl surtgis_core::WindowAlgorithm for ConvergenceStreaming {
                         // dr,dc are offsets from center to neighbor; reverse and convert
                         let dir_to_center = (-(dc as f64)).atan2(dr as f64);
                         let dir_deg = dir_to_center.to_degrees();
-                        let dir_deg = if dir_deg < 0.0 { dir_deg + 360.0 } else { dir_deg };
+                        let dir_deg = if dir_deg < 0.0 {
+                            dir_deg + 360.0
+                        } else {
+                            dir_deg
+                        };
 
                         // Angular difference
                         let mut diff = (aspect_n - dir_deg).abs();
@@ -319,7 +326,11 @@ mod tests {
 
         let result = convergence_index(&dem, ConvergenceParams::default()).unwrap();
         let center = result.get(5, 5).unwrap();
-        assert!(center < 0.0, "Bowl center should be convergent, got {}", center);
+        assert!(
+            center < 0.0,
+            "Bowl center should be convergent, got {}",
+            center
+        );
     }
 
     #[test]
@@ -337,7 +348,11 @@ mod tests {
 
         let result = convergence_index(&dem, ConvergenceParams::default()).unwrap();
         let center = result.get(5, 5).unwrap();
-        assert!(center > 0.0, "Peak center should be divergent, got {}", center);
+        assert!(
+            center > 0.0,
+            "Peak center should be divergent, got {}",
+            center
+        );
     }
 
     #[test]

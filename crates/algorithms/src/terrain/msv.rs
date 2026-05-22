@@ -13,8 +13,8 @@
 //! Reference:
 //! Wang, H. & Laffan, S.W. (2009). Multi-scale valleyness. *Computers & Geosciences*.
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -123,7 +123,10 @@ pub fn msv(dem: &Raster<f64>, params: MsvParams) -> Result<MsvResult> {
     ridgeness.set_nodata(Some(f64::NAN));
     *ridgeness.data_mut() = ridge_combined;
 
-    Ok(MsvResult { valleyness, ridgeness })
+    Ok(MsvResult {
+        valleyness,
+        ridgeness,
+    })
 }
 
 /// Compute curvature eigenvalues at a single scale.
@@ -133,8 +136,10 @@ pub fn msv(dem: &Raster<f64>, params: MsvParams) -> Result<MsvResult> {
 /// Eigenvalues λ₁ ≥ λ₂ characterize the shape.
 fn compute_scale_curvature(
     dem: &Raster<f64>,
-    rows: usize, cols: usize,
-    radius: usize, cell_size: f64,
+    rows: usize,
+    cols: usize,
+    radius: usize,
+    cell_size: f64,
 ) -> (Array2<f64>, Array2<f64>) {
     let r = radius as isize;
     let r2 = (radius as f64 * cell_size).powi(2);
@@ -332,17 +337,22 @@ mod tests {
             }
         }
 
-        let result = msv(&dem, MsvParams {
-            radii: vec![3, 5],
-            ..Default::default()
-        }).unwrap();
+        let result = msv(
+            &dem,
+            MsvParams {
+                radii: vec![3, 5],
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let center = result.valleyness.get(15, 15).unwrap();
         let flat = result.valleyness.get(15, 28).unwrap();
         assert!(
             center > flat,
             "Valley center should have higher valleyness: center={:.4} vs flat={:.4}",
-            center, flat
+            center,
+            flat
         );
     }
 
@@ -364,17 +374,22 @@ mod tests {
             }
         }
 
-        let result = msv(&dem, MsvParams {
-            radii: vec![3, 5],
-            ..Default::default()
-        }).unwrap();
+        let result = msv(
+            &dem,
+            MsvParams {
+                radii: vec![3, 5],
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let center = result.ridgeness.get(15, 15).unwrap();
         let flat = result.ridgeness.get(15, 28).unwrap();
         assert!(
             center > flat,
             "Ridge center should have higher ridgeness: center={:.4} vs flat={:.4}",
-            center, flat
+            center,
+            flat
         );
     }
 
@@ -383,15 +398,27 @@ mod tests {
         let mut dem = Raster::filled(21, 21, 100.0_f64);
         dem.set_transform(GeoTransform::new(0.0, 21.0, 1.0, -1.0));
 
-        let result = msv(&dem, MsvParams {
-            radii: vec![3],
-            ..Default::default()
-        }).unwrap();
+        let result = msv(
+            &dem,
+            MsvParams {
+                radii: vec![3],
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let v = result.valleyness.get(10, 10).unwrap();
         let r = result.ridgeness.get(10, 10).unwrap();
-        assert!(v.abs() < 0.01, "Flat terrain valleyness should be ~0, got {:.4}", v);
-        assert!(r.abs() < 0.01, "Flat terrain ridgeness should be ~0, got {:.4}", r);
+        assert!(
+            v.abs() < 0.01,
+            "Flat terrain valleyness should be ~0, got {:.4}",
+            v
+        );
+        assert!(
+            r.abs() < 0.01,
+            "Flat terrain ridgeness should be ~0, got {:.4}",
+            r
+        );
     }
 
     #[test]
@@ -407,13 +434,21 @@ mod tests {
             }
         }
 
-        let result = msv(&dem, MsvParams {
-            radii: vec![4],
-            ..Default::default()
-        }).unwrap();
+        let result = msv(
+            &dem,
+            MsvParams {
+                radii: vec![4],
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
         let v = result.valleyness.get(10, 10).unwrap();
-        assert!(v > 0.1, "Bowl center should have high valleyness, got {:.4}", v);
+        assert!(
+            v > 0.1,
+            "Bowl center should have high valleyness, got {:.4}",
+            v
+        );
     }
 
     #[test]
@@ -428,19 +463,45 @@ mod tests {
             }
         }
 
-        let result = msv(&dem, MsvParams {
-            radii: vec![3, 5],
-            combination: MsvCombination::Mean,
-        }).unwrap();
+        let result = msv(
+            &dem,
+            MsvParams {
+                radii: vec![3, 5],
+                combination: MsvCombination::Mean,
+            },
+        )
+        .unwrap();
 
         let v = result.valleyness.get(10, 10).unwrap();
-        assert!(v > 0.0, "Mean combination should produce positive valleyness, got {:.4}", v);
+        assert!(
+            v > 0.0,
+            "Mean combination should produce positive valleyness, got {:.4}",
+            v
+        );
     }
 
     #[test]
     fn test_msv_invalid_params() {
         let dem = Raster::filled(10, 10, 100.0_f64);
-        assert!(msv(&dem, MsvParams { radii: vec![], ..Default::default() }).is_err());
-        assert!(msv(&dem, MsvParams { radii: vec![0], ..Default::default() }).is_err());
+        assert!(
+            msv(
+                &dem,
+                MsvParams {
+                    radii: vec![],
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            msv(
+                &dem,
+                MsvParams {
+                    radii: vec![0],
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
     }
 }

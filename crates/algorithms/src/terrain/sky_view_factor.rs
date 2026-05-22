@@ -4,8 +4,8 @@
 //! Values range from 0 (completely enclosed) to 1 (flat, open terrain).
 //! Based on horizon angle computation in multiple directions.
 
-use ndarray::Array2;
 use crate::maybe_rayon::*;
+use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -70,8 +70,16 @@ pub fn sky_view_factor(dem: &Raster<f64>, params: SvfParams) -> Result<Raster<f6
 
                 for &(dc_step, dr_step) in &dir_vectors {
                     let max_angle = compute_horizon_angle(
-                        dem, row, col, z0, dr_step, dc_step,
-                        params.radius, cell_size, rows, cols,
+                        dem,
+                        row,
+                        col,
+                        z0,
+                        dr_step,
+                        dc_step,
+                        params.radius,
+                        cell_size,
+                        rows,
+                        cols,
                     );
                     let sin_angle = max_angle.sin();
                     sin_sq_sum += sin_angle * sin_angle;
@@ -96,10 +104,15 @@ pub fn sky_view_factor(dem: &Raster<f64>, params: SvfParams) -> Result<Raster<f6
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn compute_horizon_angle(
     dem: &Raster<f64>,
-    row: usize, col: usize, z0: f64,
-    dr_step: f64, dc_step: f64,
-    radius: usize, cell_size: f64,
-    rows: usize, cols: usize,
+    row: usize,
+    col: usize,
+    z0: f64,
+    dr_step: f64,
+    dc_step: f64,
+    radius: usize,
+    cell_size: f64,
+    rows: usize,
+    cols: usize,
 ) -> f64 {
     let mut max_angle = 0.0_f64;
 
@@ -145,7 +158,11 @@ mod tests {
 
         let result = sky_view_factor(&dem, SvfParams::default()).unwrap();
         let v = result.get(10, 10).unwrap();
-        assert!((v - 1.0).abs() < 0.01, "Flat terrain SVF should be ~1.0, got {}", v);
+        assert!(
+            (v - 1.0).abs() < 0.01,
+            "Flat terrain SVF should be ~1.0, got {}",
+            v
+        );
     }
 
     #[test]
@@ -157,7 +174,8 @@ mod tests {
             for col in 0..21 {
                 let dx = col as f64 - 10.0;
                 let dy = row as f64 - 10.0;
-                dem.set(row, col, (dx * dx + dy * dy).sqrt() * 10.0).unwrap();
+                dem.set(row, col, (dx * dx + dy * dy).sqrt() * 10.0)
+                    .unwrap();
             }
         }
 
@@ -174,7 +192,12 @@ mod tests {
         dem.set_transform(GeoTransform::new(0.0, 21.0, 1.0, -1.0));
         for row in 0..21 {
             for col in 0..21 {
-                dem.set(row, col, (row as f64 * 5.0) + ((col * 3 + row * 7) % 10) as f64).unwrap();
+                dem.set(
+                    row,
+                    col,
+                    (row as f64 * 5.0) + ((col * 3 + row * 7) % 10) as f64,
+                )
+                .unwrap();
             }
         }
 
@@ -183,7 +206,13 @@ mod tests {
             for col in 1..20 {
                 let v = result.get(row, col).unwrap();
                 if !v.is_nan() {
-                    assert!(v >= 0.0 && v <= 1.0, "SVF must be [0,1], got {} at ({},{})", v, row, col);
+                    assert!(
+                        v >= 0.0 && v <= 1.0,
+                        "SVF must be [0,1], got {} at ({},{})",
+                        v,
+                        row,
+                        col
+                    );
                 }
             }
         }
@@ -192,7 +221,25 @@ mod tests {
     #[test]
     fn test_svf_invalid_params() {
         let dem = Raster::filled(5, 5, 100.0_f64);
-        assert!(sky_view_factor(&dem, SvfParams { radius: 0, directions: 16 }).is_err());
-        assert!(sky_view_factor(&dem, SvfParams { radius: 5, directions: 0 }).is_err());
+        assert!(
+            sky_view_factor(
+                &dem,
+                SvfParams {
+                    radius: 0,
+                    directions: 16
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            sky_view_factor(
+                &dem,
+                SvfParams {
+                    radius: 5,
+                    directions: 0
+                }
+            )
+            .is_err()
+        );
     }
 }

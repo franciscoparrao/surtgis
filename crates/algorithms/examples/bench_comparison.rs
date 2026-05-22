@@ -26,15 +26,16 @@ use std::process::Command;
 use std::time::Instant;
 
 use surtgis_algorithms::hydrology::{
-    flow_accumulation, flow_direction, priority_flood, PriorityFloodParams,
+    PriorityFloodParams, flow_accumulation, flow_direction, priority_flood,
 };
 use surtgis_algorithms::terrain::{
-    aspect, hillshade, slope, tpi, AspectOutput, HillshadeParams, SlopeParams, TpiParams,
+    AspectOutput, HillshadeParams, SlopeParams, TpiParams, aspect, hillshade, slope, tpi,
 };
-use surtgis_core::io::{read_geotiff, write_geotiff, GeoTiffOptions};
+use surtgis_core::io::{GeoTiffOptions, read_geotiff, write_geotiff};
 use surtgis_core::{GeoTransform, Raster};
 
-const WBT_PATH: &str = "/home/franciscoparrao/.local/lib/python3.12/site-packages/whitebox/WBT/whitebox_tools";
+const WBT_PATH: &str =
+    "/home/franciscoparrao/.local/lib/python3.12/site-packages/whitebox/WBT/whitebox_tools";
 
 /// Timeout in seconds for external tools
 const TIMEOUT_SECS: u64 = 300;
@@ -84,7 +85,11 @@ fn main() {
     let csv_path = out_dir.join("benchmark_results.csv");
     let mut csv = fs::File::create(&csv_path).expect("Cannot create CSV");
     use std::io::Write;
-    writeln!(csv, "algorithm,size,tool,run,time_ms,read_ms,compute_ms,write_ms").unwrap();
+    writeln!(
+        csv,
+        "algorithm,size,tool,run,time_ms,read_ms,compute_ms,write_ms"
+    )
+    .unwrap();
 
     for &size in &sizes {
         println!(
@@ -97,7 +102,9 @@ fn main() {
         // Prefer uncompressed Float32 DEMs (fbm_SIZE_raw.tif) for fair I/O benchmarking.
         // Fall back to compressed originals, then generate if neither exists.
         let raw_dem = PathBuf::from(format!("benchmarks/results/dems/fbm_{}_raw.tif", size));
-        let existing_dem = if raw_dem.exists() { raw_dem } else {
+        let existing_dem = if raw_dem.exists() {
+            raw_dem
+        } else {
             PathBuf::from(format!("benchmarks/results/dems/fbm_{}.tif", size))
         };
         let dem_path = if existing_dem.exists() {
@@ -114,7 +121,8 @@ fn main() {
                 // Add proper CRS with gdal_translate so GRASS can read it
                 let status = Command::new("gdal_translate")
                     .args([
-                        "-a_srs", "EPSG:32719",
+                        "-a_srs",
+                        "EPSG:32719",
                         native_path.to_str().unwrap(),
                         dem_path.to_str().unwrap(),
                     ])
@@ -127,7 +135,10 @@ fn main() {
                     // Fallback: use native without CRS (GRASS won't work)
                     let _ = fs::rename(&native_path, &dem_path);
                 }
-                println!(" done ({:.0}MB)", fs::metadata(&dem_path).unwrap().len() as f64 / 1e6);
+                println!(
+                    " done ({:.0}MB)",
+                    fs::metadata(&dem_path).unwrap().len() as f64 / 1e6
+                );
             } else {
                 println!("  Reusing DEM: {}", dem_path.display());
             }
@@ -136,9 +147,8 @@ fn main() {
 
         for alg in &algorithms {
             // SurtGIS (native Rust I/O) — returns (total, read, compute, write)
-            let surtgis_results = run_n_times_tuple(reps, warmup, || {
-                bench_surtgis_io(alg, &dem_path, out_dir)
-            });
+            let surtgis_results =
+                run_n_times_tuple(reps, warmup, || bench_surtgis_io(alg, &dem_path, out_dir));
 
             let surtgis_totals: Vec<f64> = surtgis_results.iter().map(|r| r.0).collect();
             let surtgis_reads: Vec<f64> = surtgis_results.iter().map(|r| r.1).collect();
@@ -146,8 +156,16 @@ fn main() {
             let surtgis_writes: Vec<f64> = surtgis_results.iter().map(|r| r.3).collect();
 
             for (i, r) in surtgis_results.iter().enumerate() {
-                writeln!(csv, "{alg},{size},surtgis,{},{:.3},{:.3},{:.3},{:.3}",
-                    i + 1, r.0, r.1, r.2, r.3).unwrap();
+                writeln!(
+                    csv,
+                    "{alg},{size},surtgis,{},{:.3},{:.3},{:.3},{:.3}",
+                    i + 1,
+                    r.0,
+                    r.1,
+                    r.2,
+                    r.3
+                )
+                .unwrap();
             }
 
             let s_med = median(&surtgis_totals);
@@ -155,14 +173,16 @@ fn main() {
             let s_read = median(&surtgis_reads);
             let s_comp = median(&surtgis_computes);
             let s_write = median(&surtgis_writes);
-            print!("  {:<12} SurtGIS: {:>8.1}ms (R:{:.0} C:{:.0} W:{:.0} IQR:{:.0})",
-                alg, s_med, s_read, s_comp, s_write, s_iqr);
+            print!(
+                "  {:<12} SurtGIS: {:>8.1}ms (R:{:.0} C:{:.0} W:{:.0} IQR:{:.0})",
+                alg, s_med, s_read, s_comp, s_write, s_iqr
+            );
 
             // GDAL
             if has_gdal {
-                if let Some(times) = run_tool_n_times(reps, warmup, || {
-                    bench_gdal(alg, &dem_path, out_dir)
-                }) {
+                if let Some(times) =
+                    run_tool_n_times(reps, warmup, || bench_gdal(alg, &dem_path, out_dir))
+                {
                     for (i, &t) in times.iter().enumerate() {
                         writeln!(csv, "{alg},{size},gdal,{},{:.3},,,", i + 1, t).unwrap();
                     }
@@ -175,9 +195,9 @@ fn main() {
 
             // GRASS
             if has_grass {
-                if let Some(times) = run_tool_n_times(reps, warmup, || {
-                    bench_grass(alg, &dem_path, out_dir)
-                }) {
+                if let Some(times) =
+                    run_tool_n_times(reps, warmup, || bench_grass(alg, &dem_path, out_dir))
+                {
                     for (i, &t) in times.iter().enumerate() {
                         writeln!(csv, "{alg},{size},grass,{},{:.3},,,", i + 1, t).unwrap();
                     }
@@ -190,9 +210,9 @@ fn main() {
 
             // WhiteboxTools
             if has_wbt {
-                if let Some(times) = run_tool_n_times(reps, warmup, || {
-                    bench_whitebox(alg, &dem_path, out_dir)
-                }) {
+                if let Some(times) =
+                    run_tool_n_times(reps, warmup, || bench_whitebox(alg, &dem_path, out_dir))
+                {
                     for (i, &t) in times.iter().enumerate() {
                         writeln!(csv, "{alg},{size},wbt,{},{:.3},,,", i + 1, t).unwrap();
                     }
@@ -321,10 +341,7 @@ fn bench_gdal(algorithm: &str, dem_path: &Path, out_dir: &Path) -> Option<f64> {
 
 fn grass_tmp_flag() -> &'static str {
     // GRASS >= 8.4 uses --tmp-project, older uses --tmp-location
-    let output = Command::new("grass")
-        .arg("--version")
-        .output()
-        .ok();
+    let output = Command::new("grass").arg("--version").output().ok();
 
     if let Some(out) = output {
         let text = String::from_utf8_lossy(&out.stdout).to_string()
@@ -370,9 +387,9 @@ fn bench_grass(algorithm: &str, dem_path: &Path, out_dir: &Path) -> Option<f64> 
         "aspect" => format!(
             "{import_cmd} && r.slope.aspect elevation=dem aspect=result --overwrite && {export_cmd}"
         ),
-        "hillshade" => format!(
-            "{import_cmd} && r.relief input=dem output=result --overwrite && {export_cmd}"
-        ),
+        "hillshade" => {
+            format!("{import_cmd} && r.relief input=dem output=result --overwrite && {export_cmd}")
+        }
         "fill" => format!(
             "{import_cmd} && r.fill.dir input=dem output=result direction=fdir --overwrite && {export_cmd}"
         ),
@@ -439,10 +456,7 @@ fn bench_whitebox(algorithm: &str, dem_path: &Path, out_dir: &Path) -> Option<f6
         ],
         "flow_acc" => {
             // WBT flow_acc requires fill first
-            let filled = out_dir
-                .canonicalize()
-                .ok()?
-                .join("wbt_flow_filled.tif");
+            let filled = out_dir.canonicalize().ok()?.join("wbt_flow_filled.tif");
             let _ = fs::remove_file(&filled);
 
             let fill_status = Command::new(WBT_PATH)

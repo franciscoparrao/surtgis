@@ -57,7 +57,12 @@ pub fn watershed_parallel(
     let (rows, cols) = flow_dir.shape();
     let (ar, ac) = flow_acc.shape();
     if rows != ar || cols != ac {
-        return Err(Error::SizeMismatch { er: rows, ec: cols, ar, ac });
+        return Err(Error::SizeMismatch {
+            er: rows,
+            ec: cols,
+            ar,
+            ac,
+        });
     }
 
     let n = rows * cols;
@@ -235,9 +240,11 @@ mod tests {
         for row in 0..3 {
             for col in 0..3 {
                 assert_eq!(
-                    result.get(row, col).unwrap(), center_label,
+                    result.get(row, col).unwrap(),
+                    center_label,
                     "All cells should have same label at ({}, {})",
-                    row, col
+                    row,
+                    col
                 );
             }
         }
@@ -272,25 +279,30 @@ mod tests {
             // col 1 and 2 in this row should flow to the same pit
             for col in 1..3 {
                 assert_eq!(
-                    result.get(row, col).unwrap(), left_target,
+                    result.get(row, col).unwrap(),
+                    left_target,
                     "Row {} col {} should flow to same pit as col 0",
-                    row, col
+                    row,
+                    col
                 );
             }
 
             let right_target = result.get(row, 5).unwrap();
             for col in 3..5 {
                 assert_eq!(
-                    result.get(row, col).unwrap(), right_target,
+                    result.get(row, col).unwrap(),
+                    right_target,
                     "Row {} col {} should flow to same pit as col 5",
-                    row, col
+                    row,
+                    col
                 );
             }
         }
 
         // Left and right should be in different basins
         assert_ne!(
-            result.get(0, 0).unwrap(), result.get(0, 5).unwrap(),
+            result.get(0, 0).unwrap(),
+            result.get(0, 5).unwrap(),
             "Left and right pits should have different labels"
         );
     }
