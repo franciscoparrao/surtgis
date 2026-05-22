@@ -12,7 +12,12 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: "-D warnings"
+  # `-D warnings` is enforced on the dedicated clippy step below, not
+  # globally on every cargo invocation. The latter promotes every benign
+  # warning across feature combos (unused imports under
+  # --no-default-features, dead_code under feature-gated targets, etc.)
+  # to a hard build failure even in jobs whose purpose is just to verify
+  # things compile and tests pass.
 
 jobs:
   check:
