@@ -148,6 +148,11 @@ pub fn read_vector(path: &std::path::Path) -> crate::error::Result<FeatureCollec
         #[cfg(feature = "geopackage")]
         "gpkg" => gpkg_reader::read_gpkg(path, None),
         _ => {
+            // `mut` is needed when shapefile/geopackage features are on; without
+            // them the .push() calls are #[cfg]'d out and the binding becomes
+            // unused-mut. -D warnings in CI promotes that to an error, so the
+            // allow is intentional and feature-conditional.
+            #[allow(unused_mut)]
             let mut supported = vec![".geojson", ".json"];
             #[cfg(feature = "shapefile")]
             {

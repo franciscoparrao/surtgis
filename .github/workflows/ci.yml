@@ -24,6 +24,16 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      # System libs required by --all-features:
+      #   libgdal-dev    → gdal-sys (surtgis-core's optional gdal feature)
+      #   libhdf5-dev    → hdf5-metno-sys (transitively via netcdf feature)
+      #   libnetcdf-dev  → netcdf crate (surtgis-cloud's netcdf feature)
+      #   libeccodes-dev → eccodes-sys (surtgis-cloud's grib feature)
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgdal-dev libhdf5-dev libnetcdf-dev libeccodes-dev pkg-config
       - name: Check
         run: cargo check --workspace --exclude surtgis-python --all-features
       - name: Clippy
@@ -36,6 +46,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgdal-dev libhdf5-dev libnetcdf-dev libeccodes-dev pkg-config
       - name: Run tests
         run: cargo test --workspace --exclude surtgis-python
 
@@ -46,6 +61,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgdal-dev libhdf5-dev libnetcdf-dev libeccodes-dev pkg-config
       - name: Run tests without parallel feature
         run: cargo test --workspace --exclude surtgis-python --no-default-features
 
