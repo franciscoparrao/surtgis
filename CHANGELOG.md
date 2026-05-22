@@ -9,6 +9,18 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-05-22
+
+Headline: closes the **G2 axis** of the roadmap — Geospatial Foundation
+Model preprocessing pipeline. SurtGIS is now the first end-to-end
+preparation tool for Prithvi-EO-2.0 / Clay v1.5 training data,
+addressing the gap identified by InstaGeo (arxiv 2510.05617):
+*"no published GFM includes its preprocessing pipeline."*
+
+This is also the first release with **green CI on every job** after
+several days of red — see commit `47f65ea` for the rebaseline (cargo
+fmt + system libs + cfg gates + clippy correctness-only enforcement).
+
 ### Added — Geospatial Foundation Model (GFM) preprocessing
 
 - **`extract-patches --profile <name>`** preset that targets a specific
