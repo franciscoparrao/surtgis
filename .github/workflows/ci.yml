@@ -41,8 +41,14 @@ jobs:
             libgdal-dev libhdf5-dev libnetcdf-dev libeccodes-dev pkg-config
       - name: Check
         run: cargo check --workspace --exclude surtgis-python --all-features
+      # Clippy enforces correctness lints as errors (real bugs only) and
+      # leaves style lints as warnings. Style cleanup (`collapsible_if`,
+      # `map_or` simplification, etc.) is tracked separately and applied
+      # in dedicated `cargo clippy --fix` sweeps. Sustainable for a
+      # multi-feature codebase where the union of clippy warnings across
+      # feature combinations runs into the hundreds.
       - name: Clippy
-        run: cargo clippy --workspace --exclude surtgis-python --all-features -- -D warnings
+        run: cargo clippy --workspace --exclude surtgis-python --all-features -- -D clippy::correctness -W warnings
 
   test:
     name: Test

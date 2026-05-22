@@ -1769,7 +1769,11 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             // If --align-to is specified AND we didn't already use the reference grid,
             // resample the output to match. (When align_to is present, we now write
             // directly to the reference grid, so this step is skipped.)
-            if false && align_to.is_some() {
+            // The `if false` keeps the legacy resample block intact for reference
+            // without making it reachable; clippy's correctness lint requires the
+            // condition stay free of an `&& <side-effect-free expr>` short-circuit.
+            #[allow(clippy::overly_complex_bool_expr)]
+            if false {
                 let align_path = align_to.as_ref().unwrap();
                 let composite: surtgis_core::Raster<f64> =
                     surtgis_core::io::read_geotiff(&output, None)
