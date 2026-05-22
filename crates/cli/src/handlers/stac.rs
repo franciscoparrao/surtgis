@@ -2395,7 +2395,10 @@ fn cache_write(path: &std::path::Path, raster: &surtgis_core::Raster<f64>) {
     let _ = surtgis_core::io::write_geotiff(
         raster,
         path,
-        Some(surtgis_core::io::GeoTiffOptions { compression: "DEFLATE".into() }),
+        Some(surtgis_core::io::GeoTiffOptions {
+            compression: "DEFLATE".into(),
+            ..Default::default()
+        }),
     );
 }
 
@@ -3379,7 +3382,10 @@ fn handle_multiband_composite(
     let stem = output.file_stem().unwrap_or_default().to_string_lossy();
     let use_asset_naming = naming.eq_ignore_ascii_case("asset");
     let opts = if compress {
-        Some(surtgis_core::io::GeoTiffOptions { compression: "DEFLATE".into() })
+        Some(surtgis_core::io::GeoTiffOptions {
+            compression: "DEFLATE".into(),
+            ..Default::default()
+        })
     } else {
         None
     };
