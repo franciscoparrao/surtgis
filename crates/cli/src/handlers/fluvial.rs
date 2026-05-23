@@ -9,9 +9,9 @@ use std::path::Path;
 use anyhow::{Context, Result, anyhow};
 use ndarray::Array2;
 use surtgis_algorithms::fluvial::{
-    channel_steepness, chi_transform, concavity_index, knickpoint_detection, ChiParams,
-    ConcavityParams, ConcavityResult, Knickpoint, KnickpointParams, KnickpointPolarity, KsnParams,
-    KsnSegment,
+    channel_steepness, chi_transform, concavity_index, divide_migration, knickpoint_detection,
+    ChiParams, ConcavityParams, ConcavityResult, DivideMigrationParams, DivideSegment, Knickpoint,
+    KnickpointParams, KnickpointPolarity, KsnParams, KsnSegment,
 };
 use surtgis_core::io::{read_geotiff, write_geotiff};
 
@@ -115,6 +115,23 @@ pub fn handle(cmd: FluvialCommands, compress: bool) -> Result<()> {
             bootstrap_n,
             min_basin_cells,
             seed,
+            cell_size_m,
+        ),
+        FluvialCommands::DivideMigration {
+            basins,
+            dem,
+            flow_acc,
+            output,
+            chi,
+            min_divide_length_m,
+            cell_size_m,
+        } => handle_divide_migration(
+            &basins,
+            &dem,
+            &flow_acc,
+            &output,
+            chi.as_deref(),
+            min_divide_length_m,
             cell_size_m,
         ),
     }
@@ -663,6 +680,121 @@ fn write_knickpoints_geojson(
         "type": "FeatureCollection",
         "features": features,
     });
+    std::fs::write(path, serde_json::to_string_pretty(&fc)?)?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_divide_migration(
+    basins_path: &Path,
+    dem_path: &Path,
+    flow_acc_path: &Path,
+    output_path: &Path,
+    chi_path: Option<&Path>,
+    min_divide_length_m: f64,
+    cell_size_m_override: Option<f64>,
+) -> Result<()> {
+    let start = std::time::Instant::now();
+
+    println!("SurtGIS Fluvial — divide migration");
+    println!("==================================");
+    println!("  Basins:        {}", basins_path.display());
+    println!("  DEM:           {}", dem_path.display());
+    println!("  Flow acc:      {}", flow_acc_path.display());
+    if let Some(p) = chi_path {
+        println!("  χ raster:      {}", p.display());
+    } else {
+        println!("  χ raster:      (none — median_chi_diff will be NaN)");
+    }
+    println!("  Output GeoJSON:{}", output_path.display());
+    println!("  Min length:    {} m", min_divide_length_m);
+
+    let basins: surtgis_core::Raster<i32> = read_geotiff(basins_path, None)
+        .with_context(|| format!("read basins from {}", basins_path.display()))?;
+    let dem: surtgis_core::Raster<f64> = read_geotiff(dem_path, None)
+        .with_context(|| format!("read dem from {}", dem_path.display()))?;
+    let flow_acc: surtgis_core::Raster<f64> = read_geotiff(flow_acc_path, None)
+        .with_context(|| format!("read flow_acc from {}", flow_acc_path.display()))?;
+    let chi: Option<surtgis_core::Raster<f64>> = match chi_path {
+        Some(p) => Some(
+            read_geotiff(p, None).with_context(|| format!("read chi from {}", p.display()))?,
+        ),
+        None => None,
+    };
+
+    let pixel_width = basins.transform().pixel_width.abs();
+    let cell_size_m = match cell_size_m_override {
+        Some(v) if v > 0.0 => v,
+        Some(v) => return Err(anyhow!("--cell-size-m must be > 0, got {}", v)),
+        None => {
+            if pixel_width < 1.0 {
+                return Err(anyhow!(
+                    "Raster pixel size is {} (looks like degrees, not metres). \
+                     Reproject your inputs to a projected CRS first \
+                     or pass `--cell-size-m <metres>` explicitly.",
+                    pixel_width,
+                ));
+            }
+            pixel_width
+        }
+    };
+    println!("  Cell size (m): {:.2}", cell_size_m);
+
+    let params = DivideMigrationParams {
+        cell_size_m,
+        min_divide_length_m,
+    };
+
+    let result = divide_migration(&basins, &dem, chi.as_ref(), &flow_acc, params)
+        .context("divide_migration failed")?;
+
+    write_divide_geojson(output_path, &result)
+        .with_context(|| format!("write divides geojson to {}", output_path.display()))?;
+
+    println!();
+    println!("  {} divides reported", result.len());
+    if !result.is_empty() {
+        let n_with_chi = result.iter().filter(|d| d.median_chi_diff.is_finite()).count();
+        println!("  with finite χ diff: {}", n_with_chi);
+        let max_elev = result
+            .iter()
+            .map(|d| d.median_elev_diff.abs())
+            .fold(0.0_f64, f64::max);
+        println!("  max |median Δelev|: {:.2} m", max_elev);
+    }
+
+    println!();
+    println!("Wrote {} in {:.1}s", output_path.display(), start.elapsed().as_secs_f64());
+    Ok(())
+}
+
+fn write_divide_geojson(path: &Path, divides: &[DivideSegment]) -> Result<()> {
+    let features: Vec<serde_json::Value> = divides
+        .iter()
+        .filter(|d| d.coordinates.len() >= 2)
+        .map(|d| {
+            let coords: Vec<[f64; 2]> = d.coordinates.iter().map(|&(x, y)| [x, y]).collect();
+            serde_json::json!({
+                "type": "Feature",
+                "geometry": { "type": "LineString", "coordinates": coords },
+                "properties": {
+                    "basin_a": d.basin_a,
+                    "basin_b": d.basin_b,
+                    "median_chi_diff": if d.median_chi_diff.is_finite() {
+                        serde_json::json!(d.median_chi_diff)
+                    } else { serde_json::Value::Null },
+                    "median_elev_diff": if d.median_elev_diff.is_finite() {
+                        serde_json::json!(d.median_elev_diff)
+                    } else { serde_json::Value::Null },
+                    "median_relief_diff": if d.median_relief_diff.is_finite() {
+                        serde_json::json!(d.median_relief_diff)
+                    } else { serde_json::Value::Null },
+                    "n_pairs": d.n_pairs,
+                },
+            })
+        })
+        .collect();
+    let fc = serde_json::json!({ "type": "FeatureCollection", "features": features });
     std::fs::write(path, serde_json::to_string_pretty(&fc)?)?;
     Ok(())
 }

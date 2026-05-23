@@ -24,12 +24,16 @@
 pub mod channel_steepness;
 pub mod chi;
 pub mod concavity;
+pub mod divide_migration;
 pub mod knickpoint;
 pub mod stream_traversal;
 
 pub use channel_steepness::{channel_steepness, KsnError, KsnParams, KsnResult, KsnSegment};
 pub use chi::{chi_transform, ChiError, ChiParams};
 pub use concavity::{concavity_index, ConcavityError, ConcavityParams, ConcavityResult};
+pub use divide_migration::{
+    divide_migration, DivideMigrationError, DivideMigrationParams, DivideSegment,
+};
 pub use knickpoint::{
     knickpoint_detection, Knickpoint, KnickpointError, KnickpointParams, KnickpointPolarity,
 };

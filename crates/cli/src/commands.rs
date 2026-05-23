@@ -2445,4 +2445,32 @@ pub enum FluvialCommands {
         #[arg(long)]
         cell_size_m: Option<f64>,
     },
+    /// Divide-migration metrics (Willett 2014, Whipple 2017).
+    ///
+    /// For each pair of adjacent watershed basins, computes the median
+    /// asymmetry across the divide: Gilbert elevation/relief difference
+    /// and (optionally) χ across-divide difference. Output is a GeoJSON
+    /// LineString FeatureCollection — one feature per adjacent-basin pair.
+    DivideMigration {
+        /// Basin id raster (i32, 0 = no basin).
+        basins: PathBuf,
+        /// DEM (elevation in metres).
+        dem: PathBuf,
+        /// Flow accumulation raster (currently informational; reserved
+        /// for future area-weighted statistics).
+        flow_acc: PathBuf,
+        /// Output GeoJSON path.
+        output: PathBuf,
+        /// Optional pre-computed χ raster from `surtgis fluvial chi`.
+        /// When supplied, median_chi_diff is reported; otherwise NaN.
+        #[arg(long)]
+        chi: Option<PathBuf>,
+        /// Minimum cumulative divide polyline length (m) to report.
+        /// Default 500 m — short divides are rarely robust.
+        #[arg(long, default_value = "500")]
+        min_divide_length_m: f64,
+        /// Cell size override in metres.
+        #[arg(long)]
+        cell_size_m: Option<f64>,
+    },
 }
