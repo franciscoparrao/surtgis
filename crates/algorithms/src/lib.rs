@@ -19,6 +19,7 @@
 mod maybe_rayon;
 
 pub mod classification;
+pub mod fluvial;
 pub mod hydrology;
 pub mod imagery;
 pub mod interpolation;
