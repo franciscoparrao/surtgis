@@ -48,6 +48,7 @@ fn main() -> Result<()> {
         Commands::Hydrology { algorithm } => {
             handlers::hydrology::handle(algorithm, compress, mem_limit_bytes)?
         }
+        Commands::Fluvial { algorithm } => handlers::fluvial::handle(algorithm, compress)?,
         Commands::Imagery { algorithm } => handlers::imagery::handle(algorithm, compress)?,
         Commands::Morphology { algorithm } => handlers::morphology::handle(algorithm, compress)?,
         Commands::Landscape { algorithm } => handlers::landscape::handle(algorithm, compress)?,

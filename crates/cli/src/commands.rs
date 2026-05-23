@@ -48,6 +48,11 @@ pub enum Commands {
         #[command(subcommand)]
         algorithm: HydrologyCommands,
     },
+    /// Fluvial-tectonic morphometry (chi, ksn, knickpoints, divide migration)
+    Fluvial {
+        #[command(subcommand)]
+        algorithm: FluvialCommands,
+    },
     /// Imagery / spectral index algorithms
     Imagery {
         #[command(subcommand)]
@@ -884,14 +889,28 @@ pub enum HydrologyCommands {
         #[arg(long, default_value = "1000")]
         threshold: f64,
     },
-    /// Stream network extraction (from DEM, full pipeline)
+    /// Stream network extraction.
+    ///
+    /// By default the input is treated as a DEM and the handler runs the
+    /// full pipeline (priority_flood → flow_direction → flow_accumulation
+    /// → threshold). When `--from-facc` is passed, the input is treated
+    /// as a pre-computed flow_accumulation raster and only the threshold
+    /// step runs — this is the path you want when composing with an
+    /// externally computed flow direction / accumulation, e.g. for the
+    /// fluvial module's chi/ksn workflow.
     StreamNetwork {
-        /// Input DEM file
+        /// Input raster. DEM by default; flow_accumulation when `--from-facc`.
         input: PathBuf,
         output: PathBuf,
-        /// Contributing area threshold
+        /// Contributing area threshold (cell counts).
         #[arg(long, default_value = "1000")]
         threshold: f64,
+        /// Treat `input` as a pre-computed flow_accumulation raster and
+        /// skip the DEM → fdir → facc recomputation. Use when you already
+        /// have flow_dir/acc and want the resulting `stream-network` to
+        /// be topologically consistent with them.
+        #[arg(long)]
+        from_facc: bool,
     },
     /// Drainage density: stream length per unit area
     DrainageDensity {
@@ -2266,5 +2285,192 @@ pub enum StatisticsCommands {
         /// Neighborhood radius
         #[arg(short, long, default_value = "3")]
         radius: usize,
+    },
+}
+
+// ─── Fluvial-tectonic morphometry ────────────────────────────────────────
+//
+// Subcommands under `surtgis fluvial`. v1 of the spec ships chi here;
+// ksn, knickpoints, concavity, divide-migration follow in later sprints.
+
+/// Fluvial-tectonic morphometry subcommands.
+#[derive(Debug, Subcommand)]
+pub enum FluvialCommands {
+    /// χ (chi) integral transform (Perron & Royden 2013).
+    ///
+    /// Computes the path integral of (A₀/A(x))^θref along each stream
+    /// cell starting from the network's outlets. χ is a base-level
+    /// reference distance that linearises elevation profiles in steady
+    /// state; together with ksn it is one of the two most common metrics
+    /// in geomorphology-from-topography.
+    Chi {
+        /// Binary stream network raster (1 = stream, 0 = non-stream),
+        /// e.g. the output of `surtgis hydrology stream-network`.
+        stream: PathBuf,
+        /// D8 flow direction raster from `surtgis hydrology flow-direction`.
+        flow_dir: PathBuf,
+        /// Flow accumulation raster (cell counts) from
+        /// `surtgis hydrology flow-accumulation`.
+        flow_acc: PathBuf,
+        /// Output χ raster (Float32 GeoTIFF, NaN = non-stream).
+        output: PathBuf,
+        /// Reference concavity exponent. Default 0.45 (bedrock channels
+        /// in steady state).
+        #[arg(long, default_value = "0.45")]
+        theta_ref: f64,
+        /// Reference drainage area in m². Default 1·10⁶ m² (1 km²).
+        #[arg(long, default_value = "1e6")]
+        a_0_m2: f64,
+        /// Cell size override in metres. Default: read from the raster
+        /// transform. Required when the input does not declare a
+        /// projected CRS; not used to override an existing transform.
+        #[arg(long)]
+        cell_size_m: Option<f64>,
+    },
+    /// Normalised channel steepness index `ksn` (Wobus et al. 2006).
+    ///
+    /// Channel-following slope × A^θref, smoothed over a moving window
+    /// along the network. `ksn` is the workhorse proxy for U/K (uplift
+    /// rate divided by erodibility) used in tectonic geomorphology.
+    Ksn {
+        /// Binary stream network raster (1 = stream, 0 = non-stream).
+        stream: PathBuf,
+        /// D8 flow direction raster.
+        flow_dir: PathBuf,
+        /// Flow accumulation raster (cell counts).
+        flow_acc: PathBuf,
+        /// DEM (elevation in metres).
+        dem: PathBuf,
+        /// Output `ksn` raster (Float32 GeoTIFF, NaN = non-stream / outlet).
+        output: PathBuf,
+        /// Reference concavity exponent. Default 0.45.
+        #[arg(long, default_value = "0.45")]
+        theta_ref: f64,
+        /// Smoothing window length in metres. Default 500 (Wobus 2006 standard).
+        #[arg(long, default_value = "500")]
+        segment_length_m: f64,
+        /// Minimum drainage area in m² for a cell to contribute. Default 1e6 (1 km²).
+        #[arg(long, default_value = "1e6")]
+        min_drainage_area_m2: f64,
+        /// Cell size override in metres. Defaults to the raster transform's pixel size.
+        #[arg(long)]
+        cell_size_m: Option<f64>,
+        /// Optional path to write per-segment vector output as a GeoJSON
+        /// LineString FeatureCollection (one feature per stream segment
+        /// between confluences/outlet, attributes: `ksn_mean`, `n_cells`).
+        #[arg(long)]
+        segments: Option<PathBuf>,
+    },
+    /// Knickpoint detection (Neely et al. 2017, TVD denoising + curvature).
+    ///
+    /// Detects sharp slope breaks along each river long profile.
+    /// Knickpoints are classified as `concave` (slope decreases
+    /// downstream → likely lithologic contrast) or `convex` (slope
+    /// increases downstream → likely transient tectonic pulse).
+    Knickpoints {
+        /// Binary stream network raster (1 = stream, 0 = non-stream).
+        stream: PathBuf,
+        /// D8 flow direction raster.
+        flow_dir: PathBuf,
+        /// Flow accumulation raster (cell counts).
+        flow_acc: PathBuf,
+        /// DEM (elevation in metres).
+        dem: PathBuf,
+        /// Output GeoJSON Point FeatureCollection of knickpoints.
+        output: PathBuf,
+        /// Reference concavity exponent. Default 0.45.
+        #[arg(long, default_value = "0.45")]
+        theta_ref: f64,
+        /// TVD regularization (larger = stronger smoothing). Default 0.5.
+        #[arg(long, default_value = "0.5")]
+        tvd_lambda: f64,
+        /// Threshold on |d²z/dχ²| (units: 1/m). Default 1.0.
+        #[arg(long, default_value = "1.0")]
+        curvature_threshold: f64,
+        /// Minimum elevation magnitude across the knickpoint window
+        /// (metres). Default 10 m.
+        #[arg(long, default_value = "10")]
+        min_magnitude_m: f64,
+        /// Number of cells to exclude at each segment end (per spec
+        /// pitfall §8.9: confluences and outlets induce spurious
+        /// curvature). Default 5.
+        #[arg(long, default_value = "5")]
+        confluence_buffer_cells: usize,
+        /// Cell size override in metres. Default: read from raster.
+        #[arg(long)]
+        cell_size_m: Option<f64>,
+        /// Optional path to write a categorical raster (0=no knickpoint,
+        /// 1=concave, 2=convex) alongside the GeoJSON points.
+        #[arg(long)]
+        raster: Option<PathBuf>,
+    },
+    /// Concavity index θ per basin (Perron & Royden 2013).
+    ///
+    /// Grid-search θ ∈ [low, high] minimising the residual RMSE of
+    /// elevation~χ regression. Bootstrap (default n=200) for a 95% CI.
+    /// Output is a CSV table with one row per qualifying basin.
+    Concavity {
+        /// Binary stream network raster.
+        stream: PathBuf,
+        /// D8 flow direction raster.
+        flow_dir: PathBuf,
+        /// Flow accumulation raster (cell counts).
+        flow_acc: PathBuf,
+        /// DEM (elevation in metres).
+        dem: PathBuf,
+        /// Basin id raster (e.g. from `surtgis hydrology watershed`),
+        /// i32 with 0 = no basin.
+        basins: PathBuf,
+        /// Output CSV path. Columns:
+        /// basin_id, theta_opt, theta_ci_low, theta_ci_high, n_cells, rmse.
+        output: PathBuf,
+        /// θ search range as comma-separated (low,high). Default "0.1,0.9".
+        #[arg(long, default_value = "0.1,0.9")]
+        theta_range: String,
+        /// θ grid step. Default 0.05.
+        #[arg(long, default_value = "0.05")]
+        theta_step: f64,
+        /// Bootstrap iterations for the 95% CI. Default 200; set to 0 to
+        /// skip bootstrap (CI returned as [theta_opt, theta_opt]).
+        #[arg(long, default_value = "200")]
+        bootstrap_n: usize,
+        /// Minimum basin stream-cell count to attempt an estimate.
+        /// Default 30.
+        #[arg(long, default_value = "30")]
+        min_basin_cells: usize,
+        /// Seed for the deterministic bootstrap resampler. Default 42.
+        #[arg(long, default_value = "42")]
+        seed: u64,
+        /// Cell size override in metres.
+        #[arg(long)]
+        cell_size_m: Option<f64>,
+    },
+    /// Divide-migration metrics (Willett 2014, Whipple 2017).
+    ///
+    /// For each pair of adjacent watershed basins, computes the median
+    /// asymmetry across the divide: Gilbert elevation/relief difference
+    /// and (optionally) χ across-divide difference. Output is a GeoJSON
+    /// LineString FeatureCollection — one feature per adjacent-basin pair.
+    DivideMigration {
+        /// Basin id raster (i32, 0 = no basin).
+        basins: PathBuf,
+        /// DEM (elevation in metres).
+        dem: PathBuf,
+        /// Flow accumulation raster (currently informational; reserved
+        /// for future area-weighted statistics).
+        flow_acc: PathBuf,
+        /// Output GeoJSON path.
+        output: PathBuf,
+        /// Optional pre-computed χ raster from `surtgis fluvial chi`.
+        /// When supplied, median_chi_diff is reported; otherwise NaN.
+        #[arg(long)]
+        chi: Option<PathBuf>,
+        /// Minimum cumulative divide polyline length (m) to report.
+        /// Default 500 m — short divides are rarely robust.
+        #[arg(long, default_value = "500")]
+        min_divide_length_m: f64,
+        /// Cell size override in metres.
+        #[arg(long)]
+        cell_size_m: Option<f64>,
     },
 }
