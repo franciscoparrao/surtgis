@@ -2404,4 +2404,45 @@ pub enum FluvialCommands {
         #[arg(long)]
         raster: Option<PathBuf>,
     },
+    /// Concavity index θ per basin (Perron & Royden 2013).
+    ///
+    /// Grid-search θ ∈ [low, high] minimising the residual RMSE of
+    /// elevation~χ regression. Bootstrap (default n=200) for a 95% CI.
+    /// Output is a CSV table with one row per qualifying basin.
+    Concavity {
+        /// Binary stream network raster.
+        stream: PathBuf,
+        /// D8 flow direction raster.
+        flow_dir: PathBuf,
+        /// Flow accumulation raster (cell counts).
+        flow_acc: PathBuf,
+        /// DEM (elevation in metres).
+        dem: PathBuf,
+        /// Basin id raster (e.g. from `surtgis hydrology watershed`),
+        /// i32 with 0 = no basin.
+        basins: PathBuf,
+        /// Output CSV path. Columns:
+        /// basin_id, theta_opt, theta_ci_low, theta_ci_high, n_cells, rmse.
+        output: PathBuf,
+        /// θ search range as comma-separated (low,high). Default "0.1,0.9".
+        #[arg(long, default_value = "0.1,0.9")]
+        theta_range: String,
+        /// θ grid step. Default 0.05.
+        #[arg(long, default_value = "0.05")]
+        theta_step: f64,
+        /// Bootstrap iterations for the 95% CI. Default 200; set to 0 to
+        /// skip bootstrap (CI returned as [theta_opt, theta_opt]).
+        #[arg(long, default_value = "200")]
+        bootstrap_n: usize,
+        /// Minimum basin stream-cell count to attempt an estimate.
+        /// Default 30.
+        #[arg(long, default_value = "30")]
+        min_basin_cells: usize,
+        /// Seed for the deterministic bootstrap resampler. Default 42.
+        #[arg(long, default_value = "42")]
+        seed: u64,
+        /// Cell size override in metres.
+        #[arg(long)]
+        cell_size_m: Option<f64>,
+    },
 }

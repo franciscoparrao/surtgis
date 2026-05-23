@@ -9,8 +9,9 @@ use std::path::Path;
 use anyhow::{Context, Result, anyhow};
 use ndarray::Array2;
 use surtgis_algorithms::fluvial::{
-    channel_steepness, chi_transform, knickpoint_detection, ChiParams, Knickpoint,
-    KnickpointParams, KnickpointPolarity, KsnParams, KsnSegment,
+    channel_steepness, chi_transform, concavity_index, knickpoint_detection, ChiParams,
+    ConcavityParams, ConcavityResult, Knickpoint, KnickpointParams, KnickpointPolarity, KsnParams,
+    KsnSegment,
 };
 use surtgis_core::io::{read_geotiff, write_geotiff};
 
@@ -88,6 +89,33 @@ pub fn handle(cmd: FluvialCommands, compress: bool) -> Result<()> {
             cell_size_m,
             raster.as_deref(),
             compress,
+        ),
+        FluvialCommands::Concavity {
+            stream,
+            flow_dir,
+            flow_acc,
+            dem,
+            basins,
+            output,
+            theta_range,
+            theta_step,
+            bootstrap_n,
+            min_basin_cells,
+            seed,
+            cell_size_m,
+        } => handle_concavity(
+            &stream,
+            &flow_dir,
+            &flow_acc,
+            &dem,
+            &basins,
+            &output,
+            &theta_range,
+            theta_step,
+            bootstrap_n,
+            min_basin_cells,
+            seed,
+            cell_size_m,
         ),
     }
 }
@@ -340,6 +368,139 @@ fn write_segments_geojson(path: &Path, segments: &[KsnSegment]) -> Result<()> {
         "features": features,
     });
     std::fs::write(path, serde_json::to_string_pretty(&fc)?)?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_concavity(
+    stream_path: &Path,
+    flow_dir_path: &Path,
+    flow_acc_path: &Path,
+    dem_path: &Path,
+    basins_path: &Path,
+    output_path: &Path,
+    theta_range_str: &str,
+    theta_step: f64,
+    bootstrap_n: usize,
+    min_basin_cells: usize,
+    seed: u64,
+    cell_size_m_override: Option<f64>,
+) -> Result<()> {
+    let start = std::time::Instant::now();
+
+    // Parse "low,high" → (f64, f64).
+    let parts: Vec<&str> = theta_range_str.split(',').collect();
+    if parts.len() != 2 {
+        return Err(anyhow!(
+            "--theta-range must be `low,high` (e.g. \"0.1,0.9\"); got {:?}",
+            theta_range_str
+        ));
+    }
+    let lo: f64 = parts[0].trim().parse().context("parse --theta-range low")?;
+    let hi: f64 = parts[1].trim().parse().context("parse --theta-range high")?;
+
+    println!("SurtGIS Fluvial — concavity index (per basin)");
+    println!("==============================================");
+    println!("  Stream:        {}", stream_path.display());
+    println!("  Flow dir:      {}", flow_dir_path.display());
+    println!("  Flow acc:      {}", flow_acc_path.display());
+    println!("  DEM:           {}", dem_path.display());
+    println!("  Basins:        {}", basins_path.display());
+    println!("  Output CSV:    {}", output_path.display());
+    println!("  θ range:       [{}, {}] step {}", lo, hi, theta_step);
+    println!("  Bootstrap n:   {}", bootstrap_n);
+    println!("  Min cells:     {}", min_basin_cells);
+
+    let stream: surtgis_core::Raster<u8> = read_geotiff(stream_path, None)
+        .with_context(|| format!("read stream from {}", stream_path.display()))?;
+    let flow_dir: surtgis_core::Raster<u8> = read_geotiff(flow_dir_path, None)
+        .with_context(|| format!("read flow_dir from {}", flow_dir_path.display()))?;
+    let flow_acc: surtgis_core::Raster<f64> = read_geotiff(flow_acc_path, None)
+        .with_context(|| format!("read flow_acc from {}", flow_acc_path.display()))?;
+    let dem: surtgis_core::Raster<f64> = read_geotiff(dem_path, None)
+        .with_context(|| format!("read dem from {}", dem_path.display()))?;
+    let basins: surtgis_core::Raster<i32> = read_geotiff(basins_path, None)
+        .with_context(|| format!("read basins from {}", basins_path.display()))?;
+
+    let pixel_width = stream.transform().pixel_width.abs();
+    let cell_size_m = match cell_size_m_override {
+        Some(v) if v > 0.0 => v,
+        Some(v) => return Err(anyhow!("--cell-size-m must be > 0, got {}", v)),
+        None => {
+            if pixel_width < 1.0 {
+                return Err(anyhow!(
+                    "Raster pixel size is {} (looks like degrees, not metres). \
+                     Reproject your inputs to a projected CRS first \
+                     or pass `--cell-size-m <metres>` explicitly.",
+                    pixel_width,
+                ));
+            }
+            pixel_width
+        }
+    };
+    println!("  Cell size (m): {:.2}", cell_size_m);
+
+    let params = ConcavityParams {
+        theta_range: (lo, hi),
+        theta_step,
+        bootstrap_n,
+        cell_size_m,
+        seed,
+        min_basin_cells,
+    };
+
+    let results = concavity_index(&stream, &flow_dir, &flow_acc, &dem, &basins, params)
+        .context("concavity_index failed")?;
+
+    write_concavity_csv(output_path, &results)
+        .with_context(|| format!("write concavity csv to {}", output_path.display()))?;
+
+    println!();
+    println!("  {} basins reported", results.len());
+    if !results.is_empty() {
+        let mean_t: f64 =
+            results.iter().map(|r| r.theta_opt).sum::<f64>() / results.len() as f64;
+        let min_t = results
+            .iter()
+            .map(|r| r.theta_opt)
+            .fold(f64::INFINITY, f64::min);
+        let max_t = results
+            .iter()
+            .map(|r| r.theta_opt)
+            .fold(f64::NEG_INFINITY, f64::max);
+        println!("  θ_opt range:   [{:.3}, {:.3}], mean {:.3}", min_t, max_t, mean_t);
+    }
+
+    println!();
+    println!(
+        "Wrote {} in {:.1}s",
+        output_path.display(),
+        start.elapsed().as_secs_f64()
+    );
+    Ok(())
+}
+
+fn write_concavity_csv(path: &Path, results: &[ConcavityResult]) -> Result<()> {
+    let mut w = csv::Writer::from_path(path)?;
+    w.write_record([
+        "basin_id",
+        "theta_opt",
+        "theta_ci_low",
+        "theta_ci_high",
+        "n_cells",
+        "rmse",
+    ])?;
+    for r in results {
+        w.write_record([
+            r.basin_id.to_string(),
+            format!("{:.4}", r.theta_opt),
+            format!("{:.4}", r.theta_ci.0),
+            format!("{:.4}", r.theta_ci.1),
+            r.n_cells.to_string(),
+            format!("{:.6}", r.rmse),
+        ])?;
+    }
+    w.flush()?;
     Ok(())
 }
 
