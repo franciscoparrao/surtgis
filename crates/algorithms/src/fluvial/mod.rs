@@ -23,8 +23,12 @@
 
 pub mod channel_steepness;
 pub mod chi;
+pub mod knickpoint;
 pub mod stream_traversal;
 
 pub use channel_steepness::{channel_steepness, KsnError, KsnParams, KsnResult, KsnSegment};
 pub use chi::{chi_transform, ChiError, ChiParams};
+pub use knickpoint::{
+    knickpoint_detection, Knickpoint, KnickpointError, KnickpointParams, KnickpointPolarity,
+};
 pub use stream_traversal::{build_stream_graph, StreamGraph, StreamGraphError};

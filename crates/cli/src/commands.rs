@@ -2361,4 +2361,47 @@ pub enum FluvialCommands {
         #[arg(long)]
         segments: Option<PathBuf>,
     },
+    /// Knickpoint detection (Neely et al. 2017, TVD denoising + curvature).
+    ///
+    /// Detects sharp slope breaks along each river long profile.
+    /// Knickpoints are classified as `concave` (slope decreases
+    /// downstream → likely lithologic contrast) or `convex` (slope
+    /// increases downstream → likely transient tectonic pulse).
+    Knickpoints {
+        /// Binary stream network raster (1 = stream, 0 = non-stream).
+        stream: PathBuf,
+        /// D8 flow direction raster.
+        flow_dir: PathBuf,
+        /// Flow accumulation raster (cell counts).
+        flow_acc: PathBuf,
+        /// DEM (elevation in metres).
+        dem: PathBuf,
+        /// Output GeoJSON Point FeatureCollection of knickpoints.
+        output: PathBuf,
+        /// Reference concavity exponent. Default 0.45.
+        #[arg(long, default_value = "0.45")]
+        theta_ref: f64,
+        /// TVD regularization (larger = stronger smoothing). Default 0.5.
+        #[arg(long, default_value = "0.5")]
+        tvd_lambda: f64,
+        /// Threshold on |d²z/dχ²| (units: 1/m). Default 1.0.
+        #[arg(long, default_value = "1.0")]
+        curvature_threshold: f64,
+        /// Minimum elevation magnitude across the knickpoint window
+        /// (metres). Default 10 m.
+        #[arg(long, default_value = "10")]
+        min_magnitude_m: f64,
+        /// Number of cells to exclude at each segment end (per spec
+        /// pitfall §8.9: confluences and outlets induce spurious
+        /// curvature). Default 5.
+        #[arg(long, default_value = "5")]
+        confluence_buffer_cells: usize,
+        /// Cell size override in metres. Default: read from raster.
+        #[arg(long)]
+        cell_size_m: Option<f64>,
+        /// Optional path to write a categorical raster (0=no knickpoint,
+        /// 1=concave, 2=convex) alongside the GeoJSON points.
+        #[arg(long)]
+        raster: Option<PathBuf>,
+    },
 }
