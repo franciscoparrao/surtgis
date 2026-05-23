@@ -47,7 +47,7 @@ use std::collections::VecDeque;
 use ndarray::Array2;
 use surtgis_core::{Raster, Result};
 
-use super::stream_traversal::{build_stream_graph, StreamGraphError};
+use super::stream_traversal::{StreamGraphError, build_stream_graph};
 
 /// Parameters controlling the χ integration.
 #[derive(Debug, Clone)]
@@ -148,8 +148,8 @@ pub fn chi_transform(
     }
     let (rows, cols) = stream_shape;
 
-    let graph =
-        build_stream_graph(stream, flow_dir).map_err(|e| surtgis_core::Error::Other(e.to_string()))?;
+    let graph = build_stream_graph(stream, flow_dir)
+        .map_err(|e| surtgis_core::Error::Other(e.to_string()))?;
 
     // Decide which nodes start with χ = 0. Auto = every detected outlet;
     // explicit = the user-supplied (row, col) coordinates, each of which
@@ -291,7 +291,10 @@ mod tests {
                 row[c] >= row[c + 1],
                 "χ must be monotonically non-decreasing upstream; \
                  row[{}]={}, row[{}]={}",
-                c, row[c], c + 1, row[c + 1],
+                c,
+                row[c],
+                c + 1,
+                row[c + 1],
             );
         }
 
@@ -328,9 +331,7 @@ mod tests {
         // Synthetic steady-state DEM: z = K · χ + base.
         let k = 0.5; // arbitrary positive slope; sets ksn
         let base = 100.0;
-        let z: Vec<f64> = (0..n)
-            .map(|c| k * chi.get(0, c).unwrap() + base)
-            .collect();
+        let z: Vec<f64> = (0..n).map(|c| k * chi.get(0, c).unwrap() + base).collect();
         let x: Vec<f64> = (0..n).map(|c| chi.get(0, c).unwrap()).collect();
 
         // R² for the linear regression z ~ x.
@@ -396,8 +397,8 @@ mod tests {
         let cell_area_m2 = cell * cell;
         // Expected χ at (1,1): Δx (diagonal) · (a0 / A_mid_m2)^θ.
         // A_mid_cells = 2 → m² = 2 * cell² = 1800
-        let expected_chi_mid = cell * std::f64::consts::SQRT_2
-            * (a0 / (2.0 * cell_area_m2)).powf(theta);
+        let expected_chi_mid =
+            cell * std::f64::consts::SQRT_2 * (a0 / (2.0 * cell_area_m2)).powf(theta);
         // Expected χ at (0,2): χ_mid + Δx · (a0 / A_head_m2)^θ.
         // A_head_cells = 1 → m² = 1 * cell² = 900
         let expected_chi_head =

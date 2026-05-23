@@ -212,8 +212,7 @@ pub fn handle(
                 let dem = read_dem(&input)?;
                 let filled = priority_flood(&dem, PriorityFloodParams { epsilon: 0.0001 })
                     .context("Failed to fill depressions")?;
-                let fdir =
-                    flow_direction(&filled).context("Failed to compute flow direction")?;
+                let fdir = flow_direction(&filled).context("Failed to compute flow direction")?;
                 flow_accumulation(&fdir).context("Failed to compute flow accumulation")?
             };
             let result = stream_network(&facc, StreamNetworkParams { threshold })

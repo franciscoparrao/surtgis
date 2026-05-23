@@ -47,8 +47,8 @@
 
 use surtgis_core::{Raster, Result};
 
-use super::chi::{chi_transform, ChiParams};
-use super::stream_traversal::{build_stream_graph, StreamGraph, StreamGraphError};
+use super::chi::{ChiParams, chi_transform};
+use super::stream_traversal::{StreamGraph, StreamGraphError, build_stream_graph};
 
 /// Parameters for knickpoint detection.
 #[derive(Debug, Clone)]
@@ -158,8 +158,8 @@ pub fn knickpoint_detection(
         }
     }
 
-    let graph =
-        build_stream_graph(stream, flow_dir).map_err(|e| surtgis_core::Error::Other(e.to_string()))?;
+    let graph = build_stream_graph(stream, flow_dir)
+        .map_err(|e| surtgis_core::Error::Other(e.to_string()))?;
 
     // Compute χ once. Within a segment we read χ from this raster — the
     // numerical value of a_0_m2 only sets the absolute χ scale; curvature
@@ -458,7 +458,10 @@ mod tests {
         let mean_left: f64 = y[..10].iter().sum::<f64>() / 10.0;
         let mean_right: f64 = y[10..].iter().sum::<f64>() / 10.0;
         for v in &y[..10] {
-            assert!((v - mean_left).abs() < 0.01, "left should be flat after TVD");
+            assert!(
+                (v - mean_left).abs() < 0.01,
+                "left should be flat after TVD"
+            );
         }
         for v in &y[10..] {
             assert!(
@@ -466,10 +469,7 @@ mod tests {
                 "right should be flat after TVD"
             );
         }
-        assert!(
-            (mean_right - mean_left) > 0.5,
-            "TVD must preserve the step"
-        );
+        assert!((mean_right - mean_left) > 0.5, "TVD must preserve the step");
     }
 
     /// Spec §7.2 headline test for knickpoints: build a synthetic profile
@@ -572,7 +572,13 @@ mod tests {
         // Knickpoint at col 2 (very close to headwater at col 0).
         // With confluence_buffer_cells = 5, this should be excluded.
         let z: Vec<f64> = (0..n)
-            .map(|c| if c >= 2 { (n - 1 - c) as f64 * 0.5 } else { (n - 1 - c) as f64 * 0.5 + 30.0 })
+            .map(|c| {
+                if c >= 2 {
+                    (n - 1 - c) as f64 * 0.5
+                } else {
+                    (n - 1 - c) as f64 * 0.5 + 30.0
+                }
+            })
             .collect();
         let dem = raster_f64(vec![z]);
 
@@ -591,7 +597,8 @@ mod tests {
         for k in &knicks {
             assert!(
                 k.col >= 5 && k.col < 7,
-                "knickpoint at col {} should have been excluded by buffer", k.col
+                "knickpoint at col {} should have been excluded by buffer",
+                k.col
             );
         }
     }
@@ -635,7 +642,9 @@ mod tests {
         let knicks = knickpoint_detection(&stream, &flow_dir, &flow_acc, &dem, params).unwrap();
         assert!(!knicks.is_empty(), "no knickpoint detected");
         assert!(
-            knicks.iter().any(|k| k.polarity == KnickpointPolarity::Convex),
+            knicks
+                .iter()
+                .any(|k| k.polarity == KnickpointPolarity::Convex),
             "expected at least one Convex knickpoint on a sharp downstream drop, \
              got polarities: {:?}",
             knicks.iter().map(|k| k.polarity).collect::<Vec<_>>()

@@ -163,14 +163,32 @@ pub fn divide_migration(
             if c + 1 < cols {
                 let bid_e = basins.get(r, c + 1).unwrap_or(0);
                 if bid_e != 0 && bid_e != bid {
-                    record_pair(&mut groups, basins, dem, chi, rows, cols, (r, c), (r, c + 1));
+                    record_pair(
+                        &mut groups,
+                        basins,
+                        dem,
+                        chi,
+                        rows,
+                        cols,
+                        (r, c),
+                        (r, c + 1),
+                    );
                 }
             }
             // South neighbour
             if r + 1 < rows {
                 let bid_s = basins.get(r + 1, c).unwrap_or(0);
                 if bid_s != 0 && bid_s != bid {
-                    record_pair(&mut groups, basins, dem, chi, rows, cols, (r, c), (r + 1, c));
+                    record_pair(
+                        &mut groups,
+                        basins,
+                        dem,
+                        chi,
+                        rows,
+                        cols,
+                        (r, c),
+                        (r + 1, c),
+                    );
                 }
             }
         }
@@ -289,8 +307,12 @@ fn local_relief(dem: &Raster<f64>, r: usize, c: usize, rows: usize, cols: usize)
         for cc in c0..=c1 {
             let v = dem.get(rr, cc).unwrap_or(f64::NAN);
             if v.is_finite() {
-                if v < mn { mn = v; }
-                if v > mx { mx = v; }
+                if v < mn {
+                    mn = v;
+                }
+                if v > mx {
+                    mx = v;
+                }
             }
         }
     }
@@ -328,7 +350,9 @@ fn greedy_polyline(points: &[(f64, f64)]) -> Vec<(f64, f64)> {
         let mut best = usize::MAX;
         let mut best_d = f64::INFINITY;
         for j in 0..n {
-            if visited[j] { continue; }
+            if visited[j] {
+                continue;
+            }
             let dx = points[j].0 - points[cur].0;
             let dy = points[j].1 - points[cur].1;
             let d = dx * dx + dy * dy;
@@ -337,7 +361,9 @@ fn greedy_polyline(points: &[(f64, f64)]) -> Vec<(f64, f64)> {
                 best = j;
             }
         }
-        if best == usize::MAX { break; }
+        if best == usize::MAX {
+            break;
+        }
         visited[best] = true;
         order.push(points[best]);
         cur = best;
@@ -418,15 +444,20 @@ mod tests {
             cell_size_m: 30.0,
             min_divide_length_m: 0.0,
         };
-        let result =
-            divide_migration(&basins, &dem, Some(&chi), &flow_acc, params).expect("ok");
+        let result = divide_migration(&basins, &dem, Some(&chi), &flow_acc, params).expect("ok");
         assert_eq!(result.len(), 1);
         let d = &result[0];
         assert_eq!((d.basin_a, d.basin_b), (1, 2));
-        assert!(d.median_chi_diff.abs() < 1e-9,
-            "symmetric basins should give |Δχ| ≈ 0, got {}", d.median_chi_diff);
-        assert!(d.median_elev_diff.abs() < 1e-9,
-            "symmetric basins should give |Δelev| ≈ 0, got {}", d.median_elev_diff);
+        assert!(
+            d.median_chi_diff.abs() < 1e-9,
+            "symmetric basins should give |Δχ| ≈ 0, got {}",
+            d.median_chi_diff
+        );
+        assert!(
+            d.median_elev_diff.abs() < 1e-9,
+            "symmetric basins should give |Δelev| ≈ 0, got {}",
+            d.median_elev_diff
+        );
     }
 
     /// Asymmetric basins: basin 1 has higher elevations than basin 2 →
@@ -452,14 +483,19 @@ mod tests {
             cell_size_m: 30.0,
             min_divide_length_m: 0.0,
         };
-        let result =
-            divide_migration(&basins, &dem, None, &flow_acc, params).expect("ok");
+        let result = divide_migration(&basins, &dem, None, &flow_acc, params).expect("ok");
         assert_eq!(result.len(), 1);
         let d = &result[0];
         assert_eq!((d.basin_a, d.basin_b), (1, 2));
-        assert!((d.median_elev_diff - 50.0).abs() < 1e-9,
-            "expected median Δelev = +50, got {}", d.median_elev_diff);
-        assert!(d.median_chi_diff.is_nan(), "chi=None must give NaN chi_diff");
+        assert!(
+            (d.median_elev_diff - 50.0).abs() < 1e-9,
+            "expected median Δelev = +50, got {}",
+            d.median_elev_diff
+        );
+        assert!(
+            d.median_chi_diff.is_nan(),
+            "chi=None must give NaN chi_diff"
+        );
     }
 
     /// min_divide_length_m filters out short divides.
@@ -467,11 +503,7 @@ mod tests {
     fn short_divide_below_length_filter_is_dropped() {
         // 3×3 grid: two basins with only 1 cell-pair divide → polyline
         // length ≈ 0 (one midpoint). Should be filtered when min > 0.
-        let basins = raster_i32(vec![
-            vec![1, 1, 2],
-            vec![1, 0, 0],
-            vec![0, 0, 0],
-        ]);
+        let basins = raster_i32(vec![vec![1, 1, 2], vec![1, 0, 0], vec![0, 0, 0]]);
         let dem = raster_f64(vec![vec![1.0f64; 3]; 3]);
         let flow_acc = raster_f64(vec![vec![1.0f64; 3]; 3]);
         let params = DivideMigrationParams {
@@ -479,7 +511,11 @@ mod tests {
             min_divide_length_m: 100.0, // requires >= 100 m of divide
         };
         let result = divide_migration(&basins, &dem, None, &flow_acc, params).expect("ok");
-        assert!(result.is_empty(), "1-cell divide should be filtered, got {:?}", result);
+        assert!(
+            result.is_empty(),
+            "1-cell divide should be filtered, got {:?}",
+            result
+        );
     }
 
     /// Three basins → up to 3 divide pairs (1-2, 1-3, 2-3). Pairing
@@ -532,7 +568,13 @@ mod tests {
         .unwrap();
         assert_eq!(result.len(), 1);
         let d = &result[0];
-        assert!(d.median_chi_diff.is_nan(), "chi_diff must be NaN with chi=None");
-        assert!(d.median_elev_diff.is_finite(), "elev_diff must remain finite");
+        assert!(
+            d.median_chi_diff.is_nan(),
+            "chi_diff must be NaN with chi=None"
+        );
+        assert!(
+            d.median_elev_diff.is_finite(),
+            "elev_diff must remain finite"
+        );
     }
 }

@@ -28,13 +28,13 @@ pub mod divide_migration;
 pub mod knickpoint;
 pub mod stream_traversal;
 
-pub use channel_steepness::{channel_steepness, KsnError, KsnParams, KsnResult, KsnSegment};
-pub use chi::{chi_transform, ChiError, ChiParams};
-pub use concavity::{concavity_index, ConcavityError, ConcavityParams, ConcavityResult};
+pub use channel_steepness::{KsnError, KsnParams, KsnResult, KsnSegment, channel_steepness};
+pub use chi::{ChiError, ChiParams, chi_transform};
+pub use concavity::{ConcavityError, ConcavityParams, ConcavityResult, concavity_index};
 pub use divide_migration::{
-    divide_migration, DivideMigrationError, DivideMigrationParams, DivideSegment,
+    DivideMigrationError, DivideMigrationParams, DivideSegment, divide_migration,
 };
 pub use knickpoint::{
-    knickpoint_detection, Knickpoint, KnickpointError, KnickpointParams, KnickpointPolarity,
+    Knickpoint, KnickpointError, KnickpointParams, KnickpointPolarity, knickpoint_detection,
 };
-pub use stream_traversal::{build_stream_graph, StreamGraph, StreamGraphError};
+pub use stream_traversal::{StreamGraph, StreamGraphError, build_stream_graph};

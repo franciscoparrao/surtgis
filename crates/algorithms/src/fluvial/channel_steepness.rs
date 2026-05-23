@@ -53,7 +53,7 @@ use std::collections::VecDeque;
 use ndarray::Array2;
 use surtgis_core::{Raster, Result};
 
-use super::stream_traversal::{build_stream_graph, StreamGraph, StreamGraphError};
+use super::stream_traversal::{StreamGraph, StreamGraphError, build_stream_graph};
 
 /// Parameters for [`channel_steepness`].
 #[derive(Debug, Clone)]
@@ -158,8 +158,8 @@ pub fn channel_steepness(
     }
     let (rows, cols) = s_shape;
 
-    let graph =
-        build_stream_graph(stream, flow_dir).map_err(|e| surtgis_core::Error::Other(e.to_string()))?;
+    let graph = build_stream_graph(stream, flow_dir)
+        .map_err(|e| surtgis_core::Error::Other(e.to_string()))?;
 
     let cell = params.cell_size_m;
     let cell_diag = cell * std::f64::consts::SQRT_2;
@@ -296,14 +296,7 @@ pub fn channel_steepness(
     })
 }
 
-fn step_distance(
-    r0: usize,
-    c0: usize,
-    r1: usize,
-    c1: usize,
-    cardinal: f64,
-    diagonal: f64,
-) -> f64 {
+fn step_distance(r0: usize, c0: usize, r1: usize, c1: usize, cardinal: f64, diagonal: f64) -> f64 {
     let dr = (r1 as isize - r0 as isize).abs();
     let dc = (c1 as isize - c0 as isize).abs();
     if dr + dc == 2 { diagonal } else { cardinal }
@@ -457,11 +450,7 @@ mod tests {
         // flow_dir: east everywhere on the channels; non-channel cells 0.
         let flow_dir = raster_u8(vec![vec![1; n], vec![0; n], vec![1; n]]);
         // Both channels: constant A = 5000 cells (≈ 4.5 km² for cell=30m).
-        let flow_acc = raster_f64(vec![
-            vec![5000.0; n],
-            vec![0.0; n],
-            vec![5000.0; n],
-        ]);
+        let flow_acc = raster_f64(vec![vec![5000.0; n], vec![0.0; n], vec![5000.0; n]]);
         // DEM: channel A drops 1 m/cell, channel B drops 3 m/cell.
         let dem_a: Vec<f64> = (0..n).map(|c| (n - 1 - c) as f64 * 1.0).collect();
         let dem_b: Vec<f64> = (0..n).map(|c| (n - 1 - c) as f64 * 3.0).collect();
@@ -481,7 +470,9 @@ mod tests {
         let ksn_b = result.ksn_raster.get(2, 2).unwrap();
         assert!(
             ksn_a.is_finite() && ksn_b.is_finite(),
-            "ksn must be finite on interior cells; got A={}, B={}", ksn_a, ksn_b,
+            "ksn must be finite on interior cells; got A={}, B={}",
+            ksn_a,
+            ksn_b,
         );
 
         let ratio = ksn_b / ksn_a;
@@ -546,7 +537,12 @@ mod tests {
         // qualifying rightmost cell → smoothed NaN.
         for c in 0..3 {
             let v = result.ksn_raster.get(0, c).unwrap();
-            assert!(v.is_nan(), "cell {} should be NaN (below threshold), got {}", c, v);
+            assert!(
+                v.is_nan(),
+                "cell {} should be NaN (below threshold), got {}",
+                c,
+                v
+            );
         }
     }
 
@@ -587,6 +583,11 @@ mod tests {
         let segs = result.segments.expect("emit_segments=true");
         // 1 outlet-rooted segment (main stem) + 2 confluence-tributary
         // segments = 3 total.
-        assert_eq!(segs.len(), 3, "expected 3 segments for a Y network, got {}", segs.len());
+        assert_eq!(
+            segs.len(),
+            3,
+            "expected 3 segments for a Y network, got {}",
+            segs.len()
+        );
     }
 }

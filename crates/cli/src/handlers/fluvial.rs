@@ -9,9 +9,9 @@ use std::path::Path;
 use anyhow::{Context, Result, anyhow};
 use ndarray::Array2;
 use surtgis_algorithms::fluvial::{
-    channel_steepness, chi_transform, concavity_index, divide_migration, knickpoint_detection,
     ChiParams, ConcavityParams, ConcavityResult, DivideMigrationParams, DivideSegment, Knickpoint,
-    KnickpointParams, KnickpointPolarity, KsnParams, KsnSegment,
+    KnickpointParams, KnickpointPolarity, KsnParams, KsnSegment, channel_steepness, chi_transform,
+    concavity_index, divide_migration, knickpoint_detection,
 };
 use surtgis_core::io::{read_geotiff, write_geotiff};
 
@@ -209,8 +209,7 @@ fn handle_chi(
         base_outlets: None,
     };
 
-    let chi = chi_transform(&stream, &flow_dir, &flow_acc, params)
-        .context("χ transform failed")?;
+    let chi = chi_transform(&stream, &flow_dir, &flow_acc, params).context("χ transform failed")?;
 
     // Quick stats so the user knows the run produced something sensible.
     let stats = chi.statistics();
@@ -223,7 +222,8 @@ fn handle_chi(
     } else {
         println!("    (all NaN — no stream cells reached an outlet?)");
     }
-    println!("    valid {} / {} cells ({:.1}%)",
+    println!(
+        "    valid {} / {} cells ({:.1}%)",
         stats.valid_count,
         chi.len(),
         100.0 * stats.valid_count as f64 / chi.len() as f64,
@@ -233,7 +233,8 @@ fn handle_chi(
         .with_context(|| format!("write chi to {}", output_path.display()))?;
 
     println!();
-    println!("Wrote {} in {:.1}s",
+    println!(
+        "Wrote {} in {:.1}s",
         output_path.display(),
         start.elapsed().as_secs_f64(),
     );
@@ -338,9 +339,8 @@ fn handle_ksn(
 
     if let Some(p) = segments_path {
         let segs = result.segments.as_deref().unwrap_or(&[]);
-        write_segments_geojson(p, segs).with_context(|| {
-            format!("write ksn segments to {}", p.display())
-        })?;
+        write_segments_geojson(p, segs)
+            .with_context(|| format!("write ksn segments to {}", p.display()))?;
         println!("  Segments:    {} features → {}", segs.len(), p.display());
     }
 
@@ -414,7 +414,10 @@ fn handle_concavity(
         ));
     }
     let lo: f64 = parts[0].trim().parse().context("parse --theta-range low")?;
-    let hi: f64 = parts[1].trim().parse().context("parse --theta-range high")?;
+    let hi: f64 = parts[1]
+        .trim()
+        .parse()
+        .context("parse --theta-range high")?;
 
     println!("SurtGIS Fluvial — concavity index (per basin)");
     println!("==============================================");
@@ -475,8 +478,7 @@ fn handle_concavity(
     println!();
     println!("  {} basins reported", results.len());
     if !results.is_empty() {
-        let mean_t: f64 =
-            results.iter().map(|r| r.theta_opt).sum::<f64>() / results.len() as f64;
+        let mean_t: f64 = results.iter().map(|r| r.theta_opt).sum::<f64>() / results.len() as f64;
         let min_t = results
             .iter()
             .map(|r| r.theta_opt)
@@ -485,7 +487,10 @@ fn handle_concavity(
             .iter()
             .map(|r| r.theta_opt)
             .fold(f64::NEG_INFINITY, f64::max);
-        println!("  θ_opt range:   [{:.3}, {:.3}], mean {:.3}", min_t, max_t, mean_t);
+        println!(
+            "  θ_opt range:   [{:.3}, {:.3}], mean {:.3}",
+            min_t, max_t, mean_t
+        );
     }
 
     println!();
@@ -611,9 +616,8 @@ fn handle_knickpoints(
         n_convex,
     );
 
-    write_knickpoints_geojson(output_path, &knicks, &stream).with_context(|| {
-        format!("write knickpoints geojson to {}", output_path.display())
-    })?;
+    write_knickpoints_geojson(output_path, &knicks, &stream)
+        .with_context(|| format!("write knickpoints geojson to {}", output_path.display()))?;
 
     if let Some(rp) = raster_path {
         let (rows, cols) = stream.shape();
@@ -716,9 +720,9 @@ fn handle_divide_migration(
     let flow_acc: surtgis_core::Raster<f64> = read_geotiff(flow_acc_path, None)
         .with_context(|| format!("read flow_acc from {}", flow_acc_path.display()))?;
     let chi: Option<surtgis_core::Raster<f64>> = match chi_path {
-        Some(p) => Some(
-            read_geotiff(p, None).with_context(|| format!("read chi from {}", p.display()))?,
-        ),
+        Some(p) => {
+            Some(read_geotiff(p, None).with_context(|| format!("read chi from {}", p.display()))?)
+        }
         None => None,
     };
 
@@ -754,7 +758,10 @@ fn handle_divide_migration(
     println!();
     println!("  {} divides reported", result.len());
     if !result.is_empty() {
-        let n_with_chi = result.iter().filter(|d| d.median_chi_diff.is_finite()).count();
+        let n_with_chi = result
+            .iter()
+            .filter(|d| d.median_chi_diff.is_finite())
+            .count();
         println!("  with finite χ diff: {}", n_with_chi);
         let max_elev = result
             .iter()
@@ -764,7 +771,11 @@ fn handle_divide_migration(
     }
 
     println!();
-    println!("Wrote {} in {:.1}s", output_path.display(), start.elapsed().as_secs_f64());
+    println!(
+        "Wrote {} in {:.1}s",
+        output_path.display(),
+        start.elapsed().as_secs_f64()
+    );
     Ok(())
 }
 

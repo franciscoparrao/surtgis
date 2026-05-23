@@ -36,7 +36,7 @@ use std::hash::{Hash, Hasher};
 
 use surtgis_core::{Raster, Result};
 
-use super::stream_traversal::{build_stream_graph, StreamGraph, StreamGraphError};
+use super::stream_traversal::{StreamGraph, StreamGraphError, build_stream_graph};
 
 /// Parameters for [`concavity_index`].
 #[derive(Debug, Clone)]
@@ -144,8 +144,8 @@ pub fn concavity_index(
         }
     }
 
-    let graph =
-        build_stream_graph(stream, flow_dir).map_err(|e| surtgis_core::Error::Other(e.to_string()))?;
+    let graph = build_stream_graph(stream, flow_dir)
+        .map_err(|e| surtgis_core::Error::Other(e.to_string()))?;
 
     // θ grid: inclusive endpoints, step interval.
     let mut theta_grid: Vec<f64> = Vec::new();
@@ -219,8 +219,7 @@ pub fn concavity_index(
         }
 
         // ── 2. χ_per_theta[t_idx][cell_pos_in_valid] ─────────────────
-        let mut chi_per_theta: Vec<Vec<f64>> =
-            Vec::with_capacity(n_theta);
+        let mut chi_per_theta: Vec<Vec<f64>> = Vec::with_capacity(n_theta);
         for &theta in &theta_grid {
             let chi_map = compute_basin_chi(
                 &graph,
@@ -240,7 +239,8 @@ pub fn concavity_index(
 
         // ── 3. Grid-search θ_opt on the full sample. ───────────────────
         let full_idx: Vec<usize> = (0..valid_node_indices.len()).collect();
-        let (theta_opt, rmse_opt) = grid_search_theta(&chi_per_theta, &elevations, &theta_grid, &full_idx);
+        let (theta_opt, rmse_opt) =
+            grid_search_theta(&chi_per_theta, &elevations, &theta_grid, &full_idx);
 
         // ── 4. Bootstrap CI. ────────────────────────────────────────────
         let theta_ci = if params.bootstrap_n == 0 {
@@ -261,17 +261,14 @@ pub fn concavity_index(
                         (h.finish() as usize) % n
                     })
                     .collect();
-                let (t_b, _) = grid_search_theta(
-                    &chi_per_theta,
-                    &elevations,
-                    &theta_grid,
-                    &resampled_idx,
-                );
+                let (t_b, _) =
+                    grid_search_theta(&chi_per_theta, &elevations, &theta_grid, &resampled_idx);
                 samples.push(t_b);
             }
             samples.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             let pct = |p: f64| -> f64 {
-                let idx = ((p * (samples.len() as f64 - 1.0)).round() as usize).min(samples.len() - 1);
+                let idx =
+                    ((p * (samples.len() as f64 - 1.0)).round() as usize).min(samples.len() - 1);
                 samples[idx]
             };
             (pct(0.025), pct(0.975))
@@ -519,7 +516,11 @@ mod tests {
             "theta_opt {} should be within 0.06 of 0.45",
             r.theta_opt
         );
-        assert!(r.rmse < 1e-6, "RMSE on a perfectly linear profile should be ~0, got {}", r.rmse);
+        assert!(
+            r.rmse < 1e-6,
+            "RMSE on a perfectly linear profile should be ~0, got {}",
+            r.rmse
+        );
     }
 
     /// Bootstrap CI must (a) be non-degenerate (low < high or at least
@@ -538,33 +539,41 @@ mod tests {
             seed: 42,
             min_basin_cells: 30,
         };
-        let results = concavity_index(&stream, &flow_dir, &flow_acc, &dem, &basins, params)
-            .expect("ok");
+        let results =
+            concavity_index(&stream, &flow_dir, &flow_acc, &dem, &basins, params).expect("ok");
         let r = &results[0];
         // For a perfectly linear synthetic profile, every bootstrap sample
         // picks (almost) the same θ; CI is tight but well-defined.
-        assert!(r.theta_ci.0 <= r.theta_opt && r.theta_opt <= r.theta_ci.1,
+        assert!(
+            r.theta_ci.0 <= r.theta_opt && r.theta_opt <= r.theta_ci.1,
             "θ_opt {} should fall inside CI [{}, {}]",
-            r.theta_opt, r.theta_ci.0, r.theta_ci.1,
+            r.theta_opt,
+            r.theta_ci.0,
+            r.theta_ci.1,
         );
-        assert!(r.theta_ci.0 >= 0.1 && r.theta_ci.1 <= 0.9,
-            "CI must stay inside the searched θ range");
+        assert!(
+            r.theta_ci.0 >= 0.1 && r.theta_ci.1 <= 0.9,
+            "CI must stay inside the searched θ range"
+        );
     }
 
     /// Basins with too few stream cells must be silently skipped.
     #[test]
     fn small_basin_is_skipped() {
         // 10-cell channel, but require min_basin_cells = 30 → should skip.
-        let (stream, flow_dir, flow_acc, dem, basins) =
-            synthetic_basin(10, 0.45, 1.0, 100.0, 30.0);
+        let (stream, flow_dir, flow_acc, dem, basins) = synthetic_basin(10, 0.45, 1.0, 100.0, 30.0);
         let params = ConcavityParams {
             min_basin_cells: 30,
             bootstrap_n: 0,
             ..ConcavityParams::default()
         };
-        let results = concavity_index(&stream, &flow_dir, &flow_acc, &dem, &basins, params)
-            .expect("ok");
-        assert!(results.is_empty(), "10-cell basin should be skipped, got {:?}", results);
+        let results =
+            concavity_index(&stream, &flow_dir, &flow_acc, &dem, &basins, params).expect("ok");
+        assert!(
+            results.is_empty(),
+            "10-cell basin should be skipped, got {:?}",
+            results
+        );
     }
 
     /// Two independent basins must yield two independent estimates.
@@ -595,14 +604,18 @@ mod tests {
             min_basin_cells: 30,
             ..ConcavityParams::default()
         };
-        let results = concavity_index(&stream, &flow_dir, &flow_acc, &dem, &basins, params)
-            .expect("ok");
+        let results =
+            concavity_index(&stream, &flow_dir, &flow_acc, &dem, &basins, params).expect("ok");
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].basin_id, 1);
         assert_eq!(results[1].basin_id, 2);
         for r in &results {
-            assert!((r.theta_opt - 0.45).abs() < 0.06,
-                "basin {} θ {} not close to 0.45", r.basin_id, r.theta_opt);
+            assert!(
+                (r.theta_opt - 0.45).abs() < 0.06,
+                "basin {} θ {} not close to 0.45",
+                r.basin_id,
+                r.theta_opt
+            );
         }
     }
 }
