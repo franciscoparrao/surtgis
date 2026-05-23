@@ -9,6 +9,84 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-05-23
+
+Headline: closes the **fluvial-tectonic morphometry spec** —
+`docs/SPEC_morfometria_fluvial_tectonica.md` — that Dr. Paulo Quezada
+(LAMIR/UFPR + UDD) contributed for the Frente Puerto Aysén project.
+Adds the five canonical metrics of tectonic geomorphology as a new
+`crates/algorithms/src/fluvial/` submodule, all reachable from a single
+binary as `surtgis fluvial <sub>`.
+
+### Added — `crates/algorithms/src/fluvial/`
+
+- **`chi-transform`** (Perron & Royden 2013): base-level reference
+  distance χ, the path integral of `(A₀/A(x))^θref`. BFS upstream from
+  every outlet on a `StreamGraph` built from the binary stream raster +
+  D8 flow_dir. Riemann-sum convention matching TopoToolbox 2 for
+  bit-for-bit parity.
+- **`channel-steepness` (`ksn`)** (Wobus 2006): channel-following slope
+  `S = (z_up − z_down)/dx_along_channel`, raw `ksn = S · A^θref`,
+  smoothed over a moving window (default 500 m) along the network with
+  main-stem traversal at confluences. Optional `--segments` flag emits a
+  LineString GeoJSON of per-segment averages.
+- **`knickpoints`** (Neely 2017): per-segment χ–z profile + 1-D TVD
+  denoising (inline Condat 2013, ~80 LOC; the `tvr` crate that the spec
+  recommended doesn't exist on crates.io) + non-uniform 3-point
+  curvature stencil + magnitude / polarity classification (concave =
+  decreasing slope downstream → likely lithology; convex = increasing
+  slope downstream → likely transient/tectonic). Confluence buffer to
+  suppress edge artefacts. GeoJSON Points + optional categorical raster.
+- **`concavity`** (Perron & Royden 2013): per-basin θ estimation via
+  grid search minimising elevation~χ scatter, with deterministic seeded
+  bootstrap (default n=200) for 95 % CI. CSV output with `theta_opt`,
+  `theta_ci_low`, `theta_ci_high`, `n_cells`, `rmse`.
+- **`divide-migration`** (Willett 2014, Whipple 2017): scan 4-connected
+  basin boundaries, group by sorted basin-id pair, compute median Δχ +
+  Gilbert Δelev + Δrelief (local 3×3 max−min). Greedy nearest-neighbour
+  polyline geometry per divide. LineString GeoJSON output.
+
+Foundation primitive used by all five: `StreamGraph` +
+`build_stream_graph(stream, flow_dir)` in `fluvial/stream_traversal.rs`.
+
+29 unit tests, including the five `§7.2` headline golden tests from
+the spec (all pass).
+
+### Added — CLI
+
+Five new subcommands under `surtgis fluvial`:
+
+  - `fluvial chi STREAM FLOW_DIR FLOW_ACC OUTPUT [--theta-ref 0.45] [--a-0-m2 1e6]`
+  - `fluvial ksn STREAM FLOW_DIR FLOW_ACC DEM OUTPUT [--segment-length-m 500] [--segments GEOJSON]`
+  - `fluvial knickpoints STREAM FLOW_DIR FLOW_ACC DEM OUTPUT [--tvd-lambda 0.5] [--raster RASTER]`
+  - `fluvial concavity STREAM FLOW_DIR FLOW_ACC DEM BASINS OUTPUT [--bootstrap-n 200]`
+  - `fluvial divide-migration BASINS DEM FLOW_ACC OUTPUT [--chi CHI] [--min-divide-length-m 500]`
+
+All handlers share a CRS-validation heuristic: reject inputs with
+pixel size `< 1.0` unit (likely degrees) unless `--cell-size-m` is
+supplied explicitly. Warns when cell size `> 30 m` per spec §8 pitfall
+#1 (ksn / knickpoint sensitivity).
+
+### Added — `hydrology stream-network --from-facc`
+
+Optional flag to interpret the input as a pre-computed flow_accumulation
+raster (skipping the DEM-side recomputation). Required for composable
+workflows where stream-network must be topologically consistent with an
+externally-computed flow_dir. Backward-compatible (default behaviour
+unchanged).
+
+### Notes
+
+- Versioning is minor (0.9 → 0.10) because all additions are
+  non-breaking; the existing public API surface is untouched. No
+  `Breaking` heading required this release.
+- Inter-crate path-deps bumped 0.9 → 0.10 across all 8 crates.
+- Sprints 7-9 of the spec (TopoToolbox / pyTopoToolbox parity
+  validation against published Smugglers Notch case + the Quezada
+  Pangal AOI cross-check + mdBook chapter) are deferred to a follow-up
+  release. They validate the algorithms against the literature but do
+  not block usability for early adopters.
+
 ## [0.9.0] - 2026-05-22
 
 Headline: closes the **G2 axis** of the roadmap — Geospatial Foundation
