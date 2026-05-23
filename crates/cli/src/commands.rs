@@ -889,14 +889,28 @@ pub enum HydrologyCommands {
         #[arg(long, default_value = "1000")]
         threshold: f64,
     },
-    /// Stream network extraction (from DEM, full pipeline)
+    /// Stream network extraction.
+    ///
+    /// By default the input is treated as a DEM and the handler runs the
+    /// full pipeline (priority_flood → flow_direction → flow_accumulation
+    /// → threshold). When `--from-facc` is passed, the input is treated
+    /// as a pre-computed flow_accumulation raster and only the threshold
+    /// step runs — this is the path you want when composing with an
+    /// externally computed flow direction / accumulation, e.g. for the
+    /// fluvial module's chi/ksn workflow.
     StreamNetwork {
-        /// Input DEM file
+        /// Input raster. DEM by default; flow_accumulation when `--from-facc`.
         input: PathBuf,
         output: PathBuf,
-        /// Contributing area threshold
+        /// Contributing area threshold (cell counts).
         #[arg(long, default_value = "1000")]
         threshold: f64,
+        /// Treat `input` as a pre-computed flow_accumulation raster and
+        /// skip the DEM → fdir → facc recomputation. Use when you already
+        /// have flow_dir/acc and want the resulting `stream-network` to
+        /// be topologically consistent with them.
+        #[arg(long)]
+        from_facc: bool,
     },
     /// Drainage density: stream length per unit area
     DrainageDensity {

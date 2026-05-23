@@ -192,13 +192,30 @@ pub fn handle(
             input,
             output,
             threshold,
+            from_facc,
         } => {
-            let dem = read_dem(&input)?;
             let start = Instant::now();
-            let filled = priority_flood(&dem, PriorityFloodParams { epsilon: 0.0001 })
-                .context("Failed to fill depressions")?;
-            let fdir = flow_direction(&filled).context("Failed to compute flow direction")?;
-            let facc = flow_accumulation(&fdir).context("Failed to compute flow accumulation")?;
+            // Two input modes:
+            //   default (`from_facc == false`): input is a DEM. Run the
+            //     full pipeline priority_flood → flow_direction →
+            //     flow_accumulation → threshold. Convenient one-shot.
+            //   `--from-facc`: input is already a flow_accumulation
+            //     raster (Float64 cell counts). Skip the recomputation
+            //     and threshold directly. Use this when the resulting
+            //     stream raster must be topologically consistent with an
+            //     externally-computed flow_dir (e.g. for `surtgis fluvial
+            //     chi` / `ksn`, which need streams + fdir + facc to come
+            //     from the same flow analysis).
+            let facc = if from_facc {
+                read_dem(&input)? // read_dem reads a Float64 raster from disk; semantically OK here
+            } else {
+                let dem = read_dem(&input)?;
+                let filled = priority_flood(&dem, PriorityFloodParams { epsilon: 0.0001 })
+                    .context("Failed to fill depressions")?;
+                let fdir =
+                    flow_direction(&filled).context("Failed to compute flow direction")?;
+                flow_accumulation(&fdir).context("Failed to compute flow accumulation")?
+            };
             let result = stream_network(&facc, StreamNetworkParams { threshold })
                 .context("Failed to extract stream network")?;
             let elapsed = start.elapsed();
