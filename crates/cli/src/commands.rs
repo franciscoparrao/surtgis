@@ -2313,4 +2313,38 @@ pub enum FluvialCommands {
         #[arg(long)]
         cell_size_m: Option<f64>,
     },
+    /// Normalised channel steepness index `ksn` (Wobus et al. 2006).
+    ///
+    /// Channel-following slope × A^θref, smoothed over a moving window
+    /// along the network. `ksn` is the workhorse proxy for U/K (uplift
+    /// rate divided by erodibility) used in tectonic geomorphology.
+    Ksn {
+        /// Binary stream network raster (1 = stream, 0 = non-stream).
+        stream: PathBuf,
+        /// D8 flow direction raster.
+        flow_dir: PathBuf,
+        /// Flow accumulation raster (cell counts).
+        flow_acc: PathBuf,
+        /// DEM (elevation in metres).
+        dem: PathBuf,
+        /// Output `ksn` raster (Float32 GeoTIFF, NaN = non-stream / outlet).
+        output: PathBuf,
+        /// Reference concavity exponent. Default 0.45.
+        #[arg(long, default_value = "0.45")]
+        theta_ref: f64,
+        /// Smoothing window length in metres. Default 500 (Wobus 2006 standard).
+        #[arg(long, default_value = "500")]
+        segment_length_m: f64,
+        /// Minimum drainage area in m² for a cell to contribute. Default 1e6 (1 km²).
+        #[arg(long, default_value = "1e6")]
+        min_drainage_area_m2: f64,
+        /// Cell size override in metres. Defaults to the raster transform's pixel size.
+        #[arg(long)]
+        cell_size_m: Option<f64>,
+        /// Optional path to write per-segment vector output as a GeoJSON
+        /// LineString FeatureCollection (one feature per stream segment
+        /// between confluences/outlet, attributes: `ksn_mean`, `n_cells`).
+        #[arg(long)]
+        segments: Option<PathBuf>,
+    },
 }
