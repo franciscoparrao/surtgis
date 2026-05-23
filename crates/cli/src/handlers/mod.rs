@@ -2,6 +2,7 @@ pub mod classification;
 pub mod clip;
 pub mod extract;
 pub mod extract_patches;
+pub mod fluvial;
 pub mod gfm_profiles;
 pub mod hydrology;
 pub mod imagery;

@@ -48,6 +48,11 @@ pub enum Commands {
         #[command(subcommand)]
         algorithm: HydrologyCommands,
     },
+    /// Fluvial-tectonic morphometry (chi, ksn, knickpoints, divide migration)
+    Fluvial {
+        #[command(subcommand)]
+        algorithm: FluvialCommands,
+    },
     /// Imagery / spectral index algorithms
     Imagery {
         #[command(subcommand)]
@@ -2266,5 +2271,46 @@ pub enum StatisticsCommands {
         /// Neighborhood radius
         #[arg(short, long, default_value = "3")]
         radius: usize,
+    },
+}
+
+// ─── Fluvial-tectonic morphometry ────────────────────────────────────────
+//
+// Subcommands under `surtgis fluvial`. v1 of the spec ships chi here;
+// ksn, knickpoints, concavity, divide-migration follow in later sprints.
+
+/// Fluvial-tectonic morphometry subcommands.
+#[derive(Debug, Subcommand)]
+pub enum FluvialCommands {
+    /// χ (chi) integral transform (Perron & Royden 2013).
+    ///
+    /// Computes the path integral of (A₀/A(x))^θref along each stream
+    /// cell starting from the network's outlets. χ is a base-level
+    /// reference distance that linearises elevation profiles in steady
+    /// state; together with ksn it is one of the two most common metrics
+    /// in geomorphology-from-topography.
+    Chi {
+        /// Binary stream network raster (1 = stream, 0 = non-stream),
+        /// e.g. the output of `surtgis hydrology stream-network`.
+        stream: PathBuf,
+        /// D8 flow direction raster from `surtgis hydrology flow-direction`.
+        flow_dir: PathBuf,
+        /// Flow accumulation raster (cell counts) from
+        /// `surtgis hydrology flow-accumulation`.
+        flow_acc: PathBuf,
+        /// Output χ raster (Float32 GeoTIFF, NaN = non-stream).
+        output: PathBuf,
+        /// Reference concavity exponent. Default 0.45 (bedrock channels
+        /// in steady state).
+        #[arg(long, default_value = "0.45")]
+        theta_ref: f64,
+        /// Reference drainage area in m². Default 1·10⁶ m² (1 km²).
+        #[arg(long, default_value = "1e6")]
+        a_0_m2: f64,
+        /// Cell size override in metres. Default: read from the raster
+        /// transform. Required when the input does not declare a
+        /// projected CRS; not used to override an existing transform.
+        #[arg(long)]
+        cell_size_m: Option<f64>,
     },
 }

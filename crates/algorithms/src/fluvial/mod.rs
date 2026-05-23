@@ -21,6 +21,8 @@
 //! introduced in subsequent sprints (see `docs/SPEC_morfometria_fluvial_tectonica.md`
 //! §9).
 
+pub mod chi;
 pub mod stream_traversal;
 
+pub use chi::{chi_transform, ChiError, ChiParams};
 pub use stream_traversal::{build_stream_graph, StreamGraph, StreamGraphError};
