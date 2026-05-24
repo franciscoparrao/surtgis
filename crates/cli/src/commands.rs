@@ -2360,6 +2360,13 @@ pub enum FluvialCommands {
         /// between confluences/outlet, attributes: `ksn_mean`, `n_cells`).
         #[arg(long)]
         segments: Option<PathBuf>,
+        /// Preserve the source raster's CRS in the GeoJSON output and
+        /// declare it via a legacy `crs` member (GeoJSON 2008 compat).
+        /// Default: reproject coordinates to WGS84 (RFC 7946 compliant)
+        /// — recommended for web-mapping pipelines (MapLibre, deck.gl)
+        /// and modern geopandas / QGIS workflows.
+        #[arg(long)]
+        keep_crs: bool,
     },
     /// Knickpoint detection (Neely et al. 2017, TVD denoising + curvature).
     ///
@@ -2403,6 +2410,11 @@ pub enum FluvialCommands {
         /// 1=concave, 2=convex) alongside the GeoJSON points.
         #[arg(long)]
         raster: Option<PathBuf>,
+        /// Preserve the source raster's CRS in the GeoJSON output and
+        /// declare it via a legacy `crs` member. Default: reproject to
+        /// WGS84 (RFC 7946 compliant).
+        #[arg(long)]
+        keep_crs: bool,
     },
     /// Concavity index θ per basin (Perron & Royden 2013).
     ///
@@ -2472,5 +2484,10 @@ pub enum FluvialCommands {
         /// Cell size override in metres.
         #[arg(long)]
         cell_size_m: Option<f64>,
+        /// Preserve the source raster's CRS in the GeoJSON output and
+        /// declare it via a legacy `crs` member. Default: reproject to
+        /// WGS84 (RFC 7946 compliant).
+        #[arg(long)]
+        keep_crs: bool,
     },
 }

@@ -1,8 +1,19 @@
 //! Handler for `surtgis fluvial <subcmd>` commands.
 //!
 //! Subcommand surface tracks docs/SPEC_morfometria_fluvial_tectonica.md.
-//! Sprint 2 ships `chi` only; ksn / knickpoints / concavity /
-//! divide-migration arrive in subsequent sprints.
+//! All five spec algorithms (chi, ksn, knickpoints, concavity,
+//! divide-migration) are implemented.
+//!
+//! ## GeoJSON CRS handling
+//!
+//! By default the three vector outputs (ksn segments, knickpoints,
+//! divides) are reprojected to WGS84 (EPSG:4326) before serialisation,
+//! which makes them compliant with RFC 7946 and consumable by modern
+//! clients (geopandas, MapLibre, deck.gl) without any post-processing.
+//! Passing `--keep-crs` instead preserves the source raster's projected
+//! coordinates and adds a legacy GeoJSON-2008 `crs` member declaring
+//! the EPSG; useful for scientific workflows that need submetre
+//! precision preserved (QGIS / R sf / OGR-modern handle it cleanly).
 
 use std::path::Path;
 
@@ -17,6 +28,111 @@ use surtgis_core::io::{read_geotiff, write_geotiff};
 
 use crate::commands::FluvialCommands;
 use crate::helpers::write_opts;
+
+// ─── GeoJSON CRS handling (BUG_FLUVIAL_GEOJSON_CRS.md fix) ────────────
+//
+// Two strategies, selected per-subcommand by the `--keep-crs` flag:
+//
+//   * `keep_crs = false` (default, RFC 7946 compliant):
+//       coordinates are reprojected to WGS84 lon/lat before writing.
+//       Output is a vanilla FeatureCollection with no `crs` member,
+//       interpreted as EPSG:4326 by any standards-compliant client.
+//
+//   * `keep_crs = true` (opt-in, GeoJSON 2008 compat):
+//       coordinates are written verbatim in the source raster's CRS.
+//       A legacy `crs` member is added to the FeatureCollection naming
+//       the EPSG. Non-RFC-7946 but understood by all real GIS tooling.
+//
+// Without a fix, every GeoJSON output of v0.10.0 fluvial bled metres
+// into lat/lon-shaped slots, breaking geopandas / MapLibre / QGIS-OGR.
+
+/// Reproject `(x, y)` from `src_epsg` to WGS84 lon/lat via proj4rs.
+/// Returns `None` on any failure (unknown EPSG, transform error) so
+/// callers can fall back to source coords with a warning.
+#[cfg(feature = "projections")]
+fn to_wgs84(x: f64, y: f64, src_epsg: u32) -> Option<(f64, f64)> {
+    use proj4rs::Proj;
+    if src_epsg == 4326 {
+        return Some((x, y));
+    }
+    let src = Proj::from_epsg_code(src_epsg as u16).ok()?;
+    let dst = Proj::from_epsg_code(4326).ok()?;
+    let mut pt = (x, y, 0.0_f64);
+    proj4rs::transform::transform(&src, &dst, &mut pt).ok()?;
+    if dst.is_latlong() {
+        Some((pt.0.to_degrees(), pt.1.to_degrees()))
+    } else {
+        Some((pt.0, pt.1))
+    }
+}
+
+#[cfg(not(feature = "projections"))]
+fn to_wgs84(_x: f64, _y: f64, _src_epsg: u32) -> Option<(f64, f64)> {
+    None
+}
+
+/// Map one `(x, y)` for serialisation. When `keep_crs` is true we pass
+/// the coordinates through unchanged. Otherwise we try to reproject to
+/// WGS84; on failure (no EPSG known, projection not in the proj4rs DB)
+/// we fall back to source coords and the caller already added the
+/// `crs` member as a defensive label.
+fn project_coord(x: f64, y: f64, src_epsg: Option<u32>, keep_crs: bool) -> (f64, f64) {
+    if keep_crs {
+        return (x, y);
+    }
+    if let Some(epsg) = src_epsg {
+        if let Some(ll) = to_wgs84(x, y, epsg) {
+            return ll;
+        }
+    }
+    (x, y)
+}
+
+/// Build the optional `crs` member for the GeoJSON FeatureCollection.
+/// Present only when `keep_crs == true` AND we know the EPSG, in which
+/// case the output is GeoJSON-2008-shaped with an explicit EPSG name.
+fn crs_member(src_epsg: Option<u32>, keep_crs: bool) -> Option<serde_json::Value> {
+    if keep_crs {
+        src_epsg.map(|epsg| {
+            serde_json::json!({
+                "type": "name",
+                "properties": { "name": format!("urn:ogc:def:crs:EPSG::{}", epsg) }
+            })
+        })
+    } else {
+        None
+    }
+}
+
+/// Assemble a FeatureCollection JSON value, inserting the legacy `crs`
+/// member when warranted. Keeps the three writers below symmetrical.
+fn feature_collection_json(
+    features: Vec<serde_json::Value>,
+    src_epsg: Option<u32>,
+    keep_crs: bool,
+) -> serde_json::Value {
+    let mut fc = serde_json::Map::new();
+    fc.insert(
+        "type".to_string(),
+        serde_json::Value::String("FeatureCollection".to_string()),
+    );
+    if let Some(crs) = crs_member(src_epsg, keep_crs) {
+        fc.insert("crs".to_string(), crs);
+    }
+    fc.insert("features".to_string(), serde_json::Value::Array(features));
+    serde_json::Value::Object(fc)
+}
+
+/// Extract the EPSG code from a raster's CRS, if known. Returns `None`
+/// when the raster has no CRS metadata or its CRS has no EPSG mapping
+/// (e.g. proj-string-only). Downstream consumers treat `None` as
+/// "unknown — emit verbatim coords without reprojection."
+fn raster_epsg<T>(raster: &surtgis_core::Raster<T>) -> Option<u32>
+where
+    T: surtgis_core::raster::RasterElement,
+{
+    raster.crs().and_then(|c| c.epsg())
+}
 
 pub fn handle(cmd: FluvialCommands, compress: bool) -> Result<()> {
     match cmd {
@@ -49,6 +165,7 @@ pub fn handle(cmd: FluvialCommands, compress: bool) -> Result<()> {
             min_drainage_area_m2,
             cell_size_m,
             segments,
+            keep_crs,
         } => handle_ksn(
             &stream,
             &flow_dir,
@@ -60,6 +177,7 @@ pub fn handle(cmd: FluvialCommands, compress: bool) -> Result<()> {
             min_drainage_area_m2,
             cell_size_m,
             segments.as_deref(),
+            keep_crs,
             compress,
         ),
         FluvialCommands::Knickpoints {
@@ -75,6 +193,7 @@ pub fn handle(cmd: FluvialCommands, compress: bool) -> Result<()> {
             confluence_buffer_cells,
             cell_size_m,
             raster,
+            keep_crs,
         } => handle_knickpoints(
             &stream,
             &flow_dir,
@@ -88,6 +207,7 @@ pub fn handle(cmd: FluvialCommands, compress: bool) -> Result<()> {
             confluence_buffer_cells,
             cell_size_m,
             raster.as_deref(),
+            keep_crs,
             compress,
         ),
         FluvialCommands::Concavity {
@@ -125,6 +245,7 @@ pub fn handle(cmd: FluvialCommands, compress: bool) -> Result<()> {
             chi,
             min_divide_length_m,
             cell_size_m,
+            keep_crs,
         } => handle_divide_migration(
             &basins,
             &dem,
@@ -133,6 +254,7 @@ pub fn handle(cmd: FluvialCommands, compress: bool) -> Result<()> {
             chi.as_deref(),
             min_divide_length_m,
             cell_size_m,
+            keep_crs,
         ),
     }
 }
@@ -253,6 +375,7 @@ fn handle_ksn(
     min_drainage_area_m2: f64,
     cell_size_m_override: Option<f64>,
     segments_path: Option<&Path>,
+    keep_crs: bool,
     compress: bool,
 ) -> Result<()> {
     let start = std::time::Instant::now();
@@ -339,9 +462,20 @@ fn handle_ksn(
 
     if let Some(p) = segments_path {
         let segs = result.segments.as_deref().unwrap_or(&[]);
-        write_segments_geojson(p, segs)
+        let src_epsg = raster_epsg(&stream);
+        write_segments_geojson(p, segs, src_epsg, keep_crs)
             .with_context(|| format!("write ksn segments to {}", p.display()))?;
-        println!("  Segments:    {} features → {}", segs.len(), p.display());
+        let crs_note = if keep_crs {
+            format!("CRS preserved (EPSG:{:?})", src_epsg.unwrap_or(0))
+        } else {
+            "reprojected to WGS84".to_string()
+        };
+        println!(
+            "  Segments:    {} features → {} ({})",
+            segs.len(),
+            p.display(),
+            crs_note
+        );
     }
 
     println!();
@@ -354,15 +488,27 @@ fn handle_ksn(
 }
 
 /// Write a list of [`KsnSegment`] as a GeoJSON LineString
-/// FeatureCollection. Coordinates are the cell-centre `(x, y)` values
-/// in the source raster's CRS (NOT WGS84 — callers needing lon/lat must
-/// reproject downstream). Each feature carries `ksn_mean` and `n_cells`.
-fn write_segments_geojson(path: &Path, segments: &[KsnSegment]) -> Result<()> {
+/// FeatureCollection. Coordinates are projected to WGS84 unless
+/// `keep_crs` is true (see module-level comment on CRS handling).
+/// Each feature carries `ksn_mean` and `n_cells`.
+fn write_segments_geojson(
+    path: &Path,
+    segments: &[KsnSegment],
+    src_epsg: Option<u32>,
+    keep_crs: bool,
+) -> Result<()> {
     let features: Vec<serde_json::Value> = segments
         .iter()
         .filter(|s| s.coordinates.len() >= 2)
         .map(|s| {
-            let coords: Vec<[f64; 2]> = s.coordinates.iter().map(|&(x, y)| [x, y]).collect();
+            let coords: Vec<[f64; 2]> = s
+                .coordinates
+                .iter()
+                .map(|&(x, y)| {
+                    let (px, py) = project_coord(x, y, src_epsg, keep_crs);
+                    [px, py]
+                })
+                .collect();
             serde_json::json!({
                 "type": "Feature",
                 "geometry": {
@@ -380,10 +526,7 @@ fn write_segments_geojson(path: &Path, segments: &[KsnSegment]) -> Result<()> {
             })
         })
         .collect();
-    let fc = serde_json::json!({
-        "type": "FeatureCollection",
-        "features": features,
-    });
+    let fc = feature_collection_json(features, src_epsg, keep_crs);
     std::fs::write(path, serde_json::to_string_pretty(&fc)?)?;
     Ok(())
 }
@@ -540,6 +683,7 @@ fn handle_knickpoints(
     confluence_buffer_cells: usize,
     cell_size_m_override: Option<f64>,
     raster_path: Option<&Path>,
+    keep_crs: bool,
     compress: bool,
 ) -> Result<()> {
     let start = std::time::Instant::now();
@@ -616,7 +760,7 @@ fn handle_knickpoints(
         n_convex,
     );
 
-    write_knickpoints_geojson(output_path, &knicks, &stream)
+    write_knickpoints_geojson(output_path, &knicks, &stream, keep_crs)
         .with_context(|| format!("write knickpoints geojson to {}", output_path.display()))?;
 
     if let Some(rp) = raster_path {
@@ -646,21 +790,24 @@ fn handle_knickpoints(
 }
 
 /// Write knickpoints as a GeoJSON Point FeatureCollection. Coordinates
-/// are cell-centre `(x, y)` in the source raster's CRS. Each feature
-/// carries `elevation_m`, `magnitude_m`, `chi`, and `polarity`
-/// (string: "concave" or "convex").
+/// are projected to WGS84 unless `keep_crs` is true (see module-level
+/// CRS handling comment). Each feature carries `elevation_m`,
+/// `magnitude_m`, `chi`, and `polarity` ("concave" or "convex").
 fn write_knickpoints_geojson(
     path: &Path,
     knicks: &[Knickpoint],
     stream: &surtgis_core::Raster<u8>,
+    keep_crs: bool,
 ) -> Result<()> {
     let gt = stream.transform();
+    let src_epsg = raster_epsg(stream);
     let features: Vec<serde_json::Value> = knicks
         .iter()
         .map(|k| {
             let (x0, y0) = stream.pixel_to_geo(k.col, k.row);
-            let x = x0 + 0.5 * gt.pixel_width;
-            let y = y0 + 0.5 * gt.pixel_height;
+            let x_native = x0 + 0.5 * gt.pixel_width;
+            let y_native = y0 + 0.5 * gt.pixel_height;
+            let (x, y) = project_coord(x_native, y_native, src_epsg, keep_crs);
             let pol_str = match k.polarity {
                 KnickpointPolarity::Concave => "concave",
                 KnickpointPolarity::Convex => "convex",
@@ -680,10 +827,7 @@ fn write_knickpoints_geojson(
             })
         })
         .collect();
-    let fc = serde_json::json!({
-        "type": "FeatureCollection",
-        "features": features,
-    });
+    let fc = feature_collection_json(features, src_epsg, keep_crs);
     std::fs::write(path, serde_json::to_string_pretty(&fc)?)?;
     Ok(())
 }
@@ -697,6 +841,7 @@ fn handle_divide_migration(
     chi_path: Option<&Path>,
     min_divide_length_m: f64,
     cell_size_m_override: Option<f64>,
+    keep_crs: bool,
 ) -> Result<()> {
     let start = std::time::Instant::now();
 
@@ -752,7 +897,8 @@ fn handle_divide_migration(
     let result = divide_migration(&basins, &dem, chi.as_ref(), &flow_acc, params)
         .context("divide_migration failed")?;
 
-    write_divide_geojson(output_path, &result)
+    let src_epsg = raster_epsg(&basins);
+    write_divide_geojson(output_path, &result, src_epsg, keep_crs)
         .with_context(|| format!("write divides geojson to {}", output_path.display()))?;
 
     println!();
@@ -779,12 +925,24 @@ fn handle_divide_migration(
     Ok(())
 }
 
-fn write_divide_geojson(path: &Path, divides: &[DivideSegment]) -> Result<()> {
+fn write_divide_geojson(
+    path: &Path,
+    divides: &[DivideSegment],
+    src_epsg: Option<u32>,
+    keep_crs: bool,
+) -> Result<()> {
     let features: Vec<serde_json::Value> = divides
         .iter()
         .filter(|d| d.coordinates.len() >= 2)
         .map(|d| {
-            let coords: Vec<[f64; 2]> = d.coordinates.iter().map(|&(x, y)| [x, y]).collect();
+            let coords: Vec<[f64; 2]> = d
+                .coordinates
+                .iter()
+                .map(|&(x, y)| {
+                    let (px, py) = project_coord(x, y, src_epsg, keep_crs);
+                    [px, py]
+                })
+                .collect();
             serde_json::json!({
                 "type": "Feature",
                 "geometry": { "type": "LineString", "coordinates": coords },
@@ -805,7 +963,7 @@ fn write_divide_geojson(path: &Path, divides: &[DivideSegment]) -> Result<()> {
             })
         })
         .collect();
-    let fc = serde_json::json!({ "type": "FeatureCollection", "features": features });
+    let fc = feature_collection_json(features, src_epsg, keep_crs);
     std::fs::write(path, serde_json::to_string_pretty(&fc)?)?;
     Ok(())
 }
