@@ -7,6 +7,7 @@
 
 - [First terrain analysis from a Copernicus DEM](tutorials/first-terrain-analysis.md)
 - [Sentinel-2 composite and NDVI from STAC](tutorials/s2-composite-ndvi.md)
+- [Fluvial-tectonic morphometry from a DEM](tutorials/fluvial-from-dem.md)
 
 # How-to guides
 
@@ -30,3 +31,4 @@
 - [Memory model](explanation/memory-model.md)
 - [When to use SurtGIS vs alternatives](explanation/vs-alternatives.md)
 - [STAC integration philosophy](explanation/stac-philosophy.md)
+- [Tectonic geomorphology with the fluvial module](explanation/fluvial-tectonics.md)
