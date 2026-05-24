@@ -9,6 +9,49 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-05-24
+
+Patch release that fixes a real bug surfaced by the first external use
+of the v0.10.0 fluvial module (Frente Puerto Aysén / Pangal AOI
+analysis): the three vector outputs of `surtgis fluvial *` were
+writing coordinates in the source projected CRS but omitting any CRS
+declaration. Per RFC 7946 the absence of a `crs` member means WGS84,
+so every standards-compliant client (geopandas, MapLibre, deck.gl,
+QGIS via modern OGR) interpreted UTM metres as lat/lon and produced
+garbage values.
+
+### Fixed
+
+- **`surtgis fluvial ksn --segments`**, **`fluvial knickpoints`**,
+  **`fluvial divide-migration`** now reproject coordinates to WGS84
+  (EPSG:4326) before serialisation by default. Output is RFC 7946
+  strict — no `crs` member, coordinates interpreted as lat/lon. Works
+  unmodified with `geopandas.read_file()`, MapLibre, deck.gl, and
+  modern QGIS workflows.
+
+### Added
+
+- **`--keep-crs` flag** on the three vector-output subcommands
+  preserves the source raster's CRS in the GeoJSON output and declares
+  it via a legacy GeoJSON 2008 `crs` member naming the EPSG. Use this
+  when you need submetre precision preserved (scientific analysis,
+  cross-tool comparison against QGIS / R sf / OGR-modern). Non-strict
+  RFC 7946 but understood by all real GIS tooling.
+
+### Implementation notes
+
+Shared helpers `to_wgs84`, `project_coord`, `crs_member`,
+`feature_collection_json`, `raster_epsg` at the top of
+`crates/cli/src/handlers/fluvial.rs` (mirrors the pattern from
+`stac_writer.rs` shipped in v0.9.0). Same proj4rs path under the
+`projections` feature flag; fallback when projection fails preserves
+source coordinates rather than failing the command.
+
+Validated end-to-end on `fbm_1000_raw.tif` (EPSG:32719): same 3037
+knickpoints in both modes; default emits valid Patagonia lon/lat,
+`--keep-crs` emits UTM metres with explicit `urn:ogc:def:crs:EPSG::32719`.
+geopandas roundtrip confirms `crs=EPSG:4326` with sensible bbox.
+
 ## [0.10.0] - 2026-05-23
 
 Headline: closes the **fluvial-tectonic morphometry spec** —
