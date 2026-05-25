@@ -123,8 +123,7 @@ pub fn fill_sinks(dem: &Raster<f64>, params: FillSinksParams) -> Result<Raster<f
                 continue;
             }
 
-            let physical_border =
-                row == 0 || row == rows - 1 || col == 0 || col == cols - 1;
+            let physical_border = row == 0 || row == rows - 1 || col == 0 || col == cols - 1;
 
             let mut nodata_adjacent = false;
             if !physical_border {
