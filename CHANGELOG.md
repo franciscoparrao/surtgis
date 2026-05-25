@@ -9,6 +9,53 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-05-24
+
+Patch release that fixes a silent-corruption bug in
+`surtgis hydrology fill-sinks` when the input DEM contains NaN
+cells that form a barrier between the physical raster border and a
+valid interior region. This is the typical post-reprojection pattern:
+WGS84 → UTM leaves the rotated corners as NaN, and earlier versions
+of `fill-sinks` could not find drainage paths around the NaN
+curtains, leaving interior valid cells stuck at `f64::MAX / 2.0 ≈
+8.99e307`. Every downstream stage (flow-direction, flow-accumulation,
+χ, ksn, knickpoints) then operated on garbage. The defensive
+workaround — `surtgis clip --bbox` to a NaN-free interior — is no
+longer required.
+
+Surfaced during the Sprint 7 Smugglers Notch validation against
+Perron & Royden (2013); the validation example now runs without the
+clip step and produces R² = 0.82 on the main catchment as before.
+
+### Fixed
+
+- **`surtgis hydrology fill-sinks`** now treats NaN / nodata cells as
+  drainage exits in the Planchon-Darboux init, matching the GIS
+  convention (and the `priority_flood` implementation in the same
+  crate). Concretely: interior cells 8-adjacent to a NaN/nodata
+  neighbour are initialised to their DEM value, so they can act as
+  drains for cells further in. NaN cells themselves are preserved in
+  the output (no `inf` propagation, no `big_value` leak).
+- **`fill-sinks` output nodata metadata** is now uniformly
+  `Some(f64::NAN)` regardless of input sentinel. Explicit sentinel
+  values (e.g. `-9999.0`) in the input are converted to NaN in the
+  output for consistency with `priority_flood`.
+
+### Added
+
+- Three new unit tests for `fill-sinks` covering: interior NaN
+  preservation with adjacent sink, NaN curtain at all four corners
+  (synthetic analogue of reprojected UTM), and explicit
+  sentinel-nodata-to-NaN conversion.
+- Debug assertion that catches `big_value` leaks before they reach
+  the output raster; no cost in release builds.
+
+### Changed
+
+- **`examples/smugglers_notch_validation/run_validation.sh`** drops
+  the defensive `clip` step (steps renumbered 1–7 instead of 1–8).
+  README updated to reflect the v0.10.2 fix.
+
 ## [0.10.1] - 2026-05-24
 
 Patch release that fixes a real bug surfaced by the first external use

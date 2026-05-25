@@ -41,16 +41,15 @@ bash run_validation.sh
 ```
 
 Runtime: ~3 minutes (most of it Earth Search download). Requires
-SurtGIS ≥ 0.10.1 + Python with rasterio, numpy, matplotlib.
+SurtGIS ≥ 0.10.2 + Python with rasterio, numpy, matplotlib.
 
 The script:
 1. Fetches a 22 × 22 km Copernicus GLO-30 DEM for the Smugglers Notch
    area via Earth Search (no auth required)
 2. Reprojects to UTM 18N (EPSG:32618)
-3. Clips to the NaN-free interior (~16 × 18 km)
-4. Runs the standard SurtGIS hydrology pipeline
-5. Computes χ + ksn + concavity
-6. Plots elevation~χ scatter + R² per basin + ksn map
+3. Runs the standard SurtGIS hydrology pipeline
+4. Computes χ + ksn + concavity
+5. Plots elevation~χ scatter + R² per basin + ksn map
 
 ## What's committed here
 
@@ -78,11 +77,11 @@ regenerate them under `/tmp/smugglers_notch_run/` (or override via
    along the AOI boundary) would yield multiple basins for inter-basin
    comparison; left as a future refinement.
 2. **The reprojection step leaves NaN at the corners** of the UTM grid
-   (rotated bbox). `fill-sinks` propagates `inf` through those NaN
-   cells, which would invalidate the entire downstream pipeline. The
-   workaround in step 4 of `run_validation.sh` clips to the interior;
-   a proper fix to surtgis `fill-sinks` (handle NaN gracefully) is
-   tracked separately.
+   (rotated bbox). Fixed in surtgis v0.10.2: `fill-sinks` now treats
+   NaN cells as drainage exits (matching `priority_flood` and standard
+   GIS convention), so reprojected DEMs no longer need a defensive
+   `clip` step. Earlier versions of this README documented a clip
+   workaround that has since been removed from `run_validation.sh`.
 3. **30 m Copernicus DEM** vs the ~10 m USGS NED P&R used. The chi
    linearisation signal is robust to resolution, but the absolute χ
    values and ksn distribution differ from P&R's published numbers by

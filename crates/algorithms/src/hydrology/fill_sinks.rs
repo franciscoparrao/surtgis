@@ -96,23 +96,49 @@ pub fn fill_sinks(dem: &Raster<f64>, params: FillSinksParams) -> Result<Raster<f
     let big_value = f64::MAX / 2.0;
     let mut w = Array2::from_elem((rows, cols), big_value);
 
-    // Set border cells to DEM values
+    // Init pass: nodata cells preserve NaN; physical-border AND
+    // nodata-adjacent cells initialise to DEM value (they act as
+    // drainage exits); everything else stays at big_value.
+    //
+    // Why nodata-adjacent counts as boundary: when reprojection leaves
+    // NaN curtains between the physical border and a valid interior
+    // (typical of WGS84 -> UTM rotated grids), interior cells that
+    // see only NaN neighbours have no drainage path under the original
+    // init scheme, so they stay at big_value and contaminate
+    // every downstream tool. Treating NaN as a drainage exit matches
+    // GIS convention and what priority_flood already does.
+    let is_nodata = |val: f64| -> bool {
+        match nodata {
+            Some(nd) => val.is_nan() || (val - nd).abs() < f64::EPSILON,
+            None => val.is_nan(),
+        }
+    };
+
     for row in 0..rows {
         for col in 0..cols {
             let val = unsafe { dem.get_unchecked(row, col) };
 
-            let is_nodata = match nodata {
-                Some(nd) => val.is_nan() || (val - nd).abs() < f64::EPSILON,
-                None => val.is_nan(),
-            };
-
-            if is_nodata {
-                w[(row, col)] = val;
+            if is_nodata(val) {
+                w[(row, col)] = f64::NAN;
                 continue;
             }
 
-            // Border cells
-            if row == 0 || row == rows - 1 || col == 0 || col == cols - 1 {
+            let physical_border = row == 0 || row == rows - 1 || col == 0 || col == cols - 1;
+
+            let mut nodata_adjacent = false;
+            if !physical_border {
+                for (dr, dc) in D8_OFFSETS.iter() {
+                    let nr = (row as isize + dr) as usize;
+                    let nc = (col as isize + dc) as usize;
+                    let nv = unsafe { dem.get_unchecked(nr, nc) };
+                    if is_nodata(nv) {
+                        nodata_adjacent = true;
+                        break;
+                    }
+                }
+            }
+
+            if physical_border || nodata_adjacent {
                 w[(row, col)] = val;
             }
         }
@@ -209,8 +235,17 @@ pub fn fill_sinks(dem: &Raster<f64>, params: FillSinksParams) -> Result<Raster<f
         }
     }
 
+    debug_assert!(
+        w.iter().all(|&v| v.is_nan() || v < big_value),
+        "fill-sinks: some interior cells did not drain"
+    );
+
     let mut output = dem.like(0.0);
     *output.data_mut() = w;
+    // Normalise nodata metadata to NaN regardless of input sentinel,
+    // matching the data array (sentinel cells were converted to NaN
+    // during init).
+    output.set_nodata(Some(f64::NAN));
 
     Ok(output)
 }
@@ -358,5 +393,158 @@ mod tests {
             center,
             neighbor
         );
+    }
+
+    #[test]
+    fn test_fill_sinks_preserves_interior_nan() {
+        // 5x5 sloped plane with one NaN cell and one sink next to it.
+        let mut dem = Raster::new(5, 5);
+        dem.set_transform(GeoTransform::new(0.0, 5.0, 1.0, -1.0));
+        for row in 0..5 {
+            for col in 0..5 {
+                dem.set(row, col, (row + col) as f64).unwrap();
+            }
+        }
+        dem.set(2, 2, f64::NAN).unwrap();
+        // Sink directly adjacent to the NaN cell.
+        dem.set(2, 3, 0.5).unwrap();
+
+        let filled = fill_sinks(&dem, FillSinksParams { min_slope: 0.0 }).unwrap();
+
+        // NaN preserved.
+        assert!(
+            filled.get(2, 2).unwrap().is_nan(),
+            "NaN cell at (2,2) must be preserved"
+        );
+        // Sink filled to a finite, reasonable value (never big_value).
+        let sink = filled.get(2, 3).unwrap();
+        assert!(
+            sink.is_finite() && sink.abs() < 1e100,
+            "Sink at (2,3) should be finite and not big_value, got {}",
+            sink
+        );
+        // Sink filled UP (>= original) to at least the level of a non-NaN neighbour.
+        assert!(sink >= 0.5, "Sink should be raised, got {}", sink);
+        // No cell anywhere should be big_value-leaked.
+        for row in 0..5 {
+            for col in 0..5 {
+                let v = filled.get(row, col).unwrap();
+                assert!(
+                    v.is_nan() || v.abs() < 1e100,
+                    "big_value leak at ({}, {}) = {}",
+                    row,
+                    col,
+                    v
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_fill_sinks_with_nodata_curtain() {
+        // 9x9 DEM with 3x3 NaN blocks at each corner, leaving a
+        // cross-shaped valid region with a sink at the very centre.
+        // This is the synthetic analogue of a reprojected UTM grid:
+        // NaN curtains seal off most border-to-interior drainage paths.
+        let mut dem = Raster::new(9, 9);
+        dem.set_transform(GeoTransform::new(0.0, 9.0, 1.0, -1.0));
+        for row in 0..9 {
+            for col in 0..9 {
+                dem.set(row, col, 10.0).unwrap();
+            }
+        }
+        // Four 3x3 NaN corners.
+        for (r0, c0) in [(0, 0), (0, 6), (6, 0), (6, 6)] {
+            for dr in 0..3 {
+                for dc in 0..3 {
+                    dem.set(r0 + dr, c0 + dc, f64::NAN).unwrap();
+                }
+            }
+        }
+        // Centre sink.
+        dem.set(4, 4, 2.0).unwrap();
+
+        let filled = fill_sinks(&dem, FillSinksParams { min_slope: 0.0 }).unwrap();
+
+        // All NaN corners preserved.
+        for (r0, c0) in [(0, 0), (0, 6), (6, 0), (6, 6)] {
+            for dr in 0..3 {
+                for dc in 0..3 {
+                    let v = filled.get(r0 + dr, c0 + dc).unwrap();
+                    assert!(
+                        v.is_nan(),
+                        "Corner NaN cell ({}, {}) was modified to {}",
+                        r0 + dr,
+                        c0 + dc,
+                        v
+                    );
+                }
+            }
+        }
+        // Sink at centre filled.
+        let centre = filled.get(4, 4).unwrap();
+        assert!(
+            centre.is_finite() && centre >= 2.0 && centre <= 10.0,
+            "Centre sink (4,4) should be filled to a finite value in [2, 10], got {}",
+            centre
+        );
+        // No big_value leak anywhere.
+        for row in 0..9 {
+            for col in 0..9 {
+                let v = filled.get(row, col).unwrap();
+                assert!(
+                    v.is_nan() || v.abs() < 1e100,
+                    "big_value leak at ({}, {}) = {}",
+                    row,
+                    col,
+                    v
+                );
+            }
+        }
+        // Output nodata metadata is NaN.
+        assert!(
+            filled.nodata().is_some_and(|nd| nd.is_nan()),
+            "Output nodata metadata should be Some(NaN)"
+        );
+    }
+
+    #[test]
+    fn test_fill_sinks_explicit_nodata_sentinel() {
+        // Sentinel-based nodata (-9999) should be converted to NaN in output.
+        let mut dem = Raster::new(5, 5);
+        dem.set_transform(GeoTransform::new(0.0, 5.0, 1.0, -1.0));
+        for row in 0..5 {
+            for col in 0..5 {
+                dem.set(row, col, (row + col) as f64).unwrap();
+            }
+        }
+        dem.set(2, 2, -9999.0).unwrap();
+        dem.set_nodata(Some(-9999.0));
+
+        let filled = fill_sinks(&dem, FillSinksParams { min_slope: 0.0 }).unwrap();
+
+        // Sentinel cell becomes NaN in output (uniform convention).
+        assert!(
+            filled.get(2, 2).unwrap().is_nan(),
+            "Sentinel nodata cell should be NaN in output"
+        );
+        // Output nodata metadata is NaN, not the original sentinel.
+        assert!(
+            filled.nodata().is_some_and(|nd| nd.is_nan()),
+            "Output nodata metadata should be Some(NaN), not the sentinel"
+        );
+        // No big_value leak.
+        for row in 0..5 {
+            for col in 0..5 {
+                let v = filled.get(row, col).unwrap();
+                assert!(
+                    v.is_nan() || v.abs() < 1e100,
+                    "big_value leak at ({}, {}) = {}",
+                    row,
+                    col,
+                    v
+                );
+            }
+        }
     }
 }
