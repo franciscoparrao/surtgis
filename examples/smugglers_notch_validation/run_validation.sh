@@ -44,14 +44,40 @@ echo "[4/7] Hydrology pipeline"
 "$BIN" hydrology flow-accumulation fdir.tif facc.tif
 "$BIN" hydrology stream-network --from-facc --threshold 500 facc.tif streams.tif
 
-echo "[5/7] Watershed delineation (top-8 max-facc cells as pour points)"
+echo "[5/7] Watershed delineation (spatially-distributed pour points)"
+# Greedy spatial selection: rank cells by flow-accumulation, then pick
+# the top N subject to a minimum pixel-distance constraint between
+# any two selected cells. This avoids the failure mode of the naive
+# "top-K max-facc" picker, which collapses all picks onto the few
+# cells where the dominant river exits the AOI (here, the eastern
+# border) and yields only one delineated basin.
 PP=$(python3 -c "
 import rasterio, numpy as np
-fa = rasterio.open('facc.tif').read(1)
+src = rasterio.open('facc.tif')
+fa = src.read(1)
+cell_size = abs(src.transform.a)
+min_sep_m = 3000  # 3 km between basin outlets — keeps Smugglers' tributaries separable
+min_sep_px = max(1, int(min_sep_m / cell_size))
+target_n = 6
+
+# Candidate pool: top 0.1% by facc, then greedy spatial filter.
+n_cand = max(target_n * 50, int(fa.size * 0.001))
 flat = fa.flatten()
-top_idx = np.argpartition(flat, -8)[-8:]
-print(';'.join(f'{int(i//fa.shape[1])},{int(i%fa.shape[1])}' for i in top_idx))
+top_idx = np.argpartition(flat, -n_cand)[-n_cand:]
+top_idx = top_idx[np.argsort(-flat[top_idx])]  # descending by facc
+rows = (top_idx // fa.shape[1]).astype(int)
+cols = (top_idx %  fa.shape[1]).astype(int)
+
+picked = []
+for r, c in zip(rows, cols):
+    if all((r - pr) ** 2 + (c - pc) ** 2 >= min_sep_px ** 2 for pr, pc in picked):
+        picked.append((int(r), int(c)))
+        if len(picked) >= target_n:
+            break
+
+print(';'.join(f'{r},{c}' for r, c in picked))
 ")
+echo "  pour points: $PP"
 "$BIN" hydrology watershed --pour-points "$PP" fdir.tif basins.tif
 
 echo "[6/7] Fluvial morphometry"

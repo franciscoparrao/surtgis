@@ -36,12 +36,14 @@ def main() -> int:
     mask = (streams == 1) & np.isfinite(chi) & np.isfinite(dem)
     all_basins = np.unique(basins[basins > 0])
 
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+    fig, axes = plt.subplots(1, 3, figsize=(19, 5.5))
 
     ax = axes[0]
     results = []
     colors = plt.cm.tab10(np.linspace(0, 1, max(len(all_basins), 1)))
+    basin_color = {}
     for bid, col in zip(all_basins, colors):
+        basin_color[int(bid)] = col
         bmask = mask & (basins == bid)
         if bmask.sum() < 50:
             continue
@@ -68,10 +70,24 @@ def main() -> int:
     ax.set_ylabel("Elevation (m)")
     ax.set_title("Smugglers Notch — elevation vs χ per basin\n"
                  "(Perron & Royden 2013 linearisation test)")
-    ax.legend(loc="lower right", fontsize=9)
+    ax.legend(loc="lower right", fontsize=8)
     ax.grid(True, alpha=0.3)
 
     ax = axes[1]
+    basin_rgba = np.zeros((*basins.shape, 4), dtype=float)
+    basin_rgba[..., 3] = 0.0  # transparent default
+    for bid, col in basin_color.items():
+        m = basins == bid
+        basin_rgba[m] = col
+        basin_rgba[m, 3] = 0.85
+    ax.imshow(basin_rgba)
+    # Stream skeleton overlay for context.
+    stream_overlay = np.where(streams == 1, 1.0, np.nan)
+    ax.imshow(stream_overlay, cmap="gray_r", vmin=0, vmax=1, alpha=0.7)
+    ax.set_title(f"Basin delineation ({len(results)} basins)\nstreams overlaid")
+    ax.axis("off")
+
+    ax = axes[2]
     ksn_disp = np.where(np.isfinite(ksn), ksn, np.nan)
     im = ax.imshow(ksn_disp, cmap="viridis", vmin=0,
                    vmax=float(np.nanpercentile(ksn_disp, 95)))
@@ -97,7 +113,9 @@ def main() -> int:
               f"slope={r['slope']:.4f} m/m_χ")
     if results:
         all_r2 = [r["r2"] for r in results]
-        print(f"\nMedian R²: {np.median(all_r2):.4f}, min R²: {min(all_r2):.4f}")
+        print(f"\nN basins: {len(results)}")
+        print(f"Median R²: {np.median(all_r2):.4f}  "
+              f"min: {min(all_r2):.4f}  max: {max(all_r2):.4f}")
     return 0
 
 
