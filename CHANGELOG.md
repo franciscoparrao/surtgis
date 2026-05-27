@@ -9,6 +9,48 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-05-26
+
+Patch release that adds the benchmark suite for the `extract-patches`
+subcommand. Companion-paper submission to *Computers & Geosciences*
+("Compute-efficient preparation of training data for geospatial
+foundation models in native Rust") cites this version as the
+reproducibility anchor for §6 of the manuscript.
+
+### Added
+
+- `benchmarks/measure_memory_gfm_prep.sh` — peak resident-set
+  measurement via `/usr/bin/time -v`. Writes
+  `benchmarks/results/gfm_prep/memory.csv`.
+- `benchmarks/verify_outputs_gfm_prep.sh` — SHA-256 hashes plus
+  element-wise diff statistics on the single-timestamp comparable
+  workload. Writes `output_verification.txt`.
+- `benchmarks/run_gfm_prep_sweeps.sh` — scaling sweeps over point
+  count, patch size, and timestamp count. Forces `LC_ALL=C` for
+  locale-independent printf. Writes
+  `benchmarks/results/gfm_prep/scaling.csv`.
+- `benchmarks/run_gfm_prep_3way.sh` — 3-way comparison harness
+  (SurtGIS vs naive Python vs InstaGeo-style xarray+rioxarray
+  proxy). Writes `three_way.csv`.
+- `benchmarks/bench_gfm_prep_instageo_style.py` — InstaGeo-style
+  chip-extraction proxy that reproduces the
+  `RasterDataPipeline.process_tile` inner loop on local data
+  without installing the CC-BY-NC-SA-licensed `instageo` package.
+- `benchmarks/measure_stac_latency.py` — one-off STAC query
+  latency probe against Element 84 Earth Search v1.
+
+### Notes
+
+- All five new bench scripts and their committed result files
+  (memory.csv, scaling.csv, three_way.csv, output_verification.txt)
+  are the reproducibility anchors cited in the paper-gfm-prep
+  submission. The paper's repository
+  ([github.com/franciscoparrao/paper-gfm-prep](https://github.com/franciscoparrao/paper-gfm-prep))
+  references these files by path; the v0.10.3 tag ensures the
+  cited paths resolve.
+- No algorithm changes vs v0.10.2. Same library functionality;
+  only the benchmark suite expands.
+
 ## [0.10.2] - 2026-05-24
 
 Patch release that fixes a silent-corruption bug in
