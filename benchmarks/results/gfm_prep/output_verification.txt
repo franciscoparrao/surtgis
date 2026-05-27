@@ -1,0 +1,26 @@
+Output verification: SurtGIS vs Python reference
+Generated: 2026-05-26T03:58:50-04:00
+
+----- SHA-256 hashes -----
+  patches.npy: MATCH (b0ba23df719eeea863f4e051353441b37f595376b439c7f0cede59bb798d2c5b)
+  labels.npy: MATCH (9af287ff6119cbcb9b5072ce333397f4f9f7523a92fdb46458aa9f432bf6ddc7)
+
+----- Element-wise diff statistics -----
+  patches.npy
+    shapes : surtgis=(200, 6, 224, 224) python=(200, 6, 224, 224)
+    dtypes : surtgis=float32 python=float32
+    n_total         : 60211200
+    n_finite_both   : 60211200
+    n_nan_surtgis_only : 0
+    n_nan_python_only  : 0
+    diff abs (finite): max=0  mean=0
+    diff rel (finite): max=0
+  labels.npy
+    shapes : surtgis=(200,) python=(200,)
+    dtypes : surtgis=int64 python=int64
+    n_total         : 200
+    n_finite_both   : 200
+    n_nan_surtgis_only : 0
+    n_nan_python_only  : 0
+    diff abs (finite): max=0  mean=0
+    diff rel (finite): max=0
