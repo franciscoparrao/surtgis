@@ -119,6 +119,96 @@ pub fn cast_shadow_ray_mask(
     Ok(out)
 }
 
+/// Per-cell maximum `tan(angle_to_occluder)` along a single azimuth.
+///
+/// Like [`cast_shadow_ray_mask`] but instead of an early-exit "is there any
+/// occluder above altitude X" query, this walks the full radius and tracks
+/// `max_k (z(k) - z0) / dist_world(k)`. The output is the tangent of the
+/// horizon angle. Cells with no positive elevation gain along the ray get
+/// `0.0`; nodata cells stay NaN.
+///
+/// This is the amortisation primitive used by [`crate::ray_shade`] when the
+/// caller's sun samples all share an azimuth (the rayshader recipe). One
+/// call here replaces N calls to [`cast_shadow_ray_mask`] — then each
+/// altitude reduces to an O(N) thresholding `tan(alt) >= horizon_tan?`.
+///
+/// Hot-loop optimisations:
+///   - per-step position state updated by additions (no multiplications)
+///   - `1 / dist_world(k)` pre-computed so the inner-loop tan is one
+///     multiply (no division)
+///   - `unsafe get_unchecked` once the index is bounds-checked against the
+///     grid dimensions
+pub fn horizon_tan_map(dem: &Raster<f64>, azimuth_rad: f64, radius: usize) -> Result<Raster<f64>> {
+    let (rows, cols) = dem.shape();
+    let cell_size = dem.cell_size();
+
+    let dr = -azimuth_rad.cos();
+    let dc = azimuth_rad.sin();
+
+    let rows_f = rows as f64;
+    let cols_f = cols as f64;
+
+    // inv_dist[k-1] = 1 / (k * cell_size). Replaces a division in the inner
+    // loop with one multiplication.
+    let inv_dist: Vec<f64> = (1..=radius).map(|k| 1.0 / (k as f64 * cell_size)).collect();
+
+    let row_results: Vec<Vec<f64>> = (0..rows)
+        .into_par_iter()
+        .map(|row| {
+            let mut out_row = vec![0.0f64; cols];
+
+            for col in 0..cols {
+                let z0 = unsafe { dem.get_unchecked(row, col) };
+                if z0.is_nan() {
+                    out_row[col] = f64::NAN;
+                    continue;
+                }
+
+                let mut nr_f = row as f64;
+                let mut nc_f = col as f64;
+                let mut max_tan = 0.0f64;
+
+                for (k_minus_1, &inv_d) in inv_dist.iter().enumerate() {
+                    nr_f += dr;
+                    nc_f += dc;
+                    if nr_f < 0.0 || nc_f < 0.0 || nr_f >= rows_f || nc_f >= cols_f {
+                        break;
+                    }
+                    let z = unsafe { dem.get_unchecked(nr_f as usize, nc_f as usize) };
+                    if z.is_nan() {
+                        // Avoid an unused-variable warning when nothing else
+                        // touches k_minus_1 on this iteration.
+                        let _ = k_minus_1;
+                        continue;
+                    }
+                    let dz = z - z0;
+                    if dz > 0.0 {
+                        let t = dz * inv_d;
+                        if t > max_tan {
+                            max_tan = t;
+                        }
+                    }
+                }
+
+                out_row[col] = max_tan;
+            }
+
+            out_row
+        })
+        .collect();
+
+    let mut data = Vec::with_capacity(rows * cols);
+    for r in row_results {
+        data.extend(r);
+    }
+    let mut out = Raster::new(rows, cols);
+    out.set_transform(*dem.transform());
+    out.set_nodata(Some(f64::NAN));
+    *out.data_mut() = Array2::from_shape_vec((rows, cols), data)
+        .map_err(|e| crate::ReliefError::Shape(e.to_string()))?;
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,6 +237,53 @@ mod tests {
         for v in out.data().iter() {
             assert!(v.is_nan() || (*v - 1.0).abs() < 1e-12);
         }
+    }
+
+    #[test]
+    fn horizon_tan_map_flat_dem_is_zero() {
+        let mut dem = Raster::new(8, 8);
+        for r in 0..8 {
+            for c in 0..8 {
+                dem.set(r, c, 50.0).unwrap();
+            }
+        }
+        let out = horizon_tan_map(&dem, 90f64.to_radians(), 10).unwrap();
+        for v in out.data().iter() {
+            assert!(v.is_nan() || v.abs() < 1e-12, "got {v}");
+        }
+    }
+
+    #[test]
+    fn horizon_tan_map_matches_shadow_mask_threshold() {
+        // Ridge at column 8 (peak 5m). Sun in the east, low altitude.
+        // For each cell, the horizon-tan map should produce a value `T`
+        // such that the binary shadow mask at altitude `alt` matches
+        // `tan(alt) >= T`.
+        let dem = ridge_dem(4, 16, 8, 5.0);
+        let az = 90f64.to_radians();
+        let alt_deg: f64 = 5.0;
+        let alt_rad = alt_deg.to_radians();
+        let radius = 16;
+        let tan_map = horizon_tan_map(&dem, az, radius).unwrap();
+        let mask = cast_shadow_ray_mask(&dem, az, alt_rad, radius).unwrap();
+        let tan_alt = alt_rad.tan();
+        let mut compared = 0;
+        for r in 0..4 {
+            for c in 0..16 {
+                let t = tan_map.get(r, c).unwrap();
+                let m = mask.get(r, c).unwrap();
+                if t.is_nan() || m.is_nan() {
+                    continue;
+                }
+                let amortised_lit = if tan_alt >= t { 1.0 } else { 0.0 };
+                assert!(
+                    (amortised_lit - m).abs() < 1e-9,
+                    "({r},{c}) tan_map={t} mask={m} tan_alt={tan_alt}"
+                );
+                compared += 1;
+            }
+        }
+        assert!(compared > 0, "no cells compared");
     }
 
     #[test]

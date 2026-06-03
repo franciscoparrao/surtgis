@@ -10,10 +10,14 @@
 //! ~3–4× lower than going through `horizon_angle_map` (which has to find
 //! the *maximum* occlusion angle, not just *any* occluder).
 
-use crate::shadow_ray::cast_shadow_ray_mask;
+use crate::shadow_ray::{cast_shadow_ray_mask, horizon_tan_map};
 use crate::{ReliefError, Result};
 use ndarray::Array2;
 use surtgis_core::raster::Raster;
+
+/// Azimuths within this many radians are treated as "the same" for the
+/// amortised path. Tighter than 1° to keep the heuristic conservative.
+const SHARED_AZIMUTH_TOL_RAD: f64 = 0.5_f64 * std::f64::consts::PI / 180.0;
 
 /// A single sun position.
 #[derive(Debug, Clone, Copy)]
@@ -137,11 +141,70 @@ pub fn ray_shade(dem: &Raster<f64>, params: &RayShadeParams) -> Result<Raster<f6
         ));
     }
 
+    // Fast path: all sun samples share an azimuth (the rayshader recipe).
+    // Compute one horizon-tan map and threshold each altitude in O(N).
+    if shared_azimuth(&params.suns) {
+        return ray_shade_amortised(dem, params);
+    }
+
+    ray_shade_per_sun(dem, params)
+}
+
+/// Returns true iff every sun sample's azimuth is within
+/// `SHARED_AZIMUTH_TOL_RAD` of the first.
+fn shared_azimuth(suns: &[SunSample]) -> bool {
+    if suns.len() <= 1 {
+        return true;
+    }
+    let a0 = suns[0].azimuth_rad();
+    suns.iter()
+        .skip(1)
+        .all(|s| (s.azimuth_rad() - a0).abs() <= SHARED_AZIMUTH_TOL_RAD)
+}
+
+/// Single-azimuth amortisation: one horizon_tan_map call + one
+/// thresholding per altitude. Equivalent to `ray_shade_per_sun` when
+/// every sun shares an azimuth (the rayshader anglebreaks pattern).
+fn ray_shade_amortised(dem: &Raster<f64>, params: &RayShadeParams) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
     let n_samples = params.suns.len() as f64;
     let inv_n = 1.0 / n_samples;
 
-    // Accumulator: per-cell sum of lit/shadow contributions in [0, 1].
+    let azimuth_rad = params.suns[0].azimuth_rad();
+    let horizon = horizon_tan_map(dem, azimuth_rad, params.radius)?;
+    let horizon_data = horizon.data();
+
+    let tan_alts: Vec<f64> = params.suns.iter().map(|s| s.altitude_rad().tan()).collect();
+
+    let mut acc = vec![0.0f64; rows * cols];
+    for (i, &h) in horizon_data.iter().enumerate() {
+        if h.is_nan() {
+            acc[i] = f64::NAN;
+            continue;
+        }
+        let mut lit_count = 0usize;
+        for &t in &tan_alts {
+            if t >= h {
+                lit_count += 1;
+            }
+        }
+        acc[i] = lit_count as f64 * inv_n;
+    }
+
+    let mut out = Raster::new(rows, cols);
+    out.set_transform(*dem.transform());
+    out.set_nodata(Some(f64::NAN));
+    *out.data_mut() =
+        Array2::from_shape_vec((rows, cols), acc).map_err(|e| ReliefError::Shape(e.to_string()))?;
+    Ok(out)
+}
+
+/// Per-sun ray-march fallback (general case, varying azimuths).
+fn ray_shade_per_sun(dem: &Raster<f64>, params: &RayShadeParams) -> Result<Raster<f64>> {
+    let (rows, cols) = dem.shape();
+    let n_samples = params.suns.len() as f64;
+    let inv_n = 1.0 / n_samples;
+
     let mut acc = vec![0.0f64; rows * cols];
 
     for sun in &params.suns {
@@ -157,7 +220,6 @@ pub fn ray_shade(dem: &Raster<f64>, params: &RayShadeParams) -> Result<Raster<f6
         }
     }
 
-    // Wrap accumulator back into a Raster, preserving transform / nodata.
     let mut out = Raster::new(rows, cols);
     out.set_transform(*dem.transform());
     out.set_nodata(Some(f64::NAN));
@@ -263,6 +325,42 @@ mod tests {
             east_frac > west_frac,
             "east lit-fraction ({east_frac}) should exceed west ({west_frac})"
         );
+    }
+
+    #[test]
+    fn amortised_matches_per_sun_on_shared_azimuth() {
+        // The fast path (shared azimuth) and the general path must agree
+        // numerically when run on the same suns. Mid-altitude ridge so we
+        // get a mix of lit, partial, and shadowed cells.
+        let dem = ridge_dem(8, 16, 8, 5.0);
+        let params = RayShadeParams::with_soft_shadow_altitude(90.0, 3.0, 8.0, 6);
+        let amortised = ray_shade_amortised(&dem, &params).unwrap();
+        let per_sun = ray_shade_per_sun(&dem, &params).unwrap();
+        for r in 0..8 {
+            for c in 0..16 {
+                let a = amortised.get(r, c).unwrap();
+                let b = per_sun.get(r, c).unwrap();
+                if a.is_nan() || b.is_nan() {
+                    assert_eq!(a.is_nan(), b.is_nan(), "nan mismatch at ({r},{c})");
+                    continue;
+                }
+                assert!((a - b).abs() < 1e-9, "({r},{c}) amortised={a} per_sun={b}");
+            }
+        }
+    }
+
+    #[test]
+    fn shared_azimuth_detection_works() {
+        let single = vec![SunSample::new(315.0, 45.0)];
+        assert!(shared_azimuth(&single));
+
+        let shared = (0..11)
+            .map(|i| SunSample::new(315.0, 40.0 + i as f64))
+            .collect::<Vec<_>>();
+        assert!(shared_azimuth(&shared));
+
+        let spread = RayShadeParams::with_soft_shadow(315.0, 45.0, 5, 10.0).suns;
+        assert!(!shared_azimuth(&spread), "5° spread should NOT be shared");
     }
 
     #[test]
