@@ -712,3 +712,88 @@ pub fn focal_percentile(
         }
     ))
 }
+
+// ===========================================================================
+// Relief — rayshader-style shaded composite (RGBA bytes, not GeoTIFF)
+// ===========================================================================
+
+/// Full shaded-relief composite. Returns a raw RGBA `Vec<u8>` of length
+/// `width * height * 4` in row-major order; the caller knows
+/// `width × height` from the DEM and can either encode a PNG on the JS
+/// side or upload it directly as a canvas/WebGL texture.
+///
+/// `colormap`: scheme name (`"terrain"`, `"grayscale"`, `"divergent"`,
+/// `"ndvi"`, `"bwr"`, `"geomorphons"`, `"water"`, `"accumulation"`).
+/// Unknown names fall back to `"terrain"`.
+///
+/// `shadows`: if true, runs `ray_shade` with 11 sun samples sharing the
+/// azimuth (rayshader anglebreaks recipe — hits the amortised path).
+///
+/// `ambient`: if true, runs `ambient_shade` (SVF) with radius=30.
+#[wasm_bindgen]
+pub fn relief_compute(
+    tiff_bytes: &[u8],
+    colormap: &str,
+    sun_azimuth: f64,
+    sun_altitude: f64,
+    shadows: bool,
+    ambient: bool,
+) -> Result<Vec<u8>, JsValue> {
+    use surtgis_colormap::ColorScheme;
+    use surtgis_relief::{RayShadeParams, ReliefBuilder, ambient_shade, ray_shade, sphere_shade};
+
+    let scheme = match colormap.to_ascii_lowercase().as_str() {
+        "divergent" => ColorScheme::Divergent,
+        "grayscale" | "greyscale" => ColorScheme::Grayscale,
+        "ndvi" => ColorScheme::Ndvi,
+        "bwr" | "blue-white-red" => ColorScheme::BlueWhiteRed,
+        "geomorphons" => ColorScheme::Geomorphons,
+        "water" => ColorScheme::Water,
+        "accumulation" => ColorScheme::Accumulation,
+        _ => ColorScheme::Terrain,
+    };
+
+    let dem = read_geotiff_from_buffer::<f64>(tiff_bytes, None)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+    let sphere = sphere_shade(
+        &dem,
+        HillshadeParams {
+            azimuth: sun_azimuth,
+            altitude: sun_altitude,
+            z_factor: 1.0,
+            normalized: true,
+        },
+    )
+    .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+    let mut builder = ReliefBuilder::new(&dem)
+        .base_colormap(scheme)
+        .add_shade(sphere, 0.6);
+
+    if shadows {
+        let (rows, cols) = dem.shape();
+        let params = RayShadeParams::with_soft_shadow_altitude(
+            sun_azimuth,
+            (sun_altitude - 5.0).max(0.5),
+            (sun_altitude + 5.0).min(89.0),
+            11,
+        );
+        let params = RayShadeParams {
+            suns: params.suns,
+            radius: rows.max(cols),
+        };
+        let shadow = ray_shade(&dem, &params).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        builder = builder.add_shadow(shadow, 0.7);
+    }
+
+    if ambient {
+        let ao = ambient_shade(&dem, 30).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        builder = builder.add_ambient(ao, 0.3);
+    }
+
+    let img = builder
+        .render()
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    Ok(img.pixels)
+}

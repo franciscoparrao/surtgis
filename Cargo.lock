@@ -5479,6 +5479,7 @@ dependencies = [
  "surtgis-cloud",
  "surtgis-core",
  "surtgis-parallel",
+ "surtgis-relief",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -5606,7 +5607,9 @@ dependencies = [
  "numpy",
  "pyo3",
  "surtgis-algorithms",
+ "surtgis-colormap",
  "surtgis-core",
+ "surtgis-relief",
 ]
 
 [[package]]
@@ -5630,7 +5633,9 @@ dependencies = [
  "serde",
  "serde_json",
  "surtgis-algorithms",
+ "surtgis-colormap",
  "surtgis-core",
+ "surtgis-relief",
  "wasm-bindgen",
 ]
 

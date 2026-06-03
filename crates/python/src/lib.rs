@@ -3,8 +3,8 @@
 //! All terrain functions accept a 2D numpy array (f64) and a `cell_size` parameter.
 //! Returns a 2D numpy array of the same shape.
 
-use numpy::ndarray::Array2;
-use numpy::{IntoPyArray, PyArray2, PyReadonlyArray2, PyUntypedArrayMethods};
+use numpy::ndarray::{Array2, Array3};
+use numpy::{IntoPyArray, PyArray2, PyArray3, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
@@ -2251,6 +2251,89 @@ fn predict_raster<'py>(
 ///     slp = surtgis.slope(dem, cell_size=30.0)
 ///     asp = surtgis.aspect_degrees(dem, cell_size=30.0)
 ///     hs  = surtgis.hillshade_compute(dem, cell_size=30.0)
+/// Full shaded-relief composite (terrain colormap + sphere shade + optional
+/// ray-traced shadows + optional ambient occlusion). Returns an
+/// `(H, W, 4) uint8` numpy array in row-major RGBA order.
+///
+/// `colormap` is one of `terrain`, `divergent`, `grayscale`, `ndvi`, `bwr`,
+/// `geomorphons`, `water`, `accumulation`. Unknown names fall back to
+/// `terrain`.
+#[pyfunction]
+#[pyo3(signature = (
+    dem, cell_size=1.0, colormap="terrain", sun_azimuth=315.0,
+    sun_altitude=45.0, shadows=true, ambient=false,
+))]
+#[allow(clippy::too_many_arguments)]
+fn relief_compute<'py>(
+    py: Python<'py>,
+    dem: PyReadonlyArray2<'py, f64>,
+    cell_size: f64,
+    colormap: &str,
+    sun_azimuth: f64,
+    sun_altitude: f64,
+    shadows: bool,
+    ambient: bool,
+) -> PyResult<Bound<'py, PyArray3<u8>>> {
+    use surtgis_colormap::ColorScheme;
+    use surtgis_relief::{RayShadeParams, ReliefBuilder, ambient_shade, ray_shade, sphere_shade};
+
+    let scheme = match colormap.to_ascii_lowercase().as_str() {
+        "divergent" => ColorScheme::Divergent,
+        "grayscale" | "greyscale" => ColorScheme::Grayscale,
+        "ndvi" => ColorScheme::Ndvi,
+        "bwr" | "blue-white-red" => ColorScheme::BlueWhiteRed,
+        "geomorphons" => ColorScheme::Geomorphons,
+        "water" => ColorScheme::Water,
+        "accumulation" => ColorScheme::Accumulation,
+        _ => ColorScheme::Terrain,
+    };
+
+    let raster = numpy_to_raster(&dem, cell_size)?;
+    let (rows, cols) = raster.shape();
+
+    let sphere = sphere_shade(
+        &raster,
+        HillshadeParams {
+            azimuth: sun_azimuth,
+            altitude: sun_altitude,
+            z_factor: 1.0,
+            normalized: true,
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
+    let mut builder = ReliefBuilder::new(&raster)
+        .base_colormap(scheme)
+        .add_shade(sphere, 0.6);
+
+    if shadows {
+        let p = RayShadeParams::with_soft_shadow_altitude(
+            sun_azimuth,
+            (sun_altitude - 5.0).max(0.5),
+            (sun_altitude + 5.0).min(89.0),
+            11,
+        );
+        let p = RayShadeParams {
+            suns: p.suns,
+            radius: rows.max(cols),
+        };
+        let shadow = ray_shade(&raster, &p).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        builder = builder.add_shadow(shadow, 0.7);
+    }
+
+    if ambient {
+        let ao = ambient_shade(&raster, 30).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        builder = builder.add_ambient(ao, 0.3);
+    }
+
+    let img = builder
+        .render()
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let arr = Array3::from_shape_vec((rows, cols, 4), img.pixels)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(arr.into_pyarray(py))
+}
+
 #[pymodule]
 fn surtgis(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Terrain
@@ -2373,6 +2456,9 @@ fn surtgis(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // ML / Geospatial extraction & prediction
     m.add_function(wrap_pyfunction!(extract_at_points, m)?)?;
     m.add_function(wrap_pyfunction!(predict_raster, m)?)?;
+
+    // Relief composite (RGBA bytes, not GeoTIFF)
+    m.add_function(wrap_pyfunction!(relief_compute, m)?)?;
 
     Ok(())
 }
