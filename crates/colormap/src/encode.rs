@@ -220,9 +220,7 @@ mod tests {
     fn from_rgba_rejects_wrong_length() {
         let err = RgbaImage::from_rgba(2, 2, vec![0u8; 15]).unwrap_err();
         match err {
-            EncodeError::Shape {
-                expected, got, ..
-            } => {
+            EncodeError::Shape { expected, got, .. } => {
                 assert_eq!(expected, 16);
                 assert_eq!(got, 15);
             }
@@ -303,7 +301,10 @@ mod tests {
         let img = solid(4, 3, [255, 0, 0, 255]);
         let bytes = img.to_png_bytes().unwrap();
         // PNG signature
-        assert_eq!(&bytes[..8], &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]);
+        assert_eq!(
+            &bytes[..8],
+            &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -313,7 +314,10 @@ mod tests {
         let tmp = std::env::temp_dir().join("colormap_encode_test.png");
         img.save_png(&tmp).unwrap();
         let bytes = std::fs::read(&tmp).unwrap();
-        assert_eq!(&bytes[..8], &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]);
+        assert_eq!(
+            &bytes[..8],
+            &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]
+        );
         let _ = std::fs::remove_file(&tmp);
     }
 }
