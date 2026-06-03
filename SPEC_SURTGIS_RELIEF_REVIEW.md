@@ -227,18 +227,43 @@ Spec §8 says: "Perf: add a Criterion bench in `crates/relief/benches/`
 for a 4K² DEM; the value proposition is that Rust + Rayon beats
 rayshader's runtime — measure and put the number in the README."
 
-This is the claim that has to land for the crate to "matter" vs
-rayshader. The spec should commit to a target up front:
+**Baseline measured 2026-06-02** (script `benchmarks/rayshader_baseline.R`,
+data `benchmarks/results/rayshader_baseline.csv`). 5 timed reps + 1
+warmup on `dem_filled.tif` (637×570 = 363,090 cells, Andes,
+EPSG:32719). Sun azimuth 315°, soft-shadow penumbra over 11
+anglebreaks (40°–50°). Rayshader 0.37.3, R 4.3.
 
-- Run rayshader's `ray_shade + sphere_shade` on a 4K² DEM **before**
-  M2 starts. Document the wall-clock.
-- That number becomes the M2 acceptance criterion. If SurtGIS at M2
-  isn't measurably faster (≥ 2× target), the value prop is in doubt
-  and the spec should be re-scoped (perhaps merge in `embree-rs` or
-  drop the perf claim and lean on the WASM path alone).
+| Stage | Median (s) | IQR (s) |
+|---|---|---|
+| `ray_shade` | **1.24** | [1.22, 1.29] |
+| `sphere_shade` | **0.53** | [0.46, 0.58] |
+| TOTAL | **1.80** | [1.75, 1.81] |
 
-Without this, the perf claim is a "we expect Rust to be faster" promise.
-That's the kind of claim our v1 paper learned to avoid.
+Variance is tight (TOTAL sd = 0.05 s), so the median is reliable.
+
+**M2 acceptance criterion**: SurtGIS `relief::ray_shade +
+relief::sphere_shade` on the same DEM, same 11-sample soft-shadow
+budget, must complete in **≤ 0.90 s median** (≥ 2× speedup).
+Stretch target: ≤ 0.45 s (≥ 4×).
+
+**Implementation note that bears on this**: the cheap path
+(`horizon_angle_map` ~350 ms per call) used 11 times would land at
+~3.85 s — *slower* than rayshader. To meet ≥ 2×, M2 must either
+use `horizon_angle_map_fast` (Gap 3 below) or amortise the
+multi-azimuth pass via the `horizon_angles` precompute. The spec
+should say which strategy it picks before M2 starts; "for free over
+3 azimuths" (the spike's claim) is a different quality bar than
+rayshader's default.
+
+Bench environment for the baseline:
+- Same workstation that hosts the spike numbers in spec §0.
+- R 4.3.x, rayshader 0.37.3, default thread count.
+- Wall-clock via `Sys.time()` deltas, no warm-cache trick beyond
+  the discarded warmup rep.
+
+When M2 runs its Criterion bench, run rayshader **and** SurtGIS in
+the same session so the comparison cannot be skewed by background
+load drift.
 
 ### Gap 3. `horizon_angles_fast` exists — prefer it
 
