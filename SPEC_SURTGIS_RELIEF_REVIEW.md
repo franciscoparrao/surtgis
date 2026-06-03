@@ -241,19 +241,75 @@ anglebreaks (40°–50°). Rayshader 0.37.3, R 4.3.
 
 Variance is tight (TOTAL sd = 0.05 s), so the median is reliable.
 
-**M2 acceptance criterion**: SurtGIS `relief::ray_shade +
-relief::sphere_shade` on the same DEM, same 11-sample soft-shadow
-budget, must complete in **≤ 0.90 s median** (≥ 2× speedup).
-Stretch target: ≤ 0.45 s (≥ 4×).
+**M2 acceptance criterion (pre-implementation, aspirational)**:
+SurtGIS `relief::ray_shade + relief::sphere_shade` on the same DEM,
+same 11-sample soft-shadow budget, in **≤ 0.90 s median** (≥ 2×
+speedup). Stretch ≤ 0.45 s (≥ 4×).
 
-**Implementation note that bears on this**: the cheap path
-(`horizon_angle_map` ~350 ms per call) used 11 times would land at
-~3.85 s — *slower* than rayshader. To meet ≥ 2×, M2 must either
-use `horizon_angle_map_fast` (Gap 3 below) or amortise the
-multi-azimuth pass via the `horizon_angles` precompute. The spec
-should say which strategy it picks before M2 starts; "for free over
-3 azimuths" (the spike's claim) is a different quality bar than
-rayshader's default.
+### M2 actual result (2026-06-02)
+
+Implementation: `crates/relief/src/shadow_ray.rs` (a new per-cell
+early-exit ray-march primitive — `horizon_angle_map` turned out to
+be the wrong layer, see below), `ray_shade_impl.rs`,
+`sphere_shade_impl.rs`. Same `dem_filled.tif`, same 11 sun samples
+(altitude 40°–50° at 1° step, azimuth 315°), radius = max(rows, cols)
+= 850 cells for rayshader-equivalent quality. Bench:
+`crates/relief/examples/bench_vs_rayshader.rs`.
+
+| Stage | SurtGIS median (s) | Rayshader median (s) | Ratio (Rs/Sg) |
+|---|---|---|---|
+| `ray_shade` | 1.98 | 1.24 | 0.63× (Sg slower) |
+| `sphere_shade` | 0.06 | 0.53 | 8.83× (Sg faster) |
+| TOTAL | **2.04** | **1.80** | **0.88×** (Sg slower by 12%) |
+
+**Verdict on the ≥ 2× target**: **FAIL.** SurtGIS is competitive
+(within 12% on the total) but not measurably faster. The
+sphere_shade leg is a runaway win (9×); the ray_shade leg loses
+~1.6× per sun sample.
+
+### What this taught us about the spec
+
+The spec assumed `horizon_angle_map` was the natural primitive for
+`ray_shade`. It is not. `horizon_angle_map` finds the *maximum*
+elevation angle to any occluder along the ray — it walks the entire
+ray even after finding occluders. `ray_shade` only needs a binary
+"is there any occluder above the sun's altitude line", which is
+strictly cheaper and admits early exit. The first M2 attempt that
+built ray_shade on `horizon_angle_map_fast` × 11 sun samples
+clocked **14 s** TOTAL — 8× slower than rayshader. Replacing
+`horizon_angle_map_fast` with a dedicated `cast_shadow_ray_mask`
+primitive cut that to 3 s, and a one-pass incremental optimisation
+of the hot loop brought it to 2.04 s.
+
+The "no new terrain math" claim in spec §11 turned out to need
+revision: a ~75-LOC per-cell shadow-ray primitive is the cheapest
+honest path to a rayshader-comparable ray_shade. The crate is no
+longer a *pure* compositor; it adds one terrain function that the
+algorithms crate did not need before.
+
+### Strategic options for closing the remaining 1.6× per-sun gap
+
+1. **SIMD inner loop**: process N cells at a time along the ray
+   direction with AVX2/AVX-512 intrinsics. The hot loop is 6–8
+   f64 ops on contiguous-ish data; a 4-wide SIMD pass would
+   approximately quarter the per-sample cost. Estimated 2–4× speedup,
+   would put us at 0.5–1.0 s ray_shade ≈ rayshader.
+2. **Sweep-based ray-shadow algorithm**: instead of N independent
+   per-cell ray marches, process all cells along a sweep direction
+   with a single pass that maintains a running "horizon-so-far" state.
+   The R rayshader implementation (Rcpp + RcppThread) likely does
+   something close to this; their per-sample cost (~113 ms vs our
+   ~180 ms) is suggestive.
+3. **Accept and document**: ship M2 at 0.88× rayshader as a
+   "competitive but not faster" baseline. The WASM-in-browser story
+   (spec §6) remains a *categorical* advantage — rayshader simply
+   does not run in a browser. Soften the README perf claim to
+   "comparable performance to rayshader plus browser/WASM
+   deployment".
+
+The honest read on (1) and (2): both are real opportunities and
+neither is part of the M1–M5 MVP timeline. They belong in a
+follow-up "M6 — perf polish" milestone, separately scoped.
 
 Bench environment for the baseline:
 - Same workstation that hosts the spike numbers in spec §0.

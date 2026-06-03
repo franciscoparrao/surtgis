@@ -5610,6 +5610,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "surtgis-relief"
+version = "0.10.4"
+dependencies = [
+ "ndarray",
+ "num-traits",
+ "rayon",
+ "surtgis-algorithms",
+ "surtgis-colormap",
+ "surtgis-core",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "surtgis-wasm"
 version = "0.10.4"
 dependencies = [
