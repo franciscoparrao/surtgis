@@ -1,13 +1,25 @@
 # SPEC: `surtgis-relief` — Rayshader-style relief & 3D rendering
 
-**Status:** Proposed
+**Status:** P1 shipped (M1–M5 merged on `main` 2026-06-03)
 **Target version:** 0.11.0 (MVP 2D) → 0.12.0 (3D web)
-**Author of spec:** handoff doc — to be implemented by the SurtGIS team
+**Author of spec:** handoff doc — implemented by the SurtGIS team
 **Crate name:** `surtgis-relief` (workspace member `crates/relief`)
+
+> **Implementation reality:** This document is the original handoff spec.
+> Several P1 assumptions did not survive contact with the implementation —
+> see **§12 Reality check** for what shipped, what was added, and what was
+> wrong. Read §12 before §0–§11 if you want the truth before the original
+> theory.
 
 ---
 
 ## 0. Proof of concept (spike, 2026-06-02)
+
+> **Reality:** the spike's "no new terrain math" claim was wrong. See §12.
+> It measured 3 azimuths × 1 altitude. Production needed 1 azimuth × 11
+> altitudes, where `horizon_angle_map` is 8× too slow without an early
+> exit and without shared-azimuth amortisation. Two new ray-march
+> primitives were written.
 
 A throwaway spike already validated the central claim of this spec: a
 rayshader-style shaded relief composites cleanly from primitives that **already
@@ -63,11 +75,20 @@ new set of algorithms. It reuses, it does not reimplement.
 
 ### Non-goals for P1
 - No interactive rendering (P1 is batch image generation).
-- No new terrain math — everything composites existing `terrain/` outputs.
+- ~~No new terrain math — everything composites existing `terrain/` outputs.~~
+  Three new primitives shipped: `cast_shadow_ray_mask`, `horizon_tan_map`,
+  `detect_water`. See §12.
 
 ---
 
 ## 2. What we reuse (do NOT reimplement)
+
+> **Reality:** the `ray_shade` and "soft shadows" rows of this table did not
+> survive contact with the rayshader benchmark. `horizon_angle_map` is
+> correct mathematically but ~8× too slow for the 11-altitude recipe.
+> Shipped code in `crates/relief/src/shadow_ray.rs` does its own
+> early-exit ray-march (`cast_shadow_ray_mask`) plus a shared-azimuth
+> amortisation primitive (`horizon_tan_map`). See §12 for the post-mortem.
 
 All of these already exist in `crates/algorithms/src/terrain/`:
 
@@ -329,6 +350,10 @@ M1–M5 = the ~2-week MVP. Each milestone ends with a runnable example in
   doc). For `ray_shade` prefer **`horizon_angle_map` per sun sample** (single
   azimuth, streaming-friendly) over the full `horizon_angles` precompute, unless
   many suns share directions.
+  **Reality (post-M2):** `horizon_angle_map` per sun sample is also too slow
+  at 11 altitudes (~2.75 s/call × 11 = 30 s). Production uses
+  `cast_shadow_ray_mask` per sun (early-exit) or `horizon_tan_map` once
+  for the shared-azimuth case. See §12.3.
 - **Edition 2024 / no GDAL:** stay consistent — `image` is pure-Rust with the
   `png` feature only; do not pull system libs.
 - **Don't widen scope in the current ENVSOFT R1.** This crate ships *after* the
@@ -342,6 +367,10 @@ M1–M5 = the ~2-week MVP. Each milestone ends with a runnable example in
 
 ## 11. One-paragraph summary for the implementer
 
+> **This paragraph was wrong about "no new terrain math".** See §12 for the
+> corrected accounting. Kept here as a historical record of the original
+> handoff intent.
+
 `surtgis-relief` is a thin compositor crate. The hard part — ray-traced shadow
 computation — is already done by `terrain::horizon_angle_map`; relief just
 thresholds it against sun altitude and averages over sun samples for soft
@@ -351,3 +380,112 @@ else is alpha-blending RGBA buffers and writing a PNG. No new terrain math.
 Build it as workspace member `crates/relief`, expose it through CLI/WASM/Python
 exactly like `hillshade` is exposed today, and the browser WASM path gives
 SurtGIS a capability rayshader (desktop-only) does not have.
+
+---
+
+## 12. Reality check (post-M5, 2026-06-03)
+
+This section records where the original spec misled and what shipped instead.
+It is intentionally honest. Read it before writing the next §-style spec for
+another crate — the same traps will lurk there.
+
+### 12.1 What survived intact
+
+The compositor framing (§4 layer model, §4.4 ReliefBuilder), the CLI surface
+(§5), and the WASM/Python frontends (§6, §7) shipped close to spec. The
+re-use story held for three of the four shading primitives:
+
+| Spec claim | Shipped | Notes |
+|---|---|---|
+| `sphere_shade` wraps `hillshade` | ✓ 49 LOC in `sphere_shade_impl.rs` | Forces `normalized = true`, otherwise identical |
+| `ambient_shade` wraps `sky_view_factor` | ✓ ~30 LOC in `ambient.rs` | Defaults to 16 directions; perf follow-up below |
+| base colour wraps `colormap::raster_to_rgba` | ✓ in `compose.rs::base_colormap` | unchanged |
+| Layer compositor uses `over` + `multiply` blends | ✓ in `compose.rs` and `surtgis-colormap::RgbaImage` | Only addition: `add_water` paints a u8 mask with a scheme-sampled colour |
+| Single binary + WASM + Python frontends | ✓ all three landed in PR #9 (CLI), PR #10 (WASM, Python) | — |
+
+### 12.2 What changed
+
+| Spec said | Reality | Why |
+|---|---|---|
+| "No new terrain math" (§0, §1, §11) | **Three new primitives shipped in `crates/relief/src/`** | Perf trap, water heuristic — see below |
+| PNG encoder in `relief::encode.rs` (§3) | Landed in `surtgis-colormap::encode` | The note at §3 line 147 already flagged this. Done in pre-M1 (PR #7). |
+| Layout: `ray_shade.rs` + `sphere_shade.rs` + `ambient.rs` (§3) | `ray_shade_impl.rs`, `shadow_ray.rs`, `sphere_shade_impl.rs`, `ambient.rs`, `water.rs`, `compose.rs` | `shadow_ray.rs` hosts the two new perf primitives; the rest matches |
+| `ray_shade` is `sun_altitude > horizon_angle_map(...)` thresholded (§2, §0) | Correct mathematically, **wrong for performance** | See §12.3 |
+| Spike timing "~2 s on 363k cells, horizon-angle ~350 ms × 3" (§0) | Spike measured **3 azimuths × 1 altitude**, not the rayshader recipe of 1 azimuth × 11 altitudes. The spec under-estimated the real workload by 4–5×. | The spike's 350 ms × 3 = 1.05 s. A naive port to 11 altitudes would have been 14 s (horizon_angle_map per call) — 8× slower than rayshader. |
+
+### 12.3 Three new primitives in `crates/relief/src/`
+
+The "thin compositor" framing failed at the ray_shade level. Three primitives
+had to be written:
+
+1. **`shadow_ray::cast_shadow_ray_mask(dem, az, alt, radius) -> Raster<f64>`**
+   (~75 LOC). Early-exit per-cell ray-march. Unlike `horizon_angle_map`,
+   which walks the full radius computing the *maximum* horizon angle, this
+   stops the moment any occluder is found above the target altitude. With
+   the hot-loop tricks (incremental position state in additions, no
+   per-step multiplications, `unsafe get_unchecked`), one call takes
+   ~180 ms on the 637×570 DEM vs ~2.75 s for `horizon_angle_map(radius=500)`.
+
+2. **`shadow_ray::horizon_tan_map(dem, az, radius) -> Raster<f64>`**
+   (~85 LOC). Full-radius march tracking `max_k (z(k) - z0) / dist(k)`
+   (the tan of the horizon angle). Same hot-loop optimisations as (1),
+   plus pre-computed `inv_dist[k]` so the inner-loop tan is one multiply,
+   no division. This is the **amortisation primitive**: when sun samples
+   share an azimuth (the rayshader anglebreaks recipe), `ray_shade` calls
+   `horizon_tan_map` **once** and each altitude reduces to an O(N)
+   thresholding `tan(alt) >= horizon_tan?`. 11 altitudes share work that
+   previously cost 11 independent ray marches.
+
+3. **`water::detect_water(dem, WaterParams) -> Raster<u8>`** (~170 LOC).
+   Heuristic water mask via flat-area connected components: 8-neighbour
+   flatness test + 4-connected union-find + minimum-area filter. The
+   spec assumed this could "reuse landscape/morphology connected-components
+   if available" (§4.3); the implementation found it cleaner to write a
+   focused 170-LOC routine than to thread a generic CC primitive through
+   the constraints (flat predicate, NaN handling, area filter, u8 output).
+
+In addition, the auto-detection logic in `ray_shade` (shared-azimuth
+fast path vs per-sun fallback) is ~50 LOC of pure compositor code that has
+no analog in the spec. It is what makes the WASM and Python frontends emit
+a 6.99× rayshader number with no caller-side ceremony.
+
+### 12.4 Perf payoff
+
+The spike said "~2 s composite". The shipped M2 acceptance benchmark, with
+the rayshader-equivalent recipe (azimuth 315°, anglebreaks `seq(40, 50, 1)`,
+radius `max(rows, cols) = 850`), measures:
+
+- `ray_shade` median: **0.19 s** (10.4× faster than the pre-amortisation
+  M2 baseline of 1.98 s, which itself replaced a 14 s naive approach)
+- `sphere_shade` median: 0.06 s
+- TOTAL median: **0.26 s** = **6.99× rayshader** (rayshader baseline
+  measured at 1.80 s in `benchmarks/rayshader_baseline.R`)
+- M2 target was ≥ 2×; stretch was ≥ 4×. Both pass.
+
+This number would have been impossible to hit with the spec's
+"threshold `horizon_angle_map`" approach. The amortisation insight only
+becomes available once you accept that you are writing the primitive
+yourself rather than re-using the terrain crate's.
+
+### 12.5 Outstanding perf concern: `ambient_shade`
+
+`ambient_shade` calls `sky_view_factor` with 16 directions × user radius.
+On the M3 end-to-end render (`render_relief` example), it dominates the
+pipeline at **6.4 s** (vs sphere 0.05 s, ray 0.20 s, compose 0.06 s).
+Rayshader's analog is similarly slow, so this does not affect the
+competitive perf story — but it is the next target. Likely treatment:
+a relief-specific `ambient_tan_map` using the same hot-loop tricks
+as `horizon_tan_map`, or an early-exit variant of `sky_view_factor`
+upstream in `surtgis-algorithms`.
+
+### 12.6 Lesson for the next handoff spec
+
+The original §0 spike measured the cheapest configuration ("3 azimuths,
+1 altitude, sun 18°") and projected linear scaling to the production
+configuration ("1 azimuth, 11 altitudes"). That projection was wrong by
+8× because `horizon_angle_map` has no early exit and no shared-azimuth
+amortisation. **When writing the next spec that claims "we already have
+the primitive, just compose it" — measure the production-workload
+configuration in the spike, not the cheapest one.** Otherwise the spec
+will mis-scope the work by an order of magnitude and the implementer
+will rediscover the gap mid-milestone.
