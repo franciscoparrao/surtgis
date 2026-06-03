@@ -10,7 +10,9 @@
 //! [`crate::ambient_shade`]) and handed in as `Raster<f64>` intensity
 //! masks in `[0, 1]`.
 
-use surtgis_colormap::{ColorScheme, ColormapParams, RgbaImage, auto_params, raster_to_rgba};
+use surtgis_colormap::{
+    ColorScheme, ColormapParams, RgbaImage, auto_params, evaluate, raster_to_rgba,
+};
 use surtgis_core::raster::Raster;
 
 use crate::{ReliefError, Result};
@@ -105,6 +107,32 @@ impl<'a> ReliefBuilder<'a> {
             blend: Blend::Over,
         });
         self
+    }
+
+    /// Alpha-over a water mask (typically from [`crate::detect_water`]),
+    /// painting each `1` cell with a fixed colour sampled from `scheme`
+    /// and leaving `0` cells transparent.
+    ///
+    /// The colour is sampled from the scheme at `t = 0.5` so it doesn't
+    /// depend on any data range. For deep ocean / shallow lakes
+    /// distinctions, use [`Self::add_rgba_over`] with a hand-built layer.
+    pub fn add_water(self, mask: Raster<u8>, scheme: ColorScheme) -> Self {
+        let (rows, cols) = mask.shape();
+        let colour = evaluate(scheme, 0.5);
+        let mut pixels = vec![0u8; rows * cols * 4];
+        for (i, &m) in mask.data().iter().enumerate() {
+            if m == 0 {
+                continue;
+            }
+            let off = i * 4;
+            pixels[off] = colour.r;
+            pixels[off + 1] = colour.g;
+            pixels[off + 2] = colour.b;
+            pixels[off + 3] = 255;
+        }
+        let image = RgbaImage::from_rgba(cols, rows, pixels)
+            .expect("water mask sized rows*cols*4 by construction");
+        self.add_rgba_over(image, 1.0)
     }
 
     fn add_intensity(mut self, intensity: Raster<f64>, opacity: f64, blend: Blend) -> Self {

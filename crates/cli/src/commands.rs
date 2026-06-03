@@ -141,6 +141,40 @@ pub enum Commands {
         /// labels.npy, manifest.csv, meta.json, and optional stac/)
         output: PathBuf,
     },
+    /// Rayshader-style shaded relief composite to PNG
+    Relief {
+        /// Input DEM file
+        input: PathBuf,
+        /// Output PNG file
+        output: PathBuf,
+        /// Color scheme for the base layer
+        #[arg(long, default_value = "terrain")]
+        colormap: String,
+        /// Sun azimuth in degrees (0 = North, clockwise)
+        #[arg(long, default_value = "315")]
+        sun_azimuth: f64,
+        /// Sun altitude in degrees above the horizon
+        #[arg(long, default_value = "45")]
+        sun_altitude: f64,
+        /// Enable ray-traced cast shadows
+        #[arg(long)]
+        shadows: bool,
+        /// Number of sun samples for the soft-shadow penumbra (>=2 enables soft shadows). Default 1 = hard shadows.
+        #[arg(long, default_value = "1")]
+        soft: usize,
+        /// Enable ambient occlusion via sky-view factor
+        #[arg(long)]
+        ambient: bool,
+        /// Detect water bodies (large flat regions) and tint them
+        #[arg(long)]
+        water: bool,
+        /// Vertical exaggeration for the normal-based sphere shade
+        #[arg(long, default_value = "1.0")]
+        z_factor: f64,
+        /// Search radius (cells) for the ambient SVF computation
+        #[arg(long, default_value = "30")]
+        radius: usize,
+    },
     /// Clip a raster by polygon or bounding box
     Clip {
         /// Input raster file
