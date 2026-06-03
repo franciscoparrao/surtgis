@@ -22,10 +22,31 @@
 //! Border / NaN cells are returned as NaN.
 
 use ndarray::Array2;
+#[cfg(not(target_arch = "wasm32"))]
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use surtgis_core::raster::Raster;
 
 use crate::Result;
+
+/// Internal helper: run `f` over `0..n` in parallel on native, sequentially
+/// on wasm32. Mirrors the `maybe_rayon` pattern from `surtgis-algorithms`.
+#[cfg(not(target_arch = "wasm32"))]
+#[inline]
+fn map_rows<F>(rows: usize, f: F) -> Vec<Vec<f64>>
+where
+    F: Fn(usize) -> Vec<f64> + Sync + Send,
+{
+    (0..rows).into_par_iter().map(f).collect()
+}
+
+#[cfg(target_arch = "wasm32")]
+#[inline]
+fn map_rows<F>(rows: usize, f: F) -> Vec<Vec<f64>>
+where
+    F: Fn(usize) -> Vec<f64>,
+{
+    (0..rows).map(f).collect()
+}
 
 /// Per-cell binary shadow mask: `1.0` = lit, `0.0` = in shadow.
 ///
@@ -60,52 +81,49 @@ pub fn cast_shadow_ray_mask(
 
     // Per-row parallel pass. Each row produces a `cols`-long vector of
     // intensities, which we then assemble into the output.
-    let row_results: Vec<Vec<f64>> = (0..rows)
-        .into_par_iter()
-        .map(|row| {
-            let mut out_row = vec![1.0f64; cols];
+    let row_results: Vec<Vec<f64>> = map_rows(rows, |row| {
+        let mut out_row = vec![1.0f64; cols];
 
-            for col in 0..cols {
-                let z0 = unsafe { dem.get_unchecked(row, col) };
-                if z0.is_nan() {
-                    out_row[col] = f64::NAN;
-                    continue;
-                }
-
-                // Incremental position + required-height state. Avoids the
-                // per-step `step as f64 * dr/dc/tan_alt` multiplications
-                // that dominated the previous implementation.
-                let mut nr_f = row as f64;
-                let mut nc_f = col as f64;
-                let mut required = z0;
-
-                let mut shadowed = false;
-                for _ in 0..radius {
-                    nr_f += dr;
-                    nc_f += dc;
-                    required += height_step;
-                    if nr_f < 0.0 || nc_f < 0.0 || nr_f >= rows_f || nc_f >= cols_f {
-                        break;
-                    }
-                    let z = unsafe { dem.get_unchecked(nr_f as usize, nc_f as usize) };
-                    if z.is_nan() {
-                        // Treat nodata as non-occluder; rayshader does the
-                        // same when stepping outside the heightmap.
-                        continue;
-                    }
-                    if z > required {
-                        shadowed = true;
-                        break;
-                    }
-                }
-                if shadowed {
-                    out_row[col] = 0.0;
-                }
+        for col in 0..cols {
+            let z0 = unsafe { dem.get_unchecked(row, col) };
+            if z0.is_nan() {
+                out_row[col] = f64::NAN;
+                continue;
             }
 
-            out_row
-        })
-        .collect();
+            // Incremental position + required-height state. Avoids the
+            // per-step `step as f64 * dr/dc/tan_alt` multiplications
+            // that dominated the previous implementation.
+            let mut nr_f = row as f64;
+            let mut nc_f = col as f64;
+            let mut required = z0;
+
+            let mut shadowed = false;
+            for _ in 0..radius {
+                nr_f += dr;
+                nc_f += dc;
+                required += height_step;
+                if nr_f < 0.0 || nc_f < 0.0 || nr_f >= rows_f || nc_f >= cols_f {
+                    break;
+                }
+                let z = unsafe { dem.get_unchecked(nr_f as usize, nc_f as usize) };
+                if z.is_nan() {
+                    // Treat nodata as non-occluder; rayshader does the
+                    // same when stepping outside the heightmap.
+                    continue;
+                }
+                if z > required {
+                    shadowed = true;
+                    break;
+                }
+            }
+            if shadowed {
+                out_row[col] = 0.0;
+            }
+        }
+
+        out_row
+    });
 
     let mut data = Vec::with_capacity(rows * cols);
     for r in row_results {
@@ -152,50 +170,47 @@ pub fn horizon_tan_map(dem: &Raster<f64>, azimuth_rad: f64, radius: usize) -> Re
     // loop with one multiplication.
     let inv_dist: Vec<f64> = (1..=radius).map(|k| 1.0 / (k as f64 * cell_size)).collect();
 
-    let row_results: Vec<Vec<f64>> = (0..rows)
-        .into_par_iter()
-        .map(|row| {
-            let mut out_row = vec![0.0f64; cols];
+    let row_results: Vec<Vec<f64>> = map_rows(rows, |row| {
+        let mut out_row = vec![0.0f64; cols];
 
-            for col in 0..cols {
-                let z0 = unsafe { dem.get_unchecked(row, col) };
-                if z0.is_nan() {
-                    out_row[col] = f64::NAN;
-                    continue;
-                }
-
-                let mut nr_f = row as f64;
-                let mut nc_f = col as f64;
-                let mut max_tan = 0.0f64;
-
-                for (k_minus_1, &inv_d) in inv_dist.iter().enumerate() {
-                    nr_f += dr;
-                    nc_f += dc;
-                    if nr_f < 0.0 || nc_f < 0.0 || nr_f >= rows_f || nc_f >= cols_f {
-                        break;
-                    }
-                    let z = unsafe { dem.get_unchecked(nr_f as usize, nc_f as usize) };
-                    if z.is_nan() {
-                        // Avoid an unused-variable warning when nothing else
-                        // touches k_minus_1 on this iteration.
-                        let _ = k_minus_1;
-                        continue;
-                    }
-                    let dz = z - z0;
-                    if dz > 0.0 {
-                        let t = dz * inv_d;
-                        if t > max_tan {
-                            max_tan = t;
-                        }
-                    }
-                }
-
-                out_row[col] = max_tan;
+        for col in 0..cols {
+            let z0 = unsafe { dem.get_unchecked(row, col) };
+            if z0.is_nan() {
+                out_row[col] = f64::NAN;
+                continue;
             }
 
-            out_row
-        })
-        .collect();
+            let mut nr_f = row as f64;
+            let mut nc_f = col as f64;
+            let mut max_tan = 0.0f64;
+
+            for (k_minus_1, &inv_d) in inv_dist.iter().enumerate() {
+                nr_f += dr;
+                nc_f += dc;
+                if nr_f < 0.0 || nc_f < 0.0 || nr_f >= rows_f || nc_f >= cols_f {
+                    break;
+                }
+                let z = unsafe { dem.get_unchecked(nr_f as usize, nc_f as usize) };
+                if z.is_nan() {
+                    // Avoid an unused-variable warning when nothing else
+                    // touches k_minus_1 on this iteration.
+                    let _ = k_minus_1;
+                    continue;
+                }
+                let dz = z - z0;
+                if dz > 0.0 {
+                    let t = dz * inv_d;
+                    if t > max_tan {
+                        max_tan = t;
+                    }
+                }
+            }
+
+            out_row[col] = max_tan;
+        }
+
+        out_row
+    });
 
     let mut data = Vec::with_capacity(rows * cols);
     for r in row_results {
