@@ -12,3 +12,9 @@ categories = ["science::geo", "graphics"]
 [dependencies]
 surtgis-core = { version = "0.10", path = "../core", default-features = false, features = [] }
 num-traits.workspace = true
+thiserror.workspace = true
+
+# Native PNG encoder. WASM builds skip the `image` dep to keep the binary
+# small; on WASM the JS side is expected to encode the raw RGBA buffer.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+image.workspace = true

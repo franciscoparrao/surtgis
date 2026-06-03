@@ -15,8 +15,14 @@
 //! let rgba = raster_to_rgba(&raster, &params);
 //! ```
 
+mod encode;
 mod render;
 mod scheme;
 
+pub use encode::{EncodeError, RgbaImage};
 pub use render::{ColormapParams, auto_params, raster_to_rgba};
 pub use scheme::{ColorScheme, ColorStop, Rgb, evaluate};
+
+// Native-only PNG helpers re-exported at the crate root for ergonomics.
+#[cfg(not(target_arch = "wasm32"))]
+pub use encode::{rgba_to_png_bytes, save_png};

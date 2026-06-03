@@ -9,6 +9,40 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.10.4] - 2026-06-02
+
+Patch release that adds in-tree PNG output. Pre-M1 for the
+`surtgis-relief` crate (see `SPEC_SURTGIS_RELIEF.md`); doing this in
+`surtgis-colormap` rather than `surtgis-relief` so every crate that
+produces an RGBA buffer (curvature previews, hypsometric maps, fluvial
+GeoJSON-paired rasters, future relief composites) can save PNG without
+pulling its own dependency.
+
+### Added
+
+- `RgbaImage` struct in `surtgis_colormap::encode` with the row-major
+  RGBA pixel layout that `raster_to_rgba` already produces. Methods:
+  `from_rgba`, `from_intensity` (single-channel `[0, 1]` raster →
+  greyscale), `over` (alpha-over composite), `multiply` (multiply blend
+  for shadows on a colored base).
+- `RgbaImage::to_png_bytes()` and `RgbaImage::save_png(path)` for
+  native PNG output. Standalone helpers `rgba_to_png_bytes(width,
+  height, &[u8])` and `save_png(path, …)` are also re-exported at the
+  crate root.
+- `EncodeError` typed via `thiserror`; includes shape-mismatch,
+  `image::ImageError`, and `std::io::Error` variants.
+
+### Notes
+
+- All PNG paths are gated on `cfg(not(target_arch = "wasm32"))`. The
+  `image` crate is added as a workspace-target dependency under the
+  same gate, so WASM builds stay lightweight. On WASM, consumers are
+  expected to pass the raw RGBA buffer back to JS, where the canvas or
+  Blob path encodes the image.
+- No algorithm changes elsewhere; `surtgis-core`, `surtgis-algorithms`,
+  `surtgis-parallel`, `surtgis-cloud`, `surtgis` (CLI) ship unchanged
+  but bump in lockstep with the workspace version.
+
 ## [0.10.3] - 2026-05-26
 
 Patch release that adds the benchmark suite for the `extract-patches`
