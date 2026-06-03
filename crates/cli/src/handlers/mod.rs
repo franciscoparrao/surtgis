@@ -11,6 +11,7 @@ pub mod interpolation;
 pub mod landscape;
 pub mod morphology;
 pub mod mosaic;
+pub mod relief;
 // Pipeline workflows depend on STAC for input data acquisition; without
 // the cloud feature there's no useful pipeline operation available, and
 // compiling it triggers unresolved imports for super::stac. Gate the

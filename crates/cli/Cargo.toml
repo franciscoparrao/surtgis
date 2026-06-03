@@ -27,6 +27,7 @@ ml = ["dep:smelt-ml"]
 surtgis-core = { version = "0.10", path = "../core", features = ["shapefile", "geopackage"] }
 surtgis-algorithms = { version = "0.10", path = "../algorithms" }
 surtgis-parallel = { version = "0.10", path = "../parallel" }
+surtgis-relief = { version = "0.10", path = "../relief" }
 surtgis-cloud = { version = "0.10", path = "../cloud", features = ["native"], optional = true }
 clap.workspace = true
 anyhow.workspace = true

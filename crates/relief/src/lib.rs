@@ -32,16 +32,22 @@
 
 use thiserror::Error;
 
+mod ambient;
+mod compose;
 mod ray_shade_impl;
 mod shadow_ray;
 mod sphere_shade_impl;
+mod water;
 
+pub use ambient::ambient_shade;
+pub use compose::ReliefBuilder;
 pub use ray_shade_impl::{RayShadeParams, SunSample, ray_shade};
-pub use shadow_ray::cast_shadow_ray_mask;
+pub use shadow_ray::{cast_shadow_ray_mask, horizon_tan_map};
 pub use sphere_shade_impl::sphere_shade;
+pub use water::{WaterParams, detect_water};
 
 // Re-exports from colormap so users only need to depend on relief.
-pub use surtgis_colormap::{EncodeError, RgbaImage};
+pub use surtgis_colormap::{ColorScheme, ColormapParams, EncodeError, RgbaImage};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use surtgis_colormap::{rgba_to_png_bytes, save_png};
