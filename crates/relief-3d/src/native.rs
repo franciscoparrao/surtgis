@@ -1,54 +1,126 @@
 //! Native winit-driven window + event loop.
 //!
-//! M1 scope: create a window, set up the wgpu surface, render the
-//! given mesh + texture at every redraw, log FPS once per second.
-//! The FPS readout is what makes the M1 acceptance bar measurable
-//! ("≥60 FPS at 1M vertices").
+//! Two public entry points:
+//!   - [`run_spike`]   — M1 acceptance: textured mesh + auto-orbit
+//!     camera + FPS log. The texture is an in-tree checker pattern.
+//!   - [`run_viewer`]  — M2 viewer: textured mesh + interactive
+//!     OrbitCamera (left-drag rotate, scroll zoom, right-drag pan).
+//!     The texture is supplied as a row-major `Vec<u8>` RGBA buffer
+//!     of size `width * height * 4`, typically the output of
+//!     `surtgis-relief`.
 
 use std::time::Instant;
 
 use bytemuck::cast_slice;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::WindowEvent;
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
 
-use crate::pipeline::{ReliefPipeline, build_pipeline, make_checker_texture, make_depth};
+use crate::camera::OrbitCamera;
+use crate::pipeline::{
+    ReliefPipeline, build_pipeline, make_checker_texture, make_depth, upload_rgba_texture,
+};
 use crate::{ReliefError, Result, Uniforms, Vertex};
 
-/// Run a native window that renders the given vertices + indices with
-/// the M1 spike pipeline (checker texture). Blocks until the user
-/// closes the window. Returns immediately on event-loop error.
+/// Texture source for the viewer. M1 ships a procedural checker; M2's
+/// `render_dem` example wraps a `surtgis-relief` RGBA buffer.
+pub enum TextureSource {
+    Checker,
+    Rgba {
+        pixels: Vec<u8>,
+        width: u32,
+        height: u32,
+    },
+}
+
+/// Whether the camera orbits automatically (M1 spike) or responds to
+/// mouse input (M2 viewer).
+pub enum CameraMode {
+    AutoOrbit,
+    Interactive,
+}
+
+/// M1 helper: run the spike with auto-orbit + checker texture.
 pub fn run_spike(vertices: Vec<Vertex>, indices: Vec<u32>, label: &str) -> Result<()> {
+    run_inner(
+        vertices,
+        indices,
+        TextureSource::Checker,
+        CameraMode::AutoOrbit,
+        label,
+    )
+}
+
+/// M2 entry point: run the interactive viewer with the given texture.
+pub fn run_viewer(
+    vertices: Vec<Vertex>,
+    indices: Vec<u32>,
+    rgba_pixels: Vec<u8>,
+    width: u32,
+    height: u32,
+    label: &str,
+) -> Result<()> {
+    run_inner(
+        vertices,
+        indices,
+        TextureSource::Rgba {
+            pixels: rgba_pixels,
+            width,
+            height,
+        },
+        CameraMode::Interactive,
+        label,
+    )
+}
+
+fn run_inner(
+    vertices: Vec<Vertex>,
+    indices: Vec<u32>,
+    texture: TextureSource,
+    mode: CameraMode,
+    label: &str,
+) -> Result<()> {
     let event_loop = EventLoop::new().map_err(|e| ReliefError::EventLoop(e.to_string()))?;
     let mut app = App {
         title: label.to_string(),
         window: None,
         state: None,
-        pending: Some((vertices, indices)),
+        pending: Some((vertices, indices, texture, mode)),
         last_log: Instant::now(),
         frames_since_log: 0,
+        mouse: MouseState::default(),
     };
     event_loop
         .run_app(&mut app)
         .map_err(|e| ReliefError::EventLoop(e.to_string()))
 }
 
+#[derive(Default)]
+struct MouseState {
+    left_pressed: bool,
+    right_pressed: bool,
+    last_pos: Option<(f64, f64)>,
+}
+
 struct App {
     title: String,
     window: Option<std::sync::Arc<Window>>,
     state: Option<RenderState>,
-    pending: Option<(Vec<Vertex>, Vec<u32>)>,
+    pending: Option<(Vec<Vertex>, Vec<u32>, TextureSource, CameraMode)>,
     last_log: Instant,
     frames_since_log: u32,
+    mouse: MouseState,
 }
 
 struct RenderState {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     pipeline: ReliefPipeline,
-    angle: f32,
+    camera: OrbitCamera,
+    mode: CameraMode,
+    auto_angle: f32,
 }
 
 impl ApplicationHandler for App {
@@ -64,8 +136,8 @@ impl ApplicationHandler for App {
                 .create_window(attrs)
                 .expect("create window failed"),
         );
-        let (vertices, indices) = self.pending.take().expect("spike data");
-        let state = pollster::block_on(setup(window.clone(), &vertices, &indices))
+        let (vertices, indices, texture, mode) = self.pending.take().expect("viewer data");
+        let state = pollster::block_on(setup(window.clone(), &vertices, &indices, texture, mode))
             .expect("wgpu setup failed");
         self.window = Some(window);
         self.state = Some(state);
@@ -91,17 +163,53 @@ impl ApplicationHandler for App {
                     state.pipeline.depth_view =
                         make_depth(&state.pipeline.device, new_size.width, new_size.height);
                     state.pipeline.depth_size = (new_size.width, new_size.height);
+                    state
+                        .camera
+                        .set_aspect(new_size.width as f32 / new_size.height.max(1) as f32);
                 }
             }
+            WindowEvent::MouseInput {
+                button, state: bs, ..
+            } => match button {
+                MouseButton::Left => self.mouse.left_pressed = bs == ElementState::Pressed,
+                MouseButton::Right => self.mouse.right_pressed = bs == ElementState::Pressed,
+                _ => {}
+            },
+            WindowEvent::CursorMoved { position, .. } => {
+                let pos = (position.x, position.y);
+                if let Some((px, py)) = self.mouse.last_pos {
+                    let dx = (pos.0 - px) as f32;
+                    let dy = (pos.1 - py) as f32;
+                    if self.mouse.left_pressed {
+                        state.camera.rotate(dx, dy);
+                    }
+                    if self.mouse.right_pressed {
+                        state.camera.pan(dx, dy);
+                    }
+                }
+                self.mouse.last_pos = Some(pos);
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                let scroll = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y,
+                    MouseScrollDelta::PixelDelta(p) => (p.y / 32.0) as f32,
+                };
+                // Negative scroll (towards user) zooms out by convention.
+                let factor = (1.0_f32 - 0.1 * scroll).clamp(0.5, 2.0);
+                state.camera.zoom(factor);
+            }
             WindowEvent::RedrawRequested => {
-                state.angle += 0.005;
+                if matches!(state.mode, CameraMode::AutoOrbit) {
+                    state.auto_angle += 0.005;
+                    state.camera.azimuth = state.auto_angle;
+                }
                 render(state);
                 self.frames_since_log += 1;
                 let now = Instant::now();
                 let elapsed = now.duration_since(self.last_log).as_secs_f32();
                 if elapsed >= 1.0 {
                     let fps = self.frames_since_log as f32 / elapsed;
-                    eprintln!("relief-3d M1: {:.1} FPS", fps);
+                    eprintln!("relief-3d: {:.1} FPS", fps);
                     self.frames_since_log = 0;
                     self.last_log = now;
                 }
@@ -116,6 +224,8 @@ async fn setup(
     window: std::sync::Arc<Window>,
     vertices: &[Vertex],
     indices: &[u32],
+    texture: TextureSource,
+    mode: CameraMode,
 ) -> Result<RenderState> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::PRIMARY,
@@ -166,7 +276,14 @@ async fn setup(
     };
     surface.configure(&device, &config);
 
-    let tex_view = make_checker_texture(&device, &queue);
+    let tex_view = match texture {
+        TextureSource::Checker => make_checker_texture(&device, &queue),
+        TextureSource::Rgba {
+            pixels,
+            width,
+            height,
+        } => upload_rgba_texture(&device, &queue, &pixels, width, height),
+    };
     let pipeline = build_pipeline(
         device,
         queue,
@@ -177,22 +294,22 @@ async fn setup(
         (config.width, config.height),
     );
 
+    let mut camera = OrbitCamera::for_dem();
+    camera.set_aspect(size.width as f32 / size.height.max(1) as f32);
+
     Ok(RenderState {
         surface,
         config,
         pipeline,
-        angle: 0.0,
+        camera,
+        mode,
+        auto_angle: 0.0,
     })
 }
 
 fn render(state: &mut RenderState) {
-    // Camera: orbit a couple of mesh-widths back, slowly rotating.
-    let aspect = state.config.width as f32 / state.config.height.max(1) as f32;
-    let proj = glam::Mat4::perspective_rh(45f32.to_radians(), aspect, 0.01, 100.0);
-    let eye = glam::Vec3::new(2.5 * state.angle.cos(), 1.8, 2.5 * state.angle.sin());
-    let view = glam::Mat4::look_at_rh(eye, glam::Vec3::ZERO, glam::Vec3::Y);
     let uniforms = Uniforms {
-        view_proj: (proj * view).to_cols_array_2d(),
+        view_proj: state.camera.view_proj().to_cols_array_2d(),
     };
     state
         .pipeline

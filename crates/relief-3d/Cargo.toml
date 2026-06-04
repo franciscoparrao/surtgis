@@ -29,3 +29,4 @@ web-sys        = { version = "0.3", features = [
 ] }
 
 [dev-dependencies]
+surtgis-algorithms = { version = "0.11", path = "../algorithms" }

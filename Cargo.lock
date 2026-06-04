@@ -5759,6 +5759,7 @@ dependencies = [
  "env_logger",
  "glam",
  "pollster",
+ "surtgis-algorithms",
  "surtgis-core",
  "surtgis-relief",
  "thiserror 2.0.18",

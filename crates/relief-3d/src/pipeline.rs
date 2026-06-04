@@ -24,29 +24,30 @@ pub struct ReliefPipeline {
     pub depth_size: (u32, u32),
 }
 
-/// Single-channel 256×256 checkerboard upload for the M1 spike. M2
-/// replaces this with the `surtgis-relief` RGBA output.
-pub fn make_checker_texture(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::TextureView {
-    const N: u32 = 256;
-    const CHECK: u32 = 32;
-    let mut pixels = vec![0u8; (N * N * 4) as usize];
-    for y in 0..N {
-        for x in 0..N {
-            let i = ((y * N + x) * 4) as usize;
-            let on = ((x / CHECK) + (y / CHECK)) % 2 == 0;
-            let c = if on { 255u8 } else { 64u8 };
-            pixels[i] = c;
-            pixels[i + 1] = c;
-            pixels[i + 2] = (c / 2).saturating_add(64);
-            pixels[i + 3] = 255;
-        }
-    }
+/// Upload an arbitrary RGBA byte buffer as a wgpu texture and return its
+/// view. `pixels.len()` must equal `width * height * 4`; the panic on
+/// mismatch is the right policy because the buffer comes from
+/// `surtgis-relief`, which already guarantees the layout.
+pub fn upload_rgba_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+) -> wgpu::TextureView {
+    assert_eq!(
+        pixels.len(),
+        (width * height * 4) as usize,
+        "rgba upload: pixels.len()={} expected={}",
+        pixels.len(),
+        width * height * 4
+    );
 
     let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("relief3d.checker"),
+        label: Some("relief3d.rgba"),
         size: wgpu::Extent3d {
-            width: N,
-            height: N,
+            width,
+            height,
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
@@ -64,20 +65,41 @@ pub fn make_checker_texture(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu:
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
-        &pixels,
+        pixels,
         wgpu::ImageDataLayout {
             offset: 0,
-            bytes_per_row: Some(N * 4),
-            rows_per_image: Some(N),
+            bytes_per_row: Some(width * 4),
+            rows_per_image: Some(height),
         },
         wgpu::Extent3d {
-            width: N,
-            height: N,
+            width,
+            height,
             depth_or_array_layers: 1,
         },
     );
 
     texture.create_view(&wgpu::TextureViewDescriptor::default())
+}
+
+/// Single-channel 256×256 checkerboard upload for the M1 spike. M2's
+/// `render_dem` example uses [`upload_rgba_texture`] with the
+/// `surtgis-relief` output instead.
+pub fn make_checker_texture(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::TextureView {
+    const N: u32 = 256;
+    const CHECK: u32 = 32;
+    let mut pixels = vec![0u8; (N * N * 4) as usize];
+    for y in 0..N {
+        for x in 0..N {
+            let i = ((y * N + x) * 4) as usize;
+            let on = ((x / CHECK) + (y / CHECK)) % 2 == 0;
+            let c = if on { 255u8 } else { 64u8 };
+            pixels[i] = c;
+            pixels[i + 1] = c;
+            pixels[i + 2] = (c / 2).saturating_add(64);
+            pixels[i + 3] = 255;
+        }
+    }
+    upload_rgba_texture(device, queue, &pixels, N, N)
 }
 
 /// Build a depth buffer view for the swapchain. Re-created on resize.
