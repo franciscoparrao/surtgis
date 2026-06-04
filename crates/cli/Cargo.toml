@@ -22,12 +22,17 @@ netcdf = ["surtgis-cloud/netcdf"]
 grib = ["surtgis-cloud/grib"]
 projections = ["surtgis-cloud/projections", "dep:proj4rs"]
 ml = ["dep:smelt-ml"]
+# Off by default — pulls wgpu + winit-style deps that aren't useful for
+# the 2D CLI workflows. Enable explicitly to get the `relief-3d`
+# subcommand.
+relief-3d = ["dep:surtgis-relief-3d"]
 
 [dependencies]
 surtgis-core = { version = "0.11", path = "../core", features = ["shapefile", "geopackage"] }
 surtgis-algorithms = { version = "0.11", path = "../algorithms" }
 surtgis-parallel = { version = "0.11", path = "../parallel" }
 surtgis-relief = { version = "0.11", path = "../relief" }
+surtgis-relief-3d = { version = "0.11", path = "../relief-3d", optional = true }
 surtgis-cloud = { version = "0.11", path = "../cloud", features = ["native"], optional = true }
 clap.workspace = true
 anyhow.workspace = true

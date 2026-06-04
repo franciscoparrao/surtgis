@@ -17,6 +17,9 @@ pub mod mesh;
 pub mod pipeline;
 
 #[cfg(not(target_arch = "wasm32"))]
+pub mod headless;
+
+#[cfg(not(target_arch = "wasm32"))]
 pub mod native;
 
 #[cfg(target_arch = "wasm32")]

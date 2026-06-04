@@ -5616,6 +5616,7 @@ dependencies = [
  "surtgis-core",
  "surtgis-parallel",
  "surtgis-relief",
+ "surtgis-relief-3d",
  "tokio",
  "tracing",
  "tracing-subscriber",

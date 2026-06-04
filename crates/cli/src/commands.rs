@@ -175,6 +175,51 @@ pub enum Commands {
         #[arg(long, default_value = "30")]
         radius: usize,
     },
+    /// 3D rayshader-style relief render to PNG (headless, no window)
+    #[cfg(feature = "relief-3d")]
+    #[command(name = "relief-3d")]
+    Relief3d {
+        /// Input DEM file
+        input: PathBuf,
+        /// Output PNG file
+        output: PathBuf,
+        /// Color scheme for the base layer
+        #[arg(long, default_value = "terrain")]
+        colormap: String,
+        /// Output width in pixels
+        #[arg(long, default_value = "1920")]
+        width: u32,
+        /// Output height in pixels
+        #[arg(long, default_value = "1080")]
+        height: u32,
+        /// Sun azimuth in degrees (0 = North, clockwise)
+        #[arg(long, default_value = "315")]
+        sun_azimuth: f64,
+        /// Sun altitude in degrees above the horizon
+        #[arg(long, default_value = "45")]
+        sun_altitude: f64,
+        /// Enable ray-traced cast shadows in the 2D texture
+        #[arg(long)]
+        shadows: bool,
+        /// Number of sun samples for soft-shadow penumbra (>=2)
+        #[arg(long, default_value = "11")]
+        soft: usize,
+        /// Enable ambient occlusion in the 2D texture
+        #[arg(long)]
+        ambient: bool,
+        /// Vertical exaggeration for the displaced mesh
+        #[arg(long, default_value = "0.45")]
+        vertical_exaggeration: f32,
+        /// Camera azimuth (deg) around the DEM centre
+        #[arg(long, default_value = "45")]
+        camera_azimuth: f32,
+        /// Camera polar angle (deg from straight-up)
+        #[arg(long, default_value = "60")]
+        camera_polar: f32,
+        /// Camera distance (scene units; DEM longer side = 2)
+        #[arg(long, default_value = "3.2")]
+        camera_distance: f32,
+    },
     /// Clip a raster by polygon or bounding box
     Clip {
         /// Input raster file

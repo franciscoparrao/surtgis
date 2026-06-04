@@ -235,7 +235,16 @@ impl ApplicationHandler for App {
         let window_clone = window.clone();
         let slot = self.state_slot.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            match setup(window_clone, &vertices, &indices, &pixels, width, height, lighting).await
+            match setup(
+                window_clone,
+                &vertices,
+                &indices,
+                &pixels,
+                width,
+                height,
+                lighting,
+            )
+            .await
             {
                 Ok(s) => {
                     *slot.borrow_mut() = Some(s);
