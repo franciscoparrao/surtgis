@@ -9,6 +9,113 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-06-04
+
+Minor release introducing **`surtgis-relief`** — a rayshader-style 2D
+shaded-relief composite layer on top of the existing terrain primitives.
+Single binary on the CLI, browser-runnable via WASM (categorically
+unique vs rayshader, which is desktop R only), and importable from
+Python as a numpy `(H, W, 4) uint8` array.
+
+This release closes M1–M5 of the `SPEC_SURTGIS_RELIEF.md` handoff.
+3D (P2) is intentionally out of scope and will land in a later minor.
+A working Three.js + WASM preview lives in `surtgis-demo/relief3d.html`
+to validate that the 2D textures hold up under 3D mesh display.
+
+### Added
+
+- **`surtgis-relief`** workspace crate. Public API:
+  - `ray_shade(dem, &RayShadeParams)` — ray-traced cast shadows.
+    `RayShadeParams::with_soft_shadow_altitude(azimuth_deg,
+    low_alt_deg, high_alt_deg, n_samples)` matches rayshader's
+    `anglebreaks = seq(low, high, by=1)` recipe. When every sun sample
+    shares an azimuth, the implementation routes through an amortised
+    fast path; with differing azimuths it falls back to per-sun
+    ray-marches transparently.
+  - `sphere_shade(dem, HillshadeParams)` — normal-based intensity
+    layer, thin wrapper over `hillshade` forcing `normalized = true`.
+  - `ambient_shade(dem, radius)` — sky-view-factor wrapper for ambient
+    occlusion in `[0, 1]`.
+  - `detect_water(dem, &WaterParams)` — heuristic water mask via
+    flat-area connected components (8-neighbour flatness test, 4-CC
+    union-find, min-area filter), returning `Raster<u8>`.
+  - `ReliefBuilder` fluent compositor — `.base_colormap(scheme)` +
+    `.add_shade()` / `.add_shadow()` / `.add_ambient()` (multiply
+    blend) + `.add_water()` (alpha-over with scheme-sampled colour) +
+    `.add_rgba_over()` (alpha-over arbitrary RGBA) → `.render()` →
+    `RgbaImage`.
+
+- **Two new ray-march primitives** in `surtgis-relief::shadow_ray`:
+  - `cast_shadow_ray_mask` — per-cell early-exit ray-march, binary
+    lit/shadow mask. Incremental position state (no per-step
+    multiplications) + `unsafe get_unchecked`. ~3× faster per call
+    than `horizon_angle_map`.
+  - `horizon_tan_map` — full-radius march tracking
+    `max_k (z(k) - z0) / dist(k)`. With pre-computed `inv_dist[k]` so
+    the inner-loop tan is one multiply (no division). Shared-azimuth
+    amortisation primitive: one call serves every altitude; each
+    altitude is then an O(N) thresholding.
+
+- **CLI `surtgis relief DEM.tif OUT.png`** — full composite to PNG.
+  Flags: `--colormap`, `--sun-azimuth`, `--sun-altitude`, `--shadows`,
+  `--soft N`, `--ambient`, `--water`, `--z-factor`, `--radius`.
+
+- **WASM binding `relief_compute`** in `surtgis-wasm` — returns a raw
+  RGBA `Vec<u8>` for direct canvas/WebGL upload.
+
+- **Python binding `surtgis.relief_compute`** — returns an
+  `(H, W, 4) uint8` numpy array.
+
+- `crates/relief/examples/render_relief.rs` — end-to-end example.
+- `crates/relief/examples/bench_vs_rayshader.rs` — M2 acceptance
+  benchmark mirroring `benchmarks/rayshader_baseline.R`.
+- `benchmarks/rayshader_baseline.R` — 5-rep + warmup R baseline on
+  `dem_filled.tif`; results in `benchmarks/results/rayshader_baseline.csv`.
+- `surtgis-demo/relief.html` and `surtgis-demo/relief3d.html` — 2D and
+  3D in-browser demos.
+
+### Performance
+
+On `dem_filled.tif` (637×570, Andes, EPSG:32719) with the rayshader
+anglebreaks recipe (azimuth 315°, 11 altitudes 40°–50°, radius 850):
+
+| Component | Before amortisation | After amortisation |
+|---|---|---|
+| `ray_shade` median | 1.98 s | **0.19 s** (10.4×) |
+| `sphere_shade` median | 0.06 s | 0.06 s |
+| **TOTAL median** | 2.04 s | **0.26 s** |
+| **vs rayshader 1.80 s** | 0.88× FAIL | **6.99× PASS** |
+
+The amortisation insight (single-azimuth `horizon_tan_map` + N cheap
+thresholdings) is what makes the WASM and Python `relief_compute`
+calls interactive on real DEMs.
+
+### Spec deltas
+
+`SPEC_SURTGIS_RELIEF.md` claimed "no new terrain math". After
+implementation that was wrong — three new primitives shipped
+(`cast_shadow_ray_mask`, `horizon_tan_map`, `detect_water`). The
+spec's §11 was preserved verbatim with a "this paragraph was wrong"
+prefix; new §12 Reality check documents the perf trap with
+`horizon_angle_map`, the outstanding `ambient_shade` follow-up
+(~6.4 s, SVF-dominated), and the meta-lesson for the next handoff
+spec: measure the production-workload configuration in the spike,
+not the cheapest one.
+
+### Changed
+
+- Workspace version bump 0.10.4 → 0.11.0.
+- Inter-crate dependency declarations swept from `version = "0.10"` to
+  `version = "0.11"` across `surtgis-core`, `surtgis-algorithms`,
+  `surtgis-parallel`, `surtgis-cloud`, `surtgis-colormap`,
+  `surtgis-relief`.
+- `surtgis-cli` and the `surtgis-wasm` / `surtgis-python` frontends
+  pick up direct dependencies on `surtgis-relief`.
+- `crates/relief/src/shadow_ray.rs` cfg-gates the `rayon` import on
+  `cfg(not(target_arch = "wasm32"))` and routes through an internal
+  `map_rows()` helper that is parallel on native and sequential on
+  WASM. Mirrors the `maybe_rayon` pattern from `surtgis-algorithms`.
+
 ## [0.10.4] - 2026-06-02
 
 Patch release that adds in-tree PNG output. Pre-M1 for the
