@@ -9,23 +9,32 @@ description = "Native wgpu 3D viewer for SurtGis shaded relief"
 keywords = ["gis", "3d", "wgpu", "webgpu", "visualization"]
 categories = ["science::geo", "graphics", "rendering"]
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
-surtgis-core   = { version = "0.11", path = "../core", default-features = false }
-surtgis-relief = { version = "0.11", path = "../relief", default-features = false }
-wgpu           = "23"
-bytemuck       = { version = "1", features = ["derive"] }
-glam           = "0.29"
+surtgis-core      = { version = "0.11", path = "../core", default-features = false }
+surtgis-algorithms = { version = "0.11", path = "../algorithms", default-features = false }
+surtgis-relief    = { version = "0.11", path = "../relief", default-features = false }
+# wgpu webgl feature: WebGPU is preferred on browsers that have it
+# (Chrome stable, Edge); WebGL2 covers Firefox + Safari for now.
+wgpu              = { version = "23", features = ["webgl"] }
+bytemuck          = { version = "1", features = ["derive"] }
+glam              = "0.29"
 thiserror.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-winit          = "0.30"
-pollster       = "0.4"
-env_logger     = "0.11"
+winit             = "0.30"
+pollster          = "0.4"
+env_logger        = "0.11"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen   = "0.2"
-web-sys        = { version = "0.3", features = [
-  "HtmlCanvasElement", "Window", "Document",
+winit             = "0.30"
+wasm-bindgen      = "0.2"
+wasm-bindgen-futures = "0.4"
+console_error_panic_hook = "0.1"
+web-sys           = { version = "0.3", features = [
+  "HtmlCanvasElement", "Window", "Document", "Element",
 ] }
 
 [dev-dependencies]
