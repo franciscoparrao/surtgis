@@ -1,0 +1,31 @@
+{
+  "name": "surtgis-relief-3d",
+  "type": "module",
+  "collaborators": [
+    "Francisco Parra"
+  ],
+  "description": "Native wgpu 3D viewer for SurtGis shaded relief",
+  "version": "0.11.0",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/franciscoparrao/surtgis"
+  },
+  "files": [
+    "surtgis_relief_3d_bg.wasm",
+    "surtgis_relief_3d.js",
+    "surtgis_relief_3d.d.ts"
+  ],
+  "main": "surtgis_relief_3d.js",
+  "types": "surtgis_relief_3d.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ],
+  "keywords": [
+    "gis",
+    "3d",
+    "wgpu",
+    "webgpu",
+    "visualization"
+  ]
+}

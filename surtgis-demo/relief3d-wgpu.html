@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SurtGIS Relief 3D — wgpu native (WebGPU + WebGL2)</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #0f1115; color: #e8eaed; font-family: system-ui, sans-serif; overflow: hidden; height: 100vh; }
+  #canvas { display: block; width: 100vw; height: 100vh; }
+  #panel { position: fixed; top: 14px; left: 14px; background: rgba(20, 23, 28, 0.92); border: 1px solid #2a2e34; border-radius: 8px; padding: 14px; min-width: 280px; backdrop-filter: blur(6px); z-index: 10; font-size: 13px; }
+  #panel h1 { font-size: 14px; margin: 0 0 4px; }
+  #panel .sub { font-size: 11px; color: #9aa0a6; margin-bottom: 10px; }
+  label { display: block; font-size: 11px; color: #9aa0a6; margin: 8px 0 2px; }
+  input[type=range] { width: 220px; }
+  select { background: #14171c; color: #e8eaed; border: 1px solid #2a2e34; padding: 3px 6px; font-size: 12px; }
+  button { background: #3b82f6; color: white; border: none; padding: 6px 12px; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 12px; margin-right: 4px; }
+  button:hover:not(:disabled) { background: #2563eb; }
+  button:disabled { background: #45474a; cursor: not-allowed; }
+  .check { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; margin-right: 10px; }
+  .stat { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: #9aa0a6; white-space: pre; margin-top: 8px; }
+  .ok { color: #10b981; }
+  .err { color: #ef4444; }
+  .v { font-family: ui-monospace, Menlo, monospace; color: #e8eaed; min-width: 30px; display: inline-block; text-align: right; }
+</style>
+</head>
+<body>
+
+<canvas id="canvas"></canvas>
+
+<div id="panel">
+  <h1>SurtGIS Relief 3D — wgpu native</h1>
+  <div class="sub">
+    All Rust code, no Three.js. WebGPU preferred (Chrome/Edge),
+    WebGL2 fallback (Firefox/Safari). Renders entirely in-page —
+    no server compute.
+  </div>
+
+  <button id="loadDefault">Load bundled DEM</button>
+  <input type="file" id="demFile" accept=".tif,.tiff" style="display:none;">
+  <button id="openFile">Open .tif…</button>
+
+  <label>Colormap</label>
+  <select id="colormap">
+    <option value="terrain" selected>terrain</option>
+    <option value="grayscale">grayscale</option>
+    <option value="divergent">divergent</option>
+    <option value="ndvi">ndvi</option>
+    <option value="bwr">bwr</option>
+  </select>
+
+  <label style="margin-top: 6px;">Texture layers (recomputed on Init)</label>
+  <div>
+    <label class="check"><input type="checkbox" id="shadows" checked> shadows</label>
+    <label class="check"><input type="checkbox" id="ambient"> ambient</label>
+  </div>
+
+  <label>Initial sun azimuth (°) <span class="v" id="initAzVal">315</span></label>
+  <input type="range" id="initAz" min="0" max="360" value="315">
+
+  <label>Initial sun altitude (°) <span class="v" id="initAltVal">45</span></label>
+  <input type="range" id="initAlt" min="5" max="85" value="45">
+
+  <label>Vertical exaggeration (mesh build) <span class="v" id="zexInitVal">0.45</span></label>
+  <input type="range" id="zexInit" min="0.05" max="2.0" step="0.05" value="0.45">
+
+  <button id="initBtn" style="margin-top: 12px;" disabled>Init viewer</button>
+
+  <hr style="border-color: #2a2e34; margin: 12px 0 8px;">
+  <div class="sub">Live controls (after viewer is running)</div>
+
+  <label>Live sun azimuth (°) <span class="v" id="liveAzVal">315</span></label>
+  <input type="range" id="liveAz" min="0" max="360" value="315">
+
+  <label>Live sun altitude (°) <span class="v" id="liveAltVal">45</span></label>
+  <input type="range" id="liveAlt" min="5" max="85" value="45">
+
+  <label>Live vertical scale <span class="v" id="liveZexVal">1.0</span>×</label>
+  <input type="range" id="liveZex" min="0.05" max="5" step="0.05" value="1.0">
+
+  <label>Live ambient <span class="v" id="liveAmbVal">0.40</span></label>
+  <input type="range" id="liveAmb" min="0" max="1" step="0.05" value="0.4">
+
+  <div id="status" class="stat"></div>
+</div>
+
+<script type="module">
+import init, { run_relief3d_canvas } from './wasm3d/surtgis_relief_3d.js';
+
+const $ = (id) => document.getElementById(id);
+let demBytes = null;
+let handle = null;
+
+function setStatus(msg, cls = '') {
+  $('status').textContent = msg;
+  $('status').className = `stat ${cls}`;
+}
+
+// Mirror sliders to their display spans.
+for (const [id, span] of [
+  ['initAz', 'initAzVal'], ['initAlt', 'initAltVal'], ['zexInit', 'zexInitVal'],
+  ['liveAz', 'liveAzVal'], ['liveAlt', 'liveAltVal'], ['liveZex', 'liveZexVal'],
+  ['liveAmb', 'liveAmbVal'],
+]) {
+  $(id).addEventListener('input', (e) => { $(span).textContent = e.target.value; });
+}
+
+// Live sliders push into the handle once it exists.
+for (const id of ['liveAz', 'liveAlt', 'liveZex', 'liveAmb']) {
+  $(id).addEventListener('input', () => {
+    if (!handle) return;
+    const az = parseFloat($('liveAz').value);
+    const alt = parseFloat($('liveAlt').value);
+    const zex = parseFloat($('liveZex').value);
+    const amb = parseFloat($('liveAmb').value);
+    handle.set_sun(az, alt);
+    handle.set_vertical_scale(zex);
+    handle.set_ambient(amb);
+  });
+}
+
+$('demFile').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  demBytes = new Uint8Array(await file.arrayBuffer());
+  setStatus(`Loaded ${file.name} (${(demBytes.byteLength / 1024).toFixed(1)} KB)`, 'ok');
+  $('initBtn').disabled = false;
+});
+
+$('openFile').addEventListener('click', () => $('demFile').click());
+
+$('loadDefault').addEventListener('click', async () => {
+  setStatus('Fetching data/dem_filled.tif…');
+  try {
+    const r = await fetch('./data/dem_filled.tif');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    demBytes = new Uint8Array(await r.arrayBuffer());
+    setStatus(`Loaded dem_filled.tif (${(demBytes.byteLength / 1024).toFixed(1)} KB)`, 'ok');
+    $('initBtn').disabled = false;
+  } catch (err) {
+    setStatus(`Could not load default DEM: ${err.message}`, 'err');
+  }
+});
+
+function sizeCanvasToWindow() {
+  const c = $('canvas');
+  c.width = window.innerWidth;
+  c.height = window.innerHeight;
+}
+window.addEventListener('resize', sizeCanvasToWindow);
+
+$('initBtn').addEventListener('click', async () => {
+  if (!demBytes) return;
+  sizeCanvasToWindow();
+  setStatus('Computing relief composite + uploading mesh…');
+  try {
+    const t0 = performance.now();
+    handle = run_relief3d_canvas(
+      'canvas',
+      demBytes,
+      $('colormap').value,
+      parseFloat($('initAz').value),
+      parseFloat($('initAlt').value),
+      $('shadows').checked,
+      $('ambient').checked,
+      parseFloat($('zexInit').value),
+    );
+    const dt = performance.now() - t0;
+    setStatus(`Viewer running. Setup ${dt.toFixed(0)} ms. Mouse-drag rotate, wheel zoom, right-drag pan.`, 'ok');
+    // Disable init flags so the user knows live sliders are the active path.
+    $('initBtn').disabled = true;
+  } catch (err) {
+    setStatus(`Init failed: ${err.message || err}`, 'err');
+  }
+});
+
+setStatus('Initialising WASM module…');
+await init();
+sizeCanvasToWindow();
+setStatus('WASM ready. Choose a DEM to load.', 'ok');
+</script>
+
+</body>
+</html>

@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SurtGIS Relief 3D — Three.js + WASM</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #0f1115; color: #e8eaed; font-family: system-ui, sans-serif; overflow: hidden; height: 100vh; }
+  #canvas { display: block; width: 100vw; height: 100vh; }
+  #panel { position: fixed; top: 14px; left: 14px; background: rgba(20, 23, 28, 0.92); border: 1px solid #2a2e34; border-radius: 8px; padding: 14px; min-width: 260px; backdrop-filter: blur(6px); z-index: 10; font-size: 13px; }
+  #panel h1 { font-size: 14px; margin: 0 0 4px; }
+  #panel .sub { font-size: 11px; color: #9aa0a6; margin-bottom: 10px; }
+  label { display: block; font-size: 11px; color: #9aa0a6; margin: 8px 0 2px; }
+  input[type=range] { width: 200px; }
+  select { background: #14171c; color: #e8eaed; border: 1px solid #2a2e34; padding: 3px 6px; font-size: 12px; }
+  button { background: #3b82f6; color: white; border: none; padding: 6px 12px; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 12px; margin-right: 4px; }
+  button:hover:not(:disabled) { background: #2563eb; }
+  button:disabled { background: #45474a; cursor: not-allowed; }
+  .check { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; margin-right: 10px; }
+  .stat { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: #9aa0a6; white-space: pre; margin-top: 8px; }
+  .ok { color: #10b981; }
+  .err { color: #ef4444; }
+  .v { font-family: ui-monospace, Menlo, monospace; color: #e8eaed; min-width: 30px; display: inline-block; text-align: right; }
+</style>
+</head>
+<body>
+
+<canvas id="canvas"></canvas>
+
+<div id="panel">
+  <h1>SurtGIS Relief 3D</h1>
+  <div class="sub">
+    relief_compute (WASM) → mesh texture. Three.js drives the WebGL pipeline,
+    so the 3D path is <em>not</em> surtgis native — that is P2 in the spec.
+  </div>
+
+  <button id="loadDefault">Load bundled DEM</button>
+  <input type="file" id="demFile" accept=".tif,.tiff" style="display:none;">
+  <button id="openFile">Open .tif…</button>
+
+  <label>Colormap</label>
+  <select id="colormap">
+    <option value="terrain" selected>terrain</option>
+    <option value="grayscale">grayscale</option>
+    <option value="divergent">divergent</option>
+    <option value="ndvi">ndvi</option>
+    <option value="bwr">bwr</option>
+  </select>
+
+  <label>Sun azimuth (°) <span class="v" id="azimuthVal">315</span></label>
+  <input type="range" id="azimuth" min="0" max="360" value="315">
+
+  <label>Sun altitude (°) <span class="v" id="altitudeVal">45</span></label>
+  <input type="range" id="altitude" min="5" max="85" value="45">
+
+  <label>Vertical exaggeration <span class="v" id="zexVal">1.5</span>×</label>
+  <input type="range" id="zex" min="0.1" max="5" step="0.1" value="1.5">
+
+  <label style="margin-top: 6px;">Layers</label>
+  <div>
+    <label class="check"><input type="checkbox" id="shadows" checked> shadows</label>
+    <label class="check"><input type="checkbox" id="ambient"> ambient</label>
+  </div>
+
+  <button id="rebuild" style="margin-top: 12px;" disabled>Rebuild texture</button>
+  <div id="status" class="stat"></div>
+  <div id="timing" class="stat"></div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { fromArrayBuffer } from 'https://cdn.jsdelivr.net/npm/geotiff@2.1.3/+esm';
+import init, { relief_compute } from './wasm/surtgis_wasm.js';
+
+const $ = (id) => document.getElementById(id);
+const status = $('status');
+const timing = $('timing');
+
+let demBytes = null;     // raw GeoTIFF byte buffer (for WASM relief_compute)
+let dem = null;          // { heights: Float32Array, w, h, zMin, zMax }
+let mesh = null;
+let textureCanvas = null;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0f1115);
+
+const renderer = new THREE.WebGLRenderer({ canvas: $('canvas'), antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.01, 1000);
+camera.position.set(2.5, 2.2, 2.5);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.07;
+controls.target.set(0, 0, 0);
+
+const sunLight = new THREE.DirectionalLight(0xffffff, 1.6);
+sunLight.position.set(-3, 4, -3);
+scene.add(sunLight);
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.55);
+scene.add(ambientLight);
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+(function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+})();
+
+function setStatus(msg, cls = '') { status.textContent = msg; status.className = `stat ${cls}`; }
+
+// ── Sliders ──
+for (const id of ['azimuth', 'altitude']) {
+  $(id).addEventListener('input', (e) => $(`${id}Val`).textContent = e.target.value);
+}
+$('zex').addEventListener('input', (e) => {
+  $('zexVal').textContent = parseFloat(e.target.value).toFixed(1);
+  if (mesh) mesh.material.displacementScale = computeDisplacement(parseFloat(e.target.value));
+});
+
+$('openFile').addEventListener('click', () => $('demFile').click());
+$('demFile').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  demBytes = new Uint8Array(await file.arrayBuffer());
+  setStatus(`Decoding ${file.name}…`);
+  dem = await decodeDem(demBytes);
+  setStatus(`DEM ${dem.w}×${dem.h}, z ∈ [${dem.zMin.toFixed(0)}, ${dem.zMax.toFixed(0)}] m`, 'ok');
+  $('rebuild').disabled = false;
+  buildOrUpdateMesh();
+  rebuildReliefTexture();
+});
+
+$('loadDefault').addEventListener('click', async () => {
+  setStatus('Fetching data/dem_filled.tif…');
+  try {
+    const r = await fetch('./data/dem_filled.tif');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    demBytes = new Uint8Array(await r.arrayBuffer());
+    dem = await decodeDem(demBytes);
+    setStatus(`DEM ${dem.w}×${dem.h}, z ∈ [${dem.zMin.toFixed(0)}, ${dem.zMax.toFixed(0)}] m`, 'ok');
+    $('rebuild').disabled = false;
+    buildOrUpdateMesh();
+    rebuildReliefTexture();
+  } catch (err) {
+    setStatus(`Could not load default DEM: ${err.message}`, 'err');
+  }
+});
+
+$('rebuild').addEventListener('click', rebuildReliefTexture);
+
+// ── DEM decoding ──
+async function decodeDem(bytes) {
+  // geotiff.js's fromArrayBuffer needs an ArrayBuffer; we pass the slice
+  // backed by `bytes`.
+  const tiff = await fromArrayBuffer(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+  const image = await tiff.getImage();
+  const w = image.getWidth();
+  const h = image.getHeight();
+  const raster = await image.readRasters({ interleave: true });
+  // Float32Array typically; coerce just in case.
+  const heights = raster instanceof Float32Array ? raster : Float32Array.from(raster);
+  let zMin = Infinity, zMax = -Infinity;
+  for (let i = 0; i < heights.length; i++) {
+    const v = heights[i];
+    if (!Number.isFinite(v)) continue;
+    if (v < zMin) zMin = v;
+    if (v > zMax) zMax = v;
+  }
+  return { heights, w, h, zMin, zMax };
+}
+
+// ── Mesh build / displacement ──
+function computeDisplacement(zexUser) {
+  // The displacement texture is already normalised to [0, 1], so the DEM
+  // elevation range does not enter here — a flat DEM has 0-amplitude
+  // heights regardless of scale. The longer mesh side is 2 scene units;
+  // at zexUser=1 the tallest cell is displaced 0.3 units (~15% of mesh
+  // width), which reads as a believable landscape. The slider scales
+  // linearly from there.
+  return 0.3 * zexUser;
+}
+
+function buildHeightTexture() {
+  // Use a Float32 single-channel texture for displacement — preserves
+  // precision better than 8-bit grayscale and matches the DEM exactly.
+  // NaN cells get mapped to the minimum height so the mesh stays flat
+  // where the DEM is nodata instead of spiking to NaN.
+  const w = dem.w, h = dem.h, src = dem.heights;
+  const out = new Float32Array(w * h);
+  const range = dem.zMax - dem.zMin || 1;
+  for (let i = 0; i < src.length; i++) {
+    const v = src[i];
+    out[i] = Number.isFinite(v) ? (v - dem.zMin) / range : 0.0;
+  }
+  const tex = new THREE.DataTexture(out, w, h, THREE.RedFormat, THREE.FloatType);
+  tex.needsUpdate = true;
+  return tex;
+}
+
+function buildOrUpdateMesh() {
+  if (mesh) {
+    scene.remove(mesh);
+    mesh.geometry.dispose();
+    if (mesh.material.map) mesh.material.map.dispose();
+    if (mesh.material.displacementMap) mesh.material.displacementMap.dispose();
+    mesh.material.dispose();
+  }
+  // Mesh size: longer DEM side → 2 scene units.
+  const longer = Math.max(dem.w, dem.h);
+  const width = 2 * dem.w / longer;
+  const height = 2 * dem.h / longer;
+  // One segment per DEM cell so the displacementMap samples one vertex per cell.
+  const geo = new THREE.PlaneGeometry(width, height, dem.w - 1, dem.h - 1);
+  // Rotate so +Y is up (PlaneGeometry defaults are in XY plane).
+  geo.rotateX(-Math.PI / 2);
+
+  const mat = new THREE.MeshStandardMaterial({
+    map: null, // filled in by rebuildReliefTexture
+    displacementMap: buildHeightTexture(),
+    displacementScale: computeDisplacement(parseFloat($('zex').value)),
+    roughness: 0.95,
+    metalness: 0.0,
+  });
+
+  mesh = new THREE.Mesh(geo, mat);
+  scene.add(mesh);
+}
+
+// ── Relief texture build ──
+function rebuildReliefTexture() {
+  if (!demBytes || !mesh) return;
+  setStatus('Computing relief…');
+  // Yield to repaint the status before the synchronous WASM call.
+  setTimeout(() => {
+    try {
+      const colormap = $('colormap').value;
+      const az = parseFloat($('azimuth').value);
+      const alt = parseFloat($('altitude').value);
+      const shadows = $('shadows').checked;
+      const ambient = $('ambient').checked;
+
+      const t0 = performance.now();
+      const rgba = relief_compute(demBytes, colormap, az, alt, shadows, ambient);
+      const dt = performance.now() - t0;
+
+      // The relief output is row-major matching the DEM dimensions.
+      const w = dem.w, h = dem.h;
+      const tex = new THREE.DataTexture(rgba, w, h, THREE.RGBAFormat);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.needsUpdate = true;
+      if (mesh.material.map) mesh.material.map.dispose();
+      mesh.material.map = tex;
+      mesh.material.needsUpdate = true;
+
+      timing.textContent =
+        `relief_compute  : ${dt.toFixed(1)} ms\n` +
+        `recipe          : ${colormap} | az=${az}° alt=${alt}° | shadows=${shadows} | ambient=${ambient}\n` +
+        `mesh vertices   : ${(dem.w * dem.h).toLocaleString()}`;
+      setStatus('Texture rebuilt.', 'ok');
+    } catch (err) {
+      setStatus(`relief_compute failed: ${err.message || err}`, 'err');
+    }
+  }, 30);
+}
+
+// ── Boot ──
+setStatus('Initialising WASM module…');
+await init();
+setStatus('Ready. Load a DEM.', 'ok');
+</script>
+
+</body>
+</html>

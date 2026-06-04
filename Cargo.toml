@@ -11,6 +11,7 @@ members = [
     "crates/colormap",
     "crates/gui",
     "crates/relief",
+    "crates/relief-3d",
 ]
 
 [workspace.package]
