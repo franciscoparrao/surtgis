@@ -151,12 +151,9 @@ pub fn build_pipeline(
         usage: wgpu::BufferUsages::INDEX,
     });
 
-    let identity = Uniforms {
-        view_proj: glam::Mat4::IDENTITY.to_cols_array_2d(),
-    };
     let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("relief3d.uniforms"),
-        contents: cast_slice(&[identity]),
+        contents: cast_slice(&[Uniforms::identity()]),
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
 
@@ -176,7 +173,9 @@ pub fn build_pipeline(
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                // The fragment shader reads light_color + ambient as well,
+                // not just the vertex shader, so flag both stages.
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,

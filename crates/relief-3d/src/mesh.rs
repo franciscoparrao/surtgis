@@ -8,6 +8,29 @@
 use crate::Vertex;
 use surtgis_core::raster::Raster;
 
+/// Compute a per-cell normal from neighbour heights via central
+/// differences (one-sided at borders). The local tangents along +X
+/// and +Z are
+///   t_x = ( 2 * dx,   dh/dx * 2 * dx,  0 )
+///   t_z = ( 0,        dh/dz * 2 * dz,  2 * dz )
+/// and the up-facing normal is `cross(t_z, t_x) = (-dh/dx, 1, -dh/dz)`
+/// after dividing through by `(2*dx)(2*dz)`. Re-normalised before
+/// return so the shader can apply a vertical-scale fix without
+/// magnitude drift.
+fn normal_at<F>(rows: usize, cols: usize, r: usize, c: usize, dx: f32, dz: f32, h: &F) -> [f32; 3]
+where
+    F: Fn(usize, usize) -> f32,
+{
+    let (cm, cp) = (c.saturating_sub(1), (c + 1).min(cols - 1));
+    let (rm, rp) = (r.saturating_sub(1), (r + 1).min(rows - 1));
+    let span_x = (cp - cm).max(1) as f32 * dx;
+    let span_z = (rp - rm).max(1) as f32 * dz;
+    let dh_dx = (h(r, cp) - h(r, cm)) / span_x;
+    let dh_dz = (h(rp, c) - h(rm, c)) / span_z;
+    let n = glam::Vec3::new(-dh_dx, 1.0, -dh_dz).normalize_or_zero();
+    [n.x, n.y, n.z]
+}
+
 /// Build a (rows × cols) grid of vertices spanning `[-extent, +extent]`
 /// in X and Z. UV coordinates run 0→1 across the grid in row-major order.
 /// Heights come from `height_fn(row, col)` so the spike can plug in a
@@ -21,6 +44,11 @@ where
     let mut verts = Vec::with_capacity(rows * cols);
     let inv_rows = 1.0 / (rows.max(2) - 1) as f32;
     let inv_cols = 1.0 / (cols.max(2) - 1) as f32;
+    // Per-cell world spacing in the X and Z axes — needed by the
+    // normal calculation so the derivative magnitudes are in scene
+    // units, not cell counts.
+    let dx = 2.0 * extent / (cols.max(2) - 1) as f32;
+    let dz = 2.0 * extent / (rows.max(2) - 1) as f32;
     for r in 0..rows {
         for c in 0..cols {
             let u = c as f32 * inv_cols;
@@ -28,9 +56,11 @@ where
             let x = (u * 2.0 - 1.0) * extent;
             let z = (v * 2.0 - 1.0) * extent;
             let y = height_fn(r, c);
+            let normal = normal_at(rows, cols, r, c, dx, dz, &height_fn);
             verts.push(Vertex {
                 position: [x, y, z],
                 uv: [u, v],
+                normal,
             });
         }
     }
@@ -90,6 +120,24 @@ pub fn from_dem(dem: &Raster<f64>, vertical_exaggeration: f32) -> (Vec<Vertex>, 
 
     let inv_rows = 1.0 / (rows.max(2) - 1) as f32;
     let inv_cols = 1.0 / (cols.max(2) - 1) as f32;
+    // Per-cell world spacing for the normal calculation. The mesh
+    // extent in X / Z is fixed by the longer DEM side = 2 scene units
+    // (see extent_x, extent_z above).
+    let dx = 2.0 * extent_x / (cols.max(2) - 1) as f32;
+    let dz = 2.0 * extent_z / (rows.max(2) - 1) as f32;
+
+    // Closure that produces a sampled height in the same coordinates
+    // the normal calculation expects — i.e. already multiplied by the
+    // baseline `vertical_exaggeration` so the slope is in scene units.
+    let height_at = |r: usize, c: usize| -> f32 {
+        let raw = dem.get(r, c).unwrap_or(z_min);
+        let n = if raw.is_finite() {
+            ((raw - z_min) / range).clamp(0.0, 1.0) as f32
+        } else {
+            0.0
+        };
+        n * vertical_exaggeration
+    };
 
     let mut verts = Vec::with_capacity(rows * cols);
     for r in 0..rows {
@@ -98,15 +146,12 @@ pub fn from_dem(dem: &Raster<f64>, vertical_exaggeration: f32) -> (Vec<Vertex>, 
             let v = r as f32 * inv_rows;
             let x = (u * 2.0 - 1.0) * extent_x;
             let z = (v * 2.0 - 1.0) * extent_z;
-            let raw = dem.get(r, c).unwrap_or(z_min);
-            let normalised = if raw.is_finite() {
-                ((raw - z_min) / range).clamp(0.0, 1.0) as f32
-            } else {
-                0.0
-            };
+            let y = height_at(r, c);
+            let normal = normal_at(rows, cols, r, c, dx, dz, &height_at);
             verts.push(Vertex {
-                position: [x, normalised * vertical_exaggeration, z],
+                position: [x, y, z],
                 uv: [u, v],
+                normal,
             });
         }
     }
@@ -199,6 +244,42 @@ mod tests {
         assert!((verts[2].position[1] - 1.0).abs() < 1e-6);
         // Top-left is z_min=0 → y=0.0.
         assert!(verts[0].position[1].abs() < 1e-6);
+    }
+
+    #[test]
+    fn flat_dem_normals_point_up() {
+        let mut dem = Raster::<f64>::new(8, 8);
+        for r in 0..8 {
+            for c in 0..8 {
+                dem.set(r, c, 100.0).unwrap();
+            }
+        }
+        let (verts, _) = from_dem(&dem, 0.5);
+        for v in &verts {
+            assert!((v.normal[0]).abs() < 1e-6);
+            assert!((v.normal[1] - 1.0).abs() < 1e-6);
+            assert!((v.normal[2]).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn ramp_dem_normal_x_is_negative() {
+        // Heights increase along +X (columns), so the surface tilts up
+        // toward +X. The outward-facing normal must lean toward -X.
+        let mut dem = Raster::<f64>::new(8, 8);
+        for r in 0..8 {
+            for c in 0..8 {
+                dem.set(r, c, c as f64 * 100.0).unwrap();
+            }
+        }
+        let (verts, _) = from_dem(&dem, 0.5);
+        let mid = verts[8 * 4 + 4]; // interior cell
+        assert!(
+            mid.normal[0] < -1e-3,
+            "normal.x should be < 0, got {}",
+            mid.normal[0]
+        );
+        assert!(mid.normal[1] > 0.5, "normal.y should be up-leaning");
     }
 
     #[test]

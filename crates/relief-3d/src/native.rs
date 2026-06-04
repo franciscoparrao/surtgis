@@ -14,15 +14,38 @@ use std::time::Instant;
 use bytemuck::cast_slice;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 use crate::camera::OrbitCamera;
 use crate::pipeline::{
     ReliefPipeline, build_pipeline, make_checker_texture, make_depth, upload_rgba_texture,
 };
-use crate::{ReliefError, Result, Uniforms, Vertex};
+use crate::{ReliefError, Result, Uniforms, Vertex, sun_dir};
+
+/// Mutable lighting/displacement state owned by the viewer. Read at
+/// every frame to build the per-frame `Uniforms`.
+pub struct LightingState {
+    pub sun_azimuth_deg: f32,
+    pub sun_altitude_deg: f32,
+    pub ambient: f32,
+    pub light_rgb: [f32; 3],
+    pub vertical_scale: f32,
+}
+
+impl Default for LightingState {
+    fn default() -> Self {
+        Self {
+            sun_azimuth_deg: 315.0,
+            sun_altitude_deg: 45.0,
+            ambient: 0.4,
+            light_rgb: [1.0, 1.0, 1.0],
+            vertical_scale: 1.0,
+        }
+    }
+}
 
 /// Texture source for the viewer. M1 ships a procedural checker; M2's
 /// `render_dem` example wraps a `surtgis-relief` RGBA buffer.
@@ -121,6 +144,7 @@ struct RenderState {
     camera: OrbitCamera,
     mode: CameraMode,
     auto_angle: f32,
+    lighting: LightingState,
 }
 
 impl ApplicationHandler for App {
@@ -189,6 +213,15 @@ impl ApplicationHandler for App {
                 }
                 self.mouse.last_pos = Some(pos);
             }
+            WindowEvent::KeyboardInput {
+                event:
+                    KeyEvent {
+                        physical_key: PhysicalKey::Code(key),
+                        state: ElementState::Pressed,
+                        ..
+                    },
+                ..
+            } => handle_key(key, state),
             WindowEvent::MouseWheel { delta, .. } => {
                 let scroll = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y,
@@ -304,12 +337,59 @@ async fn setup(
         camera,
         mode,
         auto_angle: 0.0,
+        lighting: LightingState::default(),
     })
 }
 
+fn handle_key(key: KeyCode, state: &mut RenderState) {
+    let lighting = &mut state.lighting;
+    match key {
+        // Vertical exaggeration: + / =  and  - / _
+        KeyCode::Equal | KeyCode::NumpadAdd => {
+            lighting.vertical_scale = (lighting.vertical_scale + 0.1).min(5.0);
+        }
+        KeyCode::Minus | KeyCode::NumpadSubtract => {
+            lighting.vertical_scale = (lighting.vertical_scale - 0.1).max(0.1);
+        }
+        // Sun azimuth: [ / ]
+        KeyCode::BracketLeft => {
+            lighting.sun_azimuth_deg = (lighting.sun_azimuth_deg - 10.0).rem_euclid(360.0)
+        }
+        KeyCode::BracketRight => {
+            lighting.sun_azimuth_deg = (lighting.sun_azimuth_deg + 10.0).rem_euclid(360.0)
+        }
+        // Sun altitude: ; / '
+        KeyCode::Semicolon => {
+            lighting.sun_altitude_deg = (lighting.sun_altitude_deg - 5.0).max(5.0)
+        }
+        KeyCode::Quote => lighting.sun_altitude_deg = (lighting.sun_altitude_deg + 5.0).min(89.0),
+        // Ambient up/down: , / .
+        KeyCode::Comma => lighting.ambient = (lighting.ambient - 0.05).max(0.0),
+        KeyCode::Period => lighting.ambient = (lighting.ambient + 0.05).min(1.0),
+        _ => return,
+    }
+    eprintln!(
+        "lighting: zex={:.1} sun=({:.0}°, {:.0}°) ambient={:.2}",
+        lighting.vertical_scale,
+        lighting.sun_azimuth_deg,
+        lighting.sun_altitude_deg,
+        lighting.ambient
+    );
+}
+
 fn render(state: &mut RenderState) {
+    let lighting = &state.lighting;
+    let dir = sun_dir(lighting.sun_azimuth_deg, lighting.sun_altitude_deg);
     let uniforms = Uniforms {
         view_proj: state.camera.view_proj().to_cols_array_2d(),
+        light_dir: [dir.x, dir.y, dir.z, 0.0],
+        light_color: [
+            lighting.light_rgb[0],
+            lighting.light_rgb[1],
+            lighting.light_rgb[2],
+            lighting.ambient,
+        ],
+        vertical_scale: [lighting.vertical_scale, 0.0, 0.0, 0.0],
     };
     state
         .pipeline
