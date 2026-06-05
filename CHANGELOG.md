@@ -9,6 +9,142 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-06-05
+
+Polish release bringing `surtgis-relief` / `surtgis-relief-3d` to a
+"rayshader peer" on every axis except path-tracing and LOD adaptativo.
+Closes M1, M2, M3 of `SPEC_SURTGIS_RELIEF_P3.md`; M4 (R wrapper) was
+skipped mid-sprint with a documented post-mortem in spec §6.
+
+This release jumps from 0.11.0 over 0.12.0. P2 (the `surtgis-relief-3d`
+crate — native wgpu viewer + WebGL2 browser viewer + headless CLI
+screenshot) shipped on `main` between the two but was never tagged.
+Both P2 and P3 changes are included below.
+
+### Added — `surtgis-relief-3d` (P2, retroactively v0.12.0)
+
+- New workspace crate `crates/relief-3d` exposing a single wgpu
+  pipeline (mesh + textured fragment + Lambertian per-fragment light)
+  reachable from three frontends with one cfg-split layer:
+  - **Native** — winit window via `run_viewer(vertices, indices,
+    rgba_pixels, width, height, label)`. Mouse-drag rotate,
+    right-drag pan, wheel zoom. Keyboard controls for sun azimuth /
+    altitude, vertical exaggeration, and ambient term.
+  - **Browser** — `run_relief3d_canvas(canvas_id, tiff_bytes,
+    colormap, sun_az, sun_alt, shadows, ambient, vertical_exag)`
+    `#[wasm_bindgen]` entry point. WebGL2 only (WebGPU is too
+    unreliable on Firefox today). 2.6 MB WASM bundle. Demo page at
+    `surtgis-demo/relief3d-wgpu.html`. Returns a `ReliefHandle` so
+    JS sliders can retune the sun and exaggeration without
+    re-running the 2D composite.
+  - **Headless** — `surtgis relief-3d DEM.tif --output PNG` (CLI
+    feature `relief-3d`) renders a 1920×1080 PNG without opening a
+    window. Same wgpu pipeline; the surface target is a
+    `wgpu::Texture` instead of a `Surface`. Output is copied through
+    a row-aligned staging buffer and channel-swapped if the format
+    requires it.
+
+- Mesh primitives in `crates/relief-3d/src/mesh.rs`:
+  - `from_dem(dem, vertical_exaggeration)` — grid mesh with normals
+    computed from neighbour heights via central differences (one-
+    sided at borders). Up-facing `(-dh/dx, 1, -dh/dz)` convention.
+    NaN cells map to flat (zero height + up-pointing normal).
+  - `grid_mesh(rows, cols, extent, height_fn)` + the M1-spike
+    `cosine_test_heights` so the 1 M-vertex perf validation can run
+    without a real DEM.
+
+- Orbit camera with mouse-driven control in
+  `crates/relief-3d/src/camera.rs`.
+
+- Acceptance: 1024×1024 grid (1,048,576 vertices) renders at vsync-
+  capped 60 FPS in the native spike. `dem_filled.tif` (570×637,
+  363090 vertices) renders at 60 FPS sustained through the full
+  pipeline (sphere shade + ray shade + ambient + texture upload +
+  mesh upload), confirming the architecture scales to production
+  workloads (spec §M1 explicit application of §12.6 lesson from
+  the 2D spec).
+
+### Added — P3 polish (this release)
+
+- **Imhof-style palettes.** Eight new `ColorScheme` variants in
+  `surtgis-colormap::scheme`: `Imhof1` (greens → straw → ochre →
+  snow), `Imhof2` (alpine cool), `Imhof3` (desert-leaning), `Imhof4`
+  (twilight purples), `Bw1` (smooth grayscale), `Bw2` (high-contrast
+  grayscale with sharp mid-ridge), `DesertDry`, `Pastel`. All
+  curated against `dem_filled.tif`; not bit-equivalent to rayshader's
+  imhof1..4 (rayshader does not publish source values). `ALL` grows
+  from 8 to 16; CLI parsers and WASM string parsers accept the new
+  names (`imhof1`..`imhof4`, `bw1`, `bw2`, `desert`, `pastel`).
+
+- **Atmospheric haze in the 3D shader.** Vertex shader passes a
+  `linear_depth` varying (clip-space `w` under standard
+  perspective). Fragment shader applies
+  `mix(shaded, fog_color, density * smoothstep(near, far, depth))`.
+  `Uniforms` grew to 144 B (added `fog_color: vec4` and
+  `fog_range: vec4`). Density defaults to 0 so the output is bit-
+  equivalent to pre-P3 unless turned on. New CLI flag
+  `--haze <0..1>`. Native viewer keys: `H` toggles, `F`/`G`
+  fine-tune. WASM gains `ReliefHandle.set_haze(density)`.
+
+- **Water depth shading.**
+  `surtgis-relief::water_depth(mask: &Raster<u8>) -> Raster<f32>` —
+  8-connected Chebyshev distance transform via multi-source BFS,
+  O(N), with the implicit off-grid border seeded as land so lakes
+  touching the raster edge read depth 1 at the edge instead of
+  measuring against the opposite shore. New
+  `ReliefBuilder.add_water_depth(mask, scheme)` samples the scheme
+  at `t = depth / max_depth`. Shore → light end (t ≈ 0); centre →
+  dark end (t = 1). With `ColorScheme::Water` (white → cyan →
+  navy), a synthetic 200 × 200 lake renders centre `(8, 48, 107)`,
+  shore `(204, 235, 252)` — continuous gradient. The CLI
+  `surtgis relief --water` now uses depth shading by default; the
+  old binary `add_water` stays in the public API.
+
+- **Native viewer UX polish.**
+  - Camera damping with `τ = 80 ms` exponential smoothing. Mouse
+    handlers still write to `camera`; `camera_smooth` lerps each
+    frame with `factor = 1 - exp(-dt/τ)`. Azimuth wraps through the
+    short arc so 5°→355° does not animate the long way around.
+  - `?` (slash) prints a formatted keybindings table to stderr.
+    Visual on-window overlay deferred behind a font dep.
+  - `S` saves a timestamped PNG to cwd
+    (`relief3d-<unix_secs>.png`). Surface usage gains COPY_SRC; the
+    just-rendered frame is copied via `copy_texture_to_buffer` into
+    a staging buffer before submit/present, then mapped, row-
+    padding-stripped, and channel-swapped if the surface format is
+    BGRA before going through `surtgis_colormap::rgba_to_png_bytes`.
+
+### Skipped — P3 deliberate omissions
+
+- **M3.4 GLB export.** `gltf` crate is ~50 KLOC of dep weight for a
+  feature only a handful of users would touch. Deferred.
+- **M4 R wrapper (`surtgisr`).** Skipped mid-sprint, see
+  `SPEC_SURTGIS_RELIEF_P3.md` §6 for the ROI post-mortem. Short
+  version: R users we'd capture already have rayshader working,
+  and where we differentiate (browser, headless CI, Python) does
+  not overlap with R.
+- **Path-tracing (P3 non-goal).** Stays out. Use rayshader for
+  photorealistic figures.
+- **LOD adaptativo for DEMs ≥ 2K side.** P4 sprint candidate, not
+  P3.
+
+### Changed
+
+- Workspace version bumped 0.11.0 → 0.13.0 (jumps 0.12.0).
+- Inter-crate dependency declarations swept from
+  `version = "0.11"` to `version = "0.13"` across `surtgis-core`,
+  `surtgis-algorithms`, `surtgis-parallel`, `surtgis-cloud`,
+  `surtgis-colormap`, `surtgis-relief`, `surtgis-relief-3d`.
+- `surtgis-cli` gains a new `relief-3d` feature gate. `surtgis`
+  CLI binary built without that feature lacks the `relief-3d`
+  subcommand but is otherwise unchanged.
+- `crates/relief-3d/src/shadow_ray.rs` and friends gain a cfg-split
+  `map_rows()` helper so the WASM target builds without rayon
+  (mirrors the `maybe_rayon` pattern from `surtgis-algorithms`).
+- `crates/colormap/src/scheme.rs` depth-changed
+  `wgpu::TextureFormat::Depth32Float` → `Depth24Plus` in the 3D
+  pipeline to match the WebGL2 baseline.
+
 ## [0.11.0] - 2026-06-04
 
 Minor release introducing **`surtgis-relief`** — a rayshader-style 2D
