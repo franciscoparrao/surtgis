@@ -16,6 +16,7 @@ crate-type = ["cdylib", "rlib"]
 surtgis-core      = { version = "0.11", path = "../core", default-features = false }
 surtgis-algorithms = { version = "0.11", path = "../algorithms", default-features = false }
 surtgis-relief    = { version = "0.11", path = "../relief", default-features = false }
+surtgis-colormap  = { version = "0.11", path = "../colormap", default-features = false }
 # wgpu webgl feature: WebGPU is preferred on browsers that have it
 # (Chrome stable, Edge); WebGL2 covers Firefox + Safari for now.
 wgpu              = { version = "23", features = ["webgl"] }

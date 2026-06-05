@@ -5772,6 +5772,7 @@ dependencies = [
  "glam",
  "pollster",
  "surtgis-algorithms",
+ "surtgis-colormap",
  "surtgis-core",
  "surtgis-relief",
  "thiserror 2.0.18",
