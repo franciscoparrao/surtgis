@@ -114,8 +114,8 @@ impl<'a> ReliefBuilder<'a> {
     /// and leaving `0` cells transparent.
     ///
     /// The colour is sampled from the scheme at `t = 0.5` so it doesn't
-    /// depend on any data range. For deep ocean / shallow lakes
-    /// distinctions, use [`Self::add_rgba_over`] with a hand-built layer.
+    /// depend on any data range. For shore-to-centre depth gradients
+    /// use [`Self::add_water_depth`] instead.
     pub fn add_water(self, mask: Raster<u8>, scheme: ColorScheme) -> Self {
         let (rows, cols) = mask.shape();
         let colour = evaluate(scheme, 0.5);
@@ -132,6 +132,59 @@ impl<'a> ReliefBuilder<'a> {
         }
         let image = RgbaImage::from_rgba(cols, rows, pixels)
             .expect("water mask sized rows*cols*4 by construction");
+        self.add_rgba_over(image, 1.0)
+    }
+
+    /// Alpha-over a water mask with a shore-to-centre depth gradient.
+    /// Each water cell's colour is sampled from `scheme` at
+    /// `t = depth / max_depth`, where depth is the cell's 8-connected
+    /// Chebyshev distance to the nearest non-water neighbour (computed
+    /// internally via [`crate::water_depth`]). Shore cells → light end
+    /// of the scheme; deep centres → dark end.
+    ///
+    /// Use [`ColorScheme::Water`] (white → cyan → navy) for the
+    /// rayshader-style read. If `max_depth` resolves to 0 (no water in
+    /// the mask), the layer is fully transparent.
+    pub fn add_water_depth(self, mask: Raster<u8>, scheme: ColorScheme) -> Self {
+        let (rows, cols) = mask.shape();
+        let depth = match crate::water_depth(&mask) {
+            Ok(d) => d,
+            Err(_) => {
+                // Empty mask — emit a fully transparent layer so the
+                // builder API stays infallible and the caller can chain.
+                return self.add_rgba_over(
+                    RgbaImage::from_rgba(cols, rows, vec![0u8; rows * cols * 4])
+                        .expect("empty water mask sized rows*cols*4"),
+                    1.0,
+                );
+            }
+        };
+        let max_depth = depth
+            .data()
+            .iter()
+            .fold(0f32, |acc, &v| if v > acc { v } else { acc });
+        let inv_max = if max_depth > 0.0 {
+            1.0 / max_depth
+        } else {
+            0.0
+        };
+
+        let mut pixels = vec![0u8; rows * cols * 4];
+        for (i, &d) in depth.data().iter().enumerate() {
+            if d <= 0.0 {
+                continue;
+            }
+            // Shore (d=1) → t small (light); centre (d=max) → t=1 (dark).
+            let t = (d * inv_max).clamp(0.0, 1.0) as f64;
+            let colour = evaluate(scheme, t);
+            let off = i * 4;
+            pixels[off] = colour.r;
+            pixels[off + 1] = colour.g;
+            pixels[off + 2] = colour.b;
+            pixels[off + 3] = 255;
+        }
+        let image = RgbaImage::from_rgba(cols, rows, pixels)
+            .expect("water depth mask sized rows*cols*4 by construction");
         self.add_rgba_over(image, 1.0)
     }
 

@@ -80,7 +80,10 @@ pub fn handle(
 
     if water {
         let mask = detect_water(&dem, &WaterParams::default()).context("detect_water failed")?;
-        builder = builder.add_water(mask, ColorScheme::Water);
+        // Use the shore-to-centre depth gradient (P3-M2) so large lakes
+        // don't flatten to a single blue. `ColorScheme::Water` (white
+        // → cyan → navy) is the right read here.
+        builder = builder.add_water_depth(mask, ColorScheme::Water);
     }
 
     let img = builder.render().context("composite render failed")?;
