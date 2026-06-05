@@ -17,9 +17,9 @@ default = ["parallel"]
 parallel = ["surtgis-algorithms/parallel"]
 
 [dependencies]
-surtgis-core = { version = "0.11", path = "../core", default-features = false }
-surtgis-algorithms = { version = "0.11", path = "../algorithms", default-features = false }
-surtgis-relief = { version = "0.11", path = "../relief" }
-surtgis-colormap = { version = "0.11", path = "../colormap" }
+surtgis-core = { version = "0.13", path = "../core", default-features = false }
+surtgis-algorithms = { version = "0.13", path = "../algorithms", default-features = false }
+surtgis-relief = { version = "0.13", path = "../relief" }
+surtgis-colormap = { version = "0.13", path = "../colormap" }
 pyo3.workspace = true
 numpy.workspace = true
