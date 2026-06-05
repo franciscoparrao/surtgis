@@ -1,12 +1,14 @@
 //! Ambient occlusion as an intensity layer.
 //!
-//! Thin wrapper over [`surtgis_algorithms::terrain::sky_view_factor`]. The
+//! Thin wrapper over [`surtgis_algorithms::terrain::sky_view_factor_fast`]
+//! (the hot-loop-optimised SVF — ~5.6× the reference implementation on
+//! production DEMs, bit-equivalent within f64 rounding). The
 //! SVF output is already in `[0, 1]` (1 = open sky, 0 = fully enclosed), so
 //! this function just re-shapes it into the relief crate's error / result
 //! conventions. We deliberately do **not** invert: a brighter ambient layer
 //! means *more* sky exposure, which is what most rayshader recipes assume.
 
-use surtgis_algorithms::terrain::{SvfParams, sky_view_factor};
+use surtgis_algorithms::terrain::{SvfParams, sky_view_factor_fast};
 use surtgis_core::raster::Raster;
 
 use crate::{ReliefError, Result};
@@ -26,7 +28,7 @@ pub fn ambient_shade(dem: &Raster<f64>, radius: usize) -> Result<Raster<f64>> {
         radius,
         ..Default::default()
     };
-    sky_view_factor(dem, params).map_err(ReliefError::from)
+    sky_view_factor_fast(dem, params).map_err(ReliefError::from)
 }
 
 #[cfg(test)]

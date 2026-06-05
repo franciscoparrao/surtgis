@@ -9,6 +9,48 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-06-05
+
+Patch release with a single, focused perf improvement: **5.66× faster
+sky-view factor**, which propagates to ~5× faster `ambient_shade` in
+the relief composite pipeline. Bit-equivalent to within f64 rounding
+(max delta 2.9e-15 over 363090 cells on `dem_filled.tif`); no
+behavioural change for downstream callers.
+
+### Added
+
+- `surtgis_algorithms::terrain::sky_view_factor_fast(dem, params)` — a
+  hot-loop-optimised SVF that keeps the same `SvfParams`, output
+  format, and NaN semantics as `sky_view_factor`. Three optimisations:
+  - **Pre-computed integer step offsets** per direction. The Bresenham-
+    style `.round()` that the reference implementation runs every
+    iteration is hoisted out once per direction × step; the inner
+    march becomes pure integer index arithmetic, which lets the
+    autovectorisator keep up.
+  - **`inv_dist[k]` table** for `1 / (k * cell_size)` — replaces a
+    division in the hot loop with one multiplication, shared across
+    every cell × direction.
+  - **`sin²(atan(t)) = t² / (1 + t²)`** algebraic identity at the
+    direction summary — skips one `atan` and one `sin` per
+    direction per cell (5.8 M trig calls saved on `dem_filled.tif`
+    with 16 directions).
+
+  Four new unit tests cover endpoint behaviour, pit-vs-open
+  ordering, bit-equivalence against the reference SVF on a synthetic
+  bumpy DEM, and zero-radius / zero-directions rejection.
+
+- `crates/algorithms/examples/bench_svf.rs` — head-to-head benchmark
+  used to validate the ≥3× acceptance bar before committing the swap.
+
+### Changed
+
+- `surtgis_relief::ambient_shade` now calls `sky_view_factor_fast`.
+  No public API change. Pipeline benchmark
+  (`crates/relief/examples/render_relief.rs` on `dem_filled.tif`,
+  radius=30):
+  - `ambient_shade`: 6.36 s → 1.12 s (**5.7×**)
+  - relief composite total: 6.6 s → 1.35 s (**4.9×**)
+
 ## [0.13.0] - 2026-06-05
 
 Polish release bringing `surtgis-relief` / `surtgis-relief-3d` to a
