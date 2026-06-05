@@ -76,12 +76,14 @@ impl Vertex {
     };
 }
 
-/// Per-frame uniforms — 112 bytes, every field a vec4 slot to keep the
+/// Per-frame uniforms — 144 bytes, every field a vec4 slot to keep the
 /// std140-equivalent layout obvious on both sides of the FFI:
 ///   view_proj            : mat4x4<f32>   (offset   0,  64 B)
 ///   light_dir.xyz        : vec3 in vec4  (offset  64,  16 B)  // direction TOWARDS light
 ///   light_color.xyz / .w : colour + amb. (offset  80,  16 B)
 ///   vertical_scale.x     : f32 in vec4   (offset  96,  16 B)
+///   fog_color.xyz / .w   : colour + density [0,1] (offset 112, 16 B)
+///   fog_range.x / .y     : near / far stops (offset 128, 16 B)
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Uniforms {
@@ -89,12 +91,15 @@ pub struct Uniforms {
     pub light_dir: [f32; 4],
     pub light_color: [f32; 4],
     pub vertical_scale: [f32; 4],
+    pub fog_color: [f32; 4],
+    pub fog_range: [f32; 4],
 }
 
 impl Uniforms {
     /// Identity / neutral defaults. Light at azimuth 315°, altitude 45°
     /// (matching the rayshader recipe so the 3D light direction lines up
-    /// with whatever was baked into the 2D texture).
+    /// with whatever was baked into the 2D texture). Fog density is 0
+    /// so the M3 output is bit-equivalent to pre-P3 by default.
     pub fn identity() -> Self {
         let dir = sun_dir(315.0, 45.0);
         Self {
@@ -102,6 +107,14 @@ impl Uniforms {
             light_dir: [dir.x, dir.y, dir.z, 0.0],
             light_color: [1.0, 1.0, 1.0, 0.4], // .w = ambient
             vertical_scale: [1.0, 0.0, 0.0, 0.0],
+            // Neutral fog: light grey-blue colour that reads as sky,
+            // density 0 so it does not affect the output unless the
+            // viewer / CLI sets it. fog_range is in world-space units
+            // — the mesh is normalised to longer-side = 2, so a
+            // near/far of (1.5, 6.0) gives haze that ramps up from
+            // "near the camera" to "the far horizon".
+            fog_color: [0.78, 0.83, 0.88, 0.0],
+            fog_range: [1.5, 6.0, 0.0, 0.0],
         }
     }
 }

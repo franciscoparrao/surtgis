@@ -219,6 +219,9 @@ pub enum Commands {
         /// Camera distance (scene units; DEM longer side = 2)
         #[arg(long, default_value = "3.2")]
         camera_distance: f32,
+        /// Atmospheric haze density (P3 M1). 0 = off, 0.3-0.6 typical.
+        #[arg(long, default_value = "0.0")]
+        haze: f32,
     },
     /// Clip a raster by polygon or bounding box
     Clip {

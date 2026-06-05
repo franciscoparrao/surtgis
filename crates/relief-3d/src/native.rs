@@ -33,6 +33,15 @@ pub struct LightingState {
     pub ambient: f32,
     pub light_rgb: [f32; 3],
     pub vertical_scale: f32,
+    /// Atmospheric haze density in [0, 1]. 0 disables the effect.
+    pub haze_density: f32,
+    /// Haze colour (defaults to a light sky-grey-blue).
+    pub haze_rgb: [f32; 3],
+    /// Haze near-stop in world units (mesh longer side = 2). Cells
+    /// closer than this stay fully lit.
+    pub haze_near: f32,
+    /// Haze far-stop in world units. Cells beyond this are fully fogged.
+    pub haze_far: f32,
 }
 
 impl Default for LightingState {
@@ -43,6 +52,10 @@ impl Default for LightingState {
             ambient: 0.4,
             light_rgb: [1.0, 1.0, 1.0],
             vertical_scale: 1.0,
+            haze_density: 0.0,
+            haze_rgb: [0.78, 0.83, 0.88],
+            haze_near: 1.5,
+            haze_far: 6.0,
         }
     }
 }
@@ -366,14 +379,25 @@ fn handle_key(key: KeyCode, state: &mut RenderState) {
         // Ambient up/down: , / .
         KeyCode::Comma => lighting.ambient = (lighting.ambient - 0.05).max(0.0),
         KeyCode::Period => lighting.ambient = (lighting.ambient + 0.05).min(1.0),
+        // Haze (P3-M1): H toggles, F decreases density, G increases.
+        KeyCode::KeyH => {
+            lighting.haze_density = if lighting.haze_density > 0.0 {
+                0.0
+            } else {
+                0.55
+            };
+        }
+        KeyCode::KeyF => lighting.haze_density = (lighting.haze_density - 0.05).max(0.0),
+        KeyCode::KeyG => lighting.haze_density = (lighting.haze_density + 0.05).min(1.0),
         _ => return,
     }
     eprintln!(
-        "lighting: zex={:.1} sun=({:.0}°, {:.0}°) ambient={:.2}",
+        "lighting: zex={:.1} sun=({:.0}°, {:.0}°) ambient={:.2} haze={:.2}",
         lighting.vertical_scale,
         lighting.sun_azimuth_deg,
         lighting.sun_altitude_deg,
-        lighting.ambient
+        lighting.ambient,
+        lighting.haze_density
     );
 }
 
@@ -390,6 +414,13 @@ fn render(state: &mut RenderState) {
             lighting.ambient,
         ],
         vertical_scale: [lighting.vertical_scale, 0.0, 0.0, 0.0],
+        fog_color: [
+            lighting.haze_rgb[0],
+            lighting.haze_rgb[1],
+            lighting.haze_rgb[2],
+            lighting.haze_density,
+        ],
+        fog_range: [lighting.haze_near, lighting.haze_far, 0.0, 0.0],
     };
     state
         .pipeline

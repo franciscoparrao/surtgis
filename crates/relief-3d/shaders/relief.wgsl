@@ -1,4 +1,4 @@
-// M3 shader: textured mesh + Lambertian directional light.
+// M3 shader + P3-M1 atmospheric haze.
 //
 // Inputs:
 //   @location(0) position : vec3<f32>   // world-space at baseline zex
@@ -7,28 +7,24 @@
 //
 // Uniforms (group 0, binding 0):
 //   view_proj      : mat4x4<f32>
-//   light_dir      : vec3<f32>  (pad to vec4)        // direction TOWARDS the light
-//   light_color    : vec3<f32>
-//   ambient        : f32
-//   vertical_scale : f32        (pad to vec4)
+//   light_dir      : vec4 (.xyz direction TOWARDS light)
+//   light_color    : vec4 (.xyz colour, .w ambient term)
+//   vertical_scale : vec4 (.x runtime scale)
+//   fog_color      : vec4 (.xyz colour, .w density in [0, 1])
+//   fog_range      : vec4 (.x = fog_near, .y = fog_far, depth-fog params)
 //
-// `light_dir` is interpreted as the direction *from the surface toward
-// the sun*, so the Lambertian term is `dot(n, light_dir)`. The host
-// computes it from sun azimuth + altitude (see `OrbitCamera`-style
-// sun controls) and uploads it normalised.
-//
-// `vertical_scale` re-scales the Y axis of the baked mesh at render
-// time. The normal is re-oriented for the new Y stretch so lighting
-// stays correct without rebuilding the vertex buffer.
+// The fragment shader applies a depth-based haze AFTER lighting:
+// `mix(shaded, fog_color, fog_t)` where `fog_t = density * smoothstep(
+//   fog_near, fog_far, linear_depth)`. Density 0 disables the effect
+// entirely so the M3 output is bit-equivalent to pre-P3.
 
-// Pack everything into vec4 slots so the std140-equivalent layout is
-// unambiguous and the Rust side can declare a matching POD without
-// having to thread `vec3 + f32` packing rules manually.
 struct Uniforms {
   view_proj      : mat4x4<f32>,
-  light_dir      : vec4<f32>,  // .xyz = direction toward light, .w unused
-  light_color    : vec4<f32>,  // .xyz = colour, .w = ambient term
-  vertical_scale : vec4<f32>,  // .x   = scale, .yzw unused
+  light_dir      : vec4<f32>,
+  light_color    : vec4<f32>,
+  vertical_scale : vec4<f32>,
+  fog_color      : vec4<f32>,
+  fog_range      : vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u    : Uniforms;
@@ -36,9 +32,10 @@ struct Uniforms {
 @group(0) @binding(2) var          samp : sampler;
 
 struct VsOut {
-  @builtin(position) clip       : vec4<f32>,
-  @location(0)       uv         : vec2<f32>,
-  @location(1)       normal_ws  : vec3<f32>,
+  @builtin(position) clip         : vec4<f32>,
+  @location(0)       uv           : vec2<f32>,
+  @location(1)       normal_ws    : vec3<f32>,
+  @location(2)       linear_depth : f32,
 };
 
 @vertex
@@ -49,21 +46,26 @@ fn vs_main(
 ) -> VsOut {
   let zex = u.vertical_scale.x;
 
-  // Scale the displacement axis.
   var pos = pos_in;
   pos.y = pos.y * zex;
 
-  // Re-orient the normal: when y stretches by k, the y component of the
-  // normal compresses by 1/k. Then renormalise.
   var n = normal_in;
   let safe_zex = max(abs(zex), 1e-6);
   n.y = n.y / safe_zex;
   n = normalize(n);
 
+  // Negative `w` in clip space is "in front of the camera"; for depth
+  // fog we want a positive scalar that grows with distance, so we
+  // recompute from the clip coordinate.
+  let clip_pos = u.view_proj * vec4<f32>(pos, 1.0);
+
   var out : VsOut;
-  out.clip      = u.view_proj * vec4<f32>(pos, 1.0);
-  out.uv        = uv;
-  out.normal_ws = n;
+  out.clip         = clip_pos;
+  out.uv           = uv;
+  out.normal_ws    = n;
+  // `clip_pos.w` equals -view_z under a standard right-handed
+  // projection — directly the distance from the camera in world units.
+  out.linear_depth = clip_pos.w;
   return out;
 }
 
@@ -73,13 +75,20 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
   let n = normalize(in.normal_ws);
   let l = normalize(u.light_dir.xyz);
 
-  // Lambertian + ambient. Clamp dot to [0, 1] so back-faces don't
-  // contribute negative light; the ambient term keeps shadowed faces
-  // from going pure black even when the texture already bakes the
-  // 2D shadows.
   let lambert = max(dot(n, l), 0.0);
   let ambient = u.light_color.w;
   let lit = ambient + (1.0 - ambient) * lambert;
-  let shaded = base.rgb * (lit * u.light_color.xyz);
+  var shaded = base.rgb * (lit * u.light_color.xyz);
+
+  // Atmospheric haze. fog_color.w is density in [0, 1] — when 0, the
+  // mix is the identity. fog_range.x / .y are the linear-depth near
+  // and far stops. smoothstep instead of linear so the transition
+  // does not have a hard near-edge.
+  let density  = u.fog_color.w;
+  let fog_near = u.fog_range.x;
+  let fog_far  = max(u.fog_range.y, fog_near + 1e-3);
+  let fog_t    = density * smoothstep(fog_near, fog_far, in.linear_depth);
+  shaded       = mix(shaded, u.fog_color.xyz, fog_t);
+
   return vec4<f32>(shaded, base.a);
 }

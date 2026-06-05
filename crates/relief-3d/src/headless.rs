@@ -34,6 +34,10 @@ pub struct HeadlessConfig {
     pub camera_polar_deg: f32,
     pub camera_distance: f32,
     pub fov_deg: f32,
+    /// Atmospheric haze density in [0, 1]. 0 = off (default).
+    pub haze_density: f32,
+    /// Haze colour (default light sky-grey-blue).
+    pub haze_rgb: [f32; 3],
 }
 
 impl Default for HeadlessConfig {
@@ -50,6 +54,8 @@ impl Default for HeadlessConfig {
             camera_polar_deg: 60.0,
             camera_distance: 3.2,
             fov_deg: 45.0,
+            haze_density: 0.0,
+            haze_rgb: [0.78, 0.83, 0.88],
         }
     }
 }
@@ -162,6 +168,13 @@ async fn render_offscreen(
         light_dir: [dir.x, dir.y, dir.z, 0.0],
         light_color: [1.0, 1.0, 1.0, cfg.ambient],
         vertical_scale: [cfg.vertical_scale, 0.0, 0.0, 0.0],
+        fog_color: [
+            cfg.haze_rgb[0],
+            cfg.haze_rgb[1],
+            cfg.haze_rgb[2],
+            cfg.haze_density,
+        ],
+        fog_range: [1.5, 6.0, 0.0, 0.0],
     };
     pipeline
         .queue
