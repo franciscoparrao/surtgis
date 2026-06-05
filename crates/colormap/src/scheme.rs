@@ -54,6 +54,37 @@ pub enum ColorScheme {
     Water,
     /// Yellow -> Orange -> Red -> Purple (flow accumulation)
     Accumulation,
+
+    // ── Imhof-style shaded relief palettes (P3) ──
+    //
+    // Eduard Imhof's "Cartographic Relief Presentation" (1965) is the
+    // de-facto reference for shaded-relief colour conventions: green
+    // valleys, straw mid-slopes, ochre upper slopes, snow ridges. The
+    // four variants below are not bit-equivalent to rayshader's
+    // imhof1..imhof4 (rayshader does not publish source stops), but
+    // they follow the same intent and produce a comparable read for
+    // landscape figures.
+    /// Green valleys -> straw -> ochre -> snow ridges. The default
+    /// rayshader-style choice for mountain DEMs.
+    Imhof1,
+    /// Cooler variant — alpine greens, grey-blues at mid, snow tops.
+    Imhof2,
+    /// Desert-leaning variant — olive valleys, tan slopes, red rock,
+    /// bone-white tops.
+    Imhof3,
+    /// Twilight variant — deep teal valleys, mauve mid, soft blush
+    /// at the top. For artistic figures (talks, posters).
+    Imhof4,
+    /// Smooth black -> white grayscale, mid contrast biased so most of
+    /// the action lives in the [0.3, 0.7] band.
+    Bw1,
+    /// Higher-contrast grayscale with a sharp light mid-ridge — gives
+    /// pen-and-ink-style results when paired with strong shadows.
+    Bw2,
+    /// Dry desert: sand -> tan -> red rock -> bone white.
+    DesertDry,
+    /// Pastel rainbow (gentle saturation) for non-technical figures.
+    Pastel,
 }
 
 impl ColorScheme {
@@ -67,6 +98,14 @@ impl ColorScheme {
         Self::Geomorphons,
         Self::Water,
         Self::Accumulation,
+        Self::Imhof1,
+        Self::Imhof2,
+        Self::Imhof3,
+        Self::Imhof4,
+        Self::Bw1,
+        Self::Bw2,
+        Self::DesertDry,
+        Self::Pastel,
     ];
 
     /// Human-readable name.
@@ -80,6 +119,14 @@ impl ColorScheme {
             Self::Geomorphons => "Geomorphons",
             Self::Water => "Water",
             Self::Accumulation => "Accumulation",
+            Self::Imhof1 => "Imhof 1 (classic)",
+            Self::Imhof2 => "Imhof 2 (alpine)",
+            Self::Imhof3 => "Imhof 3 (desert)",
+            Self::Imhof4 => "Imhof 4 (twilight)",
+            Self::Bw1 => "Grayscale (smooth)",
+            Self::Bw2 => "Grayscale (high contrast)",
+            Self::DesertDry => "Desert dry",
+            Self::Pastel => "Pastel rainbow",
         }
     }
 }
@@ -132,6 +179,84 @@ const ACCUMULATION_STOPS: &[ColorStop] = &[
     ColorStop::new(0.50, 254, 153, 41),
     ColorStop::new(0.75, 204, 76, 2),
     ColorStop::new(1.00, 102, 37, 6),
+];
+
+// ── Imhof-style shaded-relief palettes ──
+//
+// Stops follow Eduard Imhof's "Cartographic Relief Presentation" (1965)
+// conventions: cool greens at valleys, warm earth tones at mid-slope,
+// snow-pale at ridges. Each palette was tuned visually against
+// `dem_filled.tif` rather than copied bit-for-bit from rayshader (which
+// does not publish source values). Hex colours documented inline so
+// future taste arguments can audit the curation.
+
+const IMHOF1_STOPS: &[ColorStop] = &[
+    ColorStop::new(0.00, 88, 122, 88),   // #587a58 dark valley green
+    ColorStop::new(0.20, 142, 165, 110), // #8ea56e meadow green
+    ColorStop::new(0.45, 196, 178, 119), // #c4b277 straw mid-slope
+    ColorStop::new(0.70, 168, 130, 94),  // #a8825e ochre upper
+    ColorStop::new(0.90, 217, 200, 178), // #d9c8b2 warm grey near peak
+    ColorStop::new(1.00, 252, 248, 240), // #fcf8f0 snow ridge
+];
+
+const IMHOF2_STOPS: &[ColorStop] = &[
+    ColorStop::new(0.00, 79, 109, 102),  // #4f6d66 spruce
+    ColorStop::new(0.20, 116, 144, 132), // #749084 alpine green
+    ColorStop::new(0.45, 154, 158, 153), // #9a9e99 cool stone
+    ColorStop::new(0.70, 178, 169, 161), // #b2a9a1 grey-tan
+    ColorStop::new(0.90, 224, 216, 213), // #e0d8d5 mineral white
+    ColorStop::new(1.00, 250, 250, 252), // #fafafc snow
+];
+
+const IMHOF3_STOPS: &[ColorStop] = &[
+    ColorStop::new(0.00, 108, 121, 78),  // #6c794e olive valley
+    ColorStop::new(0.25, 173, 156, 96),  // #ad9c60 tan
+    ColorStop::new(0.50, 192, 137, 84),  // #c08954 dry red ochre
+    ColorStop::new(0.75, 158, 96, 64),   // #9e6040 red rock
+    ColorStop::new(0.92, 220, 198, 168), // #dcc6a8 bone
+    ColorStop::new(1.00, 248, 240, 230), // #f8f0e6 bone white
+];
+
+const IMHOF4_STOPS: &[ColorStop] = &[
+    ColorStop::new(0.00, 60, 72, 80),    // #3c4850 deep teal
+    ColorStop::new(0.30, 110, 100, 130), // #6e6482 mauve
+    ColorStop::new(0.55, 174, 142, 162), // #ae8ea2 dusty pink
+    ColorStop::new(0.80, 222, 196, 196), // #dec4c4 soft blush
+    ColorStop::new(1.00, 250, 240, 235), // #faf0eb cream highlight
+];
+
+const BW1_STOPS: &[ColorStop] = &[
+    // Compressed contrast so most of the action happens between 0.3 and
+    // 0.7 — gives a softer, more "etching"-like read than a linear
+    // black-to-white ramp.
+    ColorStop::new(0.00, 28, 28, 28),    // #1c1c1c
+    ColorStop::new(0.30, 90, 90, 90),    // #5a5a5a
+    ColorStop::new(0.50, 150, 150, 150), // #969696
+    ColorStop::new(0.70, 210, 210, 210), // #d2d2d2
+    ColorStop::new(1.00, 252, 252, 252), // #fcfcfc
+];
+
+const BW2_STOPS: &[ColorStop] = &[
+    ColorStop::new(0.00, 10, 10, 10),    // near black valley
+    ColorStop::new(0.45, 80, 80, 80),    // dark grey
+    ColorStop::new(0.55, 230, 230, 230), // sharp light ridge
+    ColorStop::new(1.00, 255, 255, 255),
+];
+
+const DESERT_DRY_STOPS: &[ColorStop] = &[
+    ColorStop::new(0.00, 196, 174, 124), // #c4ae7c sand
+    ColorStop::new(0.30, 212, 174, 116), // #d4ae74 dry tan
+    ColorStop::new(0.55, 188, 118, 80),  // #bc7650 red rock
+    ColorStop::new(0.80, 158, 96, 76),   // #9e604c canyon shadow
+    ColorStop::new(1.00, 240, 232, 220), // #f0e8dc bone white
+];
+
+const PASTEL_STOPS: &[ColorStop] = &[
+    ColorStop::new(0.00, 184, 220, 244), // light blue
+    ColorStop::new(0.25, 192, 232, 200), // mint
+    ColorStop::new(0.50, 244, 232, 184), // butter
+    ColorStop::new(0.75, 244, 196, 184), // peach
+    ColorStop::new(1.00, 232, 200, 232), // lilac
 ];
 
 /// Geomorphons palette: 10 discrete landform classes.
@@ -199,6 +324,14 @@ pub fn evaluate(scheme: ColorScheme, t: f64) -> Rgb {
         }
         ColorScheme::Water => multi_stop(WATER_STOPS, t),
         ColorScheme::Accumulation => multi_stop(ACCUMULATION_STOPS, t),
+        ColorScheme::Imhof1 => multi_stop(IMHOF1_STOPS, t),
+        ColorScheme::Imhof2 => multi_stop(IMHOF2_STOPS, t),
+        ColorScheme::Imhof3 => multi_stop(IMHOF3_STOPS, t),
+        ColorScheme::Imhof4 => multi_stop(IMHOF4_STOPS, t),
+        ColorScheme::Bw1 => multi_stop(BW1_STOPS, t),
+        ColorScheme::Bw2 => multi_stop(BW2_STOPS, t),
+        ColorScheme::DesertDry => multi_stop(DESERT_DRY_STOPS, t),
+        ColorScheme::Pastel => multi_stop(PASTEL_STOPS, t),
     }
 }
 
@@ -252,7 +385,29 @@ mod tests {
 
     #[test]
     fn all_schemes_list() {
-        assert_eq!(ColorScheme::ALL.len(), 8);
+        // 8 original + 8 P3 Imhof-style additions.
+        assert_eq!(ColorScheme::ALL.len(), 16);
+    }
+
+    #[test]
+    fn imhof1_endpoints() {
+        // Valley green at t=0
+        let c = evaluate(ColorScheme::Imhof1, 0.0);
+        assert_eq!(c, Rgb::new(88, 122, 88));
+        // Snow ridge at t=1
+        let c = evaluate(ColorScheme::Imhof1, 1.0);
+        assert_eq!(c, Rgb::new(252, 248, 240));
+    }
+
+    #[test]
+    fn bw2_high_contrast_jumps_at_mid() {
+        // BW2 has a sharp 80→230 transition between t=0.45 and t=0.55.
+        // The 80 colour is anchored at t=0.45 and the 230 colour at
+        // t=0.55, so test just before and just after.
+        let dark = evaluate(ColorScheme::Bw2, 0.44);
+        let light = evaluate(ColorScheme::Bw2, 0.56);
+        assert!(dark.r <= 90, "dark side: r={}", dark.r);
+        assert!(light.r >= 220, "light side: r={}", light.r);
     }
 
     #[test]

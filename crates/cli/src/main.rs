@@ -130,6 +130,7 @@ fn main() -> Result<()> {
             camera_azimuth,
             camera_polar,
             camera_distance,
+            haze,
         } => handlers::relief_3d::handle(
             &input,
             &output,
@@ -145,6 +146,7 @@ fn main() -> Result<()> {
             camera_azimuth,
             camera_polar,
             camera_distance,
+            haze,
         )?,
         Commands::Clip {
             input,

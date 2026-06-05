@@ -80,7 +80,10 @@ pub fn handle(
 
     if water {
         let mask = detect_water(&dem, &WaterParams::default()).context("detect_water failed")?;
-        builder = builder.add_water(mask, ColorScheme::Water);
+        // Use the shore-to-centre depth gradient (P3-M2) so large lakes
+        // don't flatten to a single blue. `ColorScheme::Water` (white
+        // → cyan → navy) is the right read here.
+        builder = builder.add_water_depth(mask, ColorScheme::Water);
     }
 
     let img = builder.render().context("composite render failed")?;
@@ -111,9 +114,17 @@ fn parse_scheme(s: &str) -> Result<ColorScheme> {
         "geomorphons" => ColorScheme::Geomorphons,
         "water" => ColorScheme::Water,
         "accumulation" => ColorScheme::Accumulation,
+        "imhof1" | "imhof" => ColorScheme::Imhof1,
+        "imhof2" => ColorScheme::Imhof2,
+        "imhof3" => ColorScheme::Imhof3,
+        "imhof4" => ColorScheme::Imhof4,
+        "bw1" => ColorScheme::Bw1,
+        "bw2" => ColorScheme::Bw2,
+        "desert-dry" | "desert" => ColorScheme::DesertDry,
+        "pastel" => ColorScheme::Pastel,
         other => {
             return Err(anyhow!(
-                "unknown colormap '{other}'. Valid: terrain, divergent, grayscale, ndvi, bwr, geomorphons, water, accumulation"
+                "unknown colormap '{other}'. Valid: terrain, divergent, grayscale, ndvi, bwr, geomorphons, water, accumulation, imhof1..imhof4, bw1, bw2, desert, pastel"
             ));
         }
     })

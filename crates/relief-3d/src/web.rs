@@ -54,6 +54,7 @@ struct LightingShared {
     sun_altitude_deg: f32,
     ambient: f32,
     vertical_scale: f32,
+    haze_density: f32,
 }
 
 impl Default for LightingShared {
@@ -63,6 +64,7 @@ impl Default for LightingShared {
             sun_altitude_deg: 45.0,
             ambient: 0.4,
             vertical_scale: 1.0,
+            haze_density: 0.0,
         }
     }
 }
@@ -81,6 +83,10 @@ impl ReliefHandle {
 
     pub fn set_ambient(&self, ambient: f32) {
         self.lighting.borrow_mut().ambient = ambient.clamp(0.0, 1.0);
+    }
+
+    pub fn set_haze(&self, density: f32) {
+        self.lighting.borrow_mut().haze_density = density.clamp(0.0, 1.0);
     }
 }
 
@@ -440,6 +446,8 @@ fn render(state: &mut RenderState) {
         light_dir: [dir.x, dir.y, dir.z, 0.0],
         light_color: [1.0, 1.0, 1.0, lighting.ambient],
         vertical_scale: [lighting.vertical_scale, 0.0, 0.0, 0.0],
+        fog_color: [0.78, 0.83, 0.88, lighting.haze_density],
+        fog_range: [1.5, 6.0, 0.0, 0.0],
     };
     drop(lighting);
     state

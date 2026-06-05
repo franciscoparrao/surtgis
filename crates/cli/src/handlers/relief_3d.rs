@@ -32,6 +32,7 @@ pub fn handle(
     camera_azimuth: f32,
     camera_polar: f32,
     camera_distance: f32,
+    haze: f32,
 ) -> Result<()> {
     let scheme = parse_scheme(colormap)?;
 
@@ -93,6 +94,8 @@ pub fn handle(
         camera_polar_deg: camera_polar,
         camera_distance,
         fov_deg: 45.0,
+        haze_density: haze.clamp(0.0, 1.0),
+        haze_rgb: [0.78, 0.83, 0.88],
     };
     let rgba =
         render_to_rgba(&dem, &texture, &cfg).map_err(|e| anyhow!("3D render failed: {e}"))?;
@@ -123,9 +126,17 @@ fn parse_scheme(s: &str) -> Result<ColorScheme> {
         "geomorphons" => ColorScheme::Geomorphons,
         "water" => ColorScheme::Water,
         "accumulation" => ColorScheme::Accumulation,
+        "imhof1" | "imhof" => ColorScheme::Imhof1,
+        "imhof2" => ColorScheme::Imhof2,
+        "imhof3" => ColorScheme::Imhof3,
+        "imhof4" => ColorScheme::Imhof4,
+        "bw1" => ColorScheme::Bw1,
+        "bw2" => ColorScheme::Bw2,
+        "desert-dry" | "desert" => ColorScheme::DesertDry,
+        "pastel" => ColorScheme::Pastel,
         other => {
             return Err(anyhow!(
-                "unknown colormap '{other}'. Valid: terrain, divergent, grayscale, ndvi, bwr, geomorphons, water, accumulation"
+                "unknown colormap '{other}'. Valid: terrain, divergent, grayscale, ndvi, bwr, geomorphons, water, accumulation, imhof1..imhof4, bw1, bw2, desert, pastel"
             ));
         }
     })
