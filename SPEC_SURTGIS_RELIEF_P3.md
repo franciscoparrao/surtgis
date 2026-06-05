@@ -1,6 +1,6 @@
 # SPEC: `surtgis-relief` P3 — polish to rayshader peer
 
-**Status:** Proposed
+**Status:** M1+M2+M3 shipped, M4 skipped (see §6)
 **Target version:** 0.13.0
 **Author of spec:** handoff doc — implements P3 follow-up to P2 (v0.12.0)
 
@@ -232,3 +232,61 @@ average. Grazing light for M1, real water body for M2, "first 60s
 naive user" for M3, "one-line rayshader → surtgis swap" for M4. If a
 sub-task does not have a clear "this is the case it has to handle",
 write one before coding.
+
+---
+
+## 6. M4 skipped — post-mortem
+
+**Decision date:** 2026-06-05, mid-sprint, with M1+M2+M3 shipped
+and tests green.
+
+**What M4 promised:** a `surtgisr` R package shelling out to the
+`surtgis` CLI so that rayshader users could one-line swap to
+`surtgisr::surtgis_relief("dem.tif")` and get back an RGBA array.
+
+**Why it was skipped:**
+
+The honest ROI did not survive a re-read once M3 was done:
+
+1. **The user we'd capture already has rayshader working.** Switching
+   cost is real (re-tuning palettes, rewriting figure scripts). The
+   delta we offer them in 2D is 7× perf — but a figure render is
+   already < 5 s for them. They do not feel the speed gap.
+
+2. **The visual axes where we lose are precisely the axes R users
+   weigh.** Path-tracing and 5+ years of imhof-quality palette
+   tuning are rayshader's signature. Our M1 added 8 imhof-style
+   palettes; they're good but not 5-years-of-tuning good. The R user
+   who comes for the speed will compare our output side-by-side with
+   rayshader and notice the polish gap before noticing the
+   wall-clock gap.
+
+3. **The R user who is *not* on rayshader is probably not in the
+   shaded-relief market at all.** R's strength is statistics, not
+   3D. We were targeting a slice that does not exist.
+
+4. **Where we win — browser, CLI batch, Python, headless CI —
+   reaches users who are not on R to begin with.** The R wrapper
+   could not, by construction, surface our differentiators.
+
+The same ~3 days could be invested in something where users we
+already attract feel the benefit. Candidate follow-ups:
+
+- A Python wrapper similar in spirit (`surtgis-relief-py` via
+  maturin) — much larger Jupyter audience.
+- LOD adaptativo for DEMs ≥ 2K side — closes the remaining
+  algorithmic gap vs rayshader.
+- Atmospheric-scattering polish on M1 haze (Rayleigh+Mie variant).
+
+Recording the skip explicitly so the next reader does not look at
+P3 and assume R-wrapper is a thing that exists. It is not, and the
+reasoning above is why.
+
+**Meta-lesson for the next spec:** "open a new ecosystem" is a
+plausible-sounding milestone that does not survive an ROI check
+unless the new ecosystem's users overlap with the differentiators
+we already shipped. R does not overlap with browser / WASM / Python
+/ headless CI. The §12.6 lesson tells us to check the spec case
+*before* coding; here we checked it *during* coding and pivoted.
+That is one milestone too late — next spec should run the ROI
+check at handoff time.
