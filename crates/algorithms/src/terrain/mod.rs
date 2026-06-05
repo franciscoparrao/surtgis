@@ -147,7 +147,7 @@ pub use rea::{ReaParams, ReaResult, ReaScaleResult, ReaVariable, rea_analysis};
 pub use relative_aspect::{RelativeAspectParams, relative_aspect};
 pub use relative_slope_position::relative_slope_position;
 pub use shape_index::{curvedness, shape_index};
-pub use sky_view_factor::{SvfParams, sky_view_factor};
+pub use sky_view_factor::{SvfParams, sky_view_factor, sky_view_factor_fast};
 pub use slope::{Slope, SlopeParams, SlopeStreaming, SlopeUnits, slope};
 pub use smoothing::{
     FftLowPassParams, GaussianSmoothingParams, IterativeMeanParams, SmoothingParams,
