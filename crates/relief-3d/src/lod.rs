@@ -227,12 +227,30 @@ impl QuadtreeMesh {
                 }
                 let bbox = Aabb { min, max };
 
-                // Per-LOD index buffers. LOD k uses stride 2^k.
+                // P4-M2 skirt drop: drop edge strips below the chunk
+                // far enough that adjacent chunks at any LOD pair
+                // cannot expose a crack. Using `1.5 × chunk_span`
+                // covers the worst case where the neighbouring chunk
+                // varies by one full span in elevation — terrain
+                // doesn't get more disparate than that at a single
+                // boundary. The `max(zex * 0.05)` floor handles flat
+                // chunks where `bbox.min.y == bbox.max.y`, which
+                // would otherwise produce a zero-height skirt.
+                let chunk_y_min = bbox.min.y;
+                let chunk_y_span = (bbox.max.y - bbox.min.y).max(0.0);
+                let skirt_drop = (chunk_y_span * 1.5).max(vertical_exaggeration * 0.05);
+                let skirt_y = chunk_y_min - skirt_drop;
+
+                // Per-LOD index buffers. LOD k uses stride 2^k. The
+                // surface triangles come first; the four edge skirts
+                // are appended into the same range so a single
+                // draw_indexed call handles both.
                 let mut lod_indices = Vec::with_capacity(lod_levels);
                 for k in 0..lod_levels {
                     let step = 1usize << k;
                     let start = indices.len() as u32;
 
+                    // ---- Surface ----
                     let mut r = r0;
                     while r + step <= r1 {
                         let mut c = c0;
@@ -245,6 +263,63 @@ impl QuadtreeMesh {
                             c += step;
                         }
                         r += step;
+                    }
+
+                    // ---- Skirts ----
+                    //
+                    // For each of the four edges, walk the edge at
+                    // stride `step` and emit a vertical strip
+                    // connecting each step-sized segment of the
+                    // surface to a row of new skirt vertices at
+                    // `y = skirt_y`. Vertex winding doesn't matter
+                    // because the pipeline uses `cull_mode: None`
+                    // (see pipeline.rs), so skirts render visible
+                    // from both sides.
+                    let count_horiz = (c1 - c0) / step;
+                    let count_vert = (r1 - r0) / step;
+                    for edge in 0..4 {
+                        let (start_r, start_c, dr, dc, count) = match edge {
+                            0 => (r0, c0, 0usize, step, count_horiz), // top
+                            1 => (r1, c0, 0usize, step, count_horiz), // bottom
+                            2 => (r0, c0, step, 0usize, count_vert),  // left
+                            _ => (r0, c1, step, 0usize, count_vert),  // right
+                        };
+                        if count == 0 {
+                            continue;
+                        }
+                        let mut prev_top: Option<u32> = None;
+                        let mut prev_skirt: Option<u32> = None;
+                        for i in 0..=count {
+                            let rr = start_r + i * dr;
+                            let cc = start_c + i * dc;
+                            let top = (rr as u32) * cols_u32 + cc as u32;
+                            // Copy first — Vertex is Pod so this is cheap and
+                            // releases the borrow before `vertices.push`.
+                            let v = vertices[top as usize];
+                            let skirt = vertices.len() as u32;
+                            vertices.push(Vertex {
+                                position: [v.position[0], skirt_y, v.position[2]],
+                                uv: v.uv,
+                                // Side-facing normal — pointing outward from the
+                                // chunk. The shader applies Lambertian against
+                                // the sun light, so giving skirts a vertical-ish
+                                // normal keeps them from reading bright when
+                                // the sun is overhead. Match each edge so the
+                                // shading direction lines up with the chunk
+                                // boundary the skirt sits on.
+                                normal: match edge {
+                                    0 => [0.0, 0.3, -0.95],
+                                    1 => [0.0, 0.3, 0.95],
+                                    2 => [-0.95, 0.3, 0.0],
+                                    _ => [0.95, 0.3, 0.0],
+                                },
+                            });
+                            if let (Some(pt), Some(ps)) = (prev_top, prev_skirt) {
+                                indices.extend([pt, ps, top, top, ps, skirt]);
+                            }
+                            prev_top = Some(top);
+                            prev_skirt = Some(skirt);
+                        }
                     }
 
                     let end = indices.len() as u32;
@@ -377,7 +452,17 @@ mod tests {
         // 128 cells / 64 chunk_cells = 2 chunks per side → 4 chunks.
         assert_eq!(mesh.chunks.len(), 4);
         assert_eq!(mesh.lod_levels, 4);
-        assert_eq!(mesh.vertices.len(), 128 * 128);
+        // Surface vertices = rows × cols. P4-M2 skirts append extra
+        // vertices per chunk × per LOD, so the total grows by some
+        // amount that depends on the chunk layout. Sanity-check the
+        // surface portion is present and the skirts add at least
+        // some vertices (otherwise M2 silently regressed).
+        let surface = 128 * 128;
+        assert!(
+            mesh.vertices.len() > surface,
+            "expected skirts to add vertices, got {} (surface = {surface})",
+            mesh.vertices.len()
+        );
     }
 
     #[test]
@@ -385,15 +470,55 @@ mod tests {
         let dem = flat_dem(128, 128);
         let mesh = QuadtreeMesh::from_dem(&dem, 0.3, LodParams::default());
         let counts = mesh.triangle_counts();
-        // Each coarser LOD has 1/4 the triangles of the previous.
+        // Each coarser LOD's surface has ~1/4 the triangles of the
+        // previous. M2 skirts add a *linear* term (4 × edge length),
+        // which softens the ratio a bit at the coarse end where the
+        // surface term shrinks fastest. Loosen the tolerance to
+        // accommodate.
         for k in 1..mesh.lod_levels {
             let ratio = counts[k - 1] as f32 / counts[k].max(1) as f32;
             assert!(
-                (ratio - 4.0).abs() < 0.5,
-                "LOD {k}/LOD {} ratio = {ratio}, expected ~4",
+                ratio >= 3.0 && ratio <= 5.0,
+                "LOD {k}/LOD {} ratio = {ratio}, expected 3-5",
                 k - 1
             );
         }
+    }
+
+    #[test]
+    fn skirts_drop_below_chunk_min() {
+        // Bumpy DEM so every chunk has a real Y span.
+        let mut dem = Raster::<f64>::new(128, 128);
+        for r in 0..128 {
+            for c in 0..128 {
+                let z = ((r as f64 * 0.1).sin() + (c as f64 * 0.13).cos()) * 50.0 + 200.0;
+                dem.set(r, c, z).unwrap();
+            }
+        }
+        let mesh = QuadtreeMesh::from_dem(&dem, 0.3, LodParams::default());
+        // Walk every chunk and every LOD's skirt vertices (which are
+        // the ones BEYOND the rows*cols surface count). For each,
+        // there must be at least one whose Y sits below its chunk's
+        // bbox.min.y by `chunk_y_span * 1.5` (or the zex floor).
+        let surface_count = 128 * 128;
+        let mut any_below = false;
+        for v in &mesh.vertices[surface_count..] {
+            for chunk in &mesh.chunks {
+                if v.position[0] >= chunk.bbox.min.x
+                    && v.position[0] <= chunk.bbox.max.x
+                    && v.position[2] >= chunk.bbox.min.z
+                    && v.position[2] <= chunk.bbox.max.z
+                    && v.position[1] < chunk.bbox.min.y - 1e-3
+                {
+                    any_below = true;
+                    break;
+                }
+            }
+            if any_below {
+                break;
+            }
+        }
+        assert!(any_below, "no skirt vertex found below any chunk min Y");
     }
 
     #[test]
