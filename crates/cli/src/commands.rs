@@ -222,6 +222,13 @@ pub enum Commands {
         /// Atmospheric haze density (P3 M1). 0 = off, 0.3-0.6 typical.
         #[arg(long, default_value = "0.0")]
         haze: f32,
+        /// P4-M4: render via the quadtree LOD pipeline. Bounds GPU
+        /// memory to ~192 MB regardless of DEM size by streaming
+        /// per-chunk per-LOD data to a fixed pool. Use on big DEMs
+        /// (≥ 3 K side) where the default path would blow the
+        /// adapter's single-buffer cap.
+        #[arg(long, default_value = "false")]
+        lod: bool,
     },
     /// Clip a raster by polygon or bounding box
     Clip {

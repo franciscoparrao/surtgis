@@ -14,7 +14,7 @@ use surtgis_relief::{
     ColorScheme, RayShadeParams, ReliefBuilder, RgbaImage, ambient_shade, ray_shade, save_png,
     sphere_shade,
 };
-use surtgis_relief_3d::headless::{HeadlessConfig, render_to_rgba};
+use surtgis_relief_3d::headless::{HeadlessConfig, render_to_rgba, render_to_rgba_lod};
 
 #[allow(clippy::too_many_arguments)]
 pub fn handle(
@@ -33,6 +33,7 @@ pub fn handle(
     camera_polar: f32,
     camera_distance: f32,
     haze: f32,
+    lod: bool,
 ) -> Result<()> {
     let scheme = parse_scheme(colormap)?;
 
@@ -97,8 +98,17 @@ pub fn handle(
         haze_density: haze.clamp(0.0, 1.0),
         haze_rgb: [0.78, 0.83, 0.88],
     };
-    let rgba =
-        render_to_rgba(&dem, &texture, &cfg).map_err(|e| anyhow!("3D render failed: {e}"))?;
+    let rgba = if lod {
+        // P4-M4: quadtree LOD path. Streams per-chunk per-LOD data to a
+        // bounded GPU pool (192 MB) instead of uploading the whole mesh.
+        // Use it on big DEMs (≥3 K side) where the non-LOD path would
+        // exceed the single-buffer cap on the target GPU.
+        tracing::info!("relief-3d: LOD path active");
+        render_to_rgba_lod(&dem, &texture, &cfg)
+            .map_err(|e| anyhow!("3D render (LOD) failed: {e}"))?
+    } else {
+        render_to_rgba(&dem, &texture, &cfg).map_err(|e| anyhow!("3D render failed: {e}"))?
+    };
 
     // PNG output via the surtgis-colormap encoder.
     if let Some(parent) = output.parent()
