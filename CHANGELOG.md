@@ -9,6 +9,58 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-06-06
+
+Patch release. Closes **M4** of `SPEC_SURTGIS_RELIEF_P4.md` — the
+CLI `relief-3d` headless command gains a `--lod` flag that routes
+through the quadtree + `LodPool` pipeline established by M1–M3.
+Default path unchanged; opt-in for big DEMs.
+
+After this release P4 is complete: M0 (spec) + M1 (native spike) +
+M2 (skirts) + M3 (WASM browser) + M4 (CLI headless).
+
+### Added
+
+- **`surtgis-relief-3d::headless::render_to_rgba_lod(dem, texture, cfg)`**.
+  Public entry mirroring `render_to_rgba`. Builds a `QuadtreeMesh`
+  from the DEM (using `LodParams::default`) and renders via a 768 MB
+  GPU pool (384 MB vertex + 384 MB index). Browser still uses 192 MB
+  because the WebGL2 single-buffer cap binds there; headless has no
+  such cap so we size aggressively to handle 10 K DEMs without
+  overflow.
+
+- **`surtgis relief-3d --lod`**. New CLI flag, default `false`. Help
+  text points users at the use case: DEMs ≥ 3 K side where the
+  default single-buffer upload would blow the adapter's max buffer
+  size.
+
+  ```bash
+  # 10 K × 10 K DEM (100 M cells), default path is infeasible
+  surtgis relief-3d big_dem.tif out.png \
+      --width 1280 --height 720 --colormap imhof1 --lod
+  ```
+
+### Verified
+
+- 1 K DEM (1000×1000): non-LOD 0.35 s, LOD 0.67 s. The LOD path is
+  slower on small DEMs because of the quadtree build + per-chunk
+  batching overhead, which is the expected trade-off. The output
+  is visually identical.
+- 10 K DEM (10000×10000, 100 M cells): non-LOD path infeasible
+  (~3.2 GB single vertex buffer would blow every consumer GPU's
+  `max_buffer_size`). LOD path produces a 1280×720 PNG in 30 s —
+  most of which is the 2D `sphere_shade` recipe on 100 M cells in
+  a single thread, not the LOD render itself.
+
+### Deferred to a later patch
+
+- CLI knobs for `chunk_cells` / `distance_bands`. 20 K+ DEMs may
+  hit the 768 MB pool ceiling and need tighter bands or smaller
+  chunks; if anyone trips it in practice we add the flags then.
+- Auto-sized pool based on `mesh.cpu_bytes()` worst case.
+- Screen-space-error LOD metric (polish; the distance-band metric
+  is well-tuned in practice).
+
 ## [0.14.0] - 2026-06-06
 
 Minor release. **Quadtree LOD lands in `surtgis-relief-3d`**, closing
