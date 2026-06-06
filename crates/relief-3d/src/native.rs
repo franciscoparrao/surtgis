@@ -86,6 +86,7 @@ pub fn run_spike(vertices: Vec<Vertex>, indices: Vec<u32>, label: &str) -> Resul
         TextureSource::Checker,
         CameraMode::AutoOrbit,
         label,
+        None,
     )
 }
 
@@ -108,6 +109,44 @@ pub fn run_viewer(
         },
         CameraMode::Interactive,
         label,
+        None,
+    )
+}
+
+/// P4 entry point: run the viewer over a [`crate::lod::QuadtreeMesh`]
+/// instead of a flat mesh. Each frame the viewer culls + selects a
+/// LOD per chunk; only surviving chunks contribute draw calls.
+///
+/// Pass a checker pattern (`TextureSource::Checker`) for the spike
+/// example; M3+ wires the real `surtgis-relief` texture in.
+pub fn run_lod_viewer(
+    mesh: crate::lod::QuadtreeMesh,
+    lod_params: crate::lod::LodParams,
+    texture: TextureSource,
+    label: &str,
+) -> Result<()> {
+    run_lod_viewer_with_mode(mesh, lod_params, texture, label, CameraMode::Interactive)
+}
+
+/// Same as [`run_lod_viewer`] but lets the caller force auto-orbit.
+/// Useful for the M1 spike where a deterministic camera motion makes
+/// the FPS log reproducible.
+pub fn run_lod_viewer_with_mode(
+    mesh: crate::lod::QuadtreeMesh,
+    lod_params: crate::lod::LodParams,
+    texture: TextureSource,
+    label: &str,
+    mode: CameraMode,
+) -> Result<()> {
+    let vertices = mesh.vertices.clone();
+    let indices = mesh.indices.clone();
+    run_inner(
+        vertices,
+        indices,
+        texture,
+        mode,
+        label,
+        Some((mesh, lod_params)),
     )
 }
 
@@ -117,13 +156,14 @@ fn run_inner(
     texture: TextureSource,
     mode: CameraMode,
     label: &str,
+    lod: Option<(crate::lod::QuadtreeMesh, crate::lod::LodParams)>,
 ) -> Result<()> {
     let event_loop = EventLoop::new().map_err(|e| ReliefError::EventLoop(e.to_string()))?;
     let mut app = App {
         title: label.to_string(),
         window: None,
         state: None,
-        pending: Some((vertices, indices, texture, mode)),
+        pending: Some((vertices, indices, texture, mode, lod)),
         last_log: Instant::now(),
         frames_since_log: 0,
         mouse: MouseState::default(),
@@ -144,7 +184,13 @@ struct App {
     title: String,
     window: Option<std::sync::Arc<Window>>,
     state: Option<RenderState>,
-    pending: Option<(Vec<Vertex>, Vec<u32>, TextureSource, CameraMode)>,
+    pending: Option<(
+        Vec<Vertex>,
+        Vec<u32>,
+        TextureSource,
+        CameraMode,
+        Option<(crate::lod::QuadtreeMesh, crate::lod::LodParams)>,
+    )>,
     last_log: Instant,
     frames_since_log: u32,
     mouse: MouseState,
@@ -168,6 +214,15 @@ struct RenderState {
     last_frame: Instant,
     /// Set true when the user presses `S`; render() consumes it.
     screenshot_pending: bool,
+    /// Optional P4 quadtree LOD. When present, render() culls and
+    /// draws per chunk; when None, render() does a single full-mesh
+    /// draw against `pipeline.index_count`.
+    lod: Option<(crate::lod::QuadtreeMesh, crate::lod::LodParams)>,
+    /// Last-frame stats — counted by the LOD render path for the FPS
+    /// log so a user can tell at a glance whether culling is doing
+    /// any work.
+    lod_drawn_chunks: u32,
+    lod_total_chunks: u32,
 }
 
 const DAMP_TAU_S: f32 = 0.08;
@@ -185,9 +240,16 @@ impl ApplicationHandler for App {
                 .create_window(attrs)
                 .expect("create window failed"),
         );
-        let (vertices, indices, texture, mode) = self.pending.take().expect("viewer data");
-        let state = pollster::block_on(setup(window.clone(), &vertices, &indices, texture, mode))
-            .expect("wgpu setup failed");
+        let (vertices, indices, texture, mode, lod) = self.pending.take().expect("viewer data");
+        let state = pollster::block_on(setup(
+            window.clone(),
+            &vertices,
+            &indices,
+            texture,
+            mode,
+            lod,
+        ))
+        .expect("wgpu setup failed");
         self.window = Some(window);
         self.state = Some(state);
     }
@@ -267,7 +329,14 @@ impl ApplicationHandler for App {
                 let elapsed = now.duration_since(self.last_log).as_secs_f32();
                 if elapsed >= 1.0 {
                     let fps = self.frames_since_log as f32 / elapsed;
-                    eprintln!("relief-3d: {:.1} FPS", fps);
+                    if state.lod.is_some() {
+                        eprintln!(
+                            "relief-3d: {:.1} FPS — chunks {}/{} visible",
+                            fps, state.lod_drawn_chunks, state.lod_total_chunks
+                        );
+                    } else {
+                        eprintln!("relief-3d: {:.1} FPS", fps);
+                    }
                     self.frames_since_log = 0;
                     self.last_log = now;
                 }
@@ -284,6 +353,7 @@ async fn setup(
     indices: &[u32],
     texture: TextureSource,
     mode: CameraMode,
+    lod: Option<(crate::lod::QuadtreeMesh, crate::lod::LodParams)>,
 ) -> Result<RenderState> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::PRIMARY,
@@ -305,8 +375,20 @@ async fn setup(
             &wgpu::DeviceDescriptor {
                 label: Some("relief3d.device"),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_defaults()
-                    .using_resolution(adapter.limits()),
+                required_limits: {
+                    // The downlevel default caps `max_buffer_size` at
+                    // 256 MB, which a 4 K × 4 K mesh blows through
+                    // (~537 MB vertex buffer). Most desktop GPUs report
+                    // multi-GB caps in `adapter.limits().max_buffer_size`,
+                    // so we let `using_resolution` widen the limit to
+                    // whatever the hardware actually supports. WASM
+                    // (web.rs) keeps a tighter ceiling because WebGL2
+                    // caps are far lower.
+                    let mut limits =
+                        wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits());
+                    limits.max_buffer_size = adapter.limits().max_buffer_size;
+                    limits
+                },
                 memory_hints: wgpu::MemoryHints::Performance,
             },
             None,
@@ -369,6 +451,9 @@ async fn setup(
         lighting: LightingState::default(),
         last_frame: Instant::now(),
         screenshot_pending: false,
+        lod,
+        lod_drawn_chunks: 0,
+        lod_total_chunks: 0,
     })
 }
 
@@ -571,7 +656,23 @@ fn render(state: &mut RenderState) {
             state.pipeline.index_buffer.slice(..),
             wgpu::IndexFormat::Uint32,
         );
-        pass.draw_indexed(0..state.pipeline.index_count, 0, 0..1);
+
+        if let Some((mesh, params)) = &state.lod {
+            // P4 LOD path. Cull + select per chunk, then issue one
+            // draw call per surviving chunk. Stats roll up for the
+            // FPS log line.
+            let view_proj = state.camera_smooth.view_proj();
+            let camera_pos = state.camera_smooth.eye();
+            let visible = mesh.select(view_proj, camera_pos, params);
+            state.lod_drawn_chunks = visible.len() as u32;
+            state.lod_total_chunks = mesh.chunks.len() as u32;
+            for (chunk_idx, lod_idx) in visible {
+                let r = &mesh.chunks[chunk_idx].lod_indices[lod_idx];
+                pass.draw_indexed(r.clone(), 0, 0..1);
+            }
+        } else {
+            pass.draw_indexed(0..state.pipeline.index_count, 0, 0..1);
+        }
     }
 
     // P3-M3.3 screenshot: copy the just-rendered frame into a staging
