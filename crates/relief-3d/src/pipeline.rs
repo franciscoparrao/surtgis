@@ -140,11 +140,17 @@ pub fn build_pipeline(
         source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/relief.wgsl").into()),
     });
 
+    // P4-M3b: compress vertices at upload time. The f32 Vec stays
+    // CPU-resident only as long as this `compressed` allocation
+    // exists; the GPU buffer holds the 16-byte VertexC layout.
+    let compressed: Vec<crate::VertexC> =
+        vertices.iter().map(crate::VertexC::from_vertex).collect();
     let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("relief3d.vbo"),
-        contents: cast_slice(vertices),
+        contents: cast_slice(&compressed),
         usage: wgpu::BufferUsages::VERTEX,
     });
+    drop(compressed);
     let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("relief3d.ibo"),
         contents: cast_slice(indices),
@@ -233,7 +239,7 @@ pub fn build_pipeline(
         vertex: wgpu::VertexState {
             module: &shader,
             entry_point: Some("vs_main"),
-            buffers: &[Vertex::LAYOUT],
+            buffers: &[crate::VertexC::LAYOUT],
             compilation_options: Default::default(),
         },
         fragment: Some(wgpu::FragmentState {

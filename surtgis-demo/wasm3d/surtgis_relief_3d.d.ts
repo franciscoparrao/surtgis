@@ -10,6 +10,7 @@ export class ReliefHandle {
     free(): void;
     [Symbol.dispose](): void;
     set_ambient(ambient: number): void;
+    set_haze(density: number): void;
     set_sun(azimuth_deg: number, altitude_deg: number): void;
     set_vertical_scale(zex: number): void;
 }
@@ -21,15 +22,33 @@ export class ReliefHandle {
  */
 export function run_relief3d_canvas(canvas_id: string, tiff_bytes: Uint8Array, colormap: string, sun_azimuth: number, sun_altitude: number, shadows: boolean, ambient: boolean, vertical_exaggeration: number): ReliefHandle;
 
+/**
+ * Generate a procedural DEM in-WASM and render it via the LOD path.
+ * Skips the GeoTIFF decode round-trip from JS, so the demo can spin
+ * up a big DEM without shipping a multi-MB file across the wire.
+ *
+ * `side`: DEM dimensions in cells (use 2048 for a 2K stepping-stone,
+ * 4096 for the M3 acceptance target — the latter currently exceeds
+ * the WebGL2 single-buffer budget on most browsers; M3b vertex
+ * compression and M3c lazy upload are what make 4K viable in
+ * browser).
+ *
+ * Procedural pattern matches `examples/spike_lod_4k.rs` — sum of
+ * cosines + a broad central dome + some higher-frequency detail.
+ */
+export function run_relief3d_synthetic_lod_canvas(canvas_id: string, side: number, colormap: string, sun_azimuth: number, sun_altitude: number, shadows: boolean, ambient: boolean, vertical_exaggeration: number): ReliefHandle;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_reliefhandle_free: (a: number, b: number) => void;
     readonly reliefhandle_set_ambient: (a: number, b: number) => void;
+    readonly reliefhandle_set_haze: (a: number, b: number) => void;
     readonly reliefhandle_set_sun: (a: number, b: number, c: number) => void;
     readonly reliefhandle_set_vertical_scale: (a: number, b: number) => void;
     readonly run_relief3d_canvas: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => [number, number, number];
+    readonly run_relief3d_synthetic_lod_canvas: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number];
     readonly wasm_bindgen__closure__destroy__h0210e68aae7756cd: (a: number, b: number) => void;
     readonly wasm_bindgen__closure__destroy__h18a6ad49415e60d1: (a: number, b: number) => void;
     readonly wasm_bindgen__closure__destroy__hc7896da5159965b6: (a: number, b: number) => void;

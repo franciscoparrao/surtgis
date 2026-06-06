@@ -5,7 +5,7 @@
     "Francisco Parra"
   ],
   "description": "Native wgpu 3D viewer for SurtGis shaded relief",
-  "version": "0.11.0",
+  "version": "0.13.1",
   "license": "MIT OR Apache-2.0",
   "repository": {
     "type": "git",

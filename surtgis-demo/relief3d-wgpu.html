@@ -38,6 +38,15 @@
   <input type="file" id="demFile" accept=".tif,.tiff" style="display:none;">
   <button id="openFile">Open .tif…</button>
 
+  <div style="margin-top: 8px;">
+    <button id="synth2k" title="Synthetic 2K DEM (2048×2048 ~4.2M cells) — P4-M3a LOD path">
+      Synthetic 2K + LOD
+    </button>
+    <button id="synth4k" title="Synthetic 4K DEM (4096×4096 ~16.7M cells) — likely OOM in browser until P4-M3b/M3c land">
+      Synthetic 4K + LOD ⚠
+    </button>
+  </div>
+
   <label>Colormap</label>
   <select id="colormap">
     <option value="terrain" selected>terrain</option>
@@ -83,7 +92,10 @@
 </div>
 
 <script type="module">
-import init, { run_relief3d_canvas } from './wasm3d/surtgis_relief_3d.js';
+import init, {
+  run_relief3d_canvas,
+  run_relief3d_synthetic_lod_canvas,
+} from './wasm3d/surtgis_relief_3d.js';
 
 const $ = (id) => document.getElementById(id);
 let demBytes = null;
@@ -146,6 +158,54 @@ function sizeCanvasToWindow() {
   c.height = window.innerHeight;
 }
 window.addEventListener('resize', sizeCanvasToWindow);
+
+async function launchSynthLod(side, label, opts) {
+  sizeCanvasToWindow();
+  setStatus(`Building synthetic ${label} DEM + relief composite (${opts.skipExpensive ? "sphere only — 4K skips ray-shade+ambient to keep the WASM thread responsive" : "full recipe"})…`);
+  // Yield to the UI thread so the status above paints before the
+  // synchronous WASM call begins — without this the page just freezes
+  // with the previous status text up.
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  try {
+    const t0 = performance.now();
+    handle = run_relief3d_synthetic_lod_canvas(
+      'canvas',
+      side,
+      $('colormap').value,
+      parseFloat($('initAz').value),
+      parseFloat($('initAlt').value),
+      opts.shadows,
+      opts.ambient,
+      parseFloat($('zexInit').value),
+    );
+    const dt = performance.now() - t0;
+    setStatus(`${label} viewer running. Setup ${(dt / 1000).toFixed(1)} s. Mouse-drag rotate, wheel zoom.`, 'ok');
+    $('initBtn').disabled = true;
+    $('synth2k').disabled = true;
+    $('synth4k').disabled = true;
+  } catch (err) {
+    setStatus(`Init failed: ${err.message || err}`, 'err');
+  }
+}
+
+// 2K runs the full recipe — composite takes ~1-2 s in WASM single-thread.
+$('synth2k').addEventListener('click', () =>
+  launchSynthLod(2048, '2K', {
+    shadows: $('shadows').checked,
+    ambient: $('ambient').checked,
+    skipExpensive: false,
+  }));
+
+// 4K skips ray_shade + ambient_shade: 16 M cells × 11 sun samples or × 16 SVF
+// directions blocks the WASM thread for minutes, which reads as "browser frozen".
+// The point of the 4K button is to validate the LOD rendering pipeline; the
+// 2D shading quality is already covered by the 2K + bundled-DEM paths.
+$('synth4k').addEventListener('click', () =>
+  launchSynthLod(4096, '4K', {
+    shadows: false,
+    ambient: false,
+    skipExpensive: true,
+  }));
 
 $('initBtn').addEventListener('click', async () => {
   if (!demBytes) return;

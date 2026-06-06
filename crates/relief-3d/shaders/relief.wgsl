@@ -40,16 +40,20 @@ struct VsOut {
 
 @vertex
 fn vs_main(
-  @location(0) pos_in    : vec3<f32>,
-  @location(1) uv        : vec2<f32>,
-  @location(2) normal_in : vec3<f32>,
+  // P4-M3b compressed inputs. snorm16x4 / unorm16x2 / snorm8x4 — the
+  // hardware decodes to f32 vectors in [-1, 1] (positions, normals)
+  // and [0, 1] (UV). The 4th component of the packed vec4 inputs is
+  // padding; ignored via `.xyz`.
+  @location(0) pos_packed    : vec4<f32>,
+  @location(1) uv            : vec2<f32>,
+  @location(2) normal_packed : vec4<f32>,
 ) -> VsOut {
   let zex = u.vertical_scale.x;
 
-  var pos = pos_in;
+  var pos = pos_packed.xyz;
   pos.y = pos.y * zex;
 
-  var n = normal_in;
+  var n = normal_packed.xyz;
   let safe_zex = max(abs(zex), 1e-6);
   n.y = n.y / safe_zex;
   n = normalize(n);

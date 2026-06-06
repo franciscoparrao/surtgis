@@ -183,12 +183,173 @@ pub fn run_relief3d_canvas(
             img.width as u32,
             img.height as u32,
             lighting.clone(),
+            None,
         )),
         mouse: MouseState::default(),
     };
     let event_loop = EventLoop::new().map_err(|e| JsValue::from_str(&e.to_string()))?;
     event_loop.spawn_app(app);
     Ok(ReliefHandle { lighting })
+}
+
+/// Generate a procedural DEM in-WASM and render it via the LOD path.
+/// Skips the GeoTIFF decode round-trip from JS, so the demo can spin
+/// up a big DEM without shipping a multi-MB file across the wire.
+///
+/// `side`: DEM dimensions in cells (use 2048 for a 2K stepping-stone,
+/// 4096 for the M3 acceptance target — the latter currently exceeds
+/// the WebGL2 single-buffer budget on most browsers; M3b vertex
+/// compression and M3c lazy upload are what make 4K viable in
+/// browser).
+///
+/// Procedural pattern matches `examples/spike_lod_4k.rs` — sum of
+/// cosines + a broad central dome + some higher-frequency detail.
+#[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
+pub fn run_relief3d_synthetic_lod_canvas(
+    canvas_id: &str,
+    side: usize,
+    colormap: &str,
+    sun_azimuth: f32,
+    sun_altitude: f32,
+    shadows: bool,
+    ambient: bool,
+    vertical_exaggeration: f32,
+) -> Result<ReliefHandle, JsValue> {
+    install_panic_hook();
+    log(&format!(
+        "relief3d M3 LOD: building synthetic {side}×{side} DEM"
+    ));
+
+    let scheme = match colormap.to_ascii_lowercase().as_str() {
+        "divergent" => ColorScheme::Divergent,
+        "grayscale" | "greyscale" => ColorScheme::Grayscale,
+        "ndvi" => ColorScheme::Ndvi,
+        "bwr" | "blue-white-red" => ColorScheme::BlueWhiteRed,
+        "geomorphons" => ColorScheme::Geomorphons,
+        "water" => ColorScheme::Water,
+        "accumulation" => ColorScheme::Accumulation,
+        "imhof1" | "imhof" => ColorScheme::Imhof1,
+        "imhof2" => ColorScheme::Imhof2,
+        "imhof3" => ColorScheme::Imhof3,
+        "imhof4" => ColorScheme::Imhof4,
+        _ => ColorScheme::Terrain,
+    };
+
+    let dem = synthetic_dem(side);
+    let (rows, cols) = dem.shape();
+
+    // 2D relief composite — same recipe as the photo-mesh path. On
+    // a 4 K DEM with shadows enabled, this takes ~1.5 s in the
+    // WASM build; the LOD pipeline is what keeps the rendering side
+    // afloat after the composite is done.
+    let sphere = sphere_shade(
+        &dem,
+        HillshadeParams {
+            azimuth: sun_azimuth as f64,
+            altitude: sun_altitude as f64,
+            z_factor: 1.0,
+            normalized: true,
+        },
+    )
+    .map_err(|e| JsValue::from_str(&format!("sphere_shade: {e}")))?;
+    let mut builder = ReliefBuilder::new(&dem)
+        .base_colormap(scheme)
+        .add_shade(sphere, 0.6);
+    if shadows {
+        let p = RayShadeParams::with_soft_shadow_altitude(
+            sun_azimuth as f64,
+            (sun_altitude as f64 - 5.0).max(0.5),
+            (sun_altitude as f64 + 5.0).min(89.0),
+            11,
+        );
+        let p = RayShadeParams {
+            suns: p.suns,
+            radius: rows.max(cols),
+        };
+        let shadow =
+            ray_shade(&dem, &p).map_err(|e| JsValue::from_str(&format!("ray_shade: {e}")))?;
+        builder = builder.add_shadow(shadow, 0.7);
+    }
+    if ambient {
+        let ao = ambient_shade(&dem, 20)
+            .map_err(|e| JsValue::from_str(&format!("ambient_shade: {e}")))?;
+        builder = builder.add_ambient(ao, 0.3);
+    }
+    let img = builder
+        .render()
+        .map_err(|e| JsValue::from_str(&format!("compose: {e}")))?;
+
+    let params = crate::lod::LodParams::default();
+    let mesh = crate::lod::QuadtreeMesh::from_dem(&dem, vertical_exaggeration, params.clone());
+    log(&format!(
+        "relief3d M3c LOD: {} chunks, CPU {:.1} MB, GPU pool 192 MB (lazy upload)",
+        mesh.chunks.len(),
+        mesh.cpu_bytes() as f64 / 1.0e6
+    ));
+
+    // M3c: pipeline doesn't need the mesh data up front — the pool
+    // streams it per frame. Pass placeholder dummies so wgpu's
+    // create_pipeline has legal non-zero buffers to bind.
+    let vertices = vec![crate::Vertex {
+        position: [0.0, 0.0, 0.0],
+        uv: [0.0, 0.0],
+        normal: [0.0, 1.0, 0.0],
+    }];
+    let indices = vec![0u32; 3];
+
+    let document = web_sys::window()
+        .and_then(|w| w.document())
+        .ok_or_else(|| JsValue::from_str("no document"))?;
+    let canvas: web_sys::HtmlCanvasElement = document
+        .get_element_by_id(canvas_id)
+        .ok_or_else(|| JsValue::from_str(&format!("canvas '{canvas_id}' not found")))?
+        .dyn_into()
+        .map_err(|_| JsValue::from_str("element is not an HTMLCanvasElement"))?;
+
+    let lighting = Rc::new(RefCell::new(LightingShared::default()));
+    let state_slot: Rc<RefCell<Option<RenderState>>> = Rc::new(RefCell::new(None));
+    let app = App {
+        canvas: Some(canvas),
+        window: None,
+        state_slot: state_slot.clone(),
+        pending: Some((
+            vertices,
+            indices,
+            img.pixels,
+            img.width as u32,
+            img.height as u32,
+            lighting.clone(),
+            Some((mesh, params)),
+        )),
+        mouse: MouseState::default(),
+    };
+    let event_loop = EventLoop::new().map_err(|e| JsValue::from_str(&e.to_string()))?;
+    event_loop.spawn_app(app);
+    Ok(ReliefHandle { lighting })
+}
+
+/// Procedural landscape used by [`run_relief3d_synthetic_lod_canvas`].
+/// Same pattern as `examples/spike_lod_4k.rs` so the in-browser test
+/// stays comparable to the native spike acceptance.
+fn synthetic_dem(side: usize) -> surtgis_core::raster::Raster<f64> {
+    let mut dem = surtgis_core::raster::Raster::<f64>::new(side, side);
+    let inv = 1.0 / side as f64;
+    let cx = side as f64 * 0.5;
+    let cy = side as f64 * 0.5;
+    for r in 0..side {
+        for c in 0..side {
+            let u = c as f64 * inv * std::f64::consts::TAU * 4.0;
+            let v = r as f64 * inv * std::f64::consts::TAU * 3.0;
+            let ridges = 220.0 * (u.cos() + v.cos());
+            let detail = 60.0 * ((u * 5.0).sin() + (v * 5.0).cos());
+            let dx = c as f64 - cx;
+            let dy = r as f64 - cy;
+            let dome = 1200.0 * (-(dx * dx + dy * dy) * inv * inv * 4.0).exp();
+            dem.set(r, c, 200.0 + ridges + detail + dome).unwrap();
+        }
+    }
+    dem
 }
 
 #[derive(Default)]
@@ -209,6 +370,7 @@ struct App {
         u32,
         u32,
         Rc<RefCell<LightingShared>>,
+        Option<(crate::lod::QuadtreeMesh, crate::lod::LodParams)>,
     )>,
     mouse: MouseState,
 }
@@ -219,6 +381,13 @@ struct RenderState {
     pipeline: ReliefPipeline,
     camera: OrbitCamera,
     lighting: Rc<RefCell<LightingShared>>,
+    /// Optional P4 quadtree. When present, `render()` runs
+    /// per-chunk culling + draws; when `None`, the existing
+    /// single-mesh path is taken.
+    lod: Option<(crate::lod::QuadtreeMesh, crate::lod::LodParams)>,
+    /// P4-M3c lazy upload pool. Sized for the WebGL2 single-buffer
+    /// cap. Only present when `lod` is set.
+    lod_pool: Option<crate::lod::LodPool>,
 }
 
 impl ApplicationHandler for App {
@@ -233,7 +402,7 @@ impl ApplicationHandler for App {
                 .create_window(attrs)
                 .expect("create_window failed"),
         );
-        let (vertices, indices, pixels, width, height, lighting) =
+        let (vertices, indices, pixels, width, height, lighting, lod) =
             self.pending.take().expect("viewer payload");
 
         // Async wgpu setup: spawn_local fills the shared state_slot,
@@ -249,6 +418,7 @@ impl ApplicationHandler for App {
                 width,
                 height,
                 lighting,
+                lod,
             )
             .await
             {
@@ -350,6 +520,7 @@ async fn setup(
     rgba_width: u32,
     rgba_height: u32,
     lighting: Rc<RefCell<LightingShared>>,
+    lod: Option<(crate::lod::QuadtreeMesh, crate::lod::LodParams)>,
 ) -> Result<RenderState, String> {
     // WebGL2-only on the web. Trying WebGPU first sounds good in
     // theory but leaves the canvas in a half-attached state when the
@@ -429,12 +600,23 @@ async fn setup(
     camera.set_aspect(size.width as f32 / size.height.max(1) as f32);
 
     log("relief3d: setup complete");
+    // P4-M3c: 96 MB vertex + 96 MB index pool fits under the typical
+    // WebGL2 single-buffer cap (256 MB). Lazy upload streams only
+    // visible chunks each frame; the full mesh (~990 MB at 4 K) lives
+    // in WASM heap.
+    let lod_pool = if lod.is_some() {
+        Some(crate::lod::LodPool::new(&pipeline.device, 96, 96))
+    } else {
+        None
+    };
     Ok(RenderState {
         surface,
         config,
         pipeline,
         camera,
         lighting,
+        lod,
+        lod_pool,
     })
 }
 
@@ -468,6 +650,37 @@ fn render(state: &mut RenderState) {
     let view_color = frame
         .texture
         .create_view(&wgpu::TextureViewDescriptor::default());
+
+    // P4-M3c batch upload — same logic as native.rs. Cache hit when
+    // the visible set didn't change vs previous frame, which is what
+    // keeps the FPS up while the camera is slow-moving.
+    if let (Some((mesh, lod_params)), Some(pool)) = (&state.lod, &mut state.lod_pool) {
+        let view_proj = state.camera.view_proj();
+        let camera_pos = state.camera.eye();
+        let rebuilt = mesh.batch_visible(view_proj, camera_pos, lod_params, &mut pool.frame);
+        if rebuilt {
+            let v_bytes = (pool.frame.vertices.len() * 16) as u64;
+            let i_bytes = (pool.frame.indices.len() * 4) as u64;
+            if v_bytes <= pool.vertex_capacity_bytes && i_bytes <= pool.index_capacity_bytes {
+                state.pipeline.queue.write_buffer(
+                    &pool.vertex_buffer,
+                    0,
+                    bytemuck::cast_slice(&pool.frame.vertices),
+                );
+                state.pipeline.queue.write_buffer(
+                    &pool.index_buffer,
+                    0,
+                    bytemuck::cast_slice(&pool.frame.indices),
+                );
+            } else {
+                pool.frame.draws.clear();
+                web_sys::console::warn_1(&JsValue::from_str(&format!(
+                    "relief3d: LOD pool overflow ({:.1} MB), frame dropped",
+                    (v_bytes + i_bytes) as f64 / 1.0e6
+                )));
+            }
+        }
+    }
 
     let mut encoder =
         state
@@ -505,12 +718,21 @@ fn render(state: &mut RenderState) {
         });
         pass.set_pipeline(&state.pipeline.render_pipeline);
         pass.set_bind_group(0, &state.pipeline.bind_group, &[]);
-        pass.set_vertex_buffer(0, state.pipeline.vertex_buffer.slice(..));
-        pass.set_index_buffer(
-            state.pipeline.index_buffer.slice(..),
-            wgpu::IndexFormat::Uint32,
-        );
-        pass.draw_indexed(0..state.pipeline.index_count, 0, 0..1);
+
+        if let (Some(_), Some(pool)) = (&state.lod, &mut state.lod_pool) {
+            pass.set_vertex_buffer(0, pool.vertex_buffer.slice(..));
+            pass.set_index_buffer(pool.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            for cmd in &pool.frame.draws {
+                pass.draw_indexed(cmd.index_start..cmd.index_end, 0, 0..1);
+            }
+        } else {
+            pass.set_vertex_buffer(0, state.pipeline.vertex_buffer.slice(..));
+            pass.set_index_buffer(
+                state.pipeline.index_buffer.slice(..),
+                wgpu::IndexFormat::Uint32,
+            );
+            pass.draw_indexed(0..state.pipeline.index_count, 0, 0..1);
+        }
     }
     state.pipeline.queue.submit(Some(encoder.finish()));
     frame.present();

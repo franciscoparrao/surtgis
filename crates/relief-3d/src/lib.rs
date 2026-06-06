@@ -13,6 +13,7 @@
 use thiserror::Error;
 
 pub mod camera;
+pub mod lod;
 pub mod mesh;
 pub mod pipeline;
 
@@ -74,6 +75,89 @@ impl Vertex {
             },
         ],
     };
+}
+
+/// P4-M3b vertex compression. 16 bytes per vertex (half the f32 layout).
+/// Used as the GPU-side storage format by `pipeline::build_pipeline`,
+/// which converts `&[Vertex]` → `Vec<VertexC>` once at upload time.
+///
+/// Memory budget impact on the M2 spike (4 K × 4 K DEM with skirts,
+/// 18.81 M vertices):
+///
+///   uncompressed: 18.81 M × 32 B = **602 MB**
+///   compressed  : 18.81 M × 16 B = **301 MB**
+///
+/// 50 % reduction lets DEMs up to ~3 K side fit the typical 256 MB
+/// WebGL2 single-buffer cap. 4 K still needs M3c lazy upload to fit.
+///
+/// Encoding:
+///   - `pos` in `[-1, 1]` as snorm16 — the mesh builders normalise
+///     positions to longer-side = 2 scene units so XZ always fit.
+///     Y is clamped at ±1 in scene units (typical zex defaults give
+///     y in `[0, 0.45]`).
+///   - `uv` as unorm16 in `[0, 1]`.
+///   - `normal` as snorm8 — ~1° angular precision, well below the
+///     Lambertian shading threshold for visible artefacts.
+#[repr(C, align(2))]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct VertexC {
+    pub pos: [i16; 3],
+    pub _pad0: u16,
+    pub uv: [u16; 2],
+    pub normal: [i8; 3],
+    pub _pad1: u8,
+}
+
+impl VertexC {
+    pub const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
+        array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &[
+            // pos+pad consumed as a vec4<f32> in [-1, 1]; the shader
+            // takes .xyz.
+            wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 0,
+                format: wgpu::VertexFormat::Snorm16x4,
+            },
+            wgpu::VertexAttribute {
+                offset: 8,
+                shader_location: 1,
+                format: wgpu::VertexFormat::Unorm16x2,
+            },
+            // normal+pad consumed as a vec4<f32> in [-1, 1]; shader
+            // takes .xyz.
+            wgpu::VertexAttribute {
+                offset: 12,
+                shader_location: 2,
+                format: wgpu::VertexFormat::Snorm8x4,
+            },
+        ],
+    };
+
+    /// Convert from a full-precision Vertex. Clamping is conservative
+    /// — the encoder won't panic on out-of-range input, just saturates.
+    pub fn from_vertex(v: &Vertex) -> Self {
+        #[inline]
+        fn s16(x: f32) -> i16 {
+            (x.clamp(-1.0, 1.0) * 32767.0).round() as i16
+        }
+        #[inline]
+        fn u16f(x: f32) -> u16 {
+            (x.clamp(0.0, 1.0) * 65535.0).round() as u16
+        }
+        #[inline]
+        fn s8(x: f32) -> i8 {
+            (x.clamp(-1.0, 1.0) * 127.0).round() as i8
+        }
+        Self {
+            pos: [s16(v.position[0]), s16(v.position[1]), s16(v.position[2])],
+            _pad0: 0,
+            uv: [u16f(v.uv[0]), u16f(v.uv[1])],
+            normal: [s8(v.normal[0]), s8(v.normal[1]), s8(v.normal[2])],
+            _pad1: 0,
+        }
+    }
 }
 
 /// Per-frame uniforms — 144 bytes, every field a vec4 slot to keep the
