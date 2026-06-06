@@ -16,10 +16,10 @@ crate-type = ["cdylib", "rlib"]
 default = []
 
 [dependencies]
-surtgis-core = { version = "0.13.1", path = "../core", default-features = false }
-surtgis-algorithms = { version = "0.13.1", path = "../algorithms", default-features = false }
-surtgis-relief = { version = "0.13.1", path = "../relief" }
-surtgis-colormap = { version = "0.13.1", path = "../colormap" }
+surtgis-core = { version = "0.14", path = "../core", default-features = false }
+surtgis-algorithms = { version = "0.14", path = "../algorithms", default-features = false }
+surtgis-relief = { version = "0.14", path = "../relief" }
+surtgis-colormap = { version = "0.14", path = "../colormap" }
 wasm-bindgen.workspace = true
 js-sys.workspace = true
 serde.workspace = true

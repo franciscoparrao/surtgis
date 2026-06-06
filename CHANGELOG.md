@@ -9,6 +9,125 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-06-06
+
+Minor release. **Quadtree LOD lands in `surtgis-relief-3d`**, closing
+the last named rayshader-gap that had measurable user impact:
+production-scale DEMs (4 K × 4 K = 16 M cells) now render fluidly on
+native ≥60 FPS, and load + render in WebGL2 browsers without
+exceeding the 256 MB single-buffer cap. After this release the only
+honest "rayshader wins" line is path-tracing (out of scope, will
+stay out — use `rayrender` for that figure).
+
+Implements M0–M3 of `SPEC_SURTGIS_RELIEF_P4.md`. M4 (CLI headless
+path with LOD) is deferred to v0.14.1.
+
+### Added
+
+- **`surtgis_relief_3d::lod`** — quadtree LOD pipeline:
+  - `QuadtreeMesh::from_dem(dem, vertical_exaggeration, params)`
+    subdivides a DEM into `chunk_cells × chunk_cells` chunks and
+    builds per-chunk per-LOD self-contained vertex + index buffers.
+    LOD k uses stride `2^k`.
+  - `LodParams { chunk_cells: 64, lod_levels: 4,
+    distance_bands: [0.6, 1.8, 5.0] }` (tuned on a synthetic 4 K
+    spike; a screen-space-error metric would be a polish follow-up).
+  - `Aabb` + Gribb–Hartmann frustum extraction + 8-corners-vs-6-planes
+    culling.
+  - `QuadtreeMesh::batch_visible(view_proj, camera_pos, params, frame)`
+    culls, selects a LOD per chunk, and fills a `FrameUpload` (vertex
+    + index scratch vecs + draw commands). Cache hit when the visible
+    set is identical to the previous frame; the upload is skipped
+    entirely.
+  - Skirts at every LOD edge — vertical strips dropping below the
+    chunk's lowest vertex by `1.5 × chunk_y_span` so cracks at
+    transitions between different LOD levels stay hidden.
+
+- **`crate::VertexC`** — 16-byte compressed vertex (snorm16x4 position,
+  unorm16x2 UV, snorm8x4 normal). Halves GPU memory for the same mesh;
+  `pipeline::build_pipeline` converts `Vertex` → `VertexC` once at
+  upload time. The WGSL shader takes the snorm/unorm formats as
+  decoded vec4<f32> and extracts `.xyz` from the packed inputs.
+
+- **`LodPool`** — fixed-size ring buffers (96 MB vertex + 96 MB index)
+  for lazy GPU upload. Per frame the pool's vertex + index buffers are
+  refreshed via a single `write_buffer` call each, the visible-chunks'
+  data pre-batched into scratch vecs by `batch_visible`. The GPU side
+  never exceeds 192 MB regardless of DEM size; the full mesh
+  (~990 MB for a 4 K DEM) lives in the WASM heap, which has a 4 GB
+  budget.
+
+- **Native viewer paths**:
+  - `native::run_lod_viewer(mesh, params, texture, label)` and
+    `native::run_lod_viewer_with_mode(..., mode)` accept a
+    `QuadtreeMesh`. Mouse controls + damping + screenshot + help key
+    work unchanged.
+  - `crates/relief-3d/examples/spike_lod_4k.rs` generates a 4096²
+    procedural DEM (16.78 M cells) and renders it via the LOD path.
+    The §12.6 lesson at the spec level: the M1 acceptance must be
+    measured at production-workload size, not `dem_filled.tif` which
+    already passes at 60 FPS without any LOD work.
+
+- **Browser viewer paths**:
+  - `#[wasm_bindgen] fn run_relief3d_synthetic_lod_canvas(canvas_id,
+    side, colormap, sun_az, sun_alt, shadows, ambient,
+    vertical_exaggeration)` generates a procedural DEM in-WASM and
+    runs the LOD pipeline. Avoids the GeoTIFF round-trip from JS for
+    big synthetic test meshes.
+  - `surtgis-demo/relief3d-wgpu.html` gains "Synthetic 2K + LOD" and
+    "Synthetic 4K + LOD" buttons. The 4 K button forces
+    `shadows = false, ambient = false` because those 2D recipes block
+    the single-threaded WASM event loop for several minutes on 16 M
+    cells; the 4 K path exists to validate the 3D rendering pipeline
+    + memory budget, not the 2D recipe quality. The 2 K button keeps
+    the full recipe.
+
+### Acceptance
+
+  - **Native** (M1+M2 bar): the 4 K spike sustains 58–60 FPS across a
+    full orbit cycle, all 4096 chunks visible. The cache hit rate is
+    ~95 %; rebuild frames stay sub-10 ms.
+  - **Browser** (M3 bar): a 4 K DEM loads + renders in Chrome (ANGLE +
+    WebGL2) under the 256 MB single-buffer cap. Frame rate scales
+    with the visible-chunk count; on default camera the GPU pool
+    consumption hovers around ~30 MB.
+
+### Changed
+
+- Workspace bump 0.13.1 → 0.14.0; inter-crate deps swept from `"0.13.1"`
+  to `"0.14"` across `surtgis-core`, `surtgis-algorithms`,
+  `surtgis-parallel`, `surtgis-cloud`, `surtgis-colormap`,
+  `surtgis-relief`, `surtgis-relief-3d`.
+- `pipeline::build_pipeline` now compresses incoming `Vec<Vertex>` to
+  `Vec<VertexC>` before upload. Public API surface unchanged — the
+  conversion is internal.
+- `crates/relief-3d/shaders/relief.wgsl` vertex stage inputs change
+  from `vec3<f32>` / `vec2<f32>` / `vec3<f32>` to `vec4<f32>` /
+  `vec2<f32>` / `vec4<f32>` (snorm16x4 / unorm16x2 / snorm8x4 from
+  Rust), with `.xyz` extraction on the packed inputs. Output and the
+  fragment stage unchanged.
+
+### Fixed
+
+- **WebGL2 `drawElementsInstancedBaseVertex` panic**. The LOD path
+  initially issued `pass.draw_indexed(range, base_vertex, ...)` with
+  per-chunk non-zero `base_vertex`. WebGL2 doesn't expose
+  `drawElementsInstancedBaseVertexBaseInstance`, so the GL backend
+  panics. Fix: in `QuadtreeMesh::batch_visible`, rebase chunk-local
+  indices to pool-absolute by adding the chunk's vertex offset at
+  copy time, then call `draw_indexed` with `base_vertex = 0` always.
+  Native (Vulkan/Metal/DX12) supports the base-vertex draw natively;
+  the rebase costs ~few-ns per index on rebuild frames and is
+  free on cache hits.
+
+### Deferred to v0.14.1
+
+- **M4 — CLI headless path** (`surtgis relief-3d --lod`). Same wgpu
+  pipeline rendered offscreen via the existing headless path; needs
+  the LOD pool sized aggressively for single-frame renders. ~2 days.
+- **Screen-space-error LOD metric** instead of camera-distance bands.
+  Polish.
+
 ## [0.13.1] - 2026-06-05
 
 Patch release with a single, focused perf improvement: **5.66× faster
