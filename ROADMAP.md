@@ -186,3 +186,148 @@ either:
 - Do not add MPI / distributed runtime. Cite EMS §2.2 positioning.
 - Do not promise "drop-in GDAL replacement". Cite EMS §6 service-
   publication framing.
+
+## Survey 2026-06-06 — post-P4, looking beyond rayshader frame
+
+After closing the **P4 quadtree LOD** sprint (v0.14.0 + v0.14.1),
+the "rayshader peer" narrative is essentially complete: native 16 M-
+vertex DEMs at 60 FPS, browser 4 K under the 256 MB WebGL2 cap, CLI
+headless `--lod` for 10 K DEMs. The only remaining rayshader-wins
+axis is path-tracing — discussed separately below.
+
+This survey asked: **what would be most useful to incorporate from
+adjacent tools beyond rayshader?** Three candidates surfaced. The
+agreed decision: **document and defer**, no commit yet.
+
+### Candidates surveyed
+
+#### G. Martini RTIN terrain mesher — *backlog*
+
+[Martini](https://github.com/mapbox/martini) replaces the uniform-
+chunk LOD subdivision with Right-Triangulated Irregular Network
+adaptive triangulation. Same triangle budget, much better
+distribution: places density where curvature is high, saves on flat
+regions.
+
+**Where it fits**: `crates/relief-3d/src/lod.rs` already has the
+`ChunkLod` interface — RTIN drops in as an alternative
+`QuadtreeMesh::from_dem_rtin(dem, params)` builder. The rest of the
+LOD pool + render path stays identical.
+
+**Estimate**: ~3 days.
+
+**Why defer**: P4's quadtree LOD already meets every acceptance bar.
+RTIN is a quality upgrade, not a blocker. Pick it up when a specific
+paper figure has large flat regions that the quadtree wastes
+triangles on.
+
+#### H. TopoToolbox-style channel network depth — *partially done*
+
+[TopoToolbox](https://topotoolbox.wordpress.com/) (MATLAB) is the
+gold standard for tectonic geomorphology paper figures: χ analysis,
+ksn maps, longitudinal profiles, swath profiles, knickpoint
+detection, drainage divide migration. Equivalent stack in the
+LSDTopoTools ecosystem.
+
+**What's already shipped**:
+- `fill-sinks` (priority flood + Planchon-Darboux, with NaN-curtain
+  fix from Smugglers Notch).
+- Flow direction (D8 + Dinf with TauDEM-exact agreement, RMSE=0°).
+- Flow accumulation.
+- Stream extraction.
+- χ + ksn at usable depth (see Smugglers Notch validation, R²≥0.7
+  on dominant basin; 15-cuencas Chile production validated).
+- Validation framework (`examples/smugglers_notch_validation/`,
+  `examples/15_cuencas_chile/`).
+
+**What is likely undercooked or missing** (to verify before any
+follow-up sprint):
+- Bayesian regression for ksn with uncertainty quantification
+  (LSDTopoTools-style).
+- Swath profile extraction with statistics envelope (min/max/median
+  bands across a corridor).
+- Knickpoint detection (Wobus et al. 2006 slope-area break method;
+  Neely et al. 2017 KZP variant).
+- Drainage divide migration metrics (Whipple et al. 2017 χ-anomaly
+  approach).
+- Stream-profile χ-plot figure rendering (long profiles ready, just
+  no dedicated figure generator).
+
+**Estimate**: depends entirely on which gaps survive verification.
+Likely 1-2 sprints to reach LSDTopoTools-style parity on the items
+above.
+
+**Why partially done**: the core analysis is already shipped and
+research-validated. The remaining items are paper-figure-shaped, not
+core. Worth picking up when a specific paper demands them (tectonic
+geomorphology submission, etc.) rather than speculatively.
+
+#### I. 3D Tiles export — *backlog*
+
+[3D Tiles](https://www.ogc.org/standards/3d-tiles) is the OGC
+standard for streaming 3D geospatial. Exporting tilesets from DEMs
+lets users open SurtGIS output in CesiumJS, ArcGIS, Bentley, etc.
+
+**Where it fits**: new crate `surtgis-3dtiles` or extension of
+`surtgis-relief-3d`. The P4 quadtree maps naturally to the 3D Tiles
+tile hierarchy.
+
+**Estimate**: ~5-7 days.
+
+**Why defer**: real demand from users with Cesium pipelines, but no
+current research paper is gated on it. Practical interop story, not
+a differentiator.
+
+### Surveyed and ruled out
+
+#### J. Path-tracing — *out of scope*
+
+The last named rayshader-wins axis. Discussed at length 2026-06-06,
+decision was to skip:
+
+- Browser path-tracing infeasible (WebGL2 has no compute shaders;
+  ray queries need Vulkan KHR / Metal / DX12).
+- CPU MVP would be ~5-7 days but produces a slice of `rayrender`
+  quality at fraction of the polish.
+- Real use case (cinematic geospatial posters) doesn't drive current
+  research needs.
+- Better answer in the README: "for path-traced renders use
+  rayrender or Blender; SurtGIS aims at analysis + interactive 3D,
+  not cinematics."
+
+If revisited, the working name is `SPEC_SURTGIS_RELIEF_P5.md` with
+MVP scope: Rust + rayon, CPU only, triangle BVH on DEM mesh, primary
+rays + Lambertian + soft shadow (sun disk) + sky dome, 100-500 spp,
+acceptance at 1024×768 Imhof-style cinematic in ~5-30 min wallclock.
+
+#### K. Volume rendering (ParaView-style) — *out of scope*
+
+Scalar volume viz for atmospheric / subsurface data. Niche outside
+current user base.
+
+#### L. Photogrammetry / LAS-LAZ pipelines — *out of scope*
+
+Point cloud reading + rasterization. Well-served by PDAL and
+OpenDroneMap; no value in re-implementing.
+
+#### M. Browser interactive analysis (measure, draw, query) — *out of scope*
+
+Large UI investment with marginal research-figure value. The web
+viewer's job is "show me the surface"; analysis happens in the CLI /
+library.
+
+#### N. Cinematic camera path animation — *backlog, low priority*
+
+Animated DEMs with scripted camera paths. Possible add-on to the
+viewer. Not committed; depends on whether real demand materializes.
+
+### Next reassessment trigger
+
+Re-survey when one of the following hits:
+
+- A specific paper figure needs RTIN-quality flat regions → pick up G.
+- A specific paper submission needs Bayesian ksn / knickpoints /
+  divide migration → re-scope H and pick up the missing pieces.
+- A user with a Cesium pipeline asks for 3D Tiles export → pick up I.
+- Sprint slot opens with no pulling external priority → re-survey
+  from scratch (the landscape changes).
