@@ -138,11 +138,19 @@ pub fn run_lod_viewer_with_mode(
     label: &str,
     mode: CameraMode,
 ) -> Result<()> {
-    let vertices = mesh.vertices.clone();
-    let indices = mesh.indices.clone();
+    // P4-M3c: with per-chunk lazy upload, the pipeline doesn't see
+    // the mesh's vertices/indices up front — those are streamed from
+    // `LodPool` per frame. Pass placeholder dummies just so wgpu has
+    // legal non-zero buffers to bind before the pool overwrites them.
+    let dummy_vertices = vec![Vertex {
+        position: [0.0, 0.0, 0.0],
+        uv: [0.0, 0.0],
+        normal: [0.0, 1.0, 0.0],
+    }];
+    let dummy_indices = vec![0u32; 3];
     run_inner(
-        vertices,
-        indices,
+        dummy_vertices,
+        dummy_indices,
         texture,
         mode,
         label,
@@ -218,6 +226,10 @@ struct RenderState {
     /// draws per chunk; when None, render() does a single full-mesh
     /// draw against `pipeline.index_count`.
     lod: Option<(crate::lod::QuadtreeMesh, crate::lod::LodParams)>,
+    /// P4-M3c lazy upload pool. Sized at setup based on the device's
+    /// max buffer size and the target DEM resolution. `None` when
+    /// `lod` is `None`.
+    lod_pool: Option<crate::lod::LodPool>,
     /// Last-frame stats — counted by the LOD render path for the FPS
     /// log so a user can tell at a glance whether culling is doing
     /// any work.
@@ -440,6 +452,17 @@ async fn setup(
     camera.set_aspect(size.width as f32 / size.height.max(1) as f32);
     let camera_smooth = camera.clone();
 
+    // P4-M3c: create the LOD upload pool when a quadtree is present.
+    // 96 MB vertex + 96 MB index = 192 MB, fitting comfortably inside
+    // the 256 MB WebGL2 single-buffer cap. Native widens
+    // max_buffer_size to whatever the adapter reports, so this is
+    // always safe.
+    let lod_pool = if lod.is_some() {
+        Some(crate::lod::LodPool::new(&pipeline.device, 96, 96))
+    } else {
+        None
+    };
+
     Ok(RenderState {
         surface,
         config,
@@ -452,6 +475,7 @@ async fn setup(
         last_frame: Instant::now(),
         screenshot_pending: false,
         lod,
+        lod_pool,
         lod_drawn_chunks: 0,
         lod_total_chunks: 0,
     })
@@ -615,6 +639,39 @@ fn render(state: &mut RenderState) {
         .texture
         .create_view(&wgpu::TextureViewDescriptor::default());
 
+    // P4-M3c: refresh the LOD pool before kicking off the render pass.
+    // batch_visible() culls + selects + compresses every visible
+    // chunk's data into two scratch vecs; we then `write_buffer`
+    // each once. The pool's buffers are bound inside the pass below.
+    if let (Some((mesh, lod_params)), Some(pool)) = (&state.lod, &mut state.lod_pool) {
+        let view_proj = state.camera_smooth.view_proj();
+        let camera_pos = state.camera_smooth.eye();
+        let rebuilt = mesh.batch_visible(view_proj, camera_pos, lod_params, &mut pool.frame);
+        if rebuilt {
+            let v_bytes = (pool.frame.vertices.len() * 16) as u64;
+            let i_bytes = (pool.frame.indices.len() * 4) as u64;
+            if v_bytes <= pool.vertex_capacity_bytes && i_bytes <= pool.index_capacity_bytes {
+                state.pipeline.queue.write_buffer(
+                    &pool.vertex_buffer,
+                    0,
+                    bytemuck::cast_slice(&pool.frame.vertices),
+                );
+                state.pipeline.queue.write_buffer(
+                    &pool.index_buffer,
+                    0,
+                    bytemuck::cast_slice(&pool.frame.indices),
+                );
+            } else {
+                pool.frame.draws.clear();
+                eprintln!(
+                    "relief3d: LOD pool overflow ({:.1} MB needed, {:.1} MB cap) — frame dropped",
+                    (v_bytes + i_bytes) as f64 / 1.0e6,
+                    (pool.vertex_capacity_bytes + pool.index_capacity_bytes) as f64 / 1.0e6
+                );
+            }
+        }
+    }
+
     let mut encoder =
         state
             .pipeline
@@ -651,26 +708,29 @@ fn render(state: &mut RenderState) {
         });
         pass.set_pipeline(&state.pipeline.render_pipeline);
         pass.set_bind_group(0, &state.pipeline.bind_group, &[]);
-        pass.set_vertex_buffer(0, state.pipeline.vertex_buffer.slice(..));
-        pass.set_index_buffer(
-            state.pipeline.index_buffer.slice(..),
-            wgpu::IndexFormat::Uint32,
-        );
 
-        if let Some((mesh, params)) = &state.lod {
-            // P4 LOD path. Cull + select per chunk, then issue one
-            // draw call per surviving chunk. Stats roll up for the
-            // FPS log line.
-            let view_proj = state.camera_smooth.view_proj();
-            let camera_pos = state.camera_smooth.eye();
-            let visible = mesh.select(view_proj, camera_pos, params);
-            state.lod_drawn_chunks = visible.len() as u32;
-            state.lod_total_chunks = mesh.chunks.len() as u32;
-            for (chunk_idx, lod_idx) in visible {
-                let r = &mesh.chunks[chunk_idx].lod_indices[lod_idx];
-                pass.draw_indexed(r.clone(), 0, 0..1);
+        if let (Some((mesh, params)), Some(pool)) = (&state.lod, &mut state.lod_pool) {
+            // P4-M3c LOD path. The CPU scratch in pool.frame holds the
+            // batched per-frame upload; `set_vertex_buffer` /
+            // `set_index_buffer` point at the pool's buffers (which
+            // were `write_buffer`'d a few lines up, before the render
+            // pass began).
+            pass.set_vertex_buffer(0, pool.vertex_buffer.slice(..));
+            pass.set_index_buffer(pool.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            state.lod_drawn_chunks = pool.frame.drawn_chunks;
+            state.lod_total_chunks = pool.frame.total_chunks;
+            for cmd in &pool.frame.draws {
+                // base_vertex is always 0 (indices are pool-absolute,
+                // see batch_visible). The cmd.base_vertex field is kept
+                // for future native-only paths that want the offset.
+                pass.draw_indexed(cmd.index_start..cmd.index_end, 0, 0..1);
             }
         } else {
+            pass.set_vertex_buffer(0, state.pipeline.vertex_buffer.slice(..));
+            pass.set_index_buffer(
+                state.pipeline.index_buffer.slice(..),
+                wgpu::IndexFormat::Uint32,
+            );
             pass.draw_indexed(0..state.pipeline.index_count, 0, 0..1);
         }
     }

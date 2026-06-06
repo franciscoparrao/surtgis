@@ -5,7 +5,7 @@
     "Francisco Parra"
   ],
   "description": "WebAssembly bindings for SurtGis geospatial algorithms",
-  "version": "0.3.0",
+  "version": "0.10.4",
   "license": "MIT OR Apache-2.0",
   "repository": {
     "type": "git",

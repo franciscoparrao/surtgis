@@ -47,9 +47,8 @@ fn main() {
         mesh.triangle_counts()
     );
     eprintln!(
-        "vertex buffer: {} vertices × 32 B = {:.1} MB",
-        mesh.vertices.len(),
-        (mesh.vertices.len() * 32) as f64 / 1.0e6
+        "CPU per-chunk total: {:.1} MB; GPU pool capacity 192 MB (M3c lazy upload)",
+        mesh.cpu_bytes() as f64 / 1.0e6
     );
 
     eprintln!("FPS bar: ≥ 30 sustained. ESC or close window to exit.");

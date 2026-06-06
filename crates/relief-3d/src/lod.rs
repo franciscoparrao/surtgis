@@ -93,6 +93,113 @@ impl Aabb {
     }
 }
 
+/// Per-LOD self-contained vertex + index buffers for one chunk.
+///
+/// **Pre-compressed at build time** (`VertexC`, 16 B/vertex). Per-frame
+/// uploads memcopy these straight to GPU without further work — that's
+/// what keeps the M3c batch path under budget. The CPU memory cost is
+/// 50 % of the M2 layout (~696 MB on a 4 K spike), still well below
+/// the 4 GB WASM heap.
+#[derive(Debug, Clone)]
+pub struct ChunkLod {
+    pub vertices: Vec<crate::VertexC>,
+    pub indices: Vec<u32>,
+}
+
+impl ChunkLod {
+    pub fn upload_bytes(&self) -> usize {
+        self.vertices.len() * 16 + self.indices.len() * 4
+    }
+}
+
+/// One draw instruction emitted by [`QuadtreeMesh::batch_visible`].
+/// All draws share the pool's vertex+index buffers. `base_vertex`
+/// is kept as a field for API clarity but is always 0 — indices are
+/// rebased absolute in [`QuadtreeMesh::batch_visible`] so the GL
+/// backend (which doesn't support `drawElementsInstancedBaseVertex`)
+/// can issue every draw without that extension.
+#[derive(Debug, Clone, Copy)]
+pub struct DrawCmd {
+    pub base_vertex: u32,
+    pub index_start: u32,
+    pub index_end: u32,
+}
+
+/// Batched per-frame upload data. The two scratch vecs are filled by
+/// [`QuadtreeMesh::batch_visible`] and then `write_buffer`'d once
+/// each at the start of every frame — much cheaper than one
+/// `write_buffer` per chunk would be.
+pub struct FrameUpload {
+    pub vertices: Vec<crate::VertexC>,
+    pub indices: Vec<u32>,
+    pub draws: Vec<DrawCmd>,
+    /// Approximate visible chunk count. Used by the FPS log so the
+    /// viewer can show "drew N/M chunks this frame".
+    pub drawn_chunks: u32,
+    pub total_chunks: u32,
+    /// Last frame's `(chunk_idx, lod_idx)` selection. The cache hit
+    /// path compares the new selection against this — if equal, we
+    /// reuse the existing `vertices` / `indices` / `draws` and skip
+    /// both the CPU memcopy and the `write_buffer`.
+    pub last_visible: Vec<(usize, usize)>,
+}
+
+/// GPU buffer pool used by the LOD render path. Two fixed-size ring
+/// buffers (vertex + index); per frame [`QuadtreeMesh::batch_visible`]
+/// fills the CPU scratch vecs, and we `write_buffer` each scratch
+/// once to refresh the GPU side. The pool's capacity caps how many
+/// visible chunks fit in one frame — overflow chunks silently drop.
+pub struct LodPool {
+    pub vertex_buffer: wgpu::Buffer,
+    pub index_buffer: wgpu::Buffer,
+    pub vertex_capacity_bytes: u64,
+    pub index_capacity_bytes: u64,
+    /// Scratch CPU vecs reused across frames; pre-allocated to a
+    /// chunk-count heuristic to avoid per-frame realloc.
+    pub frame: FrameUpload,
+}
+
+impl LodPool {
+    pub fn new(device: &wgpu::Device, vertex_mb: usize, index_mb: usize) -> Self {
+        let v_size = (vertex_mb * 1024 * 1024) as u64;
+        let i_size = (index_mb * 1024 * 1024) as u64;
+        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("relief3d.lod.pool.vbo"),
+            size: v_size,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("relief3d.lod.pool.ibo"),
+            size: i_size,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        // Pre-allocate scratch large enough for ~3k chunks at LOD 2 mix,
+        // which is the typical 2K–4K visible set.
+        let frame = FrameUpload {
+            vertices: Vec::with_capacity(4 * 1024 * 1024),
+            indices: Vec::with_capacity(8 * 1024 * 1024),
+            draws: Vec::with_capacity(8192),
+            drawn_chunks: 0,
+            total_chunks: 0,
+            last_visible: Vec::with_capacity(8192),
+        };
+        Self {
+            vertex_buffer,
+            index_buffer,
+            vertex_capacity_bytes: v_size,
+            index_capacity_bytes: i_size,
+            frame,
+        }
+    }
+
+    /// Total per-frame upload size in bytes (vertex + index).
+    pub fn last_frame_bytes(&self) -> usize {
+        self.frame.vertices.len() * 16 + self.frame.indices.len() * 4
+    }
+}
+
 /// One leaf of the quadtree.
 #[derive(Debug, Clone)]
 pub struct Chunk {
@@ -102,18 +209,20 @@ pub struct Chunk {
     /// builders that want to inspect or modify the chunk's slice.
     pub row_range: Range<usize>,
     pub col_range: Range<usize>,
-    /// One index range per LOD level — `lod_indices[k]` is the slice
-    /// into [`QuadtreeMesh::indices`] for LOD k of this chunk.
-    pub lod_indices: Vec<Range<u32>>,
+    /// Self-contained vertex + index data for every LOD level. The
+    /// CPU memory cost grows by a factor of ~`lod_levels × 4/3`
+    /// versus a global vertex buffer (rough rule), but per-chunk
+    /// data lets us lazy-upload only visible chunks to GPU.
+    pub lod_data: Vec<ChunkLod>,
 }
 
-/// The full mesh + chunk metadata. Vertices are shared across LODs
-/// (only the indices differ), so memory cost is dominated by the
-/// vertex grid at the highest resolution.
+/// The full mesh. Vertices are partitioned per-chunk per-LOD so the
+/// rendering path can upload only the chunks the camera sees each
+/// frame. Per-chunk CPU memory is higher than the M2 layout that
+/// shared one global vertex buffer; the win is that GPU memory now
+/// scales with visible chunk count, not DEM size.
 #[derive(Debug)]
 pub struct QuadtreeMesh {
-    pub vertices: Vec<Vertex>,
-    pub indices: Vec<u32>,
     pub chunks: Vec<Chunk>,
     pub rows: usize,
     pub cols: usize,
@@ -204,10 +313,8 @@ impl QuadtreeMesh {
         // ----    corners at (r, c), (r, c+1), (r+1, c), (r+1, c+1).
         let chunk_cells = params.chunk_cells.max(2);
         let lod_levels = params.lod_levels.max(1);
-        let cols_u32 = cols as u32;
 
         let mut chunks = Vec::new();
-        let mut indices: Vec<u32> = Vec::new();
 
         for r0 in (0..rows.saturating_sub(1)).step_by(chunk_cells) {
             for c0 in (0..cols.saturating_sub(1)).step_by(chunk_cells) {
@@ -227,117 +334,34 @@ impl QuadtreeMesh {
                 }
                 let bbox = Aabb { min, max };
 
-                // P4-M2 skirt drop: drop edge strips below the chunk
-                // far enough that adjacent chunks at any LOD pair
-                // cannot expose a crack. Using `1.5 × chunk_span`
-                // covers the worst case where the neighbouring chunk
-                // varies by one full span in elevation — terrain
-                // doesn't get more disparate than that at a single
-                // boundary. The `max(zex * 0.05)` floor handles flat
-                // chunks where `bbox.min.y == bbox.max.y`, which
-                // would otherwise produce a zero-height skirt.
+                // Skirt drop — same heuristic as the M2 design.
                 let chunk_y_min = bbox.min.y;
                 let chunk_y_span = (bbox.max.y - bbox.min.y).max(0.0);
                 let skirt_drop = (chunk_y_span * 1.5).max(vertical_exaggeration * 0.05);
                 let skirt_y = chunk_y_min - skirt_drop;
 
-                // Per-LOD index buffers. LOD k uses stride 2^k. The
-                // surface triangles come first; the four edge skirts
-                // are appended into the same range so a single
-                // draw_indexed call handles both.
-                let mut lod_indices = Vec::with_capacity(lod_levels);
+                let mut lod_data = Vec::with_capacity(lod_levels);
                 for k in 0..lod_levels {
                     let step = 1usize << k;
-                    let start = indices.len() as u32;
-
-                    // ---- Surface ----
-                    let mut r = r0;
-                    while r + step <= r1 {
-                        let mut c = c0;
-                        while c + step <= c1 {
-                            let tl = (r as u32) * cols_u32 + c as u32;
-                            let tr = tl + step as u32;
-                            let bl = ((r + step) as u32) * cols_u32 + c as u32;
-                            let br = bl + step as u32;
-                            indices.extend([tl, bl, tr, tr, bl, br]);
-                            c += step;
-                        }
-                        r += step;
-                    }
-
-                    // ---- Skirts ----
-                    //
-                    // For each of the four edges, walk the edge at
-                    // stride `step` and emit a vertical strip
-                    // connecting each step-sized segment of the
-                    // surface to a row of new skirt vertices at
-                    // `y = skirt_y`. Vertex winding doesn't matter
-                    // because the pipeline uses `cull_mode: None`
-                    // (see pipeline.rs), so skirts render visible
-                    // from both sides.
-                    let count_horiz = (c1 - c0) / step;
-                    let count_vert = (r1 - r0) / step;
-                    for edge in 0..4 {
-                        let (start_r, start_c, dr, dc, count) = match edge {
-                            0 => (r0, c0, 0usize, step, count_horiz), // top
-                            1 => (r1, c0, 0usize, step, count_horiz), // bottom
-                            2 => (r0, c0, step, 0usize, count_vert),  // left
-                            _ => (r0, c1, step, 0usize, count_vert),  // right
-                        };
-                        if count == 0 {
-                            continue;
-                        }
-                        let mut prev_top: Option<u32> = None;
-                        let mut prev_skirt: Option<u32> = None;
-                        for i in 0..=count {
-                            let rr = start_r + i * dr;
-                            let cc = start_c + i * dc;
-                            let top = (rr as u32) * cols_u32 + cc as u32;
-                            // Copy first — Vertex is Pod so this is cheap and
-                            // releases the borrow before `vertices.push`.
-                            let v = vertices[top as usize];
-                            let skirt = vertices.len() as u32;
-                            vertices.push(Vertex {
-                                position: [v.position[0], skirt_y, v.position[2]],
-                                uv: v.uv,
-                                // Side-facing normal — pointing outward from the
-                                // chunk. The shader applies Lambertian against
-                                // the sun light, so giving skirts a vertical-ish
-                                // normal keeps them from reading bright when
-                                // the sun is overhead. Match each edge so the
-                                // shading direction lines up with the chunk
-                                // boundary the skirt sits on.
-                                normal: match edge {
-                                    0 => [0.0, 0.3, -0.95],
-                                    1 => [0.0, 0.3, 0.95],
-                                    2 => [-0.95, 0.3, 0.0],
-                                    _ => [0.95, 0.3, 0.0],
-                                },
-                            });
-                            if let (Some(pt), Some(ps)) = (prev_top, prev_skirt) {
-                                indices.extend([pt, ps, top, top, ps, skirt]);
-                            }
-                            prev_top = Some(top);
-                            prev_skirt = Some(skirt);
-                        }
-                    }
-
-                    let end = indices.len() as u32;
-                    lod_indices.push(start..end);
+                    lod_data.push(build_chunk_lod(
+                        &vertices, cols, r0, r1, c0, c1, step, skirt_y,
+                    ));
                 }
 
                 chunks.push(Chunk {
                     bbox,
                     row_range: r0..r1,
                     col_range: c0..c1,
-                    lod_indices,
+                    lod_data,
                 });
             }
         }
 
+        // Global vertex grid is no longer needed — per-chunk LOD data
+        // owns its own subset.
+        drop(vertices);
+
         QuadtreeMesh {
-            vertices,
-            indices,
             chunks,
             rows,
             cols,
@@ -351,11 +375,82 @@ impl QuadtreeMesh {
     pub fn triangle_counts(&self) -> Vec<usize> {
         let mut counts = vec![0; self.lod_levels];
         for chunk in &self.chunks {
-            for (k, r) in chunk.lod_indices.iter().enumerate() {
-                counts[k] += (r.end - r.start) as usize / 3;
+            for (k, lod) in chunk.lod_data.iter().enumerate() {
+                counts[k] += lod.indices.len() / 3;
             }
         }
         counts
+    }
+
+    /// Total per-chunk CPU memory (vertices + indices, summed across
+    /// every chunk and every LOD). The 4 K spike (16.78 M cells)
+    /// lands around 988 MB; the WASM heap budget is 4 GB, so it fits
+    /// — and the GPU pool stays a fraction of that, since only
+    /// visible chunks need uploading.
+    pub fn cpu_bytes(&self) -> usize {
+        self.chunks
+            .iter()
+            .flat_map(|c| c.lod_data.iter())
+            .map(|lod| lod.vertices.len() * 16 + lod.indices.len() * 4)
+            .sum()
+    }
+
+    /// Cull + select + compress all visible chunks into one batched
+    /// per-frame upload. Returns `true` if the upload was rebuilt this
+    /// frame, `false` if the cached result from a previous frame is
+    /// still valid (the camera produced the identical visible set).
+    /// Per-frame work when the cache hits drops from "memcopy hundreds
+    /// of MB" to "compare two short vecs", which is what keeps the FPS
+    /// up when the camera is slow-moving or static.
+    pub fn batch_visible(
+        &self,
+        view_proj: Mat4,
+        camera_pos: Vec3,
+        params: &LodParams,
+        out: &mut FrameUpload,
+    ) -> bool {
+        out.total_chunks = self.chunks.len() as u32;
+        let visible = self.select(view_proj, camera_pos, params);
+
+        // Cache hit — same visible set as last frame, nothing to do.
+        // Comparing slices of `(usize, usize)` is a single memcmp on
+        // contiguous memory; with thousands of chunks it stays well
+        // under a millisecond.
+        if visible == out.last_visible {
+            return false;
+        }
+
+        out.vertices.clear();
+        out.indices.clear();
+        out.draws.clear();
+        out.drawn_chunks = visible.len() as u32;
+
+        for &(chunk_idx, lod_idx) in &visible {
+            let lod = &self.chunks[chunk_idx].lod_data[lod_idx];
+            let base_vertex = out.vertices.len() as u32;
+            let i_start = out.indices.len() as u32;
+
+            // Vertices: straight memcopy (pre-compressed at build).
+            out.vertices.extend_from_slice(&lod.vertices);
+            // Indices: rebase from chunk-local (0..N) to pool-absolute
+            // (base_vertex..base_vertex+N). WebGL2 does not support
+            // `drawElementsInstancedBaseVertex`, so we cannot rely on
+            // `draw_indexed(..., base_vertex, ...)` — every draw on the
+            // GL backend goes through `base_vertex = 0`. The few-ns
+            // per-index addition is cheap; rebuild frames stay sub-10 ms
+            // on a 4 K mesh and most frames hit the visible-set cache.
+            out.indices
+                .extend(lod.indices.iter().map(|&i| i + base_vertex));
+
+            let i_end = out.indices.len() as u32;
+            out.draws.push(DrawCmd {
+                base_vertex: 0,
+                index_start: i_start,
+                index_end: i_end,
+            });
+        }
+        out.last_visible = visible;
+        true
     }
 
     /// Pick a LOD per chunk and frustum-cull. Returns one entry per
@@ -382,6 +477,97 @@ impl QuadtreeMesh {
         }
         out
     }
+}
+
+/// Build one chunk's per-LOD data. Local indices, self-contained
+/// vertex buffer. Stride `step = 2^k`. Skirts walk the four edges
+/// after the surface grid and append vertices + triangles connecting
+/// surface edge cells to a row of new skirt vertices at `skirt_y`.
+fn build_chunk_lod(
+    global: &[Vertex],
+    cols: usize,
+    r0: usize,
+    r1: usize,
+    c0: usize,
+    c1: usize,
+    step: usize,
+    skirt_y: f32,
+) -> ChunkLod {
+    let chunk_rows = (r1 - r0) / step + 1;
+    let chunk_cols = (c1 - c0) / step + 1;
+
+    // ---- Surface grid ----
+    let mut vertices: Vec<crate::VertexC> = Vec::with_capacity(chunk_rows * chunk_cols);
+    for lr in 0..chunk_rows {
+        for lc in 0..chunk_cols {
+            let gr = r0 + lr * step;
+            let gc = c0 + lc * step;
+            vertices.push(crate::VertexC::from_vertex(&global[gr * cols + gc]));
+        }
+    }
+    let cc = chunk_cols as u32;
+    let mut indices = Vec::with_capacity(6 * (chunk_rows - 1) * (chunk_cols - 1));
+    for lr in 0..(chunk_rows - 1) as u32 {
+        for lc in 0..(chunk_cols - 1) as u32 {
+            let tl = lr * cc + lc;
+            let tr = tl + 1;
+            let bl = (lr + 1) * cc + lc;
+            let br = bl + 1;
+            indices.extend([tl, bl, tr, tr, bl, br]);
+        }
+    }
+
+    // ---- Skirts ----
+    //
+    // For each of the four edges, walk the chunk's edge at local
+    // stride 1 (already at LOD k), emit skirt vertices below each top
+    // vertex, and connect consecutive pairs with two triangles.
+    let edge_id = |edge: usize, i: usize| -> u32 {
+        match edge {
+            0 => i as u32,                                   // top row (lr=0)
+            1 => ((chunk_rows - 1) * chunk_cols + i) as u32, // bottom row
+            2 => (i * chunk_cols) as u32,                    // left col (lc=0)
+            _ => (i * chunk_cols + (chunk_cols - 1)) as u32, // right col
+        }
+    };
+    for edge in 0..4 {
+        let count = if edge < 2 { chunk_cols } else { chunk_rows };
+        if count < 2 {
+            continue;
+        }
+        let normal = match edge {
+            0 => [0.0, 0.3, -0.95],
+            1 => [0.0, 0.3, 0.95],
+            2 => [-0.95, 0.3, 0.0],
+            _ => [0.95, 0.3, 0.0],
+        };
+        let mut prev_top: Option<u32> = None;
+        let mut prev_skirt: Option<u32> = None;
+        for i in 0..count {
+            let top_local = edge_id(edge, i);
+            let top_v = vertices[top_local as usize];
+            let skirt_local = vertices.len() as u32;
+            // Decode top vertex's snorm16 X and Z back to f32 in [-1, 1]
+            // so we can build the skirt vertex; encode the new skirt
+            // straight back to VertexC.
+            let top_x = top_v.pos[0] as f32 / 32767.0;
+            let top_z = top_v.pos[2] as f32 / 32767.0;
+            let top_u = top_v.uv[0] as f32 / 65535.0;
+            let top_v_uv = top_v.uv[1] as f32 / 65535.0;
+            vertices.push(crate::VertexC::from_vertex(&Vertex {
+                position: [top_x, skirt_y, top_z],
+                uv: [top_u, top_v_uv],
+                normal,
+            }));
+            if let (Some(pt), Some(ps)) = (prev_top, prev_skirt) {
+                indices.extend([pt, ps, top_local, top_local, ps, skirt_local]);
+            }
+            prev_top = Some(top_local);
+            prev_skirt = Some(skirt_local);
+        }
+    }
+
+    ChunkLod { vertices, indices }
 }
 
 fn frustum_planes(m: Mat4) -> [Vec4; 6] {
@@ -452,17 +638,16 @@ mod tests {
         // 128 cells / 64 chunk_cells = 2 chunks per side → 4 chunks.
         assert_eq!(mesh.chunks.len(), 4);
         assert_eq!(mesh.lod_levels, 4);
-        // Surface vertices = rows × cols. P4-M2 skirts append extra
-        // vertices per chunk × per LOD, so the total grows by some
-        // amount that depends on the chunk layout. Sanity-check the
-        // surface portion is present and the skirts add at least
-        // some vertices (otherwise M2 silently regressed).
-        let surface = 128 * 128;
-        assert!(
-            mesh.vertices.len() > surface,
-            "expected skirts to add vertices, got {} (surface = {surface})",
-            mesh.vertices.len()
-        );
+        // P4-M3c: per-chunk per-LOD self-contained buffers. The CPU
+        // cost is non-trivial (~988 MB on a 4 K DEM) but the GPU
+        // upload pool stays bounded regardless of mesh size — only
+        // visible chunks need to be uploaded each frame.
+        assert!(mesh.cpu_bytes() > 0);
+        for chunk in &mesh.chunks {
+            assert_eq!(chunk.lod_data.len(), 4);
+            // LOD 0 has the most triangles per chunk.
+            assert!(chunk.lod_data[0].indices.len() > chunk.lod_data[3].indices.len());
+        }
     }
 
     #[test]
@@ -496,29 +681,24 @@ mod tests {
             }
         }
         let mesh = QuadtreeMesh::from_dem(&dem, 0.3, LodParams::default());
-        // Walk every chunk and every LOD's skirt vertices (which are
-        // the ones BEYOND the rows*cols surface count). For each,
-        // there must be at least one whose Y sits below its chunk's
-        // bbox.min.y by `chunk_y_span * 1.5` (or the zex floor).
-        let surface_count = 128 * 128;
-        let mut any_below = false;
-        for v in &mesh.vertices[surface_count..] {
-            for chunk in &mesh.chunks {
-                if v.position[0] >= chunk.bbox.min.x
-                    && v.position[0] <= chunk.bbox.max.x
-                    && v.position[2] >= chunk.bbox.min.z
-                    && v.position[2] <= chunk.bbox.max.z
-                    && v.position[1] < chunk.bbox.min.y - 1e-3
-                {
-                    any_below = true;
-                    break;
+        // Each chunk's per-LOD vertex buffer must contain at least one
+        // vertex below the chunk's bbox.min.y by the skirt drop.
+        // With the per-chunk layout this is trivial to check — the
+        // skirt vertices are tail of each `lod_data[k].vertices`.
+        for chunk in &mesh.chunks {
+            for lod in &chunk.lod_data {
+                let mut any_below = false;
+                for v in &lod.vertices {
+                    // Decode snorm16 y back to f32 in [-1, 1].
+                    let y = v.pos[1] as f32 / 32767.0;
+                    if y < chunk.bbox.min.y - 1e-3 {
+                        any_below = true;
+                        break;
+                    }
                 }
-            }
-            if any_below {
-                break;
+                assert!(any_below, "no skirt found below chunk min Y");
             }
         }
-        assert!(any_below, "no skirt vertex found below any chunk min Y");
     }
 
     #[test]

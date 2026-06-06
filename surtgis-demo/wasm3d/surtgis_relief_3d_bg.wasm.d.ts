@@ -3,9 +3,11 @@
 export const memory: WebAssembly.Memory;
 export const __wbg_reliefhandle_free: (a: number, b: number) => void;
 export const reliefhandle_set_ambient: (a: number, b: number) => void;
+export const reliefhandle_set_haze: (a: number, b: number) => void;
 export const reliefhandle_set_sun: (a: number, b: number, c: number) => void;
 export const reliefhandle_set_vertical_scale: (a: number, b: number) => void;
 export const run_relief3d_canvas: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => [number, number, number];
+export const run_relief3d_synthetic_lod_canvas: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number];
 export const wasm_bindgen__closure__destroy__h0210e68aae7756cd: (a: number, b: number) => void;
 export const wasm_bindgen__closure__destroy__h18a6ad49415e60d1: (a: number, b: number) => void;
 export const wasm_bindgen__closure__destroy__hc7896da5159965b6: (a: number, b: number) => void;
