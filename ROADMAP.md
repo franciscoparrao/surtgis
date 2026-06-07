@@ -221,7 +221,7 @@ RTIN is a quality upgrade, not a blocker. Pick it up when a specific
 paper figure has large flat regions that the quadtree wastes
 triangles on.
 
-#### H. TopoToolbox-style channel network depth — *partially done*
+#### H. TopoToolbox-style channel network depth — *done (v0.14.2, 2026-06-07)*
 
 [TopoToolbox](https://topotoolbox.wordpress.com/) (MATLAB) is the
 gold standard for tectonic geomorphology paper figures: χ analysis,
@@ -240,27 +240,29 @@ LSDTopoTools ecosystem.
 - Validation framework (`examples/smugglers_notch_validation/`,
   `examples/15_cuencas_chile/`).
 
-**What is likely undercooked or missing** (to verify before any
-follow-up sprint):
-- Bayesian regression for ksn with uncertainty quantification
-  (LSDTopoTools-style).
-- Swath profile extraction with statistics envelope (min/max/median
-  bands across a corridor).
-- Knickpoint detection (Wobus et al. 2006 slope-area break method;
-  Neely et al. 2017 KZP variant).
-- Drainage divide migration metrics (Whipple et al. 2017 χ-anomaly
-  approach).
-- Stream-profile χ-plot figure rendering (long profiles ready, just
-  no dedicated figure generator).
+**What is likely undercooked or missing** (verified during the sprint):
+- ~~Bayesian regression for ksn with uncertainty quantification~~ →
+  shipped as **percentile bootstrap CI** on `KsnSegment.ksn_ci`,
+  Phase 1 of v0.14.2 (PR #22). Bayesian regression is a polish
+  upgrade if anyone wants priors; the percentile bootstrap covers
+  the practical use case.
+- ~~Swath profile extraction with statistics envelope~~ → shipped as
+  `fluvial::swath_profile` in Phase 2 of v0.14.2 (PR #23). Six
+  statistics per bin (min/max/mean/median/p25/p75/n_samples).
+- ~~Knickpoint detection (Neely et al. 2017 KZP variant)~~ → was
+  already shipped pre-sprint (verified during the survey).
+- ~~Drainage divide migration metrics (Whipple et al. 2017)~~ → was
+  already shipped pre-sprint (verified during the survey).
+- ~~Stream-profile χ-plot figure rendering~~ → reframed as **CSV /
+  JSON export** in Phase 2 of v0.14.2 (PR #23). In-Rust figure
+  generators were ruled out (users re-plot in matplotlib / ggplot2
+  / R for paper-grade figures anyway; the data export is what they
+  actually need).
 
-**Estimate**: depends entirely on which gaps survive verification.
-Likely 1-2 sprints to reach LSDTopoTools-style parity on the items
-above.
-
-**Why partially done**: the core analysis is already shipped and
-research-validated. The remaining items are paper-figure-shaped, not
-core. Worth picking up when a specific paper demands them (tectonic
-geomorphology submission, etc.) rather than speculatively.
+**Status**: done. The practical TopoToolbox-parity gap closed for
+the items that mattered. A `long_profile` convenience helper for
+per-tributary walking was deferred — callers can iterate confluences
+themselves; the wrapper isn't a blocker.
 
 #### I. 3D Tiles export — *backlog*
 

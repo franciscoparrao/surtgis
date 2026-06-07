@@ -9,6 +9,99 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.14.2] - 2026-06-07
+
+Patch release. Closes **ROADMAP item H** ("TopoToolbox-style channel
+network depth") which was marked *partially done* in the 2026-06-06
+survey. Two additive phases land in `surtgis-algorithms::fluvial`;
+no breaking changes; existing API surface preserved.
+
+### Added — Phase 1 (PR #22)
+
+- **`KsnSegment.ksn_ci: (f64, f64)`** — 95 % CI on `ksn_mean` from
+  a deterministic percentile bootstrap over the segment's per-cell
+  ksn values.
+- **`KsnParams.bootstrap_n: usize`** (default 200) and
+  **`KsnParams.seed: u64`** (default 42). Mirrors the
+  `concavity_index` recipe — `hash(seed, segment_id, boot_k, cell_k)`
+  generates resampling indices. `bootstrap_n = 0` disables the CI;
+  it then equals `(ksn_mean, ksn_mean)`, preserving legacy behaviour.
+- **`fluvial::long_profile`** — new module. Walks each outlet
+  upstream along the largest-area path at every confluence, emits
+  per-node `(coord, distance_from_outlet_m, elevation, area_m2,
+  chi, ksn)`. χ and ksn are passed in as **optional rasters** —
+  caller computes them with whatever θ_ref / smoothing-window choices
+  they want; the extractor stays agnostic.
+  
+  New types: `LongProfile`, `LongProfileNode`, `LongProfileParams`,
+  `LongProfileError`. Re-exported at `fluvial::`.
+
+### Added — Phase 2 (PR #23)
+
+- **`fluvial::swath_profile`** — new module. Standard TopoToolbox
+  swath: densify a polyline baseline to `step_along_m` spacing,
+  cast perpendiculars at every vertex, sample the raster within
+  `±half_width_m` at `step_cross_m` steps, emit per-bin
+  `min / max / mean / median / p25 / p75 / n_samples`.
+
+  Baseline is caller-supplied — works equally for `LongProfile`
+  nodes (`.iter().map(|n| n.coord).collect()`), fault traces, hand-
+  picked transects, etc.
+
+  New types: `SwathProfile`, `SwathStats`, `SwathParams`,
+  `SwathError`. Re-exported at `fluvial::`.
+
+- **`fluvial::export`** — new module. CSV / JSON writers for the
+  four data products:
+
+  | Product | CSV | JSON |
+  |---------|-----|------|
+  | `LongProfile` | row per node, `profile_id` groups outlets | hierarchical, nested `nodes` array |
+  | `SwathProfile` | row per bin | row array |
+  | `KsnResult` segments | row per segment + `geometry_wkt` LINESTRING | row array with nested coords |
+  | χ raster | row per finite cell | (use the CSV) |
+
+  The core types stay free of `serde` derives — wrapper structs in
+  `export.rs` own the serialisation. Adds `serde_json` and `csv`
+  to `surtgis-algorithms` dependencies.
+
+  Free functions: `write_long_profiles_csv`, `write_long_profiles_json`,
+  `write_swath_csv`, `write_swath_json`, `write_ksn_segments_csv`,
+  `write_ksn_segments_json`, `write_chi_csv`. All take any
+  `impl Write` so callers can stream to files, buffers, gz wrappers,
+  whatever.
+
+### Verified
+
+- `cargo test --release -p surtgis-algorithms fluvial`: 42/42 green
+  (was 34 pre-sprint; +8 new tests across Phase 1 and Phase 2).
+- `cargo build --release --workspace`: clean.
+
+### Deferred and rule-outs
+
+The 2026-06-06 ROADMAP survey listed several follow-up items under
+H. Status now:
+
+  - **Bootstrap CI on ksn** — done (Phase 1).
+  - **Long-profile extractor** — done (Phase 1).
+  - **Swath profiles** — done (Phase 2).
+  - **CSV/JSON export** — done (Phase 2).
+  - **Knickpoint detection** — already shipped pre-sprint
+    (Neely et al. 2017 KZP variant).
+  - **Divide migration** — already shipped pre-sprint
+    (Whipple/Forte/Willett 2017).
+  - **Per-tributary profile walker convenience helper** —
+    deferred. Callers can iterate confluences and call
+    `long_profile` themselves; the convenience wrapper isn't a
+    blocker.
+  - **In-Rust figure generators** — **out of scope**. Users will
+    re-plot the data in matplotlib / ggplot2 / R for paper-grade
+    figures anyway; the CSV / JSON export is what they actually
+    need.
+
+After this release ROADMAP item H moves from *partially done* to
+**done**. See `ROADMAP.md` for the updated entry.
+
 ## [0.14.1] - 2026-06-06
 
 Patch release. Closes **M4** of `SPEC_SURTGIS_RELIEF_P4.md` — the
