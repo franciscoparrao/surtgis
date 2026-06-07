@@ -229,6 +229,31 @@ pub struct QuadtreeMesh {
     pub lod_levels: usize,
 }
 
+/// Parameters for [`QuadtreeMesh::from_dem_martini`].
+#[derive(Debug, Clone)]
+pub struct MartiniMeshParams {
+    /// Side length of each leaf chunk, in DEM cells. Must be a power
+    /// of two (Martini's RTIN requires a `2^n + 1` grid; with
+    /// `chunk_cells = 64` the chunk's 65 × 65 vertex grid satisfies
+    /// this exactly).
+    pub chunk_cells: usize,
+    /// Vertical-error tolerance in scene-units (same units as
+    /// `vertical_exaggeration`). Smaller → more triangles, finer
+    /// surface; larger → coarser, fewer triangles. A reasonable
+    /// default for DEMs normalised to `[0, 0.45]` is `0.002`
+    /// (≈ 0.5 % of the vertical range).
+    pub max_error: f32,
+}
+
+impl Default for MartiniMeshParams {
+    fn default() -> Self {
+        Self {
+            chunk_cells: 64,
+            max_error: 0.002,
+        }
+    }
+}
+
 impl QuadtreeMesh {
     /// Build a quadtree mesh from a DEM. Heights are normalised to
     /// `[0, vertical_exaggeration]` in scene units, same convention
@@ -369,6 +394,214 @@ impl QuadtreeMesh {
         }
     }
 
+    /// Build a quadtree mesh whose per-chunk triangulation comes
+    /// from the [Mapbox Martini RTIN algorithm][crate::martini]
+    /// instead of stride-based decimation. Each chunk holds a
+    /// **single** [`ChunkLod`] — the adaptive surface mesh at the
+    /// requested error tolerance. The render path is unchanged: same
+    /// skirts, same `LodPool` upload, same select / batch flow (which
+    /// will always pick LOD 0 because that's the only level present).
+    ///
+    /// Trade-off vs [`Self::from_dem`]:
+    ///
+    /// |                 | quadtree (`from_dem`) | Martini (`from_dem_martini`) |
+    /// |-----------------|-----------------------|------------------------------|
+    /// | Triangle layout | uniform per chunk     | adapts to curvature          |
+    /// | LOD levels      | distance-band picks   | single error-tuned mesh      |
+    /// | Build time      | fast                  | slower (error pyramid + tree walk) |
+    /// | Best for        | homogeneous relief    | heterogeneous relief, flat basins |
+    ///
+    /// `params.chunk_cells` must be a power of two — Martini's RTIN
+    /// requires a `(2^n + 1)` grid per chunk. The default `64` is
+    /// the natural fit and matches the quadtree default.
+    pub fn from_dem_martini(
+        dem: &Raster<f64>,
+        vertical_exaggeration: f32,
+        params: MartiniMeshParams,
+    ) -> Self {
+        let (rows, cols) = dem.shape();
+        let longer = rows.max(cols) as f32;
+        let extent_x = cols as f32 / longer;
+        let extent_z = rows as f32 / longer;
+        let inv_rows = 1.0 / (rows.max(2) - 1) as f32;
+        let inv_cols = 1.0 / (cols.max(2) - 1) as f32;
+
+        let (z_min, z_max) = {
+            let mut lo = f64::INFINITY;
+            let mut hi = f64::NEG_INFINITY;
+            for v in dem.data().iter() {
+                if !v.is_finite() {
+                    continue;
+                }
+                if *v < lo {
+                    lo = *v;
+                }
+                if *v > hi {
+                    hi = *v;
+                }
+            }
+            (lo, hi)
+        };
+        let range = if (z_max - z_min).is_finite() && z_max > z_min {
+            z_max - z_min
+        } else {
+            1.0
+        };
+        let height_at = |r: usize, c: usize| -> f32 {
+            let raw = dem.get(r, c).unwrap_or(z_min);
+            let n = if raw.is_finite() {
+                ((raw - z_min) / range).clamp(0.0, 1.0) as f32
+            } else {
+                0.0
+            };
+            n * vertical_exaggeration
+        };
+
+        // Full vertex grid (positions + normals via central differences),
+        // same as [`Self::from_dem`]. Each chunk extracts its 65 × 65
+        // (or whatever `chunk_cells + 1`) sub-grid and Martini-meshes it.
+        let dx = 2.0 * extent_x / (cols.max(2) - 1) as f32;
+        let dz = 2.0 * extent_z / (rows.max(2) - 1) as f32;
+
+        let mut vertices: Vec<Vertex> = Vec::with_capacity(rows * cols);
+        for r in 0..rows {
+            for c in 0..cols {
+                let u = c as f32 * inv_cols;
+                let v = r as f32 * inv_rows;
+                let x = (u * 2.0 - 1.0) * extent_x;
+                let z = (v * 2.0 - 1.0) * extent_z;
+                let y = height_at(r, c);
+                let (cm, cp) = (c.saturating_sub(1), (c + 1).min(cols - 1));
+                let (rm, rp) = (r.saturating_sub(1), (r + 1).min(rows - 1));
+                let span_x = (cp - cm).max(1) as f32 * dx;
+                let span_z = (rp - rm).max(1) as f32 * dz;
+                let dh_dx = (height_at(r, cp) - height_at(r, cm)) / span_x;
+                let dh_dz = (height_at(rp, c) - height_at(rm, c)) / span_z;
+                let n = glam::Vec3::new(-dh_dx, 1.0, -dh_dz).normalize_or_zero();
+                vertices.push(Vertex {
+                    position: [x, y, z],
+                    uv: [u, v],
+                    normal: [n.x, n.y, n.z],
+                });
+            }
+        }
+
+        let chunk_cells = params.chunk_cells.max(2);
+        assert!(
+            (chunk_cells).is_power_of_two(),
+            "MartiniMeshParams.chunk_cells must be a power of two (Martini RTIN requirement)"
+        );
+        // Precompute the Martini coord table once per session. Re-used
+        // across every chunk of this DEM build.
+        let martini = crate::martini::Martini::new(chunk_cells + 1)
+            .expect("chunk_cells + 1 is 2^n + 1 by construction");
+
+        let mut chunks = Vec::new();
+        for r0 in (0..rows.saturating_sub(1)).step_by(chunk_cells) {
+            for c0 in (0..cols.saturating_sub(1)).step_by(chunk_cells) {
+                let r1 = (r0 + chunk_cells).min(rows - 1);
+                let c1 = (c0 + chunk_cells).min(cols - 1);
+                if r1 - r0 != chunk_cells || c1 - c0 != chunk_cells {
+                    // Edge chunks smaller than `chunk_cells` cannot
+                    // be Martini-meshed (Martini requires a fixed
+                    // `2^n + 1` grid). Fall back to the
+                    // quadtree-style stride-1 surface mesh, with
+                    // skirts as usual. This means a DEM whose side
+                    // isn't a multiple of `chunk_cells` has its rim
+                    // rendered uniformly; everything inside is
+                    // Martini-adaptive.
+                    let (bbox, skirt_y) = chunk_bbox_and_skirt(
+                        &vertices,
+                        cols,
+                        r0,
+                        r1,
+                        c0,
+                        c1,
+                        vertical_exaggeration,
+                    );
+                    let lod = build_chunk_lod(&vertices, cols, r0, r1, c0, c1, 1, skirt_y);
+                    chunks.push(Chunk {
+                        bbox,
+                        row_range: r0..r1,
+                        col_range: c0..c1,
+                        lod_data: vec![lod],
+                    });
+                    continue;
+                }
+
+                let (bbox, skirt_y) =
+                    chunk_bbox_and_skirt(&vertices, cols, r0, r1, c0, c1, vertical_exaggeration);
+
+                // Extract the chunk's heights into a (chunk_cells + 1)²
+                // row-major f32 buffer for Martini.
+                let g = chunk_cells + 1;
+                let mut heights = vec![0.0f32; g * g];
+                for lr in 0..g {
+                    for lc in 0..g {
+                        let gr = r0 + lr;
+                        let gc = c0 + lc;
+                        heights[lr * g + lc] = vertices[gr * cols + gc].position[1];
+                    }
+                }
+                let tile = martini
+                    .tile(&heights)
+                    .expect("heights length matches Martini grid_size²");
+                let mesh = tile.mesh(params.max_error);
+
+                // Convert Martini's (col, row, height) verts into our
+                // local ChunkLod vertex buffer. Position / UV / normal
+                // come from the global vertex grid at the same cell —
+                // the height in `mesh.vertices[i][2]` matches by
+                // construction, but we pull the full Vertex to keep
+                // normals consistent with the global grid.
+                let mut local_vertices: Vec<crate::VertexC> =
+                    Vec::with_capacity(mesh.vertices.len());
+                // Track local row/col for skirt walks below.
+                let mut local_grid_pos: Vec<(usize, usize)> =
+                    Vec::with_capacity(mesh.vertices.len());
+                for v in &mesh.vertices {
+                    let lc = v[0] as usize;
+                    let lr = v[1] as usize;
+                    let gr = r0 + lr;
+                    let gc = c0 + lc;
+                    local_vertices.push(crate::VertexC::from_vertex(&vertices[gr * cols + gc]));
+                    local_grid_pos.push((lr, lc));
+                }
+                let mut local_indices = mesh.indices.clone();
+
+                // Skirts. Walk the four boundaries; for each, gather
+                // the local vertex IDs whose grid position lies on
+                // that edge and emit a strip dropping to `skirt_y`.
+                append_martini_skirts(
+                    &mut local_vertices,
+                    &mut local_indices,
+                    &local_grid_pos,
+                    g,
+                    skirt_y,
+                );
+
+                chunks.push(Chunk {
+                    bbox,
+                    row_range: r0..r1,
+                    col_range: c0..c1,
+                    lod_data: vec![ChunkLod {
+                        vertices: local_vertices,
+                        indices: local_indices,
+                    }],
+                });
+            }
+        }
+
+        drop(vertices);
+
+        QuadtreeMesh {
+            chunks,
+            rows,
+            cols,
+            lod_levels: 1,
+        }
+    }
+
     /// Total triangle count across every LOD level. Useful for
     /// sanity-checking that LOD 0 reproduces the no-LOD mesh size and
     /// that coarser levels shrink by ~4× each.
@@ -472,10 +705,113 @@ impl QuadtreeMesh {
             if !aabb_inside_frustum(chunk.bbox, &planes) {
                 continue;
             }
-            let lod = select_lod(chunk.bbox.center(), camera_pos, params);
+            // Clamp to the chunk's actual LOD count so the Martini
+            // path (single-LOD per chunk) doesn't panic when
+            // `select_lod` picks a finer band than the chunk owns.
+            let lod = select_lod(chunk.bbox.center(), camera_pos, params)
+                .min(chunk.lod_data.len().saturating_sub(1));
             out.push((i, lod));
         }
         out
+    }
+}
+
+/// Helper: compute a chunk's bbox + skirt-drop Y from its corner cells.
+/// Shared between the quadtree and Martini builders.
+fn chunk_bbox_and_skirt(
+    vertices: &[Vertex],
+    cols: usize,
+    r0: usize,
+    r1: usize,
+    c0: usize,
+    c1: usize,
+    vertical_exaggeration: f32,
+) -> (Aabb, f32) {
+    let mut min = Vec3::splat(f32::INFINITY);
+    let mut max = Vec3::splat(f32::NEG_INFINITY);
+    for r in r0..=r1 {
+        for c in c0..=c1 {
+            let p = &vertices[r * cols + c].position;
+            let v = Vec3::new(p[0], p[1], p[2]);
+            min = min.min(v);
+            max = max.max(v);
+        }
+    }
+    let bbox = Aabb { min, max };
+    let chunk_y_span = (bbox.max.y - bbox.min.y).max(0.0);
+    let skirt_drop = (chunk_y_span * 1.5).max(vertical_exaggeration * 0.05);
+    let skirt_y = bbox.min.y - skirt_drop;
+    (bbox, skirt_y)
+}
+
+/// Walk the four boundary edges of a Martini-meshed chunk and emit a
+/// skirt strip on each. Same outward-normal convention and `skirt_y`
+/// semantics as `build_chunk_lod`'s skirt loop; the only difference
+/// is that we use whatever boundary vertices Martini retained
+/// instead of the full per-LOD stride sequence.
+fn append_martini_skirts(
+    vertices: &mut Vec<crate::VertexC>,
+    indices: &mut Vec<u32>,
+    grid_pos: &[(usize, usize)],
+    g: usize,
+    skirt_y: f32,
+) {
+    let last = g - 1;
+    // edge 0: top    (lr = 0,   sort by lc ascending) — normal -Z
+    // edge 1: bottom (lr = last, sort by lc ascending) — normal +Z
+    // edge 2: left   (lc = 0,   sort by lr ascending) — normal -X
+    // edge 3: right  (lc = last, sort by lr ascending) — normal +X
+    let edges: [(Box<dyn Fn(usize, usize) -> Option<usize>>, [f32; 3]); 4] = [
+        (
+            Box::new(|lr, _| if lr == 0 { Some(0) } else { None }),
+            [0.0, 0.3, -0.95],
+        ),
+        (
+            Box::new(move |lr, _| if lr == last { Some(0) } else { None }),
+            [0.0, 0.3, 0.95],
+        ),
+        (
+            Box::new(|_, lc| if lc == 0 { Some(0) } else { None }),
+            [-0.95, 0.3, 0.0],
+        ),
+        (
+            Box::new(move |_, lc| if lc == last { Some(0) } else { None }),
+            [0.95, 0.3, 0.0],
+        ),
+    ];
+    for (edge_idx, (filter, normal)) in edges.into_iter().enumerate() {
+        // Collect (local_vertex_id, sort_key) for verts on this edge.
+        let mut edge_verts: Vec<(u32, usize)> = Vec::new();
+        for (vid, &(lr, lc)) in grid_pos.iter().enumerate() {
+            if filter(lr, lc).is_some() {
+                let sort_key = if edge_idx < 2 { lc } else { lr };
+                edge_verts.push((vid as u32, sort_key));
+            }
+        }
+        edge_verts.sort_by_key(|&(_, k)| k);
+        if edge_verts.len() < 2 {
+            continue;
+        }
+        let mut prev_top: Option<u32> = None;
+        let mut prev_skirt: Option<u32> = None;
+        for (top_local, _) in edge_verts {
+            let top_v = vertices[top_local as usize];
+            let top_x = top_v.pos[0] as f32 / 32767.0;
+            let top_z = top_v.pos[2] as f32 / 32767.0;
+            let top_u = top_v.uv[0] as f32 / 65535.0;
+            let top_v_uv = top_v.uv[1] as f32 / 65535.0;
+            let skirt_local = vertices.len() as u32;
+            vertices.push(crate::VertexC::from_vertex(&Vertex {
+                position: [top_x, skirt_y, top_z],
+                uv: [top_u, top_v_uv],
+                normal,
+            }));
+            if let (Some(pt), Some(ps)) = (prev_top, prev_skirt) {
+                indices.extend([pt, ps, top_local, top_local, ps, skirt_local]);
+            }
+            prev_top = Some(top_local);
+            prev_skirt = Some(skirt_local);
+        }
     }
 }
 
@@ -719,5 +1055,73 @@ mod tests {
         // camera at z = -3 looks at origin, so all chunks should be in
         // front. They should all survive culling.
         assert_eq!(visible.len(), mesh.chunks.len());
+    }
+
+    /// `from_dem_martini` on a flat DEM should produce drastically
+    /// fewer triangles than `from_dem` at the same chunk size — the
+    /// Martini error pyramid is all zeros so every chunk collapses
+    /// to the 2 root triangles plus skirts.
+    #[test]
+    fn martini_collapses_flat_dem_to_few_triangles() {
+        let dem = flat_dem(129, 129); // 128 cells + 1 → 2 chunks per side
+        let quad = QuadtreeMesh::from_dem(&dem, 0.3, LodParams::default());
+        let mart = QuadtreeMesh::from_dem_martini(
+            &dem,
+            0.3,
+            MartiniMeshParams {
+                chunk_cells: 64,
+                max_error: 0.001,
+            },
+        );
+        let quad_lod0_tris = quad.triangle_counts()[0];
+        let mart_tris: usize = mart
+            .chunks
+            .iter()
+            .map(|c| c.lod_data[0].indices.len() / 3)
+            .sum();
+        assert!(
+            mart_tris < quad_lod0_tris / 10,
+            "Martini on a flat DEM should produce <10 % of the quadtree LOD0 triangle count; \
+             got Martini={} vs quad-LOD0={}",
+            mart_tris,
+            quad_lod0_tris
+        );
+        assert_eq!(mart.lod_levels, 1, "Martini path has exactly one LOD");
+    }
+
+    /// On a bumpy DEM, Martini at a tight error tolerance should
+    /// converge toward the quadtree's full LOD 0 triangle count.
+    #[test]
+    fn martini_tight_tolerance_approaches_full_grid() {
+        let mut dem = Raster::<f64>::new(129, 129);
+        for r in 0..129 {
+            for c in 0..129 {
+                let z = ((r as f64 * 0.4).sin() + (c as f64 * 0.4).cos()) * 30.0 + 100.0;
+                dem.set(r, c, z).unwrap();
+            }
+        }
+        let quad = QuadtreeMesh::from_dem(&dem, 0.3, LodParams::default());
+        let mart = QuadtreeMesh::from_dem_martini(
+            &dem,
+            0.3,
+            MartiniMeshParams {
+                chunk_cells: 64,
+                max_error: 0.0,
+            },
+        );
+        let quad_lod0_tris = quad.triangle_counts()[0];
+        let mart_tris: usize = mart
+            .chunks
+            .iter()
+            .map(|c| c.lod_data[0].indices.len() / 3)
+            .sum();
+        // At max_error=0, Martini should be within 25% of the full
+        // quadtree LOD 0 count — Martini still wins a bit because
+        // some midpoints fall exactly on the interpolation.
+        let ratio = mart_tris as f64 / quad_lod0_tris as f64;
+        assert!(
+            ratio > 0.5 && ratio < 1.5,
+            "tight Martini should reproduce ~quadtree-LOD0 count, got ratio={ratio:.2} (mart={mart_tris}, quad={quad_lod0_tris})"
+        );
     }
 }
