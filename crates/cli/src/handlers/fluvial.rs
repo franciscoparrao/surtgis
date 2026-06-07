@@ -434,6 +434,7 @@ fn handle_ksn(
         segment_length_m,
         cell_size_m,
         min_drainage_area_m2,
+        ..Default::default()
     };
     let emit_segments = segments_path.is_some();
 

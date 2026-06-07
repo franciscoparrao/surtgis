@@ -69,6 +69,12 @@ pub struct KsnParams {
     /// Minimum drainage area in m² for a cell to contribute to ksn.
     /// Default 1 km². Cells below this give numerically unstable values.
     pub min_drainage_area_m2: f64,
+    /// Number of bootstrap iterations for the per-segment 95 % CI.
+    /// Default 200 (matches `concavity_index`). Set to 0 to disable;
+    /// the CI is then `(ksn_mean, ksn_mean)`.
+    pub bootstrap_n: usize,
+    /// Reproducibility seed for the bootstrap resampler. Default 42.
+    pub seed: u64,
 }
 
 impl Default for KsnParams {
@@ -78,6 +84,8 @@ impl Default for KsnParams {
             segment_length_m: 500.0,
             cell_size_m: 30.0,
             min_drainage_area_m2: 1.0e6,
+            bootstrap_n: 200,
+            seed: 42,
         }
     }
 }
@@ -90,6 +98,12 @@ pub struct KsnSegment {
     pub coordinates: Vec<(f64, f64)>,
     /// Mean `ksn` over the segment cells (NaNs excluded).
     pub ksn_mean: f64,
+    /// 95 % CI on `ksn_mean` from a deterministic bootstrap over the
+    /// segment's per-cell `ksn` values. When `bootstrap_n == 0` in
+    /// the params, this equals `(ksn_mean, ksn_mean)`. Standard
+    /// percentile bootstrap; matches the pattern in
+    /// `concavity_index`.
+    pub ksn_ci: (f64, f64),
     /// Number of cells contributing to the mean.
     pub n_cells: usize,
 }
@@ -285,7 +299,14 @@ pub fn channel_steepness(
 
     // ── Optional vector segments. ─────────────────────────────────────
     let segments = if emit_segments {
-        Some(extract_segments(&graph, &ksn_smoothed, stream, flow_acc))
+        Some(extract_segments(
+            &graph,
+            &ksn_smoothed,
+            stream,
+            flow_acc,
+            params.bootstrap_n,
+            params.seed,
+        ))
     } else {
         None
     };
@@ -334,7 +355,11 @@ fn extract_segments(
     ksn: &[f64],
     stream: &Raster<u8>,
     flow_acc: &Raster<f64>,
+    bootstrap_n: usize,
+    seed: u64,
 ) -> Vec<KsnSegment> {
+    use std::hash::{Hash, Hasher};
+
     let mut segments = Vec::new();
     let mut starts: VecDeque<usize> = VecDeque::new();
 
@@ -353,7 +378,7 @@ fn extract_segments(
         }
     }
 
-    for start in starts {
+    for (segment_id, start) in starts.into_iter().enumerate() {
         // Walk upstream from start, single-stem, until the next confluence
         // (multiple upstream links) or headwater (no upstream).
         let mut cells: Vec<usize> = vec![start];
@@ -376,10 +401,10 @@ fn extract_segments(
             cur = next;
         }
 
-        // Convert cell indices → (x, y) raster-CRS coordinates.
+        // Convert cell indices → (x, y) raster-CRS coordinates AND
+        // collect the per-cell finite ksn values used for bootstrap.
         let mut coords: Vec<(f64, f64)> = Vec::with_capacity(cells.len());
-        let mut sum = 0.0;
-        let mut count = 0;
+        let mut values: Vec<f64> = Vec::with_capacity(cells.len());
         for &i in &cells {
             let (r, c) = graph.stream_cells[i];
             // Cell centre (pixel_to_geo returns the upper-left corner;
@@ -390,19 +415,52 @@ fn extract_segments(
             let y = y0 + 0.5 * gt.pixel_height;
             coords.push((x, y));
             if ksn[i].is_finite() {
-                sum += ksn[i];
-                count += 1;
+                values.push(ksn[i]);
             }
         }
+        let count = values.len();
         let ksn_mean = if count > 0 {
-            sum / count as f64
+            values.iter().sum::<f64>() / count as f64
         } else {
             f64::NAN
         };
+
+        // Deterministic bootstrap on the per-cell ksn values. Hash
+        // (seed, segment_id, boot_k, cell_k) for the resampling
+        // index — same recipe as `concavity_index` so results are
+        // reproducible across the suite.
+        let ksn_ci = if bootstrap_n == 0 || count == 0 {
+            (ksn_mean, ksn_mean)
+        } else {
+            let n = count;
+            let mut samples: Vec<f64> = Vec::with_capacity(bootstrap_n);
+            for boot in 0..bootstrap_n {
+                let mut sum_b = 0.0;
+                for k in 0..n {
+                    let mut h = std::collections::hash_map::DefaultHasher::new();
+                    seed.hash(&mut h);
+                    segment_id.hash(&mut h);
+                    boot.hash(&mut h);
+                    k.hash(&mut h);
+                    let idx = (h.finish() as usize) % n;
+                    sum_b += values[idx];
+                }
+                samples.push(sum_b / n as f64);
+            }
+            samples.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let pct = |p: f64| -> f64 {
+                let idx =
+                    ((p * (samples.len() as f64 - 1.0)).round() as usize).min(samples.len() - 1);
+                samples[idx]
+            };
+            (pct(0.025), pct(0.975))
+        };
+
         let _ = flow_acc; // currently unused; reserved for future per-segment area-weighted mean
         segments.push(KsnSegment {
             coordinates: coords,
             ksn_mean,
+            ksn_ci,
             n_cells: count,
         });
     }
@@ -461,6 +519,8 @@ mod tests {
             segment_length_m: 60.0, // window = 60 m = 2 cells radius
             cell_size_m: cell,
             min_drainage_area_m2: 1.0e6,
+            bootstrap_n: 0,
+            seed: 42,
         };
         let result = channel_steepness(&stream, &flow_dir, &flow_acc, &dem, params, false).unwrap();
 
@@ -501,6 +561,8 @@ mod tests {
             segment_length_m: 1.0, // half-window 0.5 m: no neighbours reach in
             cell_size_m: 30.0,
             min_drainage_area_m2: 1.0e6,
+            bootstrap_n: 0,
+            seed: 42,
         };
         let result = channel_steepness(&stream, &flow_dir, &flow_acc, &dem, params, false).unwrap();
 
@@ -530,6 +592,8 @@ mod tests {
             segment_length_m: 1.0,
             cell_size_m: cell,
             min_drainage_area_m2: threshold_cells * cell_area,
+            bootstrap_n: 0,
+            seed: 42,
         };
         let result = channel_steepness(&stream, &flow_dir, &flow_acc, &dem, params, false).unwrap();
 
@@ -578,6 +642,8 @@ mod tests {
             segment_length_m: 30.0,
             cell_size_m: 30.0,
             min_drainage_area_m2: 1.0e6,
+            bootstrap_n: 0,
+            seed: 42,
         };
         let result = channel_steepness(&stream, &flow_dir, &flow_acc, &dem, params, true).unwrap();
         let segs = result.segments.expect("emit_segments=true");
@@ -589,5 +655,94 @@ mod tests {
             "expected 3 segments for a Y network, got {}",
             segs.len()
         );
+    }
+
+    /// Bootstrap CI brackets the segment mean with the configured
+    /// percentiles, and is reproducible across runs with the same seed.
+    #[test]
+    fn ksn_bootstrap_ci_brackets_the_mean_and_is_seed_stable() {
+        // Single straight 8-cell channel, varying slope so the per-cell
+        // ksn values have real spread for the bootstrap to chew on.
+        let n = 8;
+        let cell = 30.0;
+        let a_cells = 5000.0;
+        let stream = raster_u8(vec![vec![1u8; n]]);
+        let flow_dir = raster_u8(vec![vec![1u8; n]]);
+        let flow_acc = raster_f64(vec![vec![a_cells; n]]);
+        // Heterogeneous elevation drops: alternating 1 m and 3 m steps
+        // produce ksn values with non-trivial variance.
+        let drops = [3.0, 1.0, 3.0, 1.0, 3.0, 1.0, 3.0];
+        let mut elev = vec![0.0; n];
+        for (i, d) in drops.iter().enumerate() {
+            elev[n - 2 - i] = elev[n - 1 - i] + d;
+        }
+        let dem = raster_f64(vec![elev]);
+
+        let mut params = KsnParams {
+            theta_ref: 0.45,
+            segment_length_m: 1.0,
+            cell_size_m: cell,
+            min_drainage_area_m2: 1.0e6,
+            bootstrap_n: 200,
+            seed: 42,
+        };
+
+        let r1 =
+            channel_steepness(&stream, &flow_dir, &flow_acc, &dem, params.clone(), true).unwrap();
+        let r2 =
+            channel_steepness(&stream, &flow_dir, &flow_acc, &dem, params.clone(), true).unwrap();
+        let s1 = r1.segments.unwrap();
+        let s2 = r2.segments.unwrap();
+        assert_eq!(s1.len(), s2.len());
+        for (a, b) in s1.iter().zip(s2.iter()) {
+            assert_eq!(a.ksn_ci, b.ksn_ci, "same seed must give identical CI");
+            assert!(
+                a.ksn_ci.0 <= a.ksn_mean + 1e-9 && a.ksn_mean <= a.ksn_ci.1 + 1e-9,
+                "CI must bracket the mean: ksn_mean={}, ci=({}, {})",
+                a.ksn_mean,
+                a.ksn_ci.0,
+                a.ksn_ci.1
+            );
+        }
+
+        // Bumping the seed must change at least one CI (the resampled
+        // indices differ).
+        params.seed = 1729;
+        let r3 = channel_steepness(&stream, &flow_dir, &flow_acc, &dem, params, true).unwrap();
+        let s3 = r3.segments.unwrap();
+        let any_changed = s1.iter().zip(s3.iter()).any(|(a, b)| {
+            (a.ksn_ci.0 - b.ksn_ci.0).abs() > 1e-12 || (a.ksn_ci.1 - b.ksn_ci.1).abs() > 1e-12
+        });
+        assert!(
+            any_changed,
+            "different seeds should change at least one CI; got identical CIs"
+        );
+    }
+
+    /// `bootstrap_n = 0` disables the CI; it must equal `(mean, mean)`.
+    #[test]
+    fn ksn_bootstrap_disabled_means_ci_equals_mean() {
+        let n = 6;
+        let cell = 30.0;
+        let stream = raster_u8(vec![vec![1u8; n]]);
+        let flow_dir = raster_u8(vec![vec![1u8; n]]);
+        let flow_acc = raster_f64(vec![vec![5000.0; n]]);
+        let dem = raster_f64(vec![vec![5.0, 4.0, 3.0, 2.0, 1.0, 0.0]]);
+        let params = KsnParams {
+            theta_ref: 0.45,
+            segment_length_m: 1.0,
+            cell_size_m: cell,
+            min_drainage_area_m2: 1.0e6,
+            bootstrap_n: 0,
+            seed: 42,
+        };
+        let r = channel_steepness(&stream, &flow_dir, &flow_acc, &dem, params, true).unwrap();
+        let segs = r.segments.unwrap();
+        for s in &segs {
+            if s.ksn_mean.is_finite() {
+                assert_eq!(s.ksn_ci.0, s.ksn_mean);
+                assert_eq!(s.ksn_ci.1, s.ksn_mean);
+            }
+        }
     }
 }
