@@ -25,15 +25,21 @@ pub mod channel_steepness;
 pub mod chi;
 pub mod concavity;
 pub mod divide_migration;
+pub mod export;
 pub mod knickpoint;
 pub mod long_profile;
 pub mod stream_traversal;
+pub mod swath_profile;
 
 pub use channel_steepness::{KsnError, KsnParams, KsnResult, KsnSegment, channel_steepness};
 pub use chi::{ChiError, ChiParams, chi_transform};
 pub use concavity::{ConcavityError, ConcavityParams, ConcavityResult, concavity_index};
 pub use divide_migration::{
     DivideMigrationError, DivideMigrationParams, DivideSegment, divide_migration,
+};
+pub use export::{
+    ExportError, write_chi_csv, write_ksn_segments_csv, write_ksn_segments_json,
+    write_long_profiles_csv, write_long_profiles_json, write_swath_csv, write_swath_json,
 };
 pub use knickpoint::{
     Knickpoint, KnickpointError, KnickpointParams, KnickpointPolarity, knickpoint_detection,
@@ -42,3 +48,4 @@ pub use long_profile::{
     LongProfile, LongProfileError, LongProfileNode, LongProfileParams, long_profile,
 };
 pub use stream_traversal::{StreamGraph, StreamGraphError, build_stream_graph};
+pub use swath_profile::{SwathError, SwathParams, SwathProfile, SwathStats, swath_profile};
