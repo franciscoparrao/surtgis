@@ -26,6 +26,7 @@ pub mod chi;
 pub mod concavity;
 pub mod divide_migration;
 pub mod knickpoint;
+pub mod long_profile;
 pub mod stream_traversal;
 
 pub use channel_steepness::{KsnError, KsnParams, KsnResult, KsnSegment, channel_steepness};
@@ -36,5 +37,8 @@ pub use divide_migration::{
 };
 pub use knickpoint::{
     Knickpoint, KnickpointError, KnickpointParams, KnickpointPolarity, knickpoint_detection,
+};
+pub use long_profile::{
+    LongProfile, LongProfileError, LongProfileNode, LongProfileParams, long_profile,
 };
 pub use stream_traversal::{StreamGraph, StreamGraphError, build_stream_graph};
