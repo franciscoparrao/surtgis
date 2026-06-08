@@ -9,6 +9,86 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.14.7] - 2026-06-08
+
+Patch release. Advances **ROADMAP item M** ("Pansharpening") from
+the 2026-06-08 OTB-survey backlog. Ships three classical
+pansharpening algorithms covering the practical spread: a
+spectral-ratio method (Brovey), a covariance-based method (PCA),
+and a Gram-Schmidt orthogonalisation method (Laben & Brower 2000).
+All operate on arbitrary band counts and follow a common contract.
+
+### Added
+
+- **`pansharpening::brovey`** — Brovey transform (Gillespie et al.
+  1987). `out_b = MS_b · pan / mean(MS)`. Fast, simple, can
+  oversaturate radiometric values when synthetic and real pan
+  differ strongly.
+
+- **`pansharpening::pca_pansharpen`** — PCA pansharpening (Chavez
+  et al. 1991). Builds the covariance matrix of the MS bands,
+  diagonalises it with the shared Jacobi solver from
+  `classification::pca::jacobi_eigen` (now `pub(crate)`),
+  histogram-matches the pan to the first PC, and back-projects.
+  Works for any number of bands.
+
+- **`pansharpening::gram_schmidt`** — Gram-Schmidt pansharpening
+  (Laben & Brower 2000, US patent 6,011,875 expired January 2018,
+  now public domain). Builds the centred Gram-Schmidt sequence
+  `(P_lr, MS_1, ..., MS_B)`, records the regression coefficients
+  `φ_{k,i}`, substitutes the histogram-matched pan into the first
+  GS slot, and inverts. The same `φ` coefficients are used in
+  the forward and inverse passes — that's the elegant property
+  that makes the substitution clean.
+
+- **CLI: `surtgis imagery pansharpen`** with three subcommands:
+  - `brovey --pan PATH --band PATH [--band ...] --output-dir DIR`
+  - `pca --pan PATH --band PATH [--band ...] --output-dir DIR`
+  - `gram-schmidt --pan PATH --band PATH [--band ...] --output-dir DIR`
+  Each writes one `<prefix>_band<NN>.tif` per output band into
+  `output-dir`.
+
+### Contract
+
+All three functions take `pan: &Raster<f64>` and `ms: &[&Raster<f64>]`
+with **the MS bands already upsampled to pan resolution** (upstream
+caller's responsibility — use `vector::resample` or any other
+bilinear/cubic upsampler). They return `Vec<Raster<f64>>` of the
+same length as `ms`. Pixels where any input is NaN propagate to
+NaN in every output band; output `nodata` is set to `Some(NaN)`.
+
+### Internal change
+
+`classification::pca::jacobi_eigen` is now `pub(crate)`. PCA
+pansharpening reuses it instead of duplicating the symmetric-matrix
+eigensolver — single source of truth for the numerical kernel.
+Public API of `classification::pca` is unchanged.
+
+### Tests
+
+- **Brovey**: pan-equal-synth preserves MS bit-for-bit, pan-doubled
+  doubles every output, NaN propagation, zero-synth guard,
+  empty-bands and mismatched-shape errors.
+
+- **PCA**: pan-matching-PC1 yields near-lossless reconstruction
+  (≤ 5 units mean-abs drift on a 4×4 gradient test), NaN
+  propagation, empty/mismatched-shape errors.
+
+- **Gram-Schmidt**: pan-equal-synth recovers MS at 1e-9 tolerance
+  (the deepest correctness check — pins the orthogonalisation +
+  inversion math), per-band mean preservation property
+  (centred-pan injection has zero mean by construction), NaN
+  propagation, empty/mismatched-shape errors.
+
+15/15 pansharpening tests pass.
+
+### Backlog status
+
+Survey 2026-06-06 status after this release: G ✓, H ✓, I
+trigger-driven, J ✓ (v0.14.4), K ✓ (v0.14.5), L ✓ (v0.14.6),
+**M ✓** (this release). Remaining: N (MAD / IR-MAD), O (mosaic
+seams + color balance).
+
 ## [0.14.6] - 2026-06-08
 
 Patch release. Advances **ROADMAP item L** ("Radiometric

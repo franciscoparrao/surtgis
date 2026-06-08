@@ -9,7 +9,7 @@
 
 mod isodata;
 mod kmeans;
-mod pca;
+pub(crate) mod pca;
 mod supervised;
 
 pub use isodata::{IsodataParams, isodata};
