@@ -2301,6 +2301,29 @@ pub enum TextureCommands {
         #[arg(long, default_value = "32")]
         levels: usize,
     },
+    /// GLCM all 6 textures in a single pass (one output file per feature)
+    GlcmAll {
+        /// Input raster
+        input: PathBuf,
+        /// Output directory (one .tif per feature is written here)
+        output_dir: PathBuf,
+        /// Window radius
+        #[arg(short, long, default_value = "3")]
+        radius: usize,
+        /// Quantization levels
+        #[arg(long, default_value = "32")]
+        levels: usize,
+    },
+    /// Local Binary Patterns (Ojala 2002)
+    Lbp {
+        /// Input raster
+        input: PathBuf,
+        /// Output LBP raster
+        output: PathBuf,
+        /// Variant: standard (0..255 raw code) or riu2 (rotation-invariant uniform)
+        #[arg(long, default_value = "standard")]
+        variant: String,
+    },
     /// Sobel edge detection (gradient magnitude)
     Sobel {
         /// Input raster
