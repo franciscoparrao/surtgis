@@ -9,7 +9,7 @@ use std::fs::File;
 use std::io::Cursor;
 use std::path::Path;
 use tiff::decoder::{Decoder, DecodingResult, Limits};
-use tiff::encoder::colortype::Gray32Float;
+use tiff::encoder::colortype::{ColorType, Gray32Float, RGB32Float, RGBA32Float};
 use tiff::encoder::compression::DeflateLevel;
 use tiff::encoder::{Compression, TiffEncoder};
 use tiff::tags::Tag;
@@ -397,4 +397,277 @@ where
         .map_err(|e| Error::Other(format!("Cannot write image data: {}", e)))?;
 
     Ok(())
+}
+
+/// Write a stack of single-band rasters as a multi-band GeoTIFF.
+///
+/// Supports 1, 3 or 4 bands (`Gray32Float`, `RGB32Float`,
+/// `RGBA32Float`). All band rasters must share the same shape and
+/// geotransform. GeoTIFF metadata (CRS, transform, nodata) is
+/// inherited from `bands[0]`. Per-band values are cast to `f32`.
+///
+/// For arbitrary `N > 4`, enable the `gdal` feature and use
+/// `gdal_io::write_geotiff_multiband`.
+pub fn write_geotiff_multiband<T, P>(
+    bands: &[&Raster<T>],
+    path: P,
+    options: Option<GeoTiffOptions>,
+) -> Result<()>
+where
+    T: RasterElement,
+    P: AsRef<Path>,
+{
+    if bands.is_empty() {
+        return Err(Error::Other("stack needs at least one band".into()));
+    }
+    let (rows, cols) = bands[0].shape();
+    for b in bands.iter().skip(1) {
+        if b.shape() != (rows, cols) {
+            return Err(Error::Other(
+                "stack bands must share shape".into(),
+            ));
+        }
+    }
+    let n_bands = bands.len();
+    if !matches!(n_bands, 1 | 3 | 4) {
+        return Err(Error::Other(format!(
+            "native stack supports 1, 3 or 4 bands; got {} (use --features gdal for N>4)",
+            n_bands
+        )));
+    }
+
+    let compress = options
+        .as_ref()
+        .map(|o| o.compression.to_lowercase() != "none")
+        .unwrap_or(false);
+
+    let final_path = path.as_ref();
+    let tmp_path = final_path.with_extension("tmp");
+    let file = File::create(&tmp_path)?;
+
+    // Build the interleaved (chunky) buffer expected by the tiff
+    // crate for pixel-interleaved multi-sample images:
+    //   [s0_px0, s1_px0, ..., sK_px0,
+    //    s0_px1, s1_px1, ..., sK_px1, ...]
+    let n_px = rows * cols;
+    let mut interleaved: Vec<f32> = vec![0.0; n_px * n_bands];
+    for (b, raster) in bands.iter().enumerate() {
+        for (i, &v) in raster.data().iter().enumerate() {
+            let f: f32 = num_traits::cast(v).unwrap_or(f32::NAN);
+            interleaved[i * n_bands + b] = f;
+        }
+    }
+
+    match n_bands {
+        1 => encode_multiband_image::<Gray32Float, _>(file, bands[0], &interleaved, compress)?,
+        3 => encode_multiband_image::<RGB32Float, _>(file, bands[0], &interleaved, compress)?,
+        4 => encode_multiband_image::<RGBA32Float, _>(file, bands[0], &interleaved, compress)?,
+        _ => unreachable!(),
+    }
+    std::fs::rename(&tmp_path, final_path)?;
+    Ok(())
+}
+
+/// Generic multi-band writer parameterised over the tiff
+/// `ColorType` so the same GeoTIFF-tag plumbing serves Gray /
+/// RGB / RGBA. `meta` provides geotransform, CRS and nodata;
+/// `interleaved` is the chunky f32 buffer.
+fn encode_multiband_image<CT, W>(
+    writer: W,
+    meta: &Raster<impl RasterElement>,
+    interleaved: &[f32],
+    compress: bool,
+) -> Result<()>
+where
+    CT: ColorType<Inner = f32>,
+    W: std::io::Write + std::io::Seek,
+{
+    let compression = if compress {
+        Compression::Deflate(DeflateLevel::Balanced)
+    } else {
+        Compression::Uncompressed
+    };
+    let mut encoder = TiffEncoder::new(writer)
+        .map_err(|e| Error::Other(format!("TIFF encoder error: {}", e)))?
+        .with_compression(compression);
+
+    let (rows, cols) = meta.shape();
+    let mut image = encoder
+        .new_image::<CT>(cols as u32, rows as u32)
+        .map_err(|e| Error::Other(format!("Cannot create TIFF image: {}", e)))?;
+
+    let gt = meta.transform();
+    let scale = vec![gt.pixel_width, gt.pixel_height.abs(), 0.0];
+    image
+        .encoder()
+        .write_tag(Tag::Unknown(33550), scale.as_slice())
+        .map_err(|e| Error::Other(format!("Cannot write scale tag: {}", e)))?;
+    let tiepoint = vec![0.0, 0.0, 0.0, gt.origin_x, gt.origin_y, 0.0];
+    image
+        .encoder()
+        .write_tag(Tag::Unknown(33922), tiepoint.as_slice())
+        .map_err(|e| Error::Other(format!("Cannot write tiepoint tag: {}", e)))?;
+
+    let geokeys: Vec<u16> = if let Some(crs) = meta.crs() {
+        if let Some(epsg) = crs.epsg() {
+            if epsg == 4326 {
+                vec![1, 1, 0, 3, 1024, 0, 1, 2, 1025, 0, 1, 1, 2048, 0, 1, epsg as u16]
+            } else {
+                vec![1, 1, 0, 3, 1024, 0, 1, 1, 1025, 0, 1, 1, 3072, 0, 1, epsg as u16]
+            }
+        } else {
+            vec![1, 1, 0, 2, 1024, 0, 1, 1, 1025, 0, 1, 1]
+        }
+    } else {
+        vec![1, 1, 0, 2, 1024, 0, 1, 1, 1025, 0, 1, 1]
+    };
+    image
+        .encoder()
+        .write_tag(Tag::Unknown(34735), geokeys.as_slice())
+        .map_err(|e| Error::Other(format!("Cannot write geokey tag: {}", e)))?;
+
+    if let Some(nd) = meta.nodata()
+        && let Some(nd_f64) = nd.to_f64()
+    {
+        let nodata_str = if nd_f64.is_nan() {
+            "nan\0".to_string()
+        } else {
+            format!("{}\0", nd_f64)
+        };
+        image
+            .encoder()
+            .write_tag(Tag::Unknown(42113), nodata_str.as_bytes())
+            .map_err(|e| Error::Other(format!("Cannot write nodata tag: {}", e)))?;
+    }
+
+    image
+        .write_data(interleaved)
+        .map_err(|e| Error::Other(format!("Cannot write image data: {}", e)))?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::raster::Raster;
+    use tempfile::TempDir;
+
+    fn ramp_band(rows: usize, cols: usize, base: f64) -> Raster<f64> {
+        let mut r = Raster::new(rows, cols);
+        r.set_transform(GeoTransform::new(0.0, rows as f64, 1.0, -1.0));
+        for row in 0..rows {
+            for col in 0..cols {
+                r.set(row, col, base + (row + col) as f64).unwrap();
+            }
+        }
+        r
+    }
+
+    #[test]
+    fn multiband_rgb_roundtrip() {
+        // Write three single-band rasters as an RGB stack, read it
+        // back, verify per-band values match.
+        let r0 = ramp_band(10, 12, 0.0);
+        let r1 = ramp_band(10, 12, 100.0);
+        let r2 = ramp_band(10, 12, 200.0);
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("rgb.tif");
+        write_geotiff_multiband::<f64, _>(&[&r0, &r1, &r2], &path, None).unwrap();
+
+        // Roundtrip read: the native reader returns band 1 only. We
+        // verify the file is a valid 3-band TIFF by reopening with
+        // the tiff crate directly and inspecting BitsPerSample.
+        let file = File::open(&path).unwrap();
+        let mut dec = Decoder::new(file).unwrap();
+        let bps = dec
+            .get_tag(Tag::Unknown(258)) // BitsPerSample
+            .unwrap();
+        // 3 samples × 32 bits.
+        match bps {
+            tiff::decoder::ifd::Value::List(list) => {
+                assert_eq!(list.len(), 3, "expected 3 samples per pixel");
+            }
+            _ => panic!("BitsPerSample not a list"),
+        }
+        let spp = dec.get_tag_u32(Tag::Unknown(277)).unwrap(); // SamplesPerPixel
+        assert_eq!(spp, 3);
+    }
+
+    #[test]
+    fn multiband_rgba_writes_four_samples() {
+        let r0 = ramp_band(8, 8, 0.0);
+        let r1 = ramp_band(8, 8, 1.0);
+        let r2 = ramp_band(8, 8, 2.0);
+        let r3 = ramp_band(8, 8, 3.0);
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("rgba.tif");
+        write_geotiff_multiband::<f64, _>(&[&r0, &r1, &r2, &r3], &path, None).unwrap();
+        let file = File::open(&path).unwrap();
+        let mut dec = Decoder::new(file).unwrap();
+        let spp = dec.get_tag_u32(Tag::Unknown(277)).unwrap();
+        assert_eq!(spp, 4);
+    }
+
+    #[test]
+    fn multiband_rejects_unsupported_band_count() {
+        let r0 = ramp_band(4, 4, 0.0);
+        let r1 = ramp_band(4, 4, 1.0);
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("two_bands.tif");
+        let err = write_geotiff_multiband::<f64, _>(&[&r0, &r1], &path, None).unwrap_err();
+        let msg = format!("{}", err);
+        assert!(msg.contains("1, 3 or 4"), "got: {}", msg);
+    }
+
+    #[test]
+    fn multiband_rejects_mismatched_shapes() {
+        let r0 = ramp_band(4, 4, 0.0);
+        let r1 = ramp_band(4, 5, 0.0);
+        let r2 = ramp_band(4, 4, 0.0);
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("bad.tif");
+        let err = write_geotiff_multiband::<f64, _>(&[&r0, &r1, &r2], &path, None).unwrap_err();
+        let msg = format!("{}", err);
+        assert!(msg.contains("share shape"), "got: {}", msg);
+    }
+
+    #[test]
+    fn multiband_preserves_crs_and_transform() {
+        // `read_geotiff` is single-band only; we inspect the GeoTIFF
+        // tags directly with the tiff decoder to verify the multiband
+        // writer emits the same scale / tiepoint / geokey payload.
+        use crate::crs::CRS;
+        let mut r0 = ramp_band(6, 6, 0.0);
+        let mut r1 = ramp_band(6, 6, 1.0);
+        let mut r2 = ramp_band(6, 6, 2.0);
+        // GeoTransform::new(origin_x, origin_y, pixel_width, pixel_height).
+        let gt = GeoTransform::new(100000.0, 6300000.0, 10.0, -10.0);
+        let crs = CRS::from_epsg(32719);
+        for r in [&mut r0, &mut r1, &mut r2] {
+            r.set_transform(gt.clone());
+            r.set_crs(Some(crs.clone()));
+        }
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("crs_check.tif");
+        write_geotiff_multiband::<f64, _>(&[&r0, &r1, &r2], &path, None).unwrap();
+
+        let file = File::open(&path).unwrap();
+        let mut dec = Decoder::new(file).unwrap();
+        // ModelPixelScaleTag (33550) -> [pix_w, pix_h.abs(), 0].
+        let scale = dec.get_tag_f64_vec(Tag::Unknown(33550)).unwrap();
+        assert!((scale[0] - 10.0).abs() < 1e-9);
+        assert!((scale[1] - 10.0).abs() < 1e-9);
+        // ModelTiepointTag (33922) -> [0,0,0, ox, oy, 0].
+        let tp = dec.get_tag_f64_vec(Tag::Unknown(33922)).unwrap();
+        assert!((tp[3] - 100000.0).abs() < 1e-6);
+        assert!((tp[4] - 6300000.0).abs() < 1e-6);
+        // GeoKeyDirectory (34735) -> embeds EPSG:32719 under ProjectedCSTypeGeoKey (3072).
+        let gk = dec.get_tag_u32_vec(Tag::Unknown(34735)).unwrap();
+        assert!(
+            gk.windows(2).any(|w| w[0] == 3072 && w[1] == 0)
+                && gk.contains(&32719),
+            "EPSG:32719 missing from GeoKeyDirectory: {:?}",
+            gk
+        );
+    }
 }

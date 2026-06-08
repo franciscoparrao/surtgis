@@ -344,6 +344,35 @@ pub fn handle(algorithm: ImageryCommands, compress: bool) -> Result<()> {
         ImageryCommands::Calibrate { action } => handle_calibrate(action, compress)?,
 
         ImageryCommands::Pansharpen { action } => handle_pansharpen(action, compress)?,
+
+        ImageryCommands::Stack { output, bands } => {
+            if !matches!(bands.len(), 1 | 3 | 4) {
+                anyhow::bail!(
+                    "imagery stack supports 1, 3 or 4 bands; got {}",
+                    bands.len()
+                );
+            }
+            let rasters = bands
+                .iter()
+                .map(|p| read_dem(p).with_context(|| format!("reading band {}", p.display())))
+                .collect::<Result<Vec<_>>>()?;
+            let refs: Vec<&surtgis_core::Raster<f64>> = rasters.iter().collect();
+            let start = Instant::now();
+            let opts = if compress {
+                Some(surtgis_core::io::GeoTiffOptions {
+                    compression: "DEFLATE".to_string(),
+                })
+            } else {
+                None
+            };
+            surtgis_core::io::write_geotiff_multiband(&refs, &output, opts)
+                .context("Stack write failed")?;
+            done(
+                &format!("Stack ({} bands)", bands.len()),
+                &output,
+                start.elapsed(),
+            );
+        }
     }
 
     Ok(())

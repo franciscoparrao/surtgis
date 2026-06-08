@@ -12,6 +12,10 @@ pub use gdal_io::{GeoTiffOptions, read_geotiff, write_geotiff};
 #[cfg(not(feature = "gdal"))]
 pub use native::{GeoTiffOptions, read_geotiff, write_geotiff};
 
+// Multi-band writer — only via the native backend for now
+// (1, 3, or 4 bands).
+pub use native::write_geotiff_multiband;
+
 // Buffer-based I/O (always available, no filesystem dependency)
 pub use native::{read_geotiff_from_buffer, write_geotiff_to_buffer};
 
