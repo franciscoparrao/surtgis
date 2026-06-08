@@ -172,8 +172,11 @@ pub fn pca(bands: &[&Raster<f64>], params: PcaParams) -> Result<PcaResult> {
     })
 }
 
-/// Jacobi eigenvalue algorithm for symmetric matrices
-fn jacobi_eigen(matrix: &[Vec<f64>], n: usize) -> Result<(Vec<f64>, Vec<Vec<f64>>)> {
+/// Jacobi eigenvalue algorithm for symmetric matrices.
+///
+/// `pub(crate)` so other algorithm modules (pansharpening, MAD)
+/// can reuse the same numerical kernel instead of duplicating it.
+pub(crate) fn jacobi_eigen(matrix: &[Vec<f64>], n: usize) -> Result<(Vec<f64>, Vec<Vec<f64>>)> {
     let max_iter = 100 * n * n;
     let eps = 1e-12;
 

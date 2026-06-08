@@ -11,8 +11,9 @@ use surtgis_algorithms::imagery::{
     index_builder, median_composite, mndwi, msavi, nbr, ndbi, ndmi, ndre, ndsi, ndvi, ndwi, ngrdi,
     reci, reclassify, savi, SaviParams,
 };
+use surtgis_algorithms::pansharpening::{brovey, gram_schmidt, pca_pansharpen};
 
-use crate::commands::{CalibrateCommands, ImageryCommands};
+use crate::commands::{CalibrateCommands, ImageryCommands, PansharpenCommands};
 use crate::helpers::{
     done, parse_band_assignments, parse_band_math_op, parse_reclass_entry, parse_scl_classes,
     read_dem, write_result,
@@ -341,8 +342,69 @@ pub fn handle(algorithm: ImageryCommands, compress: bool) -> Result<()> {
         }
 
         ImageryCommands::Calibrate { action } => handle_calibrate(action, compress)?,
+
+        ImageryCommands::Pansharpen { action } => handle_pansharpen(action, compress)?,
     }
 
+    Ok(())
+}
+
+fn handle_pansharpen(action: PansharpenCommands, compress: bool) -> Result<()> {
+    enum Method {
+        Brovey,
+        Pca,
+        GramSchmidt,
+    }
+    let (method, pan, bands, output_dir, prefix) = match action {
+        PansharpenCommands::Brovey {
+            pan,
+            bands,
+            output_dir,
+            prefix,
+        } => (Method::Brovey, pan, bands, output_dir, prefix),
+        PansharpenCommands::Pca {
+            pan,
+            bands,
+            output_dir,
+            prefix,
+        } => (Method::Pca, pan, bands, output_dir, prefix),
+        PansharpenCommands::GramSchmidt {
+            pan,
+            bands,
+            output_dir,
+            prefix,
+        } => (Method::GramSchmidt, pan, bands, output_dir, prefix),
+    };
+
+    std::fs::create_dir_all(&output_dir)
+        .with_context(|| format!("failed to create {}", output_dir.display()))?;
+    let pan_r = read_dem(&pan).context("reading pan")?;
+    let ms_rasters = bands
+        .iter()
+        .map(|p| read_dem(p).with_context(|| format!("reading band {}", p.display())))
+        .collect::<Result<Vec<_>>>()?;
+    let ms_refs: Vec<_> = ms_rasters.iter().collect();
+
+    let start = Instant::now();
+    let method_name = match method {
+        Method::Brovey => "Brovey",
+        Method::Pca => "PCA",
+        Method::GramSchmidt => "Gram-Schmidt",
+    };
+    let results = match method {
+        Method::Brovey => brovey(&pan_r, &ms_refs).context("Brovey failed")?,
+        Method::Pca => pca_pansharpen(&pan_r, &ms_refs).context("PCA pansharpen failed")?,
+        Method::GramSchmidt => gram_schmidt(&pan_r, &ms_refs).context("Gram-Schmidt failed")?,
+    };
+    for (idx, out) in results.iter().enumerate() {
+        let path = output_dir.join(format!("{}_band{:02}.tif", prefix, idx + 1));
+        write_result(out, &path, compress)?;
+    }
+    done(
+        &format!("{} pansharpening", method_name),
+        &output_dir.join(format!("{}_band*.tif", prefix)),
+        start.elapsed(),
+    );
     Ok(())
 }
 

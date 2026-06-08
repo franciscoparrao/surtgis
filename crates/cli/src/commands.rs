@@ -1310,6 +1310,62 @@ pub enum ImageryCommands {
         #[command(subcommand)]
         action: CalibrateCommands,
     },
+    /// Pansharpening: fuse high-res pan with low-res multispectral
+    Pansharpen {
+        #[command(subcommand)]
+        action: PansharpenCommands,
+    },
+}
+
+// ─── Pansharpen subcommands ────────────────────────────────────────────
+
+#[derive(Subcommand)]
+pub enum PansharpenCommands {
+    /// Brovey transform (Gillespie 1987) — simplest, fastest
+    Brovey {
+        /// Panchromatic raster (high resolution)
+        #[arg(long)]
+        pan: PathBuf,
+        /// One or more upsampled MS band rasters (repeatable)
+        #[arg(long = "band", required = true)]
+        bands: Vec<PathBuf>,
+        /// Output directory — one .tif per band is written here
+        #[arg(long)]
+        output_dir: PathBuf,
+        /// Output filename prefix (default: pansharp)
+        #[arg(long, default_value = "pansharp")]
+        prefix: String,
+    },
+    /// PCA pansharpening (Chavez 1991) — works for any band count
+    Pca {
+        /// Panchromatic raster
+        #[arg(long)]
+        pan: PathBuf,
+        /// One or more upsampled MS band rasters
+        #[arg(long = "band", required = true)]
+        bands: Vec<PathBuf>,
+        /// Output directory
+        #[arg(long)]
+        output_dir: PathBuf,
+        /// Output filename prefix
+        #[arg(long, default_value = "pansharp")]
+        prefix: String,
+    },
+    /// Gram-Schmidt pansharpening (Laben & Brower 2000; patent expired 2018)
+    GramSchmidt {
+        /// Panchromatic raster
+        #[arg(long)]
+        pan: PathBuf,
+        /// One or more upsampled MS band rasters
+        #[arg(long = "band", required = true)]
+        bands: Vec<PathBuf>,
+        /// Output directory
+        #[arg(long)]
+        output_dir: PathBuf,
+        /// Output filename prefix
+        #[arg(long, default_value = "pansharp")]
+        prefix: String,
+    },
 }
 
 // ─── Calibrate subcommands ─────────────────────────────────────────────
