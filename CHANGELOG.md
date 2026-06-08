@@ -9,6 +9,83 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.14.3] - 2026-06-07
+
+Patch release. Closes **ROADMAP item G** ("Martini RTIN terrain
+mesher", backlog with pickup-trigger "paper figure has flat regions
+wasting triangles"). After this release the original 2026-06-06
+survey backlog is down to one item: I (3D Tiles export), still
+backlog pending a Cesium-user trigger.
+
+### Added
+
+- **`relief_3d::martini`** — new module. Port of the Mapbox Martini
+  algorithm (Agafonkin 2019, <https://github.com/mapbox/martini>).
+  Adaptive triangulation of heightmaps by curvature: more triangles
+  where the surface bends, fewer on flat regions. Three building
+  blocks:
+
+  - `Martini::new(grid_size)` — precompute the per-triangle
+    coordinate table for a `(2^n + 1) × (2^n + 1)` grid. `O(N²)`.
+    Reuse across many tiles of the same grid size.
+  - `Martini::tile(heights)` — build the error pyramid in `O(N²)`,
+    bottom-up.
+  - `Tile::mesh(max_error)` — extract a triangle mesh whose
+    worst-case vertical error is bounded by `max_error`. Smaller
+    error → more triangles; larger → fewer.
+
+- **`relief_3d::lod::MartiniMeshParams`** + **`QuadtreeMesh::from_dem_martini`**
+  — drop-in alternative to `from_dem` that emits one Martini-meshed
+  `ChunkLod` per chunk instead of stride-decimated LOD levels. Same
+  skirts, vertex compression (`VertexC`), and `LodPool` lazy upload
+  as the quadtree path; the render pipeline is unchanged. `lod_levels`
+  is set to 1 on the returned mesh (Martini's error metric is
+  already curvature-adaptive — distance-band LOD on top of it would
+  be redundant).
+
+  Default `MartiniMeshParams { chunk_cells: 64, max_error: 0.002 }`
+  — same chunk size as the quadtree default, error tuned for DEMs
+  normalised to `[0, 0.45]` scene units (≈ 0.5 % of the vertical
+  range).
+
+### Changed
+
+- **`QuadtreeMesh::select()`** now clamps the chosen LOD index to
+  `chunk.lod_data.len() - 1`. The quadtree path was unaffected
+  because every chunk had the same `lod_levels`; the Martini path
+  needs the clamp so a `select_lod` choice of band 2 or 3 doesn't
+  panic when the chunk only owns LOD 0.
+
+### Verified
+
+- `cargo test --release -p surtgis-relief-3d`: 22/22 green (was 15
+  pre-sprint; +5 Martini core + 2 integration).
+- `cargo build --release -p surtgis-relief-3d` clean.
+- Flat 129² DEM, 4 chunks: quadtree LOD 0 = 32 768 triangles vs
+  Martini = ≤ 3 200 triangles. **>10× reduction on flat regions**
+  — exactly the use case documented in the ROADMAP pickup trigger.
+- Bumpy DEM at `max_error = 0`: Martini reproduces the quadtree
+  LOD 0 grid within ±50 %.
+
+### Constraints / known limits
+
+- `chunk_cells` must be a power of two (Martini RTIN requirement).
+  Default 64 is the natural fit.
+- DEMs whose side isn't a multiple of `chunk_cells` have their rim
+  chunks fall back to the stride-1 quadtree surface mesh. Internal
+  chunks Martini-adaptive.
+- Build time slower than `from_dem` — the error pyramid + tree walk
+  is `O(N²)` per chunk. Acceptable for static-camera paper figures
+  and headless renders; not ideal for very large DEMs where stream-
+  load time dominates.
+
+### ROADMAP status after v0.14.3
+
+  - ~~G. Martini RTIN~~ — **done** with this release.
+  - ~~H. TopoToolbox channel network depth~~ — done in v0.14.2.
+  - I. 3D Tiles export — backlog, pickup trigger: a user with a
+    Cesium pipeline asks for it.
+
 ## [0.14.2] - 2026-06-07
 
 Patch release. Closes **ROADMAP item H** ("TopoToolbox-style channel
