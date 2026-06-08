@@ -14,6 +14,7 @@ mod cloud_mask;
 mod composite;
 mod index_builder;
 mod indices;
+mod mad;
 mod reclassify;
 
 pub use band_math::{BandMathOp, band_math, band_math_binary};
@@ -36,4 +37,5 @@ pub use indices::{
     EviParams, SaviParams, SpectralIndex, bsi, evi, evi2, gndvi, mndwi, msavi, nbr, ndbi, ndmi,
     ndre, ndsi, ndvi, ndwi, ngrdi, normalized_difference, reci, savi,
 };
+pub use mad::{IrMadParams, IrMadResult, MadResult, ir_mad, mad};
 pub use reclassify::{ReclassEntry, ReclassifyParams, reclassify};

@@ -9,6 +9,94 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.14.9] - 2026-06-08
+
+Patch release. Advances **ROADMAP item N** ("MAD / IR-MAD change
+detection") from the 2026-06-08 OTB-survey backlog. After this
+release: G ✓, H ✓, I trigger-driven, J ✓, K ✓, L ✓, M ✓,
+**N ✓**. Only O (mosaic seams + color balance) remains as a
+non-trigger-driven backlog item.
+
+### Added
+
+- **`imagery::mad`** — Multivariate Alteration Detection
+  (Nielsen, Conradsen & Simpson 1998). Solves the canonical
+  correlation analysis (CCA) between two `B`-band timestamps and
+  returns the `B` MAD variates `MAD_i = U_i − V_i` plus the
+  canonical correlations `ρ_i ∈ [0, 1]`. MAD_1 captures the
+  strongest change signal, with decreasing magnitude as `i` grows.
+
+- **`imagery::ir_mad`** — Iteratively Reweighted MAD (Nielsen
+  2007). Re-estimates the joint covariance over pixels weighted
+  by `1 − F_χ²(T², B)` where T² is the standardised squared norm
+  of the MAD vector. Pixels that look "unchanged" get higher
+  weights, so the covariance is increasingly estimated on the
+  no-change population — the canonical signal-to-noise regime.
+  Returns the MAD variates, the canonical correlations, a
+  per-pixel **no-change probability** raster (the χ² weight),
+  and the iteration count. Supports diagonal regularisation
+  (Nielsen 2007 §IV.B) for near-singular covariance.
+
+- **CLI: `surtgis imagery change-detection`** with two subcommands:
+  - `mad --output-dir DIR --t1 PATH [--t1 ...] --t2 PATH [--t2 ...]`
+    — repeated `--t1` / `--t2` for multi-band inputs; outputs
+    `mad_variate{NN}.tif` and prints the canonical correlations.
+  - `ir-mad --output-dir DIR --t1 ... --t2 ... [--max-iter 25]
+    [--tol 0.001] [--regularisation 0.0]` — same plus
+    `irmad_nochange_prob.tif`.
+
+### Internal numerical kernels
+
+The CCA solver needed Cholesky factorisation and triangular
+solves on small `B × B` matrices (typically `B ≤ 10`). All three
+are implemented in-module without pulling in BLAS / LAPACK:
+
+- **`cholesky_lower`** — Cholesky-Banachiewicz. Rejects
+  non-positive-definite input with a clear error pointing to the
+  problematic diagonal.
+- **`solve_lower_tri`** / **`solve_upper_tri_transposed`** —
+  forward / back substitution.
+- **`lower_incomplete_gamma`** — series + continued-fraction
+  expansion (Numerical Recipes pattern) for χ²(k) CDF.
+- **`gamma_ln`** — Lanczos approximation, ~1e-14 precision.
+
+The symmetric eigenproblem on `MᵀM` reuses the existing Jacobi
+solver from `classification::pca::jacobi_eigen` (made
+`pub(crate)` in v0.14.7) — single source of truth for the
+algorithms-crate symmetric eigensolver across PCA, PCA
+pansharpening, and now MAD.
+
+### Tests
+
+11/11 tests in `imagery::mad::tests` pass:
+
+- **Numerical-kernel tests**: Cholesky roundtrip on a 2×2 SPD
+  matrix, Cholesky rejection on a non-positive-definite matrix,
+  triangular-solve roundtrip, χ²(k) CDF at known values
+  (`χ²(2)` at `x=2` matches `1 − e⁻¹`).
+- **MAD invariants**: `T1 == T2` yields MAD variates `< 1e-9`
+  and all canonical correlations `≈ 1.0`; the planted-change
+  test plants a 4×4 high-DN block into T2's band 1 (on a
+  20×20 two-band scene with linearly independent bands) and
+  asserts the mean `|MAD_1|` inside the block is more than 3×
+  the outside mean.
+- **Validity**: canonical correlations stay in `[0, 1]` under
+  deterministic noise; NaN in any input propagates to NaN in
+  every MAD variate.
+- **IR-MAD**: converges within 15 iterations on the planted-
+  change scenario and the per-pixel no-change probability is
+  significantly lower inside the change block than outside.
+- **Error paths**: mismatched band counts and empty inputs
+  reject cleanly.
+
+### Backlog status
+
+The 2026-06-06 OTB-deepening survey is now substantively
+complete: J, K, L, M, N all shipped. **Remaining backlog**: O
+(mosaic seams + color balance — polish on the existing
+composite pipeline). I (3D Tiles export) remains trigger-driven
+pending a Cesium-user request.
+
 ## [0.14.8] - 2026-06-08
 
 Patch release. Closes a gap surfaced during the v0.14.7 pansharpening

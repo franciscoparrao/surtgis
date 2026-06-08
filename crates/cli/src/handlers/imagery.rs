@@ -5,15 +5,15 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use surtgis_algorithms::imagery::{
-    Dos1Params, EviParams, LandsatToaParams, ReclassifyParams, S2ReflectanceParams,
+    Dos1Params, EviParams, IrMadParams, LandsatToaParams, ReclassifyParams, S2ReflectanceParams,
     band_math_binary, bsi, burn_severity_classify, cloud_mask_scl, dn_to_reflectance_s2,
     dn_to_surface_reflectance_landsat_c2, dn_to_toa_landsat, dnbr, dos1, evi, evi2, gndvi,
-    index_builder, median_composite, mndwi, msavi, nbr, ndbi, ndmi, ndre, ndsi, ndvi, ndwi, ngrdi,
-    reci, reclassify, savi, SaviParams,
+    index_builder, ir_mad, mad, median_composite, mndwi, msavi, nbr, ndbi, ndmi, ndre, ndsi, ndvi,
+    ndwi, ngrdi, reci, reclassify, savi, SaviParams,
 };
 use surtgis_algorithms::pansharpening::{brovey, gram_schmidt, pca_pansharpen};
 
-use crate::commands::{CalibrateCommands, ImageryCommands, PansharpenCommands};
+use crate::commands::{CalibrateCommands, ChangeDetectionCommands, ImageryCommands, PansharpenCommands};
 use crate::helpers::{
     done, parse_band_assignments, parse_band_math_op, parse_reclass_entry, parse_scl_classes,
     read_dem, write_result,
@@ -345,6 +345,10 @@ pub fn handle(algorithm: ImageryCommands, compress: bool) -> Result<()> {
 
         ImageryCommands::Pansharpen { action } => handle_pansharpen(action, compress)?,
 
+        ImageryCommands::ChangeDetection { action } => {
+            handle_change_detection(action, compress)?;
+        }
+
         ImageryCommands::Stack { output, bands } => {
             if !matches!(bands.len(), 1 | 3 | 4) {
                 anyhow::bail!(
@@ -503,6 +507,115 @@ fn handle_calibrate(action: CalibrateCommands, compress: bool) -> Result<()> {
             .context("DOS1 failed")?;
             write_result(&result, &output, compress)?;
             done("DOS1", &output, start.elapsed());
+        }
+    }
+    Ok(())
+}
+
+fn handle_change_detection(action: ChangeDetectionCommands, compress: bool) -> Result<()> {
+    match action {
+        ChangeDetectionCommands::Mad {
+            output_dir,
+            t1,
+            t2,
+            prefix,
+        } => {
+            if t1.len() != t2.len() {
+                anyhow::bail!(
+                    "MAD: --t1 has {} bands, --t2 has {} (must match)",
+                    t1.len(),
+                    t2.len()
+                );
+            }
+            std::fs::create_dir_all(&output_dir)
+                .with_context(|| format!("failed to create {}", output_dir.display()))?;
+            let t1_r = t1
+                .iter()
+                .map(|p| read_dem(p).with_context(|| format!("reading t1 band {}", p.display())))
+                .collect::<Result<Vec<_>>>()?;
+            let t2_r = t2
+                .iter()
+                .map(|p| read_dem(p).with_context(|| format!("reading t2 band {}", p.display())))
+                .collect::<Result<Vec<_>>>()?;
+            let t1_refs: Vec<_> = t1_r.iter().collect();
+            let t2_refs: Vec<_> = t2_r.iter().collect();
+            let start = Instant::now();
+            let result = mad(&t1_refs, &t2_refs).context("MAD failed")?;
+            for (i, m) in result.mad.iter().enumerate() {
+                let path = output_dir.join(format!("{}_variate{:02}.tif", prefix, i + 1));
+                write_result(m, &path, compress)?;
+            }
+            // Pretty-print correlations as a summary line.
+            let rhos: Vec<String> =
+                result.correlations.iter().map(|r| format!("{:.4}", r)).collect();
+            println!(
+                "MAD canonical correlations (MAD_1 → MAD_{}): {}",
+                result.correlations.len(),
+                rhos.join(", ")
+            );
+            done(
+                &format!("MAD ({} variates)", result.mad.len()),
+                &output_dir.join(format!("{}_variate*.tif", prefix)),
+                start.elapsed(),
+            );
+        }
+        ChangeDetectionCommands::IrMad {
+            output_dir,
+            t1,
+            t2,
+            max_iter,
+            tol,
+            regularisation,
+            prefix,
+        } => {
+            if t1.len() != t2.len() {
+                anyhow::bail!(
+                    "IR-MAD: --t1 has {} bands, --t2 has {} (must match)",
+                    t1.len(),
+                    t2.len()
+                );
+            }
+            std::fs::create_dir_all(&output_dir)
+                .with_context(|| format!("failed to create {}", output_dir.display()))?;
+            let t1_r = t1
+                .iter()
+                .map(|p| read_dem(p).with_context(|| format!("reading t1 band {}", p.display())))
+                .collect::<Result<Vec<_>>>()?;
+            let t2_r = t2
+                .iter()
+                .map(|p| read_dem(p).with_context(|| format!("reading t2 band {}", p.display())))
+                .collect::<Result<Vec<_>>>()?;
+            let t1_refs: Vec<_> = t1_r.iter().collect();
+            let t2_refs: Vec<_> = t2_r.iter().collect();
+            let start = Instant::now();
+            let result = ir_mad(
+                &t1_refs,
+                &t2_refs,
+                IrMadParams {
+                    max_iter,
+                    tol,
+                    regularisation,
+                },
+            )
+            .context("IR-MAD failed")?;
+            for (i, m) in result.mad.iter().enumerate() {
+                let path = output_dir.join(format!("{}_variate{:02}.tif", prefix, i + 1));
+                write_result(m, &path, compress)?;
+            }
+            let weights_path = output_dir.join(format!("{}_nochange_prob.tif", prefix));
+            write_result(&result.weights, &weights_path, compress)?;
+            let rhos: Vec<String> =
+                result.correlations.iter().map(|r| format!("{:.4}", r)).collect();
+            println!(
+                "IR-MAD converged in {} iterations. Correlations: {}",
+                result.n_iter,
+                rhos.join(", ")
+            );
+            done(
+                &format!("IR-MAD ({} variates + weights)", result.mad.len()),
+                &output_dir.join(format!("{}_*.tif", prefix)),
+                start.elapsed(),
+            );
         }
     }
     Ok(())

@@ -1325,6 +1325,56 @@ pub enum ImageryCommands {
         #[arg(long = "band", required = true)]
         bands: Vec<PathBuf>,
     },
+    /// Bitemporal change detection: MAD / IR-MAD (Nielsen 1998, 2007)
+    ChangeDetection {
+        #[command(subcommand)]
+        action: ChangeDetectionCommands,
+    },
+}
+
+// ─── Change detection (MAD / IR-MAD) subcommands ───────────────────────
+
+#[derive(Subcommand)]
+pub enum ChangeDetectionCommands {
+    /// One-shot MAD: canonical correlation analysis between two timestamps
+    Mad {
+        /// Output directory (one .tif per MAD variate)
+        #[arg(long)]
+        output_dir: PathBuf,
+        /// Band rasters at time 1 (repeat for multi-band)
+        #[arg(long = "t1", required = true)]
+        t1: Vec<PathBuf>,
+        /// Band rasters at time 2 (must match t1 in count and shape)
+        #[arg(long = "t2", required = true)]
+        t2: Vec<PathBuf>,
+        /// Output filename prefix
+        #[arg(long, default_value = "mad")]
+        prefix: String,
+    },
+    /// IR-MAD: iteratively reweighted MAD with chi-square weights
+    IrMad {
+        /// Output directory (one .tif per MAD variate + weights)
+        #[arg(long)]
+        output_dir: PathBuf,
+        /// Band rasters at time 1 (repeat for multi-band)
+        #[arg(long = "t1", required = true)]
+        t1: Vec<PathBuf>,
+        /// Band rasters at time 2 (must match t1 in count and shape)
+        #[arg(long = "t2", required = true)]
+        t2: Vec<PathBuf>,
+        /// Maximum iterations
+        #[arg(long, default_value = "25")]
+        max_iter: usize,
+        /// Convergence tolerance on max canonical-correlation change
+        #[arg(long, default_value = "0.001")]
+        tol: f64,
+        /// Diagonal regularisation factor (fraction of per-band variance)
+        #[arg(long, default_value = "0.0")]
+        regularisation: f64,
+        /// Output filename prefix
+        #[arg(long, default_value = "irmad")]
+        prefix: String,
+    },
 }
 
 // ─── Pansharpen subcommands ────────────────────────────────────────────
