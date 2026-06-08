@@ -9,6 +9,82 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.14.5] - 2026-06-08
+
+Patch release. Advances **ROADMAP item K** ("Image segmentation —
+SLIC + Felzenszwalb-Huttenlocher") from the 2026-06-08 OTB-survey
+backlog. Ships both algorithms with multi-band support and chains
+cleanly into the existing zonal-statistics pipeline.
+
+### Added
+
+- **`segmentation::slic`** — new module. SLIC superpixels
+  (Achanta et al. 2012). Multi-band input (`&[&Raster<f64>]`),
+  per-band [0, 1] normalisation so the conventional `compactness`
+  range (m ≈ 10) works regardless of input units. Each cluster
+  centre searches only its `2S × 2S` window, keeping the algorithm
+  linear in pixel count. Optional 4-connectivity post-pass merges
+  small disconnected islands into the largest adjacent component.
+  Output: dense `1..=N` labels in `Raster<i32>`; NaN pixels and
+  output nodata sentinel = `0`.
+
+- **`segmentation::felzenszwalb`** — new module. Graph-based
+  segmentation (Felzenszwalb & Huttenlocher 2004) over an
+  8-connected pixel graph with edge weight = Euclidean distance
+  between multi-band feature vectors. Union-Find with size + Int(C)
+  tracking; merge condition `w ≤ min(Int(C₁) + k/|C₁|, Int(C₂) +
+  k/|C₂|)`. Optional `min_size` post-pass merges components below
+  threshold into their cheapest neighbour. Output convention
+  matches SLIC.
+
+- **CLI: `surtgis segmentation slic <OUTPUT> --band <PATH>
+  [--band ...] [-n N] [-m M] [--max-iter N] [--no-connectivity]`**
+  — repeated `--band` flag for multi-band input.
+
+- **CLI: `surtgis segmentation felzenszwalb <OUTPUT> --band <PATH>
+  [--band ...] [-k SCALE] [--min-size N]`** — same multi-band
+  convention as `slic`.
+
+### Tests
+
+- **`integration_tests::slic_then_zonal_statistics_recovers_per_segment_means`**
+  — chains `slic` → `statistics::zonal_statistics` on a
+  half-bright/half-dark raster and asserts every per-segment mean
+  lands at one of the two underlying values (no boundary-straddling
+  segments). Validates the label-convention contract (`1..=N`,
+  zone 0 = nodata) between segmentation and downstream tools.
+
+- **`integration_tests::felzenszwalb_then_zonal_statistics_recovers_two_zones`**
+  — same chain for Felzenszwalb; asserts exactly two zones with
+  per-segment means `{0, 100}`.
+
+- **SLIC tests** (6 new): uniform-raster grid recovery, two-blob
+  separation at low compactness, multi-band shape preservation,
+  NaN sentinel propagation, mismatched-shape error, empty-bands
+  error.
+
+- **Felzenszwalb tests** (6 new): flat raster → single segment,
+  two distinct regions → exactly two segments, `min_size`
+  post-pass absorbs singletons, NaN sentinel propagation,
+  multi-band sanity check, mismatched-shape error.
+
+14/14 segmentation tests pass.
+
+### Label-convention contract
+
+Both segmentation algorithms emit `1..=N` labels with `0` as
+nodata, matching `landscape::connected_components` and the
+`statistics::zonal_statistics` contract (which treats zone `0` as
+nodata). This makes the chain `segmentation → zonal_statistics →
+per-segment band statistics` a one-liner.
+
+### Backlog status
+
+Survey 2026-06-06 status after this release: G ✓, H ✓, I
+trigger-driven, J ✓ (v0.14.4), **K ✓** (this release).
+Remaining: L (radiometric calibration), M (pansharpening), N
+(MAD / IR-MAD), O (mosaic seams + color balance).
+
 ## [0.14.4] - 2026-06-08
 
 Patch release. Opens **ROADMAP item J** ("Texture/imagery deepening

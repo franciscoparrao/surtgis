@@ -25,6 +25,7 @@ pub mod imagery;
 pub mod interpolation;
 pub mod landscape;
 pub mod morphology;
+pub mod segmentation;
 pub mod statistics;
 pub mod temporal;
 pub mod terrain;

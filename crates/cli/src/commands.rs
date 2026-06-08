@@ -341,6 +341,11 @@ pub enum Commands {
         #[command(subcommand)]
         algorithm: TextureCommands,
     },
+    /// Image segmentation: SLIC superpixels and Felzenszwalb-Huttenlocher
+    Segmentation {
+        #[command(subcommand)]
+        algorithm: SegmentationCommands,
+    },
     /// Statistics: focal, zonal, and spatial autocorrelation
     Statistics {
         #[command(subcommand)]
@@ -2337,6 +2342,46 @@ pub enum TextureCommands {
         input: PathBuf,
         /// Output edge raster
         output: PathBuf,
+    },
+}
+
+// ─── Segmentation subcommands ──────────────────────────────────────────
+
+#[derive(Subcommand)]
+pub enum SegmentationCommands {
+    /// SLIC superpixels (Achanta 2012)
+    Slic {
+        /// Output label raster (i32 GeoTIFF, 1..=N labels, 0 = nodata)
+        output: PathBuf,
+        /// One or more input band rasters (repeatable)
+        #[arg(long = "band", required = true)]
+        bands: Vec<PathBuf>,
+        /// Target number of superpixels
+        #[arg(short = 'n', long, default_value = "100")]
+        n_segments: usize,
+        /// Compactness (higher = more geometric superpixels)
+        #[arg(short = 'm', long, default_value = "10.0")]
+        compactness: f64,
+        /// Maximum k-means iterations
+        #[arg(long, default_value = "10")]
+        max_iter: usize,
+        /// Disable connectivity enforcement post-pass
+        #[arg(long, default_value = "false")]
+        no_connectivity: bool,
+    },
+    /// Felzenszwalb-Huttenlocher graph segmentation (2004)
+    Felzenszwalb {
+        /// Output label raster (i32 GeoTIFF, 1..=N labels, 0 = nodata)
+        output: PathBuf,
+        /// One or more input band rasters (repeatable)
+        #[arg(long = "band", required = true)]
+        bands: Vec<PathBuf>,
+        /// Scale parameter k (higher = larger segments)
+        #[arg(short = 'k', long, default_value = "1.0")]
+        scale: f64,
+        /// Minimum component size (smaller components are merged)
+        #[arg(long, default_value = "20")]
+        min_size: usize,
     },
 }
 
