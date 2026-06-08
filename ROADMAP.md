@@ -201,7 +201,7 @@ agreed decision: **document and defer**, no commit yet.
 
 ### Candidates surveyed
 
-#### G. Martini RTIN terrain mesher — *backlog*
+#### G. Martini RTIN terrain mesher — *done (v0.14.3, 2026-06-07)*
 
 [Martini](https://github.com/mapbox/martini) replaces the uniform-
 chunk LOD subdivision with Right-Triangulated Irregular Network
@@ -209,17 +209,23 @@ adaptive triangulation. Same triangle budget, much better
 distribution: places density where curvature is high, saves on flat
 regions.
 
-**Where it fits**: `crates/relief-3d/src/lod.rs` already has the
-`ChunkLod` interface — RTIN drops in as an alternative
-`QuadtreeMesh::from_dem_rtin(dem, params)` builder. The rest of the
-LOD pool + render path stays identical.
+**Shipped as**: `crates/relief-3d/src/martini.rs` (algorithm core,
+port of the Mapbox Martini JS implementation) +
+`QuadtreeMesh::from_dem_martini(dem, vertical_exaggeration, params)`
+in `crates/relief-3d/src/lod.rs`. The rest of the LOD pool + render
+path is reused untouched — Martini chunks render through the same
+`LodPool` lazy upload and `VertexC` compression as the quadtree
+chunks, with a single LOD level per chunk (the error metric is
+already curvature-adaptive, no distance-band LOD on top).
 
-**Estimate**: ~3 days.
+**Numerical headline**: flat 129² DEM, 4 chunks: quadtree LOD 0 =
+32 768 triangles vs Martini = ≤ 3 200 triangles. >10× reduction on
+flat regions — the use case named in the original pickup trigger.
 
-**Why defer**: P4's quadtree LOD already meets every acceptance bar.
-RTIN is a quality upgrade, not a blocker. Pick it up when a specific
-paper figure has large flat regions that the quadtree wastes
-triangles on.
+**Constraint**: `chunk_cells` must be a power of two. Default 64
+matches the existing quadtree setup. Edge chunks whose extent
+isn't a full `chunk_cells` × `chunk_cells` fall back to the
+stride-1 quadtree mesh; internal chunks Martini-adaptive.
 
 #### H. TopoToolbox-style channel network depth — *done (v0.14.2, 2026-06-07)*
 
