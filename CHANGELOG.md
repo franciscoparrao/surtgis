@@ -9,6 +9,68 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.14.8] - 2026-06-08
+
+Patch release. Closes a gap surfaced during the v0.14.7 pansharpening
+validation: there was no native way to package multiple
+single-band outputs as a single multi-band GeoTIFF for visualization
+in QGIS / ArcGIS. Until now the workaround was an external
+`rasterio` / `gdal_translate` round-trip.
+
+### Added
+
+- **`core::io::write_geotiff_multiband`** — new native writer for
+  multi-band GeoTIFFs. Generic over `RasterElement`. Supports 1, 3
+  or 4 bands (`Gray32Float`, `RGB32Float`, `RGBA32Float`); for
+  `N > 4` the function returns a clear error pointing to the
+  GDAL backend. All band rasters must share shape; GeoTIFF metadata
+  (CRS, transform, nodata) is inherited from `bands[0]`. Per-band
+  values are cast to `f32` and interleaved pixel-by-pixel
+  (chunky planar config).
+
+- **`encode_multiband_image::<CT>`** — internal generic helper
+  parameterised over the tiff crate's `ColorType` trait, so the
+  same GeoTIFF-tag plumbing (scale, tiepoint, geokey, nodata)
+  serves Gray / RGB / RGBA. Single source of truth for the tag
+  emission across band counts.
+
+- **CLI: `surtgis imagery stack <OUTPUT> --band <PATH> [--band ...]`**
+  — stacks 1, 3 or 4 single-band rasters into a multi-band
+  GeoTIFF. Order of `--band` flags determines band order in the
+  output (e.g. pass R, G, B for a standard RGB stack).
+
+### Performance note
+
+The validation pipeline (which previously used `rasterio` to
+stack the per-band pansharpening outputs) now uses the native
+`stack` command. Wall time for a 1.93 M-cell 3-band stack:
+**~90 ms** end-to-end (read 3 single-band TIFFs + interleave +
+write 3-band TIFF), comparable to the `rasterio` round-trip
+within measurement noise.
+
+### Tests
+
+5 new tests in `core::io::native::tests`:
+- `multiband_rgb_roundtrip` — round-trip 3 ramp bands, decode the
+  written file with the `tiff` crate directly, assert
+  `SamplesPerPixel == 3`.
+- `multiband_rgba_writes_four_samples` — same for 4 bands.
+- `multiband_rejects_unsupported_band_count` — passing 2 bands
+  produces a clear error message mentioning the allowed counts.
+- `multiband_rejects_mismatched_shapes` — bands with different
+  dimensions error out.
+- `multiband_preserves_crs_and_transform` — write a 3-band RGB
+  stack with `EPSG:32719` and a UTM-like geotransform; inspect the
+  raw GeoTIFF tags (33550 scale, 33922 tiepoint, 34735 geokey
+  directory) and assert each round-trips.
+
+### Backlog status
+
+Survey 2026-06-06 remains: G ✓, H ✓, I trigger-driven, J ✓, K ✓,
+L ✓, M ✓. The stack writer is a foundation-layer enabler — not a
+ROADMAP item by itself, but a precondition for cleaner CLI demos
+of every multi-band algorithm shipped in J–M.
+
 ## [0.14.7] - 2026-06-08
 
 Patch release. Advances **ROADMAP item M** ("Pansharpening") from

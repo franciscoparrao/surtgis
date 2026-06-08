@@ -1315,6 +1315,16 @@ pub enum ImageryCommands {
         #[command(subcommand)]
         action: PansharpenCommands,
     },
+    /// Stack 1/3/4 single-band rasters into a single multi-band GeoTIFF
+    Stack {
+        /// Output multi-band GeoTIFF
+        output: PathBuf,
+        /// One or more input single-band rasters (repeatable). Order
+        /// determines band order in the output — pass R, G, B for an
+        /// RGB stack.
+        #[arg(long = "band", required = true)]
+        bands: Vec<PathBuf>,
+    },
 }
 
 // ─── Pansharpen subcommands ────────────────────────────────────────────
