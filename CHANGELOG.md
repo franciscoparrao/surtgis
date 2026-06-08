@@ -9,6 +9,76 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.14.6] - 2026-06-08
+
+Patch release. Advances **ROADMAP item L** ("Radiometric
+calibration chain") from the 2026-06-08 OTB-survey backlog. Ships
+the pure-math primitives for DN → reflectance conversion of
+Landsat 8/9 and Sentinel-2, plus a simplified DOS1 atmospheric
+correction. Metadata parsing (`MTL.txt`, `MTD_MSIL1C.xml`) is
+intentionally out of scope — the existing STAC pipeline already
+exposes the calibration coefficients in item properties and can
+pass them straight through.
+
+### Added
+
+- **`imagery::dn_to_toa_landsat`** — Landsat 8/9 Collection 2
+  Level-1: `ρ_TOA = (M_p · DN + A_p) / sin(SUN_ELEVATION)`. Caller
+  supplies `M_p`, `A_p`, `sun_elevation_deg` from the MTL file.
+  USGS Landsat 8/9 C2 L1 Data Format Control Book reference.
+
+- **`imagery::dn_to_surface_reflectance_landsat_c2`** — Landsat
+  Collection 2 Level-2 with the fixed USGS coefficients
+  (`ρ = 2.75e-5 · DN − 0.2`). `DN == 0` is treated as "fill" per
+  USGS spec and emitted as NaN.
+
+- **`imagery::dn_to_reflectance_s2`** — Sentinel-2 L1C TOA or
+  L2A BOA: `ρ = (DN + offset) / quantification_value`. Default
+  params (`quantification = 10000`, `offset = 0`) work for
+  pre-baseline products. For PSD baseline 04.00+ (post
+  2022-01-25) harmonised products pass `offset = −1000`.
+
+- **`imagery::dos1`** — simplified per-band dark-object
+  subtraction (Chavez 1988). Estimates path radiance as the
+  configurable quantile of finite cells (default `0.001` — the
+  0.1 % darkest pixel, robust to sensor artefacts), subtracts it,
+  clamps to non-negative. Full Chavez 1988 DOS1 with `E_SUN`
+  rescaling is out of scope — chain with `dn_to_toa_landsat` /
+  `dn_to_reflectance_s2` for an equivalent effect.
+
+- **CLI: `surtgis imagery calibrate`** with four subcommands:
+  - `landsat-toa --mult M --add A --sun-elevation DEG`
+  - `landsat-sr-c2` (no params — fixed C2 coefficients)
+  - `s2 [--quantification 10000] [--offset 0]`
+  - `dos1 [--quantile 0.001]`
+
+All calibrators preserve NaN cells, set output `nodata` to
+`Some(NaN)`, and use the rayon-parallel per-pixel pattern shared
+across the imagery module.
+
+### Tests
+
+- **3 hand-computed reference values**:
+  - Landsat TOA: `M=2e-5, A=-0.1, elev=60°, DN=10000 →
+    ρ = 0.1 / sin(60°) ≈ 0.11547` (1e-12 tolerance)
+  - Landsat C2 SR: `DN=20000 → ρ = 0.35` (1e-12 tolerance)
+  - S2 TOA: `DN=2500, q=10000 → ρ = 0.25` (1e-12 tolerance)
+  - S2 post-baseline: `DN=2500, q=10000, offset=-1000 → ρ = 0.15`
+    (1e-12 tolerance)
+- NaN passthrough on all four calibrators.
+- Sun-elevation domain check, quantification > 0 check.
+- DOS1 invariants: dark cell → 0, monotonicity preserved across
+  the raster, NaN passthrough, all-NaN raster errors cleanly.
+
+12/12 calibration tests pass.
+
+### Backlog status
+
+Survey 2026-06-06 status after this release: G ✓, H ✓, I
+trigger-driven, J ✓ (v0.14.4), K ✓ (v0.14.5), **L ✓** (this
+release). Remaining: M (pansharpening), N (MAD / IR-MAD), O
+(mosaic seams + color balance).
+
 ## [0.14.5] - 2026-06-08
 
 Patch release. Advances **ROADMAP item K** ("Image segmentation —

@@ -8,6 +8,7 @@
 
 mod band_math;
 mod burn_severity;
+mod calibration;
 mod change_detection;
 mod cloud_mask;
 mod composite;
@@ -17,6 +18,10 @@ mod reclassify;
 
 pub use band_math::{BandMathOp, band_math, band_math_binary};
 pub use burn_severity::{burn_severity_classify, dnbr};
+pub use calibration::{
+    Dos1Params, LandsatToaParams, S2ReflectanceParams, dn_to_reflectance_s2,
+    dn_to_surface_reflectance_landsat_c2, dn_to_toa_landsat, dos1,
+};
 pub use change_detection::{
     CHANGE_DECREASE, CHANGE_INCREASE, CHANGE_NO_CHANGE, RasterDiffParams, change_vector_analysis,
     raster_difference,

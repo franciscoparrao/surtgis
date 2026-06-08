@@ -1305,6 +1305,63 @@ pub enum ImageryCommands {
         #[arg(long, default_value = "4,5,6,11")]
         keep: String,
     },
+    /// Radiometric calibration: DN → TOA reflectance, surface reflectance, DOS1
+    Calibrate {
+        #[command(subcommand)]
+        action: CalibrateCommands,
+    },
+}
+
+// ─── Calibrate subcommands ─────────────────────────────────────────────
+
+#[derive(Subcommand)]
+pub enum CalibrateCommands {
+    /// Landsat 8/9 Collection 2 Level-1: DN → TOA reflectance
+    LandsatToa {
+        /// Input DN raster
+        input: PathBuf,
+        /// Output reflectance raster
+        output: PathBuf,
+        /// REFLECTANCE_MULT_BAND_x from MTL (e.g. 2e-5)
+        #[arg(short = 'M', long = "mult")]
+        multiplicative: f64,
+        /// REFLECTANCE_ADD_BAND_x from MTL (e.g. -0.1)
+        #[arg(short = 'A', long = "add")]
+        additive: f64,
+        /// SUN_ELEVATION from MTL, in degrees
+        #[arg(long)]
+        sun_elevation: f64,
+    },
+    /// Landsat Collection 2 Level-2: DN → surface reflectance (fixed 2.75e-5/-0.2)
+    LandsatSrC2 {
+        /// Input DN raster
+        input: PathBuf,
+        /// Output reflectance raster
+        output: PathBuf,
+    },
+    /// Sentinel-2: DN → reflectance (works for L1C TOA and L2A BOA)
+    S2 {
+        /// Input DN raster
+        input: PathBuf,
+        /// Output reflectance raster
+        output: PathBuf,
+        /// QUANTIFICATION_VALUE / BOA_QUANTIFICATION_VALUE (default 10000)
+        #[arg(long, default_value = "10000.0")]
+        quantification: f64,
+        /// BOA_ADD_OFFSET (PSD baseline 04.00+: -1000; older products: 0)
+        #[arg(long, default_value = "0.0")]
+        offset: f64,
+    },
+    /// DOS1 dark-object subtraction (per band)
+    Dos1 {
+        /// Input raster
+        input: PathBuf,
+        /// Output raster
+        output: PathBuf,
+        /// Quantile of finite cells used as dark-object estimate (default 0.001)
+        #[arg(long, default_value = "0.001")]
+        quantile: f64,
+    },
 }
 
 // ─── Morphology subcommands ─────────────────────────────────────────────

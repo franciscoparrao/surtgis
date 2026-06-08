@@ -5,12 +5,14 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use surtgis_algorithms::imagery::{
-    EviParams, ReclassifyParams, SaviParams, band_math_binary, bsi, burn_severity_classify,
-    cloud_mask_scl, dnbr, evi, evi2, gndvi, index_builder, median_composite, mndwi, msavi, nbr,
-    ndbi, ndmi, ndre, ndsi, ndvi, ndwi, ngrdi, reci, reclassify, savi,
+    Dos1Params, EviParams, LandsatToaParams, ReclassifyParams, S2ReflectanceParams,
+    band_math_binary, bsi, burn_severity_classify, cloud_mask_scl, dn_to_reflectance_s2,
+    dn_to_surface_reflectance_landsat_c2, dn_to_toa_landsat, dnbr, dos1, evi, evi2, gndvi,
+    index_builder, median_composite, mndwi, msavi, nbr, ndbi, ndmi, ndre, ndsi, ndvi, ndwi, ngrdi,
+    reci, reclassify, savi, SaviParams,
 };
 
-use crate::commands::ImageryCommands;
+use crate::commands::{CalibrateCommands, ImageryCommands};
 use crate::helpers::{
     done, parse_band_assignments, parse_band_math_op, parse_reclass_entry, parse_scl_classes,
     read_dem, write_result,
@@ -337,7 +339,80 @@ pub fn handle(algorithm: ImageryCommands, compress: bool) -> Result<()> {
             write_result(&result, &output, compress)?;
             done("Cloud mask", &output, elapsed);
         }
+
+        ImageryCommands::Calibrate { action } => handle_calibrate(action, compress)?,
     }
 
+    Ok(())
+}
+
+fn handle_calibrate(action: CalibrateCommands, compress: bool) -> Result<()> {
+    match action {
+        CalibrateCommands::LandsatToa {
+            input,
+            output,
+            multiplicative,
+            additive,
+            sun_elevation,
+        } => {
+            let raster = read_dem(&input)?;
+            let start = Instant::now();
+            let result = dn_to_toa_landsat(
+                &raster,
+                LandsatToaParams {
+                    multiplicative,
+                    additive,
+                    sun_elevation_deg: sun_elevation,
+                },
+            )
+            .context("Landsat TOA calibration failed")?;
+            write_result(&result, &output, compress)?;
+            done("Landsat TOA", &output, start.elapsed());
+        }
+        CalibrateCommands::LandsatSrC2 { input, output } => {
+            let raster = read_dem(&input)?;
+            let start = Instant::now();
+            let result = dn_to_surface_reflectance_landsat_c2(&raster)
+                .context("Landsat C2 SR calibration failed")?;
+            write_result(&result, &output, compress)?;
+            done("Landsat C2 SR", &output, start.elapsed());
+        }
+        CalibrateCommands::S2 {
+            input,
+            output,
+            quantification,
+            offset,
+        } => {
+            let raster = read_dem(&input)?;
+            let start = Instant::now();
+            let result = dn_to_reflectance_s2(
+                &raster,
+                S2ReflectanceParams {
+                    quantification_value: quantification,
+                    offset,
+                },
+            )
+            .context("Sentinel-2 reflectance calibration failed")?;
+            write_result(&result, &output, compress)?;
+            done("S2 reflectance", &output, start.elapsed());
+        }
+        CalibrateCommands::Dos1 {
+            input,
+            output,
+            quantile,
+        } => {
+            let raster = read_dem(&input)?;
+            let start = Instant::now();
+            let result = dos1(
+                &raster,
+                Dos1Params {
+                    dark_object_quantile: quantile,
+                },
+            )
+            .context("DOS1 failed")?;
+            write_result(&result, &output, compress)?;
+            done("DOS1", &output, start.elapsed());
+        }
+    }
     Ok(())
 }
