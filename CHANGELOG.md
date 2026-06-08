@@ -9,6 +9,79 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.14.4] - 2026-06-08
+
+Patch release. Opens **ROADMAP item J** ("Texture/imagery deepening
+toward Orfeo ToolBox parity"). Adds Local Binary Patterns (Ojala
+2002), a single-pass multi-feature GLCM, an analytical reference
+test that pins the GLCM math to hand-computed values, and the
+matching CLI surface.
+
+### Added
+
+- **`texture::lbp`** — new module. Local Binary Patterns (Ojala,
+  Pietikäinen & Mäenpää 2002) over the 3×3 ring of each pixel
+  (P=8, R=1). Two variants:
+  - `LbpVariant::Standard` — raw 8-bit code (0..=255), neighbours
+    ordered clockwise from the top-left. Bit i is set when
+    neighbour i ≥ centre.
+  - `LbpVariant::RotationInvariantUniform` — Ojala riu2. For
+    uniform patterns (≤2 circular bit transitions): the popcount
+    of the code (0..=8). For non-uniform patterns: P+1 = 9.
+    Collapses all rotations of a uniform pattern to a single
+    value, the canonical feature for rotation-invariant
+    classification.
+  Border pixels and pixels with any NaN in the 3×3 neighbourhood
+  are written as NaN. Output `nodata` metadata is set to NaN.
+  Public API: `lbp(&Raster<f64>, LbpParams) -> Result<Raster<f64>>`.
+
+- **`texture::haralick_glcm_multi`** — new entry point. Computes
+  N GLCM features in a single pass by building the co-occurrence
+  matrix once per pixel window and evaluating every requested
+  feature on it. The GLCM construction dominates per-pixel cost,
+  so requesting all 6 features runs ~6× faster than calling
+  `haralick_glcm` six times. The existing `haralick_glcm` is a
+  thin wrapper around the multi-pass entry point — behaviour is
+  unchanged.
+
+- **CLI: `surtgis texture lbp <INPUT> <OUTPUT> [--variant
+  standard|riu2]`** — exposes LBP from the command line.
+
+- **CLI: `surtgis texture glcm-all <INPUT> <OUTPUT_DIR> [--radius
+  N] [--levels N]`** — computes all 6 Haralick textures in one
+  pass and writes them as `glcm_{energy,contrast,homogeneity,
+  correlation,entropy,dissimilarity}.tif` under `OUTPUT_DIR`.
+
+### Tests
+
+- **GLCM analytical reference**: hand-computed normalised GLCM on
+  a 3×3 binary raster (`reference_binary_3x3`) pinning all 6
+  Haralick features against analytical values (closed-form
+  features at 1e-12 tolerance, entropy and correlation at 1e-4).
+  This is the first regression test that catches subtle math
+  drift independently of cross-pixel consistency checks.
+
+- **GLCM multi vs per-feature equivalence**: asserts the
+  multi-pass output equals `haralick_glcm` cell-by-cell on a
+  gradient raster at 1e-12 tolerance.
+
+- **LBP tests** (8 new): all-brighter / all-darker neighbourhoods,
+  known clockwise pattern, riu2 uniform/non-uniform / rotation
+  invariance, NaN propagation, border-NaN output, raster-size
+  error, and a unit test on the circular bit-transition helper.
+
+20/20 texture tests pass. The new `multi` entry point is the
+single source of truth for the GLCM math; `haralick_glcm` and
+`haralick_glcm_multi` share it.
+
+### Backlog status
+
+Survey 2026-06-06 status after this release: G ✓, H ✓, I backlog
+(3D Tiles, trigger-driven), **J in progress** (texture +
+multi-feature + LBP shipped; still to land in later patches:
+GLCM-vs-scikit-image cross-validation, more texture features —
+LBP-TOP, GLRLM, GLSZM — as user demand surfaces).
+
 ## [0.14.3] - 2026-06-07
 
 Patch release. Closes **ROADMAP item G** ("Martini RTIN terrain

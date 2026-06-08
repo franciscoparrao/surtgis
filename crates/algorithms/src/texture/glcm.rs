@@ -49,7 +49,7 @@ impl Default for GlcmParams {
     }
 }
 
-/// Compute a GLCM-based texture feature.
+/// Compute a single GLCM-based texture feature.
 ///
 /// For each pixel, builds a GLCM from the surrounding window using
 /// 4 directions (0°, 45°, 90°, 135°) and averages the result.
@@ -58,11 +58,37 @@ impl Default for GlcmParams {
 /// * `raster` - Input raster (continuous values quantized internally)
 /// * `params` - GLCM parameters
 pub fn haralick_glcm(raster: &Raster<f64>, params: GlcmParams) -> Result<Raster<f64>> {
+    let textures = [params.texture];
+    let mut results = haralick_glcm_multi(raster, &params, &textures)?;
+    Ok(results.pop().unwrap())
+}
+
+/// Compute multiple GLCM texture features in a single pass.
+///
+/// The GLCM is the dominant cost per pixel; computing N features is
+/// effectively the same cost as one. This entry point builds the
+/// GLCM once per window and evaluates every requested feature on it,
+/// so requesting N features runs ~N× faster than calling
+/// `haralick_glcm` N times.
+///
+/// The `texture` field of `params` is ignored — the `textures` slice
+/// determines which features are produced. Returns one raster per
+/// requested feature, in the same order.
+pub fn haralick_glcm_multi(
+    raster: &Raster<f64>,
+    params: &GlcmParams,
+    textures: &[GlcmTexture],
+) -> Result<Vec<Raster<f64>>> {
     if params.radius == 0 {
         return Err(Error::Algorithm("GLCM radius must be > 0".into()));
     }
     if params.n_levels < 2 {
         return Err(Error::Algorithm("GLCM n_levels must be >= 2".into()));
+    }
+    if textures.is_empty() {
+        return Err(Error::Algorithm(
+            "haralick_glcm_multi needs at least one texture".into(),
+        ));
     }
 
     let (rows, cols) = raster.shape();
@@ -90,17 +116,20 @@ pub fn haralick_glcm(raster: &Raster<f64>, params: GlcmParams) -> Result<Raster<
     let n = params.n_levels;
     let d = params.distance as isize;
     let r = params.radius as isize;
+    let n_tex = textures.len();
 
     // Direction offsets: 0°, 45°, 90°, 135°
     let directions: [(isize, isize); 4] = [(0, d), (-d, d), (-d, 0), (-d, -d)];
 
+    // Each parallel chunk emits `n_tex` rows of length `cols`,
+    // interleaved feature-major (feature 0 cols, feature 1 cols, ...).
     let output_data: Vec<f64> = (0..rows)
         .into_par_iter()
         .flat_map(|row| {
-            let mut row_data = vec![f64::NAN; cols];
+            let mut row_block = vec![f64::NAN; n_tex * cols];
             let mut glcm = vec![0.0; n * n];
 
-            for (col, out) in row_data.iter_mut().enumerate() {
+            for col in 0..cols {
                 // Build GLCM from window
                 glcm.fill(0.0);
                 let mut total = 0.0;
@@ -146,19 +175,33 @@ pub fn haralick_glcm(raster: &Raster<f64>, params: GlcmParams) -> Result<Raster<
                     *v /= total;
                 }
 
-                *out = compute_texture(&glcm, n, params.texture);
+                // Evaluate every requested feature on the shared GLCM.
+                for (k, &tex) in textures.iter().enumerate() {
+                    row_block[k * cols + col] = compute_texture(&glcm, n, tex);
+                }
             }
 
-            row_data
+            row_block
         })
         .collect();
 
-    let mut output = raster.with_same_meta::<f64>(rows, cols);
-    output.set_nodata(Some(f64::NAN));
-    *output.data_mut() = Array2::from_shape_vec((rows, cols), output_data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    // Slice the interleaved block back into one Raster per feature.
+    let mut outputs = Vec::with_capacity(n_tex);
+    let row_stride = n_tex * cols;
+    for k in 0..n_tex {
+        let mut buf = Vec::with_capacity(rows * cols);
+        for row in 0..rows {
+            let start = row * row_stride + k * cols;
+            buf.extend_from_slice(&output_data[start..start + cols]);
+        }
+        let mut out = raster.with_same_meta::<f64>(rows, cols);
+        out.set_nodata(Some(f64::NAN));
+        *out.data_mut() =
+            Array2::from_shape_vec((rows, cols), buf).map_err(|e| Error::Other(e.to_string()))?;
+        outputs.push(out);
+    }
 
-    Ok(output)
+    Ok(outputs)
 }
 
 fn quantize(value: f64, vmin: f64, range: f64, n_levels: usize) -> usize {
@@ -315,5 +358,120 @@ mod tests {
 
         let v = result.get(10, 10).unwrap();
         assert!(v > 0.0, "Gradient should have entropy > 0, got {}", v);
+    }
+
+    #[test]
+    fn reference_binary_3x3() {
+        // Hand-computed reference. 3x3 raster, n_levels=2, radius=1
+        // (window covers the whole raster), distance=1, symmetric,
+        // averaged over the 4 standard directions:
+        //
+        //   0 0 1
+        //   0 1 1
+        //   0 0 1
+        //
+        // The normalised GLCM at (1,1) is:
+        //   p(0,0) = 0.300   p(0,1) = 0.225
+        //   p(1,0) = 0.225   p(1,1) = 0.250
+        //
+        // Reference texture values:
+        //   Energy        = Σp²            = 0.25375
+        //   Contrast      = Σp·(i-j)²      = 0.45
+        //   Homogeneity   = Σp/(1+|i-j|)   = 0.775
+        //   Dissimilarity = Σp·|i-j|       = 0.45
+        //   Entropy       = -Σp·ln(p)      ≈ 1.37907
+        //   Correlation   ≈ 0.09773
+        let mut r = Raster::new(3, 3);
+        r.set_transform(GeoTransform::new(0.0, 3.0, 1.0, -1.0));
+        let g = [[0.0, 0.0, 1.0], [0.0, 1.0, 1.0], [0.0, 0.0, 1.0]];
+        for row in 0..3 {
+            for col in 0..3 {
+                r.set(row, col, g[row][col]).unwrap();
+            }
+        }
+        let base = GlcmParams {
+            radius: 1,
+            n_levels: 2,
+            distance: 1,
+            texture: GlcmTexture::Contrast,
+        };
+        let textures = [
+            GlcmTexture::Energy,
+            GlcmTexture::Contrast,
+            GlcmTexture::Homogeneity,
+            GlcmTexture::Dissimilarity,
+            GlcmTexture::Entropy,
+            GlcmTexture::Correlation,
+        ];
+        let expected = [0.25375, 0.45, 0.775, 0.45, 1.37907_f64, 0.09773_f64];
+        let result = haralick_glcm_multi(&r, &base, &textures).unwrap();
+        for (k, (&tex, &exp)) in textures.iter().zip(expected.iter()).enumerate() {
+            let v = result[k].get(1, 1).unwrap();
+            // Entropy/correlation are floating-point reductions; widen
+            // tolerance to 1e-4 for them. Closed-form features hit 1e-12.
+            let tol = match tex {
+                GlcmTexture::Entropy | GlcmTexture::Correlation => 1e-4,
+                _ => 1e-12,
+            };
+            assert!(
+                (v - exp).abs() < tol,
+                "{:?}: expected {}, got {} (tol {})",
+                tex,
+                exp,
+                v,
+                tol
+            );
+        }
+    }
+
+    #[test]
+    fn multi_matches_per_feature() {
+        // Multi-pass output must equal per-feature outputs cell-by-cell.
+        let r = gradient_raster(20);
+        let base = GlcmParams {
+            radius: 2,
+            n_levels: 16,
+            distance: 1,
+            texture: GlcmTexture::Contrast, // ignored by multi
+        };
+        let textures = [
+            GlcmTexture::Energy,
+            GlcmTexture::Contrast,
+            GlcmTexture::Homogeneity,
+            GlcmTexture::Correlation,
+            GlcmTexture::Entropy,
+            GlcmTexture::Dissimilarity,
+        ];
+        let multi = haralick_glcm_multi(&r, &base, &textures).unwrap();
+        assert_eq!(multi.len(), textures.len());
+        for (k, &tex) in textures.iter().enumerate() {
+            let single = haralick_glcm(
+                &r,
+                GlcmParams {
+                    texture: tex,
+                    ..base.clone()
+                },
+            )
+            .unwrap();
+            for row in 0..20 {
+                for col in 0..20 {
+                    let a = multi[k].get(row, col).unwrap();
+                    let b = single.get(row, col).unwrap();
+                    if a.is_nan() {
+                        assert!(b.is_nan(), "multi NaN but single finite at {}, {}", row, col);
+                    } else {
+                        assert!(
+                            (a - b).abs() < 1e-12,
+                            "feature {:?} mismatch at ({}, {}): multi={} single={}",
+                            tex,
+                            row,
+                            col,
+                            a,
+                            b
+                        );
+                    }
+                }
+            }
+        }
     }
 }
