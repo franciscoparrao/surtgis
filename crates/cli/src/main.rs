@@ -193,6 +193,9 @@ fn main() -> Result<()> {
             handlers::classification::handle(algorithm, compress)?
         }
         Commands::Texture { algorithm } => handlers::texture::handle(algorithm, compress)?,
+        Commands::Segmentation { algorithm } => {
+            handlers::segmentation::handle(algorithm, compress)?
+        }
         Commands::Statistics { algorithm } => handlers::statistics::handle(algorithm, compress)?,
         #[cfg(feature = "ml")]
         Commands::Ml { action } => handlers::ml::handle(action, compress)?,
