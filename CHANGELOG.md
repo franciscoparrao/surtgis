@@ -9,6 +9,88 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.14.10] - 2026-06-08
+
+Patch release. Closes **ROADMAP item O** ("Mosaic seams + colour
+balance") from the 2026-06-08 OTB-survey backlog. **The
+2026-06-06 survey backlog is now entirely shipped or
+trigger-driven** — items G–H, J–O all done; only I (3D Tiles
+export) remains, gated on a Cesium-user request.
+
+### Added
+
+- **`imagery::histogram_match`** — empirical CDF (rank-based)
+  matching. For every source pixel `v`, computes its rank in the
+  sorted finite source values, looks up the value at the same
+  rank in the sorted reference, and emits a linearly-interpolated
+  value between adjacent reference samples. Non-linear; matches
+  the full distribution shape, not just `(μ, σ)`. Use when
+  source and reference were captured under noticeably different
+  conditions (different sun angle, atmosphere, sensor gain).
+
+- **`imagery::moment_match`** — linear `(μ, σ)` matching:
+  `v' = (v − μ_src) · (σ_ref / σ_src) + μ_ref`. Cheap and
+  monotonic. Fits Gaussian-shaped reflectance distributions
+  well. Rejects sources with zero variance.
+
+- **`imagery::feather_mosaic`** — distance-weighted blend of
+  aligned rasters. For each input raster, computes the Chamfer
+  3-4 distance transform from each valid pixel to the nearest
+  invalid cell *or* raster boundary; pixels deep inside a tile
+  get a high weight, pixels at edges fade to zero. Output is
+  the distance-weighted average across inputs:
+  `out(p) = Σᵢ d_i(p) · v_i(p) / Σᵢ d_i(p)`. Hides hard tile
+  seams without the cost of solving the full min-cost-path seam
+  problem. All-NaN positions propagate to NaN.
+
+### Internal numerical kernel
+
+- **`chamfer_distance_to_invalid`** — two-pass Chamfer 3-4
+  distance transform on a `Raster<f64>`. Initialises invalid
+  cells *and* the raster border to distance 0 so the feather
+  fades naturally at tile edges. Returns `Vec<f32>` in
+  raster-pixel units scaled by 3 (irrelevant for the feather
+  weight ratio).
+
+### CLI
+
+- **`surtgis imagery color-balance histogram <SOURCE> <REFERENCE>
+  <OUTPUT>`** — full CDF matching, single band.
+- **`surtgis imagery color-balance moments <SOURCE> <REFERENCE>
+  <OUTPUT>`** — linear (μ, σ) matching.
+- **`surtgis imagery mosaic-feather <OUTPUT> --input PATH
+  [--input ...]`** — distance-weighted feather blend, ≥ 2
+  aligned inputs.
+
+### Tests
+
+10/10 new tests pass:
+
+- **Histogram-match invariants**: `src == ref` produces output
+  ≈ source bit-for-bit; remapping `[0..100)` to `[200..300)`
+  recovers the reference's `(μ, σ)` within 0.5; NaN
+  passthrough.
+- **Moment-match invariants**: output `(μ, σ)` equal reference's
+  to 1e-9; zero-variance source rejected; NaN passthrough.
+- **Feather-mosaic invariants**: two identical-value rasters
+  preserve the value (interior cells); two non-overlapping
+  halves with mid-stripe overlap give monotonically-increasing
+  blend across the overlap zone; all-NaN positions produce NaN;
+  mismatched-shape error.
+
+### Backlog status
+
+Survey 2026-06-06 status after this release: G ✓ (Martini RTIN),
+H ✓ (TopoToolbox depth), I 📋 trigger-driven (3D Tiles export
+pending Cesium user), J ✓ (texture deepening, v0.14.4), K ✓
+(SLIC + Felzenszwalb, v0.14.5), L ✓ (radiometric calibration,
+v0.14.6), M ✓ (pansharpening, v0.14.7), N ✓ (MAD/IR-MAD,
+v0.14.9), **O ✓** (this release). Plus the v0.14.8 stack
+utility surfaced during the M validation.
+
+**Net: 7 patch releases this cycle, every non-trigger-driven
+backlog item shipped.**
+
 ## [0.14.9] - 2026-06-08
 
 Patch release. Advances **ROADMAP item N** ("MAD / IR-MAD change

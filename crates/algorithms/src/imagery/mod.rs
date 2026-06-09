@@ -11,6 +11,7 @@ mod burn_severity;
 mod calibration;
 mod change_detection;
 mod cloud_mask;
+mod color_balance;
 mod composite;
 mod index_builder;
 mod indices;
@@ -31,7 +32,8 @@ pub use cloud_mask::{
     CloudMaskStrategy, HlsFmask, LandsatQaMask, NoCloudMask, S2SclMask, SCL_VALID_DEFAULT,
     cloud_mask_hls_fmask, cloud_mask_scl,
 };
-pub use composite::median_composite;
+pub use color_balance::{histogram_match, moment_match};
+pub use composite::{feather_mosaic, median_composite};
 pub use index_builder::index_builder;
 pub use indices::{
     EviParams, SaviParams, SpectralIndex, bsi, evi, evi2, gndvi, mndwi, msavi, nbr, ndbi, ndmi,

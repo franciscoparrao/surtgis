@@ -1330,6 +1330,43 @@ pub enum ImageryCommands {
         #[command(subcommand)]
         action: ChangeDetectionCommands,
     },
+    /// Inter-tile colour balancing: histogram or moment matching
+    ColorBalance {
+        #[command(subcommand)]
+        action: ColorBalanceCommands,
+    },
+    /// Distance-weighted feather-blend mosaic of aligned rasters
+    MosaicFeather {
+        /// Output blended raster
+        output: PathBuf,
+        /// Input rasters (repeatable)
+        #[arg(long = "input", required = true)]
+        inputs: Vec<PathBuf>,
+    },
+}
+
+// ─── Colour balance subcommands ────────────────────────────────────────
+
+#[derive(Subcommand)]
+pub enum ColorBalanceCommands {
+    /// Histogram (empirical CDF) matching — full distribution alignment
+    Histogram {
+        /// Source raster to be remapped
+        source: PathBuf,
+        /// Reference raster whose distribution shape is the target
+        reference: PathBuf,
+        /// Output remapped raster
+        output: PathBuf,
+    },
+    /// Linear moment (mean, stddev) matching
+    Moments {
+        /// Source raster to be remapped
+        source: PathBuf,
+        /// Reference raster whose (μ, σ) are the target
+        reference: PathBuf,
+        /// Output remapped raster
+        output: PathBuf,
+    },
 }
 
 // ─── Change detection (MAD / IR-MAD) subcommands ───────────────────────
