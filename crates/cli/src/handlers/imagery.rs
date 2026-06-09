@@ -7,13 +7,16 @@ use std::time::Instant;
 use surtgis_algorithms::imagery::{
     Dos1Params, EviParams, IrMadParams, LandsatToaParams, ReclassifyParams, S2ReflectanceParams,
     band_math_binary, bsi, burn_severity_classify, cloud_mask_scl, dn_to_reflectance_s2,
-    dn_to_surface_reflectance_landsat_c2, dn_to_toa_landsat, dnbr, dos1, evi, evi2, gndvi,
-    index_builder, ir_mad, mad, median_composite, mndwi, msavi, nbr, ndbi, ndmi, ndre, ndsi, ndvi,
-    ndwi, ngrdi, reci, reclassify, savi, SaviParams,
+    dn_to_surface_reflectance_landsat_c2, dn_to_toa_landsat, dnbr, dos1, evi, evi2, feather_mosaic,
+    gndvi, histogram_match, index_builder, ir_mad, mad, median_composite, mndwi, moment_match,
+    msavi, nbr, ndbi, ndmi, ndre, ndsi, ndvi, ndwi, ngrdi, reci, reclassify, savi, SaviParams,
 };
 use surtgis_algorithms::pansharpening::{brovey, gram_schmidt, pca_pansharpen};
 
-use crate::commands::{CalibrateCommands, ChangeDetectionCommands, ImageryCommands, PansharpenCommands};
+use crate::commands::{
+    CalibrateCommands, ChangeDetectionCommands, ColorBalanceCommands, ImageryCommands,
+    PansharpenCommands,
+};
 use crate::helpers::{
     done, parse_band_assignments, parse_band_math_op, parse_reclass_entry, parse_scl_classes,
     read_dem, write_result,
@@ -349,6 +352,27 @@ pub fn handle(algorithm: ImageryCommands, compress: bool) -> Result<()> {
             handle_change_detection(action, compress)?;
         }
 
+        ImageryCommands::ColorBalance { action } => handle_color_balance(action, compress)?,
+
+        ImageryCommands::MosaicFeather { output, inputs } => {
+            if inputs.len() < 2 {
+                anyhow::bail!("mosaic-feather: need at least 2 --input rasters");
+            }
+            let rasters = inputs
+                .iter()
+                .map(|p| read_dem(p).with_context(|| format!("reading {}", p.display())))
+                .collect::<Result<Vec<_>>>()?;
+            let refs: Vec<_> = rasters.iter().collect();
+            let start = Instant::now();
+            let result = feather_mosaic(&refs).context("feather-mosaic failed")?;
+            write_result(&result, &output, compress)?;
+            done(
+                &format!("Feather mosaic ({} inputs)", inputs.len()),
+                &output,
+                start.elapsed(),
+            );
+        }
+
         ImageryCommands::Stack { output, bands } => {
             if !matches!(bands.len(), 1 | 3 | 4) {
                 anyhow::bail!(
@@ -507,6 +531,37 @@ fn handle_calibrate(action: CalibrateCommands, compress: bool) -> Result<()> {
             .context("DOS1 failed")?;
             write_result(&result, &output, compress)?;
             done("DOS1", &output, start.elapsed());
+        }
+    }
+    Ok(())
+}
+
+fn handle_color_balance(action: ColorBalanceCommands, compress: bool) -> Result<()> {
+    match action {
+        ColorBalanceCommands::Histogram {
+            source,
+            reference,
+            output,
+        } => {
+            let src = read_dem(&source)?;
+            let refr = read_dem(&reference)?;
+            let start = Instant::now();
+            let result =
+                histogram_match(&src, &refr).context("histogram_match failed")?;
+            write_result(&result, &output, compress)?;
+            done("Histogram match", &output, start.elapsed());
+        }
+        ColorBalanceCommands::Moments {
+            source,
+            reference,
+            output,
+        } => {
+            let src = read_dem(&source)?;
+            let refr = read_dem(&reference)?;
+            let start = Instant::now();
+            let result = moment_match(&src, &refr).context("moment_match failed")?;
+            write_result(&result, &output, compress)?;
+            done("Moment match", &output, start.elapsed());
         }
     }
     Ok(())

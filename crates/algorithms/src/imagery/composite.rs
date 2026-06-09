@@ -183,6 +183,149 @@ fn compute_median(values: &mut Vec<f64>) -> f64 {
     }
 }
 
+/// Distance-weighted feather mosaic across aligned rasters.
+///
+/// For each input raster the algorithm computes an approximate
+/// Chamfer 3-4 distance from each valid pixel to the nearest
+/// **invalid cell or raster boundary**. The output pixel value is
+/// the distance-weighted average of finite inputs at that
+/// position:
+///
+///   out(p) = Σ_i d_i(p) · v_i(p) / Σ_i d_i(p)
+///
+/// Pixels deep inside a tile dominate the average; pixels near a
+/// tile edge fade smoothly into the neighbouring tile. This
+/// hides hard seams between adjacent tiles without solving the
+/// full min-cost-path seam problem.
+///
+/// All input rasters must share the same shape. Pixels where every
+/// raster is NaN are emitted as NaN. Distance is computed in
+/// raster-pixel units, so the weighting is purely geometric.
+pub fn feather_mosaic(rasters: &[&Raster<f64>]) -> Result<Raster<f64>> {
+    if rasters.len() < 2 {
+        return Err(Error::Other(
+            "feather_mosaic requires at least 2 rasters".into(),
+        ));
+    }
+    let (rows, cols) = rasters[0].shape();
+    for r in rasters.iter().skip(1) {
+        if r.shape() != (rows, cols) {
+            return Err(Error::Other(
+                "feather_mosaic: all rasters must share shape".into(),
+            ));
+        }
+    }
+
+    // Per-raster distance map: distance from each valid cell to
+    // the nearest invalid cell *or* the raster boundary.
+    let dist_maps: Vec<Vec<f32>> = rasters
+        .iter()
+        .map(|r| chamfer_distance_to_invalid(r, rows, cols))
+        .collect();
+
+    let n_px = rows * cols;
+    let mut out_data = vec![f64::NAN; n_px];
+    for row in 0..rows {
+        for col in 0..cols {
+            let p = row * cols + col;
+            let mut w_sum = 0.0_f64;
+            let mut v_sum = 0.0_f64;
+            for (i, r) in rasters.iter().enumerate() {
+                let v = unsafe { r.get_unchecked(row, col) };
+                if !v.is_finite() {
+                    continue;
+                }
+                let w = dist_maps[i][p] as f64;
+                if w <= 0.0 {
+                    continue;
+                }
+                w_sum += w;
+                v_sum += w * v;
+            }
+            if w_sum > 0.0 {
+                out_data[p] = v_sum / w_sum;
+            }
+        }
+    }
+
+    let mut out = Raster::from_array(
+        Array2::from_shape_vec((rows, cols), out_data)
+            .map_err(|e| Error::Other(e.to_string()))?,
+    );
+    out.set_transform(rasters[0].transform().clone());
+    out.set_nodata(Some(f64::NAN));
+    if let Some(crs) = rasters[0].crs() {
+        out.set_crs(Some(crs.clone()));
+    }
+    Ok(out)
+}
+
+/// Two-pass Chamfer 3-4 distance transform. Returns, per pixel,
+/// the approximate Euclidean distance (×3 scale) to the nearest
+/// invalid cell or raster boundary. Border cells get distance 0
+/// so the feather fades smoothly into them.
+fn chamfer_distance_to_invalid(raster: &Raster<f64>, rows: usize, cols: usize) -> Vec<f32> {
+    let inf = f32::MAX / 4.0;
+    let mut d = vec![inf; rows * cols];
+    for row in 0..rows {
+        for col in 0..cols {
+            let p = row * cols + col;
+            let v = unsafe { raster.get_unchecked(row, col) };
+            let on_border = row == 0 || col == 0 || row == rows - 1 || col == cols - 1;
+            if !v.is_finite() || on_border {
+                d[p] = 0.0;
+            }
+        }
+    }
+    // Forward pass.
+    for row in 0..rows {
+        for col in 0..cols {
+            let p = row * cols + col;
+            if d[p] == 0.0 {
+                continue;
+            }
+            let mut m = d[p];
+            if row > 0 {
+                m = m.min(d[(row - 1) * cols + col] + 3.0);
+                if col > 0 {
+                    m = m.min(d[(row - 1) * cols + col - 1] + 4.0);
+                }
+                if col + 1 < cols {
+                    m = m.min(d[(row - 1) * cols + col + 1] + 4.0);
+                }
+            }
+            if col > 0 {
+                m = m.min(d[row * cols + col - 1] + 3.0);
+            }
+            d[p] = m;
+        }
+    }
+    // Backward pass.
+    for row in (0..rows).rev() {
+        for col in (0..cols).rev() {
+            let p = row * cols + col;
+            if d[p] == 0.0 {
+                continue;
+            }
+            let mut m = d[p];
+            if row + 1 < rows {
+                m = m.min(d[(row + 1) * cols + col] + 3.0);
+                if col + 1 < cols {
+                    m = m.min(d[(row + 1) * cols + col + 1] + 4.0);
+                }
+                if col > 0 {
+                    m = m.min(d[(row + 1) * cols + col - 1] + 4.0);
+                }
+            }
+            if col + 1 < cols {
+                m = m.min(d[row * cols + col + 1] + 3.0);
+            }
+            d[p] = m;
+        }
+    }
+    d
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -231,6 +374,102 @@ mod tests {
         r.set_transform(GeoTransform::new(origin_x, origin_y, 10.0, -10.0));
         r.set_nodata(Some(f64::NAN));
         r
+    }
+
+    #[test]
+    fn feather_mosaic_two_identical_rasters_preserves_values() {
+        // Both rasters carry the same constant value → output ==
+        // input regardless of the per-raster weights.
+        let r1 = make_raster(vec![vec![5.0; 10]; 10]);
+        let r2 = make_raster(vec![vec![5.0; 10]; 10]);
+        let result = feather_mosaic(&[&r1, &r2]).unwrap();
+        for row in 0..10 {
+            for col in 0..10 {
+                let v = result.get(row, col).unwrap();
+                if v.is_nan() {
+                    // Edge cells where both inputs have weight 0
+                    // legitimately get NaN. Skip them.
+                    continue;
+                }
+                assert!(
+                    (v - 5.0).abs() < 1e-9,
+                    "expected 5.0 at ({},{}), got {}",
+                    row,
+                    col,
+                    v
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn feather_mosaic_smooth_blend_in_overlap() {
+        // Two non-overlapping halves with mid-stripe overlap. Set
+        // r1 to 100 on the left half + NaN right, r2 to 200 on the
+        // right half + NaN left. In the overlap zone both are
+        // valid → output between 100 and 200.
+        let mut r1 = vec![vec![f64::NAN; 12]; 8];
+        let mut r2 = vec![vec![f64::NAN; 12]; 8];
+        for row in 0..8 {
+            for col in 0..12 {
+                if col < 8 {
+                    r1[row][col] = 100.0;
+                }
+                if col >= 4 {
+                    r2[row][col] = 200.0;
+                }
+            }
+        }
+        let r1 = make_raster(r1);
+        let r2 = make_raster(r2);
+        let result = feather_mosaic(&[&r1, &r2]).unwrap();
+        // Inside r1-only region (col 1-2): result ≈ 100.
+        let left = result.get(4, 1).unwrap();
+        assert!(
+            (left - 100.0).abs() < 1e-9,
+            "left should be 100, got {}",
+            left
+        );
+        // Inside r2-only region (col 9-10): result ≈ 200.
+        let right = result.get(4, 10).unwrap();
+        assert!(
+            (right - 200.0).abs() < 1e-9,
+            "right should be 200, got {}",
+            right
+        );
+        // Overlap centre (col 5-7): between 100 and 200, varying
+        // monotonically from "more r1" near col 4 to "more r2"
+        // near col 7.
+        let mid_left = result.get(4, 5).unwrap();
+        let mid_right = result.get(4, 7).unwrap();
+        assert!((100.0..=200.0).contains(&mid_left));
+        assert!((100.0..=200.0).contains(&mid_right));
+        assert!(
+            mid_left < mid_right,
+            "blend monotonicity: left {} should be < right {}",
+            mid_left,
+            mid_right
+        );
+    }
+
+    #[test]
+    fn feather_mosaic_all_nan_in_position_emits_nan() {
+        // Position (0, 0): both inputs NaN → output NaN.
+        let mut data1 = vec![vec![1.0; 5]; 5];
+        let mut data2 = vec![vec![2.0; 5]; 5];
+        data1[0][0] = f64::NAN;
+        data2[0][0] = f64::NAN;
+        let r1 = make_raster(data1);
+        let r2 = make_raster(data2);
+        let result = feather_mosaic(&[&r1, &r2]).unwrap();
+        assert!(result.get(0, 0).unwrap().is_nan());
+    }
+
+    #[test]
+    fn feather_mosaic_rejects_mismatched_shapes() {
+        let r1 = make_raster(vec![vec![1.0; 5]; 5]);
+        let r2 = make_raster(vec![vec![1.0; 6]; 5]);
+        assert!(feather_mosaic(&[&r1, &r2]).is_err());
     }
 
     #[test]
