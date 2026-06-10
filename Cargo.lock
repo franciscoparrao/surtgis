@@ -5776,6 +5776,7 @@ dependencies = [
  "geo",
  "geo-types",
  "ndarray",
+ "num-complex",
  "num-traits",
  "ordered-float 4.6.0",
  "parquet",

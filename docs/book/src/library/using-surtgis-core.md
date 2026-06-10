@@ -27,6 +27,8 @@ are:
 | `gdal` | GDAL-based I/O as an alternative backend |
 | `shapefile` | Shapefile vector reading |
 | `geopackage` | GeoPackage vector reading (rusqlite) |
+| `parquet` | GeoParquet point-table I/O (`PointTable`) |
+| `complex` | `Raster<Complex<f32>>` cells + InSAR helpers (`magnitude`, `phase`, re/im split) |
 
 You do **not** need `surtgis-algorithms`, `surtgis-cli` or any other
 crate to consume rasters. Add `surtgis-algorithms = "0.15"` only when
@@ -63,8 +65,13 @@ fn main() -> surtgis_core::Result<()> {
 
 Key types:
 
-- **`Raster<T>`** — the exchange unit of the whole ecosystem. Generic
-  over `RasterElement` (`u8`–`u64`, `i8`–`i64`, `f32`, `f64`). Carries
+- **`Raster<T>`** — the exchange unit of the whole ecosystem. The
+  type bound is **`RasterCell`** (copy + zero + a nodata convention);
+  every numeric type (`u8`–`u64`, `i8`–`i64`, `f32`, `f64`)
+  additionally implements **`RasterElement`** (ordering + numeric
+  casts), which is what statistics, resampling and I/O bound on.
+  With feature `complex`, `Complex<f32>`/`Complex<f64>` implement
+  `RasterCell` for interferometric phase rasters. Carries
   `GeoTransform`, optional `CRS`, optional nodata.
 - **`GeoTransform`** — affine georeferencing;
   `geo_to_pixel(x, y)` / `pixel_to_geo(col, row)` convert between
