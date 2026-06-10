@@ -19,6 +19,11 @@
 - [Extract patches: points vs polygons](how-to/extract-patches.md)
 - [Prepare training data for a Geospatial Foundation Model](how-to/gfm-prithvi-prep.md)
 
+# Library
+
+- [Using surtgis-core as a library](library/using-surtgis-core.md)
+- [Extension contract](library/extension-contract.md)
+
 # Reference
 
 - [CLI reference](reference/cli/index.md)

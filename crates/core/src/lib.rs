@@ -8,6 +8,18 @@
 //! - `CRS`: Coordinate Reference System handling
 //! - Algorithm traits for consistent API
 //! - I/O for common geospatial formats
+//! - Streaming ([`StripProcessor`]) and tiling ([`TileGrid`]) for
+//!   bounded-memory and windowed processing
+//!
+//! ## Stability
+//!
+//! As of v0.15.0, `surtgis-core` is the foundation of the SurtGIS
+//! engine ecosystem and its public API is treated as **stable under
+//! SemVer**: within a minor series the API only grows, and breaking
+//! changes are pre-announced one release ahead in the CHANGELOG under
+//! a `Breaking` heading. Sibling crates should depend on
+//! `surtgis-core = "0.15"` alone; the CLI and GUI crates carry no
+//! stability promise.
 
 pub mod crs;
 pub mod error;
