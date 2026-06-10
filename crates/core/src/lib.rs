@@ -16,6 +16,7 @@ pub mod mosaic;
 pub mod raster;
 pub mod resample;
 pub mod streaming;
+pub mod tiling;
 pub mod vector;
 
 pub use crs::CRS;
@@ -24,6 +25,7 @@ pub use mosaic::{MosaicOptions, mosaic};
 pub use raster::{GeoTransform, Raster, RasterElement};
 pub use resample::{ResampleMethod, resample_to_grid};
 pub use streaming::{StripProcessor, WindowAlgorithm};
+pub use tiling::{Tile, TileGrid};
 
 /// Prelude for convenient imports
 pub mod prelude {
