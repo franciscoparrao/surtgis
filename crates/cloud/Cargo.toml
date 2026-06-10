@@ -55,5 +55,6 @@ grib = { workspace = true, optional = true }
 proj4rs = { workspace = true, optional = true }
 
 [dev-dependencies]
+tempfile.workspace = true
 approx.workspace = true
 tokio = { workspace = true, features = ["rt", "macros"] }

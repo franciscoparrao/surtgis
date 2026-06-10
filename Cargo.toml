@@ -15,7 +15,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.15.2"
+version = "0.15.3"
 edition = "2024"
 authors = ["Francisco Parra"]
 license = "MIT OR Apache-2.0"
@@ -65,7 +65,7 @@ byteorder = "1"
 futures = "0.3"
 
 # Zarr / Climate data
-zarrs = { version = "0.23", default-features = false, features = ["gzip", "blosc", "zstd", "async"] }
+zarrs = { version = "0.23", default-features = false, features = ["gzip", "blosc", "zstd", "async", "filesystem"] }
 netcdf = { version = "0.12", default-features = false }
 grib = { version = "0.15", default-features = false }
 proj4rs = { version = "0.1", features = ["crs-definitions", "geo-types"] }
