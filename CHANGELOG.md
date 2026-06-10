@@ -11,6 +11,25 @@ call them out under a `Breaking` heading when they happen.
 
 ### Added
 
+- **`sampling` module in `surtgis-algorithms`** — the library-level
+  primitives behind `surtgis extract` / `extract-patches`, exposed
+  for sibling crates (geoembed-rs, roam, pointproc):
+  - `sample_at_points(rasters, points)` — multi-raster values at
+    world-coordinate points; `None` for out-of-bounds or non-finite.
+  - `extract_patches(bands, centers, params)` — fixed-size
+    multi-band windows as a flat `[n, bands, size, size]` f32 tensor
+    with NaN-fraction filtering and a `kept` index for label
+    alignment. Same window semantics as the CLI.
+  - `grid_points_in_polygon(polygon, reference, stride, margin)` —
+    regular grid of cell-centre points inside a polygon; pass
+    `margin = size / 2` to guarantee valid patch centres.
+  The `extract` CLI handler now delegates its sampling loop to
+  `sample_at_points`.
+- **`tiling::TileGrid` in `surtgis-core`** — 2-D tile iteration with
+  overlap. Each `Tile` carries a core extent (cores tile the grid
+  exactly) and a read extent (core + clamped halo), the standard
+  pattern for seam-free tiled kernels and embedding inference. The
+  2-D counterpart of `StripProcessor`.
 - **`hydrology::flow_accumulation_dinf`** — D-infinity flow
   accumulation as a standalone function taking only the D∞ angle
   raster (output of `flow_direction_dinf`; TauDEM `ang` rasters use

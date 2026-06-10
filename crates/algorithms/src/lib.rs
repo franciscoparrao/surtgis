@@ -26,6 +26,7 @@ pub mod interpolation;
 pub mod landscape;
 pub mod morphology;
 pub mod pansharpening;
+pub mod sampling;
 pub mod segmentation;
 pub mod statistics;
 pub mod temporal;

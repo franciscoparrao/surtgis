@@ -136,88 +136,23 @@ pub fn handle(
 
     println!("\nTotal features: {}", rasters.len());
 
-    // Use the first raster as reference for coordinate transform
-    let ref_raster = &rasters[0];
-
     // 3. Read vector points
     println!("Reading point locations...");
     let fc =
         surtgis_core::vector::read_vector(points_path).context("Failed to read vector points")?;
     println!("  {} features read", fc.len());
 
-    // 4. Extract pixel values at each point
-    println!("Extracting pixel values...");
-
-    let mut csv_writer = csv::Writer::from_path(output)
-        .with_context(|| format!("Failed to create CSV: {}", output.display()))?;
-
-    // Write header: feature_names... + target
-    let mut header: Vec<String> = feature_names.clone();
-    header.push(target_attr.to_string());
-    csv_writer
-        .write_record(&header)
-        .context("Failed to write CSV header")?;
-
-    let mut extracted = 0usize;
+    // 4. Collect point coordinates + target values
+    let mut points: Vec<(f64, f64)> = Vec::new();
+    let mut targets: Vec<String> = Vec::new();
     let mut skipped = 0usize;
 
     for feature in fc.iter() {
-        // Get point geometry
-        let geom = match &feature.geometry {
-            Some(g) => g,
-            None => {
-                skipped += 1;
-                continue;
-            }
-        };
-
-        // Extract point coordinates
-        let (x, y) = match geom {
-            geo::Geometry::Point(p) => (p.x(), p.y()),
-            _ => {
-                skipped += 1;
-                continue;
-            }
-        };
-
-        // Convert geographic to pixel coordinates
-        let (col_f, row_f) = ref_raster.geo_to_pixel(x, y);
-        let col = col_f.floor() as isize;
-        let row = row_f.floor() as isize;
-
-        // Check bounds
-        if row < 0
-            || col < 0
-            || row as usize >= ref_raster.rows()
-            || col as usize >= ref_raster.cols()
-        {
+        let Some(geo::Geometry::Point(p)) = &feature.geometry else {
             skipped += 1;
             continue;
-        }
+        };
 
-        let row = row as usize;
-        let col = col as usize;
-
-        // Extract values from all rasters
-        let mut values: Vec<String> = Vec::with_capacity(rasters.len() + 1);
-        let mut has_nan = false;
-
-        for raster in &rasters {
-            match raster.get(row, col) {
-                Ok(v) if v.is_finite() => values.push(format!("{}", v)),
-                _ => {
-                    has_nan = true;
-                    break;
-                }
-            }
-        }
-
-        if has_nan {
-            skipped += 1;
-            continue;
-        }
-
-        // Extract target value from feature properties
         let target_val = match feature.get_property(target_attr) {
             Some(surtgis_core::vector::AttributeValue::Int(v)) => format!("{}", v),
             Some(surtgis_core::vector::AttributeValue::Float(v)) => format!("{}", v),
@@ -231,9 +166,38 @@ pub fn handle(
             }
         };
 
-        values.push(target_val);
+        points.push((p.x(), p.y()));
+        targets.push(target_val);
+    }
+
+    // 5. Sample all rasters at the collected points
+    println!("Extracting pixel values...");
+    let raster_refs: Vec<&surtgis_core::Raster<f64>> = rasters.iter().collect();
+    let samples = surtgis_algorithms::sampling::sample_at_points(&raster_refs, &points)
+        .context("Failed to sample rasters at points")?;
+
+    let mut csv_writer = csv::Writer::from_path(output)
+        .with_context(|| format!("Failed to create CSV: {}", output.display()))?;
+
+    // Write header: feature_names... + target
+    let mut header: Vec<String> = feature_names.clone();
+    header.push(target_attr.to_string());
+    csv_writer
+        .write_record(&header)
+        .context("Failed to write CSV header")?;
+
+    let mut extracted = 0usize;
+
+    for (sample, target_val) in samples.into_iter().zip(targets) {
+        let Some(values) = sample else {
+            skipped += 1;
+            continue;
+        };
+
+        let mut record: Vec<String> = values.iter().map(|v| format!("{}", v)).collect();
+        record.push(target_val);
         csv_writer
-            .write_record(&values)
+            .write_record(&record)
             .context("Failed to write CSV row")?;
         extracted += 1;
     }
