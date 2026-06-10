@@ -24,10 +24,12 @@ promise.
 ## 2. Interchange
 
 The unit of exchange is **`Raster<T>`** together with its
-`GeoTransform` and `CRS`. On disk, inputs and outputs travel as
-GeoTIFF through `surtgis_core::io` (cloud-native formats are arriving
-feature-gated: Zarr read exists in `surtgis-cloud`, GeoParquet is on
-the roadmap).
+`GeoTransform` and `CRS`. On disk, raster inputs and outputs travel
+as GeoTIFF through `surtgis_core::io`; point tables with attributes
+(embeddings, samples) travel as **GeoParquet** through
+`surtgis_core::vector::geoparquet` (feature `parquet` — `PointTable`
+columnar type, DuckDB/GeoPandas-readable output). Zarr read exists
+feature-gated in `surtgis-cloud`.
 
 Conventions your engine must respect:
 

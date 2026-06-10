@@ -15,7 +15,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.15.0"
+version = "0.15.1"
 edition = "2024"
 authors = ["Francisco Parra"]
 license = "MIT OR Apache-2.0"
@@ -36,6 +36,7 @@ geo = "0.29"
 geo-types = "0.7"
 gdal = { version = "0.17", features = ["bindgen"] }
 geozero = "0.14"
+parquet = { version = "59", default-features = false, features = ["snap"] }
 rstar = "0.12"
 tiff = { version = "0.10", features = ["deflate"] }
 

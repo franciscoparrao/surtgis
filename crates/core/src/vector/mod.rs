@@ -11,6 +11,8 @@
 pub mod geojson_reader;
 pub mod rasterize;
 
+#[cfg(feature = "parquet")]
+pub mod geoparquet;
 #[cfg(feature = "geopackage")]
 pub mod gpkg_reader;
 #[cfg(feature = "shapefile")]
@@ -23,6 +25,11 @@ use std::collections::HashMap;
 pub use geojson_reader::{parse_geojson, read_geojson};
 pub use rasterize::{clip_raster, clip_raster_by_polygon, rasterize_polygons};
 
+#[cfg(feature = "parquet")]
+pub use geoparquet::{
+    Column, ColumnData, PointTable, read_geoparquet, read_geoparquet_points, write_geoparquet,
+    write_geoparquet_points,
+};
 #[cfg(feature = "geopackage")]
 pub use gpkg_reader::{list_gpkg_layers, read_gpkg};
 #[cfg(feature = "shapefile")]

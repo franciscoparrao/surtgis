@@ -9,6 +9,27 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-06-10
+
+### Added
+
+- **GeoParquet point I/O in `surtgis-core`** (new feature `parquet`,
+  off by default — pure-Rust via the `parquet` crate, no Arrow):
+  `vector::geoparquet` with the columnar `PointTable` type (one f32
+  column per embedding dimension scales without per-feature
+  HashMaps), `write_geoparquet_points` / `read_geoparquet_points`,
+  and `FeatureCollection` bridges `write_geoparquet` /
+  `read_geoparquet`. Output is GeoParquet 1.0 (WKB geometry +
+  `geo` file metadata, Snappy): DuckDB spatial auto-detects the
+  geometry column as native GEOMETRY and GeoPandas reads it
+  directly (both validated). Implements
+  SPEC_SURTGIS_ECOSYSTEM_FOUNDATION P1.1, triggered by geoembed-rs
+  starting. v1 scope: Point geometry, f64/f32/i64/string columns,
+  no nulls; CRS travels as a `surtgis:epsg` metadata key (the
+  GeoParquet `crs` field is `null` — PROJJSON generation is out of
+  scope), so non-SurtGIS readers see correct geometry but must be
+  told the CRS out-of-band.
+
 ## [0.15.0] - 2026-06-10 — "Ecosystem Foundation"
 
 Minor release consolidating SurtGIS as the base of the Rust
