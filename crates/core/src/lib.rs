@@ -22,6 +22,7 @@
 //! stability promise.
 
 pub mod crs;
+pub mod cube;
 pub mod error;
 pub mod io;
 pub mod mosaic;
@@ -32,6 +33,7 @@ pub mod tiling;
 pub mod vector;
 
 pub use crs::CRS;
+pub use cube::{Cube, CubeChunk};
 pub use error::{Error, Result};
 pub use mosaic::{MosaicOptions, mosaic};
 pub use raster::{GeoTransform, Raster, RasterElement};

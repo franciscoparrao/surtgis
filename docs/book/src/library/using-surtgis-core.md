@@ -98,6 +98,26 @@ for tile in TileGrid::new(rows, cols, 256, 16) {
 }
 ```
 
+## Cubes: aligned (time, band) stacks
+
+`Cube` stacks `n_times × n_bands` single-band rasters verified to
+share one grid (shape, transform, CRS — checked once at
+construction). It is the container half of the data-cube story:
+per-pixel time series and row-chunk streaming live here; temporal
+*analysis* lives in consumer engines.
+
+```rust
+use surtgis_core::cube::Cube;
+
+let cube = Cube::from_slices(times, vec!["red".into(), "nir".into()], slices)?;
+let nir_series: Vec<f64> = cube.pixel_series(row, col, 1)?.collect();
+for chunk in cube.chunks(256) {
+    // chunk.views: one aligned 2-D view per (time, band) slice
+}
+```
+
+Timestamps are Unix epoch seconds (`i64`), strictly increasing.
+
 ## Sampling (from surtgis-algorithms)
 
 Point/patch extraction lives one crate up, in
