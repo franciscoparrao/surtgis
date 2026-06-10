@@ -960,6 +960,12 @@ pub enum HydrologyCommands {
     },
     /// D-infinity flow direction (Tarboton 1997, continuous angles)
     FlowDirectionDinf { input: PathBuf, output: PathBuf },
+    /// D-infinity flow accumulation from a D-inf angle raster
+    FlowAccumulationDinf {
+        /// Input D-inf angle raster (output of flow-direction-dinf)
+        input: PathBuf,
+        output: PathBuf,
+    },
     /// Multiple Flow Direction accumulation (Quinn et al. 1991)
     FlowAccumulationMfd {
         input: PathBuf,
@@ -973,6 +979,9 @@ pub enum HydrologyCommands {
         /// Input DEM file
         input: PathBuf,
         output: PathBuf,
+        /// Flow routing method for the accumulation step
+        #[arg(long, default_value = "d8", value_parser = ["d8", "dinf", "mfd"])]
+        method: String,
     },
     /// Height Above Nearest Drainage (from DEM, full pipeline)
     Hand {

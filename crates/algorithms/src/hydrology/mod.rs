@@ -39,7 +39,9 @@ pub use drainage_density::{DrainageDensityParams, drainage_density};
 pub use fill_sinks::{FillSinks, FillSinksParams, fill_sinks};
 pub use flow_accumulation::{FlowAccumulation, flow_accumulation};
 pub use flow_direction::{FlowDirection, flow_direction};
-pub use flow_direction_dinf::{DinfResult, flow_dinf, flow_direction_dinf};
+pub use flow_direction_dinf::{
+    DinfResult, flow_accumulation_dinf, flow_dinf, flow_direction_dinf,
+};
 pub use flow_direction_mfd::{MfdParams, flow_accumulation_mfd};
 pub use flow_direction_mfd_adaptive::{AdaptiveMfdParams, flow_accumulation_mfd_adaptive};
 pub use flow_direction_tfga::{TfgaParams, flow_accumulation_tfga};
