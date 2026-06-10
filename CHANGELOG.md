@@ -9,6 +9,25 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.15.3] - 2026-06-10
+
+### Added
+
+- **Zarr write in `surtgis-cloud`** (feature `zarr`) —
+  `zarr_writer::write_cube_zarr` persists a `Cube<f64>` as a Zarr v2
+  directory store (one `[time, y, x]` f64 variable per band, chunked
+  one time step per chunk, plus `time`/`y`/`x` coordinate arrays with
+  CF time units), and `write_raster_zarr` does the 2-D single-raster
+  case. Hand-rolled v2 writer following the xarray
+  `_ARRAY_DIMENSIONS` convention — validated against two independent
+  readers: `zarrs` (exact round-trip) and xarray (dims, CF-decoded
+  datetimes, values, lazy dask chunks aligned). CRS/transform travel
+  as `surtgis:epsg` / `surtgis:geotransform` group attributes.
+  Completes the write half of SPEC_SURTGIS_ECOSYSTEM_FOUNDATION
+  P1.3 (read existed since v0.6.0); trigger: datacube-rs as ARD
+  backing store. v1 scope: uncompressed chunks, f64; compression and
+  tuned chunking once datacube-rs profiles real loads.
+
 ## [0.15.2] - 2026-06-10
 
 ### Added

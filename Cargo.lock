@@ -4184,6 +4184,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "page_size"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "30d5b2194ed13191c1999ae0704b7839fb18384fa22e49b57eeaa97d79ce40da"
+dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
 name = "parking"
 version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4237,6 +4247,12 @@ name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
+
+[[package]]
+name = "pathdiff"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df94ce210e5bc13cb6651479fa48d14f601d9858cfe0467f43ae157023b938d3"
 
 [[package]]
 name = "percent-encoding"
@@ -4436,6 +4452,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "091397be61a01d4be58e7841595bd4bfedb15f1cd54977d79b8271e94ed799a3"
 dependencies = [
  "portable-atomic",
+]
+
+[[package]]
+name = "positioned-io"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4ec4b80060f033312b99b6874025d9503d2af87aef2dd4c516e253fbfcdada7"
+dependencies = [
+ "byteorder",
+ "libc",
+ "winapi",
 ]
 
 [[package]]
@@ -5647,7 +5674,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "surtgis"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5677,7 +5704,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-algorithms"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "anyhow",
  "approx",
@@ -5699,7 +5726,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-cloud"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "approx",
  "byteorder",
@@ -5718,6 +5745,7 @@ dependencies = [
  "serde",
  "serde_json",
  "surtgis-core",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "wasm-bindgen",
@@ -5730,7 +5758,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-colormap"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "image",
  "num-traits",
@@ -5740,7 +5768,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-core"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "anyhow",
  "approx",
@@ -5762,7 +5790,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-gui"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -5783,7 +5811,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-parallel"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "criterion",
  "crossbeam",
@@ -5795,7 +5823,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-python"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "numpy",
  "pyo3",
@@ -5807,7 +5835,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-relief"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "ndarray",
  "num-traits",
@@ -5820,7 +5848,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-relief-3d"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "bytemuck",
  "console_error_panic_hook",
@@ -5841,7 +5869,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-wasm"
-version = "0.15.2"
+version = "0.15.3"
 dependencies = [
  "js-sys",
  "serde",
@@ -7119,6 +7147,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "winapi"
+version = "0.3.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c839a674fcd7a98952e593242ea400abe93992746761e38641405d28b00f419"
+dependencies = [
+ "winapi-i686-pc-windows-gnu",
+ "winapi-x86_64-pc-windows-gnu",
+]
+
+[[package]]
+name = "winapi-i686-pc-windows-gnu"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac3b87c63620426dd9b991e5ce0329eff545bccbbb34f3be09ff6fb6ab51b7b6"
+
+[[package]]
 name = "winapi-util"
 version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7126,6 +7170,12 @@ checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "winapi-x86_64-pc-windows-gnu"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "windows"
@@ -7936,6 +7986,7 @@ dependencies = [
  "zarrs_chunk_key_encoding",
  "zarrs_codec",
  "zarrs_data_type",
+ "zarrs_filesystem",
  "zarrs_metadata",
  "zarrs_metadata_ext",
  "zarrs_plugin",
@@ -8010,6 +8061,24 @@ dependencies = [
  "thiserror 2.0.18",
  "zarrs_metadata",
  "zarrs_plugin",
+]
+
+[[package]]
+name = "zarrs_filesystem"
+version = "0.3.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "270efeb0181651aee5460b3232f2fc83e91bd646cefe75001d1c8f9a4f3abf81"
+dependencies = [
+ "bytes",
+ "derive_more",
+ "itertools 0.14.0",
+ "libc",
+ "page_size",
+ "pathdiff",
+ "positioned-io",
+ "thiserror 2.0.18",
+ "walkdir",
+ "zarrs_storage",
 ]
 
 [[package]]
