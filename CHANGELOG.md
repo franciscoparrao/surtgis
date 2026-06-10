@@ -9,6 +9,37 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.15.4] - 2026-06-10
+
+### Added
+
+- **Complex rasters in `surtgis-core`** (new feature `complex`) —
+  `Raster<Complex<f32>>` / `Raster<Complex<f64>>` for interferometric
+  phase data, plus the minimal InSAR helpers in `raster::complex`:
+  `complex_from_parts` / `complex_to_parts` (assemble/split via
+  real+imaginary band rasters — also the persistence path: complex
+  rasters travel as `(re, im)` GeoTIFF pairs through the existing
+  writers) and `magnitude` / `phase` (wrapped phase via
+  `atan2(im, re)`). Nodata convention: a complex cell is nodata when
+  both parts are NaN. FFT helpers deliberately left to insar-rs.
+  Implements SPEC_SURTGIS_ECOSYSTEM_FOUNDATION P2.1; trigger:
+  insar-rs starting.
+
+### Changed
+
+- **`RasterElement` split into `RasterCell` + `RasterElement`** to
+  admit unordered cell types. `RasterCell` (new) is the minimum a
+  type needs to live in a `Raster` — copy, zero, nodata convention —
+  and is now the bound on `Raster<T>` itself. `RasterElement` is now
+  a subtrait (`RasterCell + PartialOrd + NumCast` + min/max/f64
+  casts) and remains the bound for statistics, resampling, I/O and
+  the algorithm crates. **Source-compatible for all consumers**:
+  every numeric type still implements both traits, and generic code
+  bounding on `RasterElement` compiles unchanged (the entire
+  workspace needed zero downstream edits). Only a hand-written
+  external `impl RasterElement for CustomType` would need to split
+  its impl in two — no such implementor is known.
+
 ## [0.15.3] - 2026-06-10
 
 ### Added

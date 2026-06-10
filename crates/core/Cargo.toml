@@ -16,6 +16,7 @@ parallel = ["ndarray/rayon"]
 shapefile = ["dep:shapefile"]
 geopackage = ["dep:rusqlite"]
 parquet = ["dep:parquet"]
+complex = ["dep:num-complex"]
 
 [dependencies]
 thiserror.workspace = true
@@ -29,6 +30,7 @@ num-traits.workspace = true
 ordered-float.workspace = true
 gdal = { workspace = true, optional = true }
 parquet = { workspace = true, optional = true }
+num-complex = { workspace = true, optional = true }
 shapefile = { workspace = true, optional = true }
 rusqlite = { workspace = true, optional = true }
 tiff.workspace = true

@@ -2,7 +2,7 @@
 
 use crate::crs::CRS;
 use crate::error::{Error, Result};
-use crate::raster::{GeoTransform, RasterElement};
+use crate::raster::{GeoTransform, RasterCell, RasterElement};
 use ndarray::{Array2, ArrayView2, ArrayViewMut2};
 
 /// A georeferenced 2D raster grid.
@@ -12,7 +12,7 @@ use ndarray::{Array2, ArrayView2, ArrayViewMut2};
 ///
 /// # Type Parameters
 ///
-/// - `T`: The cell value type, must implement [`RasterElement`]
+/// - `T`: The cell value type, must implement [`RasterCell`] (every numeric type does, via [`RasterElement`])
 ///
 /// # Example
 ///
@@ -29,7 +29,7 @@ use ndarray::{Array2, ArrayView2, ArrayViewMut2};
 /// let value = raster.get(10, 20)?;
 /// ```
 #[derive(Debug, Clone)]
-pub struct Raster<T: RasterElement> {
+pub struct Raster<T: RasterCell> {
     /// Raster data stored in row-major order (row, col)
     data: Array2<T>,
     /// Affine transformation
@@ -40,7 +40,7 @@ pub struct Raster<T: RasterElement> {
     nodata: Option<T>,
 }
 
-impl<T: RasterElement> Raster<T> {
+impl<T: RasterCell> Raster<T> {
     /// Create a new raster filled with zeros
     pub fn new(rows: usize, cols: usize) -> Self {
         Self {
@@ -92,7 +92,7 @@ impl<T: RasterElement> Raster<T> {
     }
 
     /// Create a raster with the same metadata but different data type
-    pub fn with_same_meta<U: RasterElement>(&self, rows: usize, cols: usize) -> Raster<U> {
+    pub fn with_same_meta<U: RasterCell>(&self, rows: usize, cols: usize) -> Raster<U> {
         Raster {
             data: Array2::zeros((rows, cols)),
             transform: self.transform,
@@ -295,7 +295,7 @@ impl<T: RasterElement> Raster<T> {
     /// Calculate basic statistics (min, max, mean, count of valid cells)
     pub fn statistics(&self) -> RasterStatistics<T>
     where
-        T: PartialOrd,
+        T: RasterElement,
     {
         let mut min = None;
         let mut max = None;

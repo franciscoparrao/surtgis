@@ -36,7 +36,7 @@ pub use crs::CRS;
 pub use cube::{Cube, CubeChunk};
 pub use error::{Error, Result};
 pub use mosaic::{MosaicOptions, mosaic};
-pub use raster::{GeoTransform, Raster, RasterElement};
+pub use raster::{GeoTransform, Raster, RasterCell, RasterElement};
 pub use resample::{ResampleMethod, resample_to_grid};
 pub use streaming::{StripProcessor, WindowAlgorithm};
 pub use tiling::{Tile, TileGrid};
@@ -46,7 +46,7 @@ pub mod prelude {
     pub use crate::Algorithm;
     pub use crate::crs::CRS;
     pub use crate::error::{Error, Result};
-    pub use crate::raster::{GeoTransform, Raster, RasterElement};
+    pub use crate::raster::{GeoTransform, Raster, RasterCell, RasterElement};
 }
 
 /// Core trait for all algorithms in SurtGis.
