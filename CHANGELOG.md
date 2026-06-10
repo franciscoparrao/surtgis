@@ -9,6 +9,22 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-06-10 — "Ecosystem Foundation"
+
+Minor release consolidating SurtGIS as the base of the Rust
+geoscience engine family (datacube-rs, geoembed-rs, insar-rs,
+rainflow, sedlink, …). Implements P0 of
+`SPEC_SURTGIS_ECOSYSTEM_FOUNDATION`: the public API of
+`surtgis-core` is now **declared stable under SemVer** (breaking
+changes pre-announced one release ahead), sampling and 2-D tiling
+are library APIs, and the D∞ pipeline is complete and
+cross-validated. No breaking changes vs v0.14.10.
+
+New documentation: book chapters *Using surtgis-core as a library*
+and *Extension contract* (the four rules a sibling engine signs:
+depend on core only, exchange `Raster<T>` + `GeoTransform` + `CRS`,
+stay autonomous, pin the 0.15 baseline).
+
 ### Added
 
 - **`sampling` module in `surtgis-algorithms`** — the library-level
