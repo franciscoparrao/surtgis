@@ -7,7 +7,8 @@ use surtgis_algorithms::hydrology::{
     BreachParams, DrainageDensityParams, FillSinksParams, HandParams, MfdParams,
     PriorityFloodParams, SedimentConnectivityParams, StreamNetworkParams, WatershedParams,
     basin_morphometry, breach_depressions, drainage_density, fill_sinks, flow_accumulation,
-    flow_accumulation_mfd, flow_direction, flow_direction_dinf, hand, hypsometric_integral,
+    flow_accumulation_dinf, flow_accumulation_mfd, flow_direction, flow_direction_dinf, hand,
+    hypsometric_integral,
     priority_flood, sediment_connectivity, stream_network, watershed,
 };
 use surtgis_algorithms::terrain::{SlopeParams, SlopeUnits, slope, twi};
@@ -127,6 +128,16 @@ pub fn handle(
             done("Flow direction (D-inf)", &output, elapsed);
         }
 
+        HydrologyCommands::FlowAccumulationDinf { input, output } => {
+            let angles = read_dem(&input)?;
+            let start = Instant::now();
+            let result = flow_accumulation_dinf(&angles)
+                .context("Failed to compute D-infinity flow accumulation")?;
+            let elapsed = start.elapsed();
+            write_result(&result, &output, compress)?;
+            done("Flow accumulation (D-inf)", &output, elapsed);
+        }
+
         HydrologyCommands::FlowAccumulationMfd {
             input,
             output,
@@ -141,14 +152,31 @@ pub fn handle(
             done("Flow accumulation (MFD)", &output, elapsed);
         }
 
-        HydrologyCommands::Twi { input, output } => {
+        HydrologyCommands::Twi {
+            input,
+            output,
+            method,
+        } => {
             let dem = read_dem(&input)?;
             let start = Instant::now();
             // Internal pipeline: fill -> flow_dir -> flow_acc -> slope -> twi
             let filled = priority_flood(&dem, PriorityFloodParams { epsilon: 0.0001 })
                 .context("Failed to fill depressions")?;
-            let fdir = flow_direction(&filled).context("Failed to compute flow direction")?;
-            let facc = flow_accumulation(&fdir).context("Failed to compute flow accumulation")?;
+            let facc = match method.as_str() {
+                "dinf" => {
+                    let angles = flow_direction_dinf(&filled)
+                        .context("Failed to compute D-inf flow direction")?;
+                    flow_accumulation_dinf(&angles)
+                        .context("Failed to compute D-inf flow accumulation")?
+                }
+                "mfd" => flow_accumulation_mfd(&filled, MfdParams::default())
+                    .context("Failed to compute MFD flow accumulation")?,
+                _ => {
+                    let fdir =
+                        flow_direction(&filled).context("Failed to compute flow direction")?;
+                    flow_accumulation(&fdir).context("Failed to compute flow accumulation")?
+                }
+            };
             let slope_rad = slope(
                 &filled,
                 SlopeParams {

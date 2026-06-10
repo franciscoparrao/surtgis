@@ -9,6 +9,41 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+### Added
+
+- **`hydrology::flow_accumulation_dinf`** — D-infinity flow
+  accumulation as a standalone function taking only the D∞ angle
+  raster (output of `flow_direction_dinf`; TauDEM `ang` rasters use
+  the same convention). Flow from each cell splits between the two
+  D8 neighbors bracketing its angle, proportional to the angular
+  offset (Tarboton 1997, eq. 6). Processing is a dependency-driven
+  topological sort (Kahn), matching the D8 `flow_accumulation`
+  structure — no DEM or elevation sort needed. Headwater cells have
+  accumulation 0 (same convention as D8). `flow_dinf` is now a thin
+  wrapper over `flow_direction_dinf` + `flow_accumulation_dinf`.
+- **CLI `hydrology flow-accumulation-dinf <angles> <output>`** —
+  closes the D∞ pipeline gap (direction existed since v0.10.x,
+  accumulation was library-only inside `flow_dinf`).
+- **CLI `hydrology twi --method d8|dinf|mfd`** — the TWI pipeline
+  accumulation step can now use D-infinity or MFD routing instead
+  of D8. Default remains `d8` (no behaviour change).
+- **`benchmarks/validate_dinf_accumulation.py`** — cross-validation
+  of D∞ accumulation against WhiteboxTools 2.4.0 on the Andes 30 m
+  fixture: log-accumulation Pearson r = 0.9796, median relative
+  error 0.000%, 96.8% of cells within 10%, and identical
+  contributing area at the main outlet (251,222 cells). Residual
+  differences are confined to flats, where WBT applies its own
+  flat-routing and SurtGIS marks flats as pits.
+
+### Changed
+
+- `flow_dinf` accumulation no longer sorts cells by elevation
+  (O(n log n) + 24 B/cell) — the dependency-driven pass is O(n)
+  with 4 B/cell. Results are unchanged for Tarboton-conformant
+  angles (receivers are always strictly downslope). Nodata cells in
+  the accumulation output are now NaN (previously 0.0), consistent
+  with the raster's NaN nodata metadata.
+
 ## [0.14.10] - 2026-06-08
 
 Patch release. Closes **ROADMAP item O** ("Mosaic seams + colour
