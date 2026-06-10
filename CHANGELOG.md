@@ -9,6 +9,24 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.15.2] - 2026-06-10
+
+### Added
+
+- **`cube::Cube` in `surtgis-core`** — aligned `(time, band)` raster
+  stacks for data-cube workflows. Holds `n_times × n_bands`
+  single-band rasters verified at construction to share one grid
+  (shape, transform, CRS; strictly increasing Unix-epoch timestamps,
+  unique band names). Aligned iteration: `pixel_series(row, col,
+  band)` (per-pixel time series), `band_values(row, col, t)`, and
+  `chunks(chunk_rows)` yielding one 2-D view per slice over the same
+  rows — the bounded-memory access pattern for temporal algebra.
+  Deliberately a **container only**: temporal analysis lives in
+  consumer engines (datacube-rs, unmix-rs). Implements
+  SPEC_SURTGIS_ECOSYSTEM_FOUNDATION P1.2, triggered by datacube-rs
+  starting. End-to-end test: three dated GeoTIFFs from disk →
+  Cube → aligned series and chunk iteration.
+
 ## [0.15.1] - 2026-06-10
 
 ### Added
