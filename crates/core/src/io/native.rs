@@ -54,8 +54,46 @@ where
     decode_geotiff(cursor, band)
 }
 
-/// Internal: decode a GeoTIFF from any `Read + Seek` source
-fn decode_geotiff<T, R>(reader: R, _band: Option<usize>) -> Result<Raster<T>>
+/// Read every band of a (multi-band) GeoTIFF as separate rasters.
+///
+/// Returns one [`Raster`] per sample/band, each carrying the file's
+/// geotransform, CRS and nodata. For a single-band file this yields a
+/// one-element vector. Bands are de-interleaved from the pixel-interleaved
+/// TIFF buffer.
+pub fn read_geotiff_bands<T, P>(path: P) -> Result<Vec<Raster<T>>>
+where
+    T: RasterElement,
+    P: AsRef<Path>,
+{
+    let file = File::open(path.as_ref())?;
+    decode_geotiff_bands(file)
+}
+
+/// Read every band of a GeoTIFF from an in-memory buffer.
+pub fn read_geotiff_bands_from_buffer<T>(data: &[u8]) -> Result<Vec<Raster<T>>>
+where
+    T: RasterElement,
+{
+    decode_geotiff_bands(Cursor::new(data))
+}
+
+/// A decoded GeoTIFF: interleaved sample buffer plus geo-metadata, shared
+/// by the single-band and multi-band entry points.
+struct DecodedImage<T> {
+    /// Pixel-interleaved samples (`spp` per pixel, row-major).
+    data: Vec<T>,
+    rows: usize,
+    cols: usize,
+    /// Samples per pixel (bands).
+    spp: usize,
+    transform: Option<GeoTransform>,
+    crs: Option<crate::crs::CRS>,
+    /// Raw GDAL_NODATA value (cast per band when building the raster).
+    nodata: Option<f64>,
+}
+
+/// Internal: decode a GeoTIFF (all bands, interleaved) plus its geo-tags.
+fn decode_image<T, R>(reader: R) -> Result<DecodedImage<T>>
 where
     T: RasterElement,
     R: std::io::Read + std::io::Seek,
@@ -70,8 +108,14 @@ where
 
     let rows = height as usize;
     let cols = width as usize;
+    // Samples per pixel (tag 277); absent or 0 means single band.
+    let spp = decoder
+        .get_tag_u32(Tag::SamplesPerPixel)
+        .map(|v| v as usize)
+        .unwrap_or(1)
+        .max(1);
 
-    // Read image data
+    // Read image data (pixel-interleaved for multi-band TIFFs)
     let result = decoder
         .read_image()
         .map_err(|e| Error::Other(format!("Cannot read image data: {}", e)))?;
@@ -116,43 +160,110 @@ where
         }
     };
 
-    if data.len() != rows * cols {
+    if data.len() != rows * cols * spp {
         return Err(Error::InvalidDimensions {
             width: cols,
             height: rows,
         });
     }
 
+    Ok(DecodedImage {
+        data,
+        rows,
+        cols,
+        spp,
+        transform: read_geotransform(&mut decoder).ok(),
+        crs: read_crs(&mut decoder),
+        nodata: read_nodata(&mut decoder),
+    })
+}
+
+/// Build a single-band raster from owned data and the shared geo-metadata.
+fn finish_raster<T: RasterElement>(
+    data: Vec<T>,
+    rows: usize,
+    cols: usize,
+    transform: Option<GeoTransform>,
+    crs: Option<crate::crs::CRS>,
+    nodata: Option<f64>,
+) -> Result<Raster<T>> {
     let mut raster = Raster::from_vec(data, rows, cols)?;
 
-    // Try to read GeoTIFF tags (ModelTiepointTag + ModelPixelScaleTag)
-    if let Ok(transform) = read_geotransform(&mut decoder) {
-        raster.set_transform(transform);
+    if let Some(t) = transform {
+        raster.set_transform(t);
     }
-
-    // Try to read CRS from GeoKeyDirectory (tag 34735)
-    if let Some(crs) = read_crs(&mut decoder) {
+    if let Some(crs) = crs {
         raster.set_crs(Some(crs));
     }
-
-    // Read GDAL_NODATA tag (42113) — ASCII string with nodata value
-    if let Some(nodata_f64) = read_nodata(&mut decoder) {
-        if let Some(nd) = num_traits::cast::<f64, T>(nodata_f64) {
-            raster.set_nodata(Some(nd));
-            // For float types, replace nodata values with NaN so that
-            // all algorithms (which check .is_nan()) handle them correctly.
-            if T::is_float() {
-                let nan_val = T::default_nodata(); // NaN for floats
-                for val in raster.data_mut().iter_mut() {
-                    if val.is_nodata(Some(nd)) {
-                        *val = nan_val;
-                    }
+    // Cast GDAL_NODATA to T; for float types, normalize nodata to NaN so
+    // all algorithms (which check .is_nan()) handle them correctly.
+    if let Some(nodata_f64) = nodata
+        && let Some(nd) = num_traits::cast::<f64, T>(nodata_f64)
+    {
+        raster.set_nodata(Some(nd));
+        if T::is_float() {
+            let nan_val = T::default_nodata();
+            for val in raster.data_mut().iter_mut() {
+                if val.is_nodata(Some(nd)) {
+                    *val = nan_val;
                 }
             }
         }
     }
-
     Ok(raster)
+}
+
+/// Extract one band (0-based) from a decoded image into its own raster.
+fn select_band<T: RasterElement>(img: &DecodedImage<T>, band: usize) -> Result<Raster<T>> {
+    let n = img.rows * img.cols;
+    let data: Vec<T> = (0..n).map(|i| img.data[i * img.spp + band]).collect();
+    finish_raster(
+        data,
+        img.rows,
+        img.cols,
+        img.transform,
+        img.crs.clone(),
+        img.nodata,
+    )
+}
+
+/// Internal: decode a GeoTIFF, selecting one band (0-based; default: first).
+fn decode_geotiff<T, R>(reader: R, band: Option<usize>) -> Result<Raster<T>>
+where
+    T: RasterElement,
+    R: std::io::Read + std::io::Seek,
+{
+    let img = decode_image::<T, R>(reader)?;
+    let b = band.unwrap_or(0);
+    if b >= img.spp {
+        return Err(Error::Other(format!(
+            "band {b} out of range; image has {} band(s)",
+            img.spp
+        )));
+    }
+    if img.spp == 1 {
+        // Fast path: no de-interleave, move the buffer straight through.
+        finish_raster(
+            img.data,
+            img.rows,
+            img.cols,
+            img.transform,
+            img.crs,
+            img.nodata,
+        )
+    } else {
+        select_band(&img, b)
+    }
+}
+
+/// Internal: decode every band of a GeoTIFF as separate rasters.
+fn decode_geotiff_bands<T, R>(reader: R) -> Result<Vec<Raster<T>>>
+where
+    T: RasterElement,
+    R: std::io::Read + std::io::Seek,
+{
+    let img = decode_image::<T, R>(reader)?;
+    (0..img.spp).map(|b| select_band(&img, b)).collect()
 }
 
 /// Attempt to read CRS EPSG code from GeoKeyDirectory tag
@@ -423,9 +534,7 @@ where
     let (rows, cols) = bands[0].shape();
     for b in bands.iter().skip(1) {
         if b.shape() != (rows, cols) {
-            return Err(Error::Other(
-                "stack bands must share shape".into(),
-            ));
+            return Err(Error::Other("stack bands must share shape".into()));
         }
     }
     let n_bands = bands.len();
@@ -511,9 +620,43 @@ where
     let geokeys: Vec<u16> = if let Some(crs) = meta.crs() {
         if let Some(epsg) = crs.epsg() {
             if epsg == 4326 {
-                vec![1, 1, 0, 3, 1024, 0, 1, 2, 1025, 0, 1, 1, 2048, 0, 1, epsg as u16]
+                vec![
+                    1,
+                    1,
+                    0,
+                    3,
+                    1024,
+                    0,
+                    1,
+                    2,
+                    1025,
+                    0,
+                    1,
+                    1,
+                    2048,
+                    0,
+                    1,
+                    epsg as u16,
+                ]
             } else {
-                vec![1, 1, 0, 3, 1024, 0, 1, 1, 1025, 0, 1, 1, 3072, 0, 1, epsg as u16]
+                vec![
+                    1,
+                    1,
+                    0,
+                    3,
+                    1024,
+                    0,
+                    1,
+                    1,
+                    1025,
+                    0,
+                    1,
+                    1,
+                    3072,
+                    0,
+                    1,
+                    epsg as u16,
+                ]
             }
         } else {
             vec![1, 1, 0, 2, 1024, 0, 1, 1, 1025, 0, 1, 1]
@@ -620,6 +763,74 @@ mod tests {
     }
 
     #[test]
+    fn read_bands_deinterleaves_per_band_values() {
+        let r0 = ramp_band(10, 12, 0.0);
+        let r1 = ramp_band(10, 12, 100.0);
+        let r2 = ramp_band(10, 12, 200.0);
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("rgb.tif");
+        write_geotiff_multiband::<f64, _>(&[&r0, &r1, &r2], &path, None).unwrap();
+
+        let bands = read_geotiff_bands::<f64, _>(&path).unwrap();
+        assert_eq!(bands.len(), 3);
+        for b in &bands {
+            assert_eq!(b.shape(), (10, 12));
+        }
+        // Each band carries its own ramp; cell (3,4) = base + 7.
+        assert_eq!(bands[0].get(3, 4).unwrap(), 7.0);
+        assert_eq!(bands[1].get(3, 4).unwrap(), 107.0);
+        assert_eq!(bands[2].get(3, 4).unwrap(), 207.0);
+        // Geotransform survives on every band.
+        assert_eq!(bands[2].transform().cell_size(), 1.0);
+    }
+
+    #[test]
+    fn read_geotiff_selects_requested_band() {
+        let r0 = ramp_band(6, 6, 0.0);
+        let r1 = ramp_band(6, 6, 50.0);
+        let r2 = ramp_band(6, 6, 70.0);
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("rgb.tif");
+        write_geotiff_multiband::<f64, _>(&[&r0, &r1, &r2], &path, None).unwrap();
+
+        // None → first band; Some(b) → band b (0-based).
+        assert_eq!(
+            read_geotiff::<f64, _>(&path, None)
+                .unwrap()
+                .get(1, 1)
+                .unwrap(),
+            2.0
+        );
+        assert_eq!(
+            read_geotiff::<f64, _>(&path, Some(1))
+                .unwrap()
+                .get(1, 1)
+                .unwrap(),
+            52.0
+        );
+        assert_eq!(
+            read_geotiff::<f64, _>(&path, Some(2))
+                .unwrap()
+                .get(1, 1)
+                .unwrap(),
+            72.0
+        );
+        // Out-of-range band is rejected.
+        assert!(read_geotiff::<f64, _>(&path, Some(3)).is_err());
+    }
+
+    #[test]
+    fn read_bands_single_band_yields_one() {
+        let r0 = ramp_band(5, 5, 0.0);
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("gray.tif");
+        write_geotiff_multiband::<f64, _>(&[&r0], &path, None).unwrap();
+        let bands = read_geotiff_bands::<f64, _>(&path).unwrap();
+        assert_eq!(bands.len(), 1);
+        assert_eq!(bands[0].get(2, 2).unwrap(), 4.0);
+    }
+
+    #[test]
     fn multiband_rejects_mismatched_shapes() {
         let r0 = ramp_band(4, 4, 0.0);
         let r1 = ramp_band(4, 5, 0.0);
@@ -664,8 +875,7 @@ mod tests {
         // GeoKeyDirectory (34735) -> embeds EPSG:32719 under ProjectedCSTypeGeoKey (3072).
         let gk = dec.get_tag_u32_vec(Tag::Unknown(34735)).unwrap();
         assert!(
-            gk.windows(2).any(|w| w[0] == 3072 && w[1] == 0)
-                && gk.contains(&32719),
+            gk.windows(2).any(|w| w[0] == 3072 && w[1] == 0) && gk.contains(&32719),
             "EPSG:32719 missing from GeoKeyDirectory: {:?}",
             gk
         );

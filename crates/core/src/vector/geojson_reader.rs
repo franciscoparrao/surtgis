@@ -6,7 +6,9 @@ use std::path::Path;
 use serde_json::Value;
 
 use crate::error::{Error, Result};
-use geo_types::{Coord, Geometry, LineString, MultiPolygon, Point, Polygon};
+use geo_types::{
+    Coord, Geometry, LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon,
+};
 
 use super::{AttributeValue, Feature, FeatureCollection};
 
@@ -121,6 +123,42 @@ fn parse_geometry(value: &Value) -> Result<Geometry<f64>> {
                 polygons.push(parse_polygon_rings(rings)?);
             }
             Ok(Geometry::MultiPolygon(MultiPolygon::new(polygons)))
+        }
+        "LineString" => {
+            let coords = value
+                .get("coordinates")
+                .and_then(|v| v.as_array())
+                .ok_or_else(|| Error::Other("LineString missing 'coordinates'".into()))?;
+            Ok(Geometry::LineString(parse_coord_ring(coords)?))
+        }
+        "MultiLineString" => {
+            let lines = value
+                .get("coordinates")
+                .and_then(|v| v.as_array())
+                .ok_or_else(|| Error::Other("MultiLineString missing 'coordinates'".into()))?;
+            let mut strings = Vec::with_capacity(lines.len());
+            for line in lines {
+                let coords = line
+                    .as_array()
+                    .ok_or_else(|| Error::Other("Invalid MultiLineString line array".into()))?;
+                strings.push(parse_coord_ring(coords)?);
+            }
+            Ok(Geometry::MultiLineString(MultiLineString::new(strings)))
+        }
+        "MultiPoint" => {
+            let coords = value
+                .get("coordinates")
+                .and_then(|v| v.as_array())
+                .ok_or_else(|| Error::Other("MultiPoint missing 'coordinates'".into()))?;
+            let mut points = Vec::with_capacity(coords.len());
+            for coord_val in coords {
+                let arr = coord_val
+                    .as_array()
+                    .ok_or_else(|| Error::Other("Invalid MultiPoint coordinate".into()))?;
+                let (x, y) = parse_coord_pair(arr)?;
+                points.push(Point::new(x, y));
+            }
+            Ok(Geometry::MultiPoint(MultiPoint::new(points)))
         }
         _ => Err(Error::Other(format!(
             "Unsupported geometry type: '{geom_type}'"
@@ -324,6 +362,57 @@ mod tests {
                 assert_eq!(p.interiors()[0].0.len(), 5);
             }
             other => panic!("Expected Polygon, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_linestring() {
+        let json = r#"{
+            "type": "Feature",
+            "geometry": { "type": "LineString", "coordinates": [[0,0],[1,2],[3,4]] },
+            "properties": {}
+        }"#;
+        let fc = parse_geojson(json).unwrap();
+        match &fc.features[0].geometry {
+            Some(Geometry::LineString(l)) => {
+                assert_eq!(l.0.len(), 3);
+                assert_eq!(l.0[1], Coord { x: 1.0, y: 2.0 });
+            }
+            other => panic!("Expected LineString, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_multilinestring() {
+        let json = r#"{
+            "type": "Feature",
+            "geometry": {
+                "type": "MultiLineString",
+                "coordinates": [[[0,0],[1,1]],[[2,2],[3,3],[4,4]]]
+            },
+            "properties": {}
+        }"#;
+        let fc = parse_geojson(json).unwrap();
+        match &fc.features[0].geometry {
+            Some(Geometry::MultiLineString(m)) => {
+                assert_eq!(m.0.len(), 2);
+                assert_eq!(m.0[1].0.len(), 3);
+            }
+            other => panic!("Expected MultiLineString, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_multipoint() {
+        let json = r#"{
+            "type": "Feature",
+            "geometry": { "type": "MultiPoint", "coordinates": [[0,0],[5,5],[10,10]] },
+            "properties": {}
+        }"#;
+        let fc = parse_geojson(json).unwrap();
+        match &fc.features[0].geometry {
+            Some(Geometry::MultiPoint(m)) => assert_eq!(m.0.len(), 3),
+            other => panic!("Expected MultiPoint, got {:?}", other),
         }
     }
 
