@@ -752,6 +752,15 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                 anyhow::bail!("No items found matching the search criteria");
             }
             println!("Found {} items, fetching and mosaicking...", items.len());
+            if items.len() as u32 >= max_items {
+                eprintln!(
+                    "  Note: hit the --max-scenes/--max-items cap of {}. More scenes may match \
+                     this query; narrow --datetime/--bbox or raise --max-scenes. Each scene is \
+                     held in RAM during mosaicking, so a large cap over a wide window can use \
+                     several GB.",
+                    max_items
+                );
+            }
 
             // Determine asset key from first item
             let asset_key = if let Some(ref k) = asset {
@@ -776,6 +785,9 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             let mut rasters: Vec<surtgis_core::Raster<f64>> = Vec::new();
 
             for (i, item) in items.iter().enumerate() {
+                // Plain progress line so pipelines / non-TTY logs see progress
+                // (the spinner below auto-hides when stderr is not a terminal).
+                eprintln!("  [{}/{}] fetching {}", i + 1, items.len(), item.id);
                 let pb = spinner(&format!(
                     "Fetching tile {} of {} [{}]...",
                     i + 1,
@@ -3741,7 +3753,10 @@ fn handle_multiband_composite(
         // Cost: the next strip's Phase A re-allocates from OS rather than
         // reusing warm mimalloc segments. On a multi-hour-per-strip workload
         // this overhead is negligible compared to the peak-RAM benefit.
-        #[cfg(not(target_arch = "wasm32"))]
+        // Only meaningful when mimalloc is the global allocator; with the
+        // feature off (e.g. no-cc / musl-static builds) the system allocator
+        // has no equivalent and this strip-boundary cleanup is skipped.
+        #[cfg(all(not(target_arch = "wasm32"), feature = "mimalloc"))]
         {
             // SAFETY: mi_collect is the public mimalloc API and is safe to
             // call from any thread when mimalloc is the global allocator.

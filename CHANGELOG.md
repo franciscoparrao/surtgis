@@ -9,6 +9,25 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+### Added
+
+- **`mimalloc` is now an optional CLI feature** (on by default). It compiles C,
+  which blocked builds on minimal toolchains (no system C compiler) and
+  complicated musl/static targets. Build with `--no-default-features` (plus the
+  features you want) to fall back to the system allocator and a pure-Rust /
+  no-cc build. Reported from a multi-hazard study in Ñuble, Chile.
+- **`stac fetch-mosaic --max-scenes`** — visible alias for `--max-items`, and a
+  cap-hit notice plus per-scene progress lines that remain visible in non-TTY
+  pipelines (the spinner auto-hides off a terminal). Helps users scope wide
+  datetime/bbox queries before they grow RAM.
+
+### Fixed
+
+- **STAC collection flag is now spelled consistently.** `stac search` took
+  `--collections` (plural) while `stac fetch` / `fetch-mosaic` took
+  `--collection` (singular); both spellings are now accepted on all three via
+  visible aliases. No more failed runs from the mismatch.
+
 ## [0.15.4] - 2026-06-10
 
 ### Added

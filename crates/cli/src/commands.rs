@@ -1781,7 +1781,7 @@ pub enum StacCommands {
         #[arg(long)]
         datetime: Option<String>,
         /// Collections (comma-separated, e.g. "sentinel-2-l2a")
-        #[arg(long)]
+        #[arg(long, visible_alias = "collection")]
         collections: Option<String>,
         /// Maximum items to return
         #[arg(long, default_value = "10")]
@@ -1796,7 +1796,7 @@ pub enum StacCommands {
         #[arg(long)]
         bbox: String,
         /// Collection (e.g. "sentinel-2-l2a")
-        #[arg(long)]
+        #[arg(long, visible_alias = "collections")]
         collection: String,
         /// Asset key to fetch (e.g. "red", "nir", "B04"). Auto-detects COG if omitted.
         #[arg(long)]
@@ -1822,7 +1822,7 @@ pub enum StacCommands {
         #[arg(long)]
         bbox: String,
         /// Collection (e.g. "cop-dem-glo-30", "sentinel-2-l2a")
-        #[arg(long)]
+        #[arg(long, visible_alias = "collections")]
         collection: String,
         /// Asset key to fetch (e.g. "data", "red", "B04"). Auto-detects COG if omitted.
         #[arg(long)]
@@ -1830,8 +1830,8 @@ pub enum StacCommands {
         /// Datetime or range
         #[arg(long)]
         datetime: Option<String>,
-        /// Maximum items to fetch and mosaic
-        #[arg(long, default_value = "20")]
+        /// Maximum items to fetch and mosaic (caps RAM/time on wide queries)
+        #[arg(long, default_value = "20", visible_alias = "max-scenes")]
         max_items: u32,
         /// Output GeoTIFF file
         output: PathBuf,
