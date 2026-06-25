@@ -9,8 +9,17 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.15.5] - 2026-06-24
+
 ### Added
 
+- **Multi-band GeoTIFF reading in `surtgis-core`** — `io::read_geotiff_bands`
+  and `io::read_geotiff_bands_from_buffer` read every band of a multi-band
+  GeoTIFF into a `Vec<Raster<T>>` (the read-side counterpart of the
+  `write_geotiff_multiband` writer added in v0.14.8), preserving per-band
+  georeferencing and nodata.
+- **Line and MultiPoint GeoJSON geometries** are now read by the GeoJSON
+  reader (previously points and polygons only), broadening vector ingestion.
 - **`mimalloc` is now an optional CLI feature** (on by default). It compiles C,
   which blocked builds on minimal toolchains (no system C compiler) and
   complicated musl/static targets. Build with `--no-default-features` (plus the
