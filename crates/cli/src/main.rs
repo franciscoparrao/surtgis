@@ -12,11 +12,15 @@ mod stac_introspect;
 #[cfg(feature = "cloud")]
 mod streaming;
 
-// mimalloc: global allocator. glibc malloc tends to hold freed memory in
-// fragmented heap arenas indefinitely under mixed-size alloc/free workloads,
-// which matches the v0.6.24 bug signature (linear RSS growth during long
-// stac composite runs after an initial stable phase). mimalloc returns
-// memory to the OS much more aggressively.
+// mimalloc: global allocator (feature `mimalloc`, on by default). glibc
+// malloc tends to hold freed memory in fragmented heap arenas indefinitely
+// under mixed-size alloc/free workloads, which matches the v0.6.24 bug
+// signature (linear RSS growth during long stac composite runs after an
+// initial stable phase). mimalloc returns memory to the OS much more
+// aggressively. It compiles C, so the feature can be disabled
+// (`--no-default-features`) for pure-Rust / musl-static / no-cc builds,
+// falling back to the system allocator.
+#[cfg(feature = "mimalloc")]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
