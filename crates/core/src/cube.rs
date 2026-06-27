@@ -217,9 +217,8 @@ impl<T: RasterElement> Cube<T> {
             )));
         }
         let n_bands = self.n_bands();
-        Ok((0..self.n_times()).map(move |t| unsafe {
-            self.slices[t * n_bands + band].get_unchecked(row, col)
-        }))
+        Ok((0..self.n_times())
+            .map(move |t| unsafe { self.slices[t * n_bands + band].get_unchecked(row, col) }))
     }
 
     /// All bands of one timestamp at one pixel, in band order.
@@ -320,12 +319,8 @@ mod tests {
             slice(4, 4, 100.0),  // t1 b0
             slice(4, 4, 1100.0), // t1 b1
         ];
-        let cube = Cube::from_slices(
-            vec![0, 86_400],
-            vec!["red".into(), "nir".into()],
-            slices,
-        )
-        .unwrap();
+        let cube =
+            Cube::from_slices(vec![0, 86_400], vec!["red".into(), "nir".into()], slices).unwrap();
 
         assert_eq!(cube.band_index("nir"), Some(1));
         assert_eq!(cube.slice(1, 0).unwrap().get(0, 0).unwrap(), 100.0);
@@ -382,9 +377,7 @@ mod tests {
     #[test]
     fn rejects_bad_metadata() {
         // Wrong slice count
-        assert!(
-            Cube::from_slices(vec![0, 1], vec!["b".into()], vec![slice(3, 3, 0.0)]).is_err()
-        );
+        assert!(Cube::from_slices(vec![0, 1], vec!["b".into()], vec![slice(3, 3, 0.0)]).is_err());
         // Non-increasing times
         assert!(
             Cube::from_slices(
@@ -409,12 +402,8 @@ mod tests {
     fn nan_passes_through_series() {
         let mut s1 = slice(3, 3, 0.0);
         s1.set(1, 1, f64::NAN).unwrap();
-        let cube = Cube::from_slices(
-            vec![0, 1],
-            vec!["b".into()],
-            vec![s1, slice(3, 3, 100.0)],
-        )
-        .unwrap();
+        let cube =
+            Cube::from_slices(vec![0, 1], vec!["b".into()], vec![s1, slice(3, 3, 100.0)]).unwrap();
         let series: Vec<f64> = cube.pixel_series(1, 1, 0).unwrap().collect();
         assert!(series[0].is_nan());
         assert_eq!(series[1], 104.0);

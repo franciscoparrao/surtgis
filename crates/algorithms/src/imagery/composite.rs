@@ -249,8 +249,7 @@ pub fn feather_mosaic(rasters: &[&Raster<f64>]) -> Result<Raster<f64>> {
     }
 
     let mut out = Raster::from_array(
-        Array2::from_shape_vec((rows, cols), out_data)
-            .map_err(|e| Error::Other(e.to_string()))?,
+        Array2::from_shape_vec((rows, cols), out_data).map_err(|e| Error::Other(e.to_string()))?,
     );
     out.set_transform(rasters[0].transform().clone());
     out.set_nodata(Some(f64::NAN));

@@ -458,7 +458,12 @@ mod tests {
                     let a = multi[k].get(row, col).unwrap();
                     let b = single.get(row, col).unwrap();
                     if a.is_nan() {
-                        assert!(b.is_nan(), "multi NaN but single finite at {}, {}", row, col);
+                        assert!(
+                            b.is_nan(),
+                            "multi NaN but single finite at {}, {}",
+                            row,
+                            col
+                        );
                     } else {
                         assert!(
                             (a - b).abs() < 1e-12,
