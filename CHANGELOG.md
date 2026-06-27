@@ -11,6 +11,13 @@ call them out under a `Breaking` heading when they happen.
 
 ### Added
 
+- **Lee speckle filter** (`imagery::lee_filter`) — the classic Lee (1980)
+  adaptive MMSE filter for SAR multiplicative speckle. Smooths homogeneous
+  areas toward the local mean while preserving edges and point targets, with an
+  `ENL` (equivalent number of looks) parameter. Completes the SAR water-mapping
+  path (run it before `sar_water_mask`). CLI `imagery sar-lee --window-size
+  --looks`; Python `sar_lee_filter`. 4 unit tests. The directional *refined*
+  Lee remains a possible follow-up.
 - **Melton ruggedness ratio** (`hydrology::melton_ruggedness`) — per-basin
   relief energy `(H_max − H_min) / √area`, a first-order debris-flow / lahar
   screening metric (Melton 1965; classes after Wilford et al. 2004). New CLI

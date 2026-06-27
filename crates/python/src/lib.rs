@@ -51,6 +51,7 @@ use surtgis_algorithms::imagery::{
     evi as compute_evi,
     evi2 as compute_evi2,
     gndvi as compute_gndvi,
+    lee_filter as compute_lee_filter,
     linear_to_db as compute_linear_to_db,
     // New imagery imports
     mndwi as compute_mndwi,
@@ -2444,6 +2445,30 @@ fn sar_water_mask<'py>(
     Ok(raster_u8_to_numpy(py, &out))
 }
 
+/// Lee adaptive speckle filter (Lee 1980) for SAR backscatter.
+///
+/// Args:
+///     image: 2D numpy array (f64), single-band backscatter (linear power).
+///     window_size: odd window side length (default 7).
+///     looks: equivalent number of looks / ENL (default 1.0).
+///     cell_size: cell size in map units.
+/// Returns:
+///     2D numpy array (f64), speckle-filtered.
+#[pyfunction]
+#[pyo3(signature = (image, window_size=7, looks=1.0, cell_size=1.0))]
+fn sar_lee_filter<'py>(
+    py: Python<'py>,
+    image: PyReadonlyArray2<'py, f64>,
+    window_size: usize,
+    looks: f64,
+    cell_size: f64,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let r = numpy_to_raster(&image, cell_size)?;
+    let out = compute_lee_filter(&r, window_size, looks)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(raster_to_numpy(py, &out))
+}
+
 // ===========================================================================
 // Melton ruggedness ratio (hydrology::melton)
 // ===========================================================================
@@ -2618,6 +2643,7 @@ fn surtgis(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(sar_db_to_linear, m)?)?;
     m.add_function(wrap_pyfunction!(sar_dual_pol_water_index, m)?)?;
     m.add_function(wrap_pyfunction!(sar_water_mask, m)?)?;
+    m.add_function(wrap_pyfunction!(sar_lee_filter, m)?)?;
 
     // Melton ruggedness ratio
     m.add_function(wrap_pyfunction!(melton_ruggedness_compute, m)?)?;

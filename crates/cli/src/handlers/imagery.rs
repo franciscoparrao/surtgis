@@ -9,8 +9,8 @@ use surtgis_algorithms::imagery::{
     SaviParams, band_math_binary, bsi, burn_severity_classify, cloud_mask_scl,
     dn_to_reflectance_s2, dn_to_surface_reflectance_landsat_c2, dn_to_toa_landsat, dnbr, dos1,
     dual_pol_water_index, evi, evi2, feather_mosaic, gndvi, histogram_match, index_builder, ir_mad,
-    linear_to_db, mad, median_composite, mndwi, moment_match, msavi, nbr, ndbi, ndmi, ndre, ndsi,
-    ndvi, ndwi, ngrdi, reci, reclassify, sar_water_mask, savi,
+    lee_filter, linear_to_db, mad, median_composite, mndwi, moment_match, msavi, nbr, ndbi, ndmi,
+    ndre, ndsi, ndvi, ndwi, ngrdi, reci, reclassify, sar_water_mask, savi,
 };
 use surtgis_algorithms::pansharpening::{brovey, gram_schmidt, pca_pansharpen};
 
@@ -441,6 +441,20 @@ pub fn handle(algorithm: ImageryCommands, compress: bool) -> Result<()> {
                 sar_water_mask(&r, threshold, !water_above).context("SAR water mask failed")?;
             write_result_u8(&mask, &output, compress)?;
             done("SAR water mask", &output, start.elapsed());
+        }
+
+        ImageryCommands::SarLee {
+            input,
+            output,
+            window_size,
+            looks,
+        } => {
+            let r = read_dem(&input)?;
+            let start = Instant::now();
+            let filtered =
+                lee_filter(&r, window_size, looks).context("SAR Lee speckle filter failed")?;
+            write_result(&filtered, &output, compress)?;
+            done("SAR Lee speckle filter", &output, start.elapsed());
         }
     }
 

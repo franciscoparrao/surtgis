@@ -19,11 +19,9 @@
 //!   `(VV - VH) / (VV + VH)`, which is elevated over smooth open water.
 //! - [`sar_water_mask`] — threshold a backscatter (or index) raster into a
 //!   binary water/flood mask.
-//!
-//! A speckle filter (Lee / refined Lee) is intentionally **not** included here;
-//! it is tracked as a follow-up. Pre-filtering with a speckle filter improves
-//! these results but is not required to obtain a usable first-pass mask,
-//! especially after multi-temporal compositing.
+//! - [`lee_filter`] — the classic Lee (1980) adaptive speckle filter, applied
+//!   before thresholding to suppress multiplicative speckle while preserving
+//!   edges. The directional *refined* Lee is a possible further enhancement.
 
 use crate::imagery::normalized_difference;
 use crate::maybe_rayon::*;
@@ -150,6 +148,107 @@ pub fn sar_water_mask(
     Ok(output)
 }
 
+/// Lee speckle filter (Lee 1980) for SAR amplitude/intensity imagery.
+///
+/// An adaptive MMSE filter for multiplicative speckle. In each local window it
+/// computes the mean `μ` and variance `σ²`, and blends the centre pixel toward
+/// the local mean by a weight that depends on how heterogeneous the window is:
+///
+/// ```text
+/// Cu² = 1 / ENL                  (squared coeff. of variation of pure speckle)
+/// Ci² = σ² / μ²                  (squared local coeff. of variation)
+/// W   = max(0, 1 − Cu² / Ci²)
+/// out = μ + W · (centre − μ)
+/// ```
+///
+/// In homogeneous regions (`Ci ≤ Cu`) the weight is 0 and the output is the
+/// local mean — full speckle smoothing. Near edges and bright targets
+/// (`Ci ≫ Cu`) the weight approaches 1 and the centre pixel is preserved, so
+/// edges and point scatterers are not blurred.
+///
+/// Operates on linear-power (intensity) backscatter. `looks` is the equivalent
+/// number of looks (ENL) of the product — use 1.0 for single-look data; higher
+/// ENL (multi-look / RTC products) yields a weaker speckle model and less
+/// smoothing. This is the classic Lee filter; the directional *refined* Lee
+/// (Lee 1981) is a further enhancement not implemented here.
+///
+/// # Arguments
+/// * `image` - single-band SAR backscatter (linear power).
+/// * `window_size` - odd window side length (e.g. 3, 5, 7).
+/// * `looks` - equivalent number of looks (ENL), must be positive.
+///
+/// # References
+/// - Lee, J.-S. (1980). Digital image enhancement and noise filtering by use of
+///   local statistics. *IEEE TPAMI* 2(2), 165–168.
+pub fn lee_filter(image: &Raster<f64>, window_size: usize, looks: f64) -> Result<Raster<f64>> {
+    if window_size < 3 || window_size % 2 == 0 {
+        return Err(Error::Other(
+            "window_size must be an odd number >= 3".into(),
+        ));
+    }
+    if looks <= 0.0 {
+        return Err(Error::Other("looks (ENL) must be positive".into()));
+    }
+
+    let (rows, cols) = image.shape();
+    let nodata = image.nodata();
+    let radius = window_size / 2;
+    // Squared coefficient of variation of fully-developed speckle.
+    let cu2 = 1.0 / looks;
+
+    let data: Vec<f64> = (0..rows)
+        .into_par_iter()
+        .flat_map(|row| {
+            let mut row_data = vec![f64::NAN; cols];
+            for (col, out) in row_data.iter_mut().enumerate() {
+                let center = unsafe { image.get_unchecked(row, col) };
+                if is_nodata(center, nodata) {
+                    continue;
+                }
+
+                let r0 = row.saturating_sub(radius);
+                let r1 = (row + radius).min(rows - 1);
+                let c0 = col.saturating_sub(radius);
+                let c1 = (col + radius).min(cols - 1);
+
+                let mut n = 0usize;
+                let mut sum = 0.0;
+                let mut sumsq = 0.0;
+                for wr in r0..=r1 {
+                    for wc in c0..=c1 {
+                        let v = unsafe { image.get_unchecked(wr, wc) };
+                        if is_nodata(v, nodata) {
+                            continue;
+                        }
+                        n += 1;
+                        sum += v;
+                        sumsq += v * v;
+                    }
+                }
+
+                let mean = sum / n as f64;
+                // Degenerate window: too few valid samples or zero mean -> mean.
+                if n < 2 || mean == 0.0 {
+                    *out = mean;
+                    continue;
+                }
+
+                let var = (sumsq / n as f64 - mean * mean).max(0.0);
+                let ci2 = var / (mean * mean);
+                let w = if ci2 <= cu2 { 0.0 } else { 1.0 - cu2 / ci2 };
+                *out = mean + w * (center - mean);
+            }
+            row_data
+        })
+        .collect();
+
+    let mut output = image.with_same_meta::<f64>(rows, cols);
+    output.set_nodata(Some(f64::NAN));
+    *output.data_mut() =
+        Array2::from_shape_vec((rows, cols), data).map_err(|e| Error::Other(e.to_string()))?;
+    Ok(output)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,5 +320,76 @@ mod tests {
         assert_eq!(mask.get(1, 0).unwrap(), SAR_NODATA);
         assert_eq!(mask.get(1, 1).unwrap(), SAR_WATER);
         assert_eq!(mask.nodata(), Some(SAR_NODATA));
+    }
+
+    #[test]
+    fn test_lee_filter_homogeneous_returns_mean() {
+        // A uniform field has Ci = 0 <= Cu, so every output equals the local
+        // mean = the constant value: the filter must be a no-op (within fp).
+        let img = r(vec![5.0; 25], 5, 5);
+        let out = lee_filter(&img, 3, 1.0).unwrap();
+        for v in out.data().iter() {
+            assert!((v - 5.0).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn test_lee_filter_preserves_strong_point_target() {
+        // A single very bright pixel in a dark field: Ci >> Cu at the centre,
+        // so W -> ~1 and the bright value is largely preserved (not smoothed to
+        // the local mean).
+        let mut data = vec![1.0; 25];
+        data[12] = 1000.0; // centre of 5x5
+        let img = r(data, 5, 5);
+        let out = lee_filter(&img, 3, 1.0).unwrap();
+        let center = out.get(2, 2).unwrap();
+        let local_mean = (1000.0 + 8.0 * 1.0) / 9.0; // ~112
+        // The target must be largely preserved: far above the local mean and
+        // much closer to the original peak than to the mean.
+        assert!(
+            center > 800.0,
+            "strong target should be preserved, got {center} (mean ~{local_mean})"
+        );
+        assert!(
+            (1000.0 - center) < (center - local_mean),
+            "output {center} should be closer to the peak than to the mean {local_mean}"
+        );
+    }
+
+    #[test]
+    fn test_lee_filter_smooths_speckle() {
+        // Noisy-ish window: filtered centre should move toward the local mean
+        // (variance of the output block is lower than the input block).
+        let data = vec![
+            2.0, 8.0, 3.0, 9.0, 1.0, 7.0, 2.0, 8.0, 3.0, 9.0, 1.0, 7.0, 2.0, 8.0, 3.0, 9.0, 1.0,
+            7.0, 2.0, 8.0, 3.0, 9.0, 1.0, 7.0, 2.0,
+        ];
+        let img = r(data.clone(), 5, 5);
+        let out = lee_filter(&img, 5, 4.0).unwrap();
+        let in_var = {
+            let m = data.iter().sum::<f64>() / 25.0;
+            data.iter().map(|v| (v - m).powi(2)).sum::<f64>() / 25.0
+        };
+        let ov: Vec<f64> = out.data().iter().copied().collect();
+        let out_var = {
+            let m = ov.iter().sum::<f64>() / 25.0;
+            ov.iter().map(|v| (v - m).powi(2)).sum::<f64>() / 25.0
+        };
+        assert!(
+            out_var < in_var,
+            "filter should reduce variance: {out_var} !< {in_var}"
+        );
+    }
+
+    #[test]
+    fn test_lee_filter_nodata_and_validation() {
+        let img = r(vec![1.0, 2.0, f64::NAN, 4.0], 2, 2);
+        let out = lee_filter(&img, 3, 1.0).unwrap();
+        assert!(out.get(1, 0).unwrap().is_nan()); // nodata center stays nodata
+        assert!(!out.get(0, 0).unwrap().is_nan());
+
+        assert!(lee_filter(&img, 2, 1.0).is_err()); // even window
+        assert!(lee_filter(&img, 1, 1.0).is_err()); // too small
+        assert!(lee_filter(&img, 3, 0.0).is_err()); // bad ENL
     }
 }
