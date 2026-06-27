@@ -11,6 +11,12 @@ call them out under a `Breaking` heading when they happen.
 
 ### Added
 
+- **Fluvial toolkit in the Python bindings** — `chi_compute` and `ksn_compute`
+  return per-cell rasters; `knickpoints_compute`, `concavity_compute` and
+  `divide_migration_compute` return lists of dicts (with coordinates / basin
+  ids / metrics). Closes the last Python-parity gap from the Ñuble requests so a
+  full channel-profile analysis can run in one process without shelling out to
+  the CLI.
 - **Energy-cone inundation** (`hydrology::energy_cone`) — the Malin & Sheridan
   (1982) energy-line model for volcanic mass-flow / lahar runout. From one or
   more sources an energy line descends at angle `φ` (`H/L = tan φ`); a cell is
