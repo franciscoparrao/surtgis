@@ -14,6 +14,13 @@ mod cloud;
 use surtgis_algorithms::classification::{
     IsodataParams, KmeansParams, isodata as compute_isodata, kmeans_raster as compute_kmeans,
 };
+use surtgis_algorithms::fluvial::{
+    ChiParams, ConcavityParams, DivideMigrationParams, KnickpointParams, KnickpointPolarity,
+    KsnParams, channel_steepness as compute_channel_steepness,
+    chi_transform as compute_chi_transform, concavity_index as compute_concavity_index,
+    divide_migration as compute_divide_migration,
+    knickpoint_detection as compute_knickpoint_detection,
+};
 use surtgis_algorithms::hydrology::{
     AdaptiveMfdParams,
     BreachParams,
@@ -2580,6 +2587,248 @@ fn melton_ruggedness_compute<'py>(
     Ok(out)
 }
 
+// ===========================================================================
+// Fluvial toolkit (fluvial::*) — TopoToolbox-style channel metrics
+// ===========================================================================
+
+/// χ (chi) transform of a stream network.
+///
+/// Args:
+///     stream: 2D numpy array (uint8), 1 = stream cell.
+///     flow_dir: 2D numpy array (uint8), D8 flow direction.
+///     flow_acc: 2D numpy array (f64), flow accumulation (cell counts).
+///     theta_ref: reference concavity (default 0.45).
+///     cell_size: cell size in metres.
+/// Returns:
+///     2D numpy array (f64) of χ along the streams (NaN off-network).
+#[pyfunction]
+#[pyo3(signature = (stream, flow_dir, flow_acc, theta_ref=0.45, cell_size=1.0))]
+fn chi_compute<'py>(
+    py: Python<'py>,
+    stream: PyReadonlyArray2<'py, u8>,
+    flow_dir: PyReadonlyArray2<'py, u8>,
+    flow_acc: PyReadonlyArray2<'py, f64>,
+    theta_ref: f64,
+    cell_size: f64,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let s = numpy_u8_to_raster(&stream, cell_size)?;
+    let fd = numpy_u8_to_raster(&flow_dir, cell_size)?;
+    let fa = numpy_to_raster(&flow_acc, cell_size)?;
+    let out = compute_chi_transform(
+        &s,
+        &fd,
+        &fa,
+        ChiParams {
+            theta_ref,
+            cell_size_m: cell_size,
+            ..Default::default()
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(raster_to_numpy(py, &out))
+}
+
+/// Normalized channel steepness index k_sn (per-cell raster).
+///
+/// Args:
+///     stream, flow_dir, flow_acc, dem: input rasters (uint8/uint8/f64/f64).
+///     theta_ref: reference concavity (default 0.45).
+///     segment_length_m: smoothing window along the channel (default 500).
+///     cell_size: cell size in metres.
+/// Returns:
+///     2D numpy array (f64) of k_sn (NaN off-network).
+#[pyfunction]
+#[pyo3(signature = (stream, flow_dir, flow_acc, dem, theta_ref=0.45, segment_length_m=500.0, cell_size=1.0))]
+fn ksn_compute<'py>(
+    py: Python<'py>,
+    stream: PyReadonlyArray2<'py, u8>,
+    flow_dir: PyReadonlyArray2<'py, u8>,
+    flow_acc: PyReadonlyArray2<'py, f64>,
+    dem: PyReadonlyArray2<'py, f64>,
+    theta_ref: f64,
+    segment_length_m: f64,
+    cell_size: f64,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let s = numpy_u8_to_raster(&stream, cell_size)?;
+    let fd = numpy_u8_to_raster(&flow_dir, cell_size)?;
+    let fa = numpy_to_raster(&flow_acc, cell_size)?;
+    let dem_r = numpy_to_raster(&dem, cell_size)?;
+    let res = compute_channel_steepness(
+        &s,
+        &fd,
+        &fa,
+        &dem_r,
+        KsnParams {
+            theta_ref,
+            segment_length_m,
+            cell_size_m: cell_size,
+            ..Default::default()
+        },
+        false,
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(raster_to_numpy(py, &res.ksn_raster))
+}
+
+/// Detect knickpoints on a stream network.
+///
+/// Returns a list of dicts: {row, col, elevation_m, magnitude_m, chi, polarity}
+/// where polarity is "concave" or "convex".
+#[pyfunction]
+#[pyo3(signature = (stream, flow_dir, flow_acc, dem, theta_ref=0.45, cell_size=1.0))]
+fn knickpoints_compute<'py>(
+    py: Python<'py>,
+    stream: PyReadonlyArray2<'py, u8>,
+    flow_dir: PyReadonlyArray2<'py, u8>,
+    flow_acc: PyReadonlyArray2<'py, f64>,
+    dem: PyReadonlyArray2<'py, f64>,
+    theta_ref: f64,
+    cell_size: f64,
+) -> PyResult<Bound<'py, pyo3::types::PyList>> {
+    use pyo3::types::{PyDict, PyList};
+    let s = numpy_u8_to_raster(&stream, cell_size)?;
+    let fd = numpy_u8_to_raster(&flow_dir, cell_size)?;
+    let fa = numpy_to_raster(&flow_acc, cell_size)?;
+    let dem_r = numpy_to_raster(&dem, cell_size)?;
+    let kps = compute_knickpoint_detection(
+        &s,
+        &fd,
+        &fa,
+        &dem_r,
+        KnickpointParams {
+            theta_ref,
+            cell_size_m: cell_size,
+            ..Default::default()
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
+    let out = PyList::empty(py);
+    for k in &kps {
+        let d = PyDict::new(py);
+        d.set_item("row", k.row)?;
+        d.set_item("col", k.col)?;
+        d.set_item("elevation_m", k.elevation_m)?;
+        d.set_item("magnitude_m", k.magnitude_m)?;
+        d.set_item("chi", k.chi)?;
+        let pol = match k.polarity {
+            KnickpointPolarity::Concave => "concave",
+            KnickpointPolarity::Convex => "convex",
+        };
+        d.set_item("polarity", pol)?;
+        out.append(d)?;
+    }
+    Ok(out)
+}
+
+/// Best-fit channel concavity θ per basin (χ–elevation collinearity).
+///
+/// Args:
+///     stream, flow_dir, flow_acc, dem: input rasters.
+///     basins: 2D numpy array of basin ids (f64, rounded to int).
+///     cell_size: cell size in metres.
+/// Returns:
+///     A list of dicts: {basin_id, theta_opt, theta_ci_low, theta_ci_high,
+///     n_cells, rmse}.
+#[pyfunction]
+#[pyo3(signature = (stream, flow_dir, flow_acc, dem, basins, cell_size=1.0))]
+fn concavity_compute<'py>(
+    py: Python<'py>,
+    stream: PyReadonlyArray2<'py, u8>,
+    flow_dir: PyReadonlyArray2<'py, u8>,
+    flow_acc: PyReadonlyArray2<'py, f64>,
+    dem: PyReadonlyArray2<'py, f64>,
+    basins: PyReadonlyArray2<'py, f64>,
+    cell_size: f64,
+) -> PyResult<Bound<'py, pyo3::types::PyList>> {
+    use pyo3::types::{PyDict, PyList};
+    let s = numpy_u8_to_raster(&stream, cell_size)?;
+    let fd = numpy_u8_to_raster(&flow_dir, cell_size)?;
+    let fa = numpy_to_raster(&flow_acc, cell_size)?;
+    let dem_r = numpy_to_raster(&dem, cell_size)?;
+    let basins_r = numpy_f64_to_raster_i32(&basins, cell_size)?;
+    let results = compute_concavity_index(
+        &s,
+        &fd,
+        &fa,
+        &dem_r,
+        &basins_r,
+        ConcavityParams {
+            cell_size_m: cell_size,
+            ..Default::default()
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
+    let out = PyList::empty(py);
+    for r in &results {
+        let d = PyDict::new(py);
+        d.set_item("basin_id", r.basin_id)?;
+        d.set_item("theta_opt", r.theta_opt)?;
+        d.set_item("theta_ci_low", r.theta_ci.0)?;
+        d.set_item("theta_ci_high", r.theta_ci.1)?;
+        d.set_item("n_cells", r.n_cells)?;
+        d.set_item("rmse", r.rmse)?;
+        out.append(d)?;
+    }
+    Ok(out)
+}
+
+/// Drainage-divide migration metrics (across-divide χ / elevation asymmetry).
+///
+/// Args:
+///     basins: 2D numpy array of basin ids (f64, rounded to int).
+///     dem: 2D numpy array (f64).
+///     flow_acc: 2D numpy array (f64).
+///     chi: optional 2D numpy array (f64) of χ; enables the χ-difference metric.
+///     cell_size: cell size in metres.
+/// Returns:
+///     A list of dicts: {basin_a, basin_b, median_chi_diff, median_elev_diff,
+///     median_relief_diff, n_pairs}.
+#[pyfunction]
+#[pyo3(signature = (basins, dem, flow_acc, chi=None, cell_size=1.0))]
+fn divide_migration_compute<'py>(
+    py: Python<'py>,
+    basins: PyReadonlyArray2<'py, f64>,
+    dem: PyReadonlyArray2<'py, f64>,
+    flow_acc: PyReadonlyArray2<'py, f64>,
+    chi: Option<PyReadonlyArray2<'py, f64>>,
+    cell_size: f64,
+) -> PyResult<Bound<'py, pyo3::types::PyList>> {
+    use pyo3::types::{PyDict, PyList};
+    let basins_r = numpy_f64_to_raster_i32(&basins, cell_size)?;
+    let dem_r = numpy_to_raster(&dem, cell_size)?;
+    let fa = numpy_to_raster(&flow_acc, cell_size)?;
+    let chi_r = match chi {
+        Some(c) => Some(numpy_to_raster(&c, cell_size)?),
+        None => None,
+    };
+    let results = compute_divide_migration(
+        &basins_r,
+        &dem_r,
+        chi_r.as_ref(),
+        &fa,
+        DivideMigrationParams {
+            cell_size_m: cell_size,
+            ..Default::default()
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
+    let out = PyList::empty(py);
+    for r in &results {
+        let d = PyDict::new(py);
+        d.set_item("basin_a", r.basin_a)?;
+        d.set_item("basin_b", r.basin_b)?;
+        d.set_item("median_chi_diff", r.median_chi_diff)?;
+        d.set_item("median_elev_diff", r.median_elev_diff)?;
+        d.set_item("median_relief_diff", r.median_relief_diff)?;
+        d.set_item("n_pairs", r.n_pairs)?;
+        out.append(d)?;
+    }
+    Ok(out)
+}
+
 #[pymodule]
 fn surtgis(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Terrain
@@ -2721,6 +2970,13 @@ fn surtgis(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Melton ruggedness ratio
     m.add_function(wrap_pyfunction!(melton_ruggedness_compute, m)?)?;
+
+    // Fluvial toolkit
+    m.add_function(wrap_pyfunction!(chi_compute, m)?)?;
+    m.add_function(wrap_pyfunction!(ksn_compute, m)?)?;
+    m.add_function(wrap_pyfunction!(knickpoints_compute, m)?)?;
+    m.add_function(wrap_pyfunction!(concavity_compute, m)?)?;
+    m.add_function(wrap_pyfunction!(divide_migration_compute, m)?)?;
 
     // Cloud: remote COG reading + STAC search (feature = "cloud")
     #[cfg(feature = "cloud")]
