@@ -1397,6 +1397,19 @@ pub enum ImageryCommands {
         #[arg(long)]
         water_above: bool,
     },
+    /// SAR: Lee adaptive speckle filter (Lee 1980), linear-power input
+    SarLee {
+        /// Input backscatter (linear power)
+        input: PathBuf,
+        /// Output filtered raster
+        output: PathBuf,
+        /// Odd window side length
+        #[arg(long, default_value = "7")]
+        window_size: usize,
+        /// Equivalent number of looks (ENL); 1.0 for single-look
+        #[arg(long, default_value = "1.0")]
+        looks: f64,
+    },
 }
 
 // ─── Colour balance subcommands ────────────────────────────────────────
