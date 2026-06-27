@@ -4,13 +4,14 @@ use anyhow::{Context, Result};
 use std::time::Instant;
 
 use surtgis_algorithms::hydrology::{
+    BreachParams, DrainageDensityParams, FillSinksParams, HandParams, MfdParams,
+    PriorityFloodParams, SedimentConnectivityParams, StreamNetworkParams, WatershedParams,
     basin_morphometry, breach_depressions, drainage_density, fill_sinks, flow_accumulation,
     flow_accumulation_dinf, flow_accumulation_mfd, flow_direction, flow_direction_dinf, hand,
     hypsometric_integral, melton_ruggedness, priority_flood, sediment_connectivity, stream_network,
-    watershed, BreachParams, DrainageDensityParams, FillSinksParams, HandParams, MfdParams,
-    PriorityFloodParams, SedimentConnectivityParams, StreamNetworkParams, WatershedParams,
+    watershed,
 };
-use surtgis_algorithms::terrain::{slope, twi, SlopeParams, SlopeUnits};
+use surtgis_algorithms::terrain::{SlopeParams, SlopeUnits, slope, twi};
 
 use crate::commands::HydrologyCommands;
 use crate::helpers::{

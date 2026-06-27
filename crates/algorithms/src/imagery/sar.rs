@@ -80,11 +80,7 @@ where
 /// converted with this before applying dB thresholds.
 pub fn linear_to_db(backscatter: &Raster<f64>) -> Result<Raster<f64>> {
     map_f64(backscatter, |x| {
-        if x <= 0.0 {
-            f64::NAN
-        } else {
-            10.0 * x.log10()
-        }
+        if x <= 0.0 { f64::NAN } else { 10.0 * x.log10() }
     })
 }
 

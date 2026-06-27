@@ -16,6 +16,12 @@ pub use native::{GeoTiffOptions, read_geotiff, write_geotiff};
 // (1, 3, or 4 bands).
 pub use native::write_geotiff_multiband;
 
+// Native GeoTiffOptions under an unambiguous name. When the `gdal` feature is
+// on, `io::GeoTiffOptions` resolves to the GDAL variant, but the native-only
+// `write_geotiff_multiband` needs the native options type — which is otherwise
+// unnameable from outside the crate (the `native` module is private).
+pub use native::GeoTiffOptions as NativeGeoTiffOptions;
+
 // Multi-band reading — de-interleaves every band into its own raster
 // (native backend). The single-band `read_geotiff(path, Some(band))` also
 // selects a band from a multi-band file.
