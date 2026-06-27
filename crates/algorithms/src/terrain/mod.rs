@@ -37,6 +37,7 @@ mod downslope_index;
 mod edge_density;
 mod elev_above_pit;
 mod elev_relative_to_min_max;
+mod excess_topography;
 mod gaussian_scale_space;
 mod geomorphons;
 mod hillshade;
@@ -107,6 +108,7 @@ pub use downslope_index::{DownslopeIndexParams, downslope_index};
 pub use edge_density::{EdgeDensityParams, edge_density};
 pub use elev_above_pit::elev_above_pit;
 pub use elev_relative_to_min_max::elev_relative_to_min_max;
+pub use excess_topography::{ExcessTopographyParams, excess_topography};
 pub use gaussian_scale_space::{
     GssParams, GssResult, ScaleLevel, gaussian_scale_space, scale_space_derivatives,
 };

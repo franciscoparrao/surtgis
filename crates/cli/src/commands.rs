@@ -896,6 +896,19 @@ pub enum TerrainCommands {
     },
     /// Maximum upstream branch length (longest D8 flow path)
     MaxBranchLength { input: PathBuf, output: PathBuf },
+    /// Excess topography above a threshold hillslope angle (Blöthe et al. 2015)
+    ExcessTopography {
+        /// Input DEM file
+        input: PathBuf,
+        /// Output excess topography raster (z − slope-limited surface)
+        output: PathBuf,
+        /// Threshold hillslope angle in degrees (0 < θ < 90)
+        #[arg(short, long, default_value = "30.0")]
+        threshold: f64,
+        /// Maximum fast-sweeping rounds
+        #[arg(long, default_value = "200")]
+        max_iterations: usize,
+    },
 }
 
 // ─── Hydrology subcommands ──────────────────────────────────────────────
