@@ -15,6 +15,15 @@ use crate::http::HttpClient;
 use crate::ifd::{self, IfdInfo, RawTagEntry, TiffByteOrder, tags};
 use crate::tile_index::{self, BBox, TileMapping};
 
+/// Whether verbose tile-decode diagnostics should be emitted.
+///
+/// These were invaluable when tracking the `bps=15` striping bug, so they are
+/// kept available but silenced by default — set `SURTGIS_COG_DEBUG=1` to
+/// re-enable them. FATAL decode errors are always printed regardless.
+fn cog_debug() -> bool {
+    std::env::var_os("SURTGIS_COG_DEBUG").is_some()
+}
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -338,7 +347,7 @@ impl CogReader {
                     1 => {}
                     2 => {
                         decompress::undo_horizontal_differencing(&mut raw, tw, bytes_per_pixel);
-                        if fetch_count == 0 {
+                        if fetch_count == 0 && cog_debug() {
                             eprintln!(
                                 "    [pred] undo horiz-diff: bps={} tw={} len={}",
                                 bytes_per_pixel,
@@ -349,7 +358,7 @@ impl CogReader {
                     }
                     3 => {
                         decompress::undo_floating_point_predictor(&mut raw, tw, bytes_per_pixel);
-                        if fetch_count == 0 {
+                        if fetch_count == 0 && cog_debug() {
                             let sample0 = if raw.len() >= 4 {
                                 f32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]])
                             } else {
@@ -362,7 +371,7 @@ impl CogReader {
                         }
                     }
                     p => {
-                        if fetch_count == 0 {
+                        if fetch_count == 0 && cog_debug() {
                             eprintln!("    [pred] UNSUPPORTED: predictor={}", p);
                         }
                     }
@@ -400,7 +409,7 @@ impl CogReader {
             };
 
             // Debug: log first tile's raw bytes and interpreted values
-            if tiles_written == 1 && raw.len() >= 10 {
+            if tiles_written == 1 && raw.len() >= 10 && cog_debug() {
                 let first_bytes: Vec<String> =
                     raw[..10].iter().map(|b| format!("{:02x}", b)).collect();
                 let first_u16 = u16::from_le_bytes([raw[0], raw[1]]);
@@ -488,25 +497,27 @@ impl CogReader {
             }
         }
 
-        // Always log tile assembly stats
+        // Tile assembly stats (verbose; gated behind SURTGIS_COG_DEBUG).
         let valid_pixels = output.iter().filter(|v| !v.is_nodata(None)).count();
-        eprintln!(
-            "    [cog] assembled: {} tiles ({}+{} skip), output={}x{}, tw={} th={}, valid={}/{} ({:.0}%)",
-            tiles_fetched,
-            tiles_written,
-            tiles_skipped,
-            out_cols,
-            out_rows,
-            tw,
-            th,
-            valid_pixels,
-            out_rows * out_cols,
-            if out_rows * out_cols > 0 {
-                valid_pixels as f64 / (out_rows * out_cols) as f64 * 100.0
-            } else {
-                0.0
-            }
-        );
+        if cog_debug() {
+            eprintln!(
+                "    [cog] assembled: {} tiles ({}+{} skip), output={}x{}, tw={} th={}, valid={}/{} ({:.0}%)",
+                tiles_fetched,
+                tiles_written,
+                tiles_skipped,
+                out_cols,
+                out_rows,
+                tw,
+                th,
+                valid_pixels,
+                out_rows * out_cols,
+                if out_rows * out_cols > 0 {
+                    valid_pixels as f64 / (out_rows * out_cols) as f64 * 100.0
+                } else {
+                    0.0
+                }
+            );
+        }
 
         // Build Raster with correct geo metadata.
         let mut raster = Raster::from_array(output);

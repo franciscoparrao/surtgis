@@ -5,11 +5,12 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use surtgis_algorithms::imagery::{
-    Dos1Params, EviParams, IrMadParams, LandsatToaParams, ReclassifyParams, S2ReflectanceParams,
     band_math_binary, bsi, burn_severity_classify, cloud_mask_scl, dn_to_reflectance_s2,
-    dn_to_surface_reflectance_landsat_c2, dn_to_toa_landsat, dnbr, dos1, evi, evi2, feather_mosaic,
-    gndvi, histogram_match, index_builder, ir_mad, mad, median_composite, mndwi, moment_match,
-    msavi, nbr, ndbi, ndmi, ndre, ndsi, ndvi, ndwi, ngrdi, reci, reclassify, savi, SaviParams,
+    dn_to_surface_reflectance_landsat_c2, dn_to_toa_landsat, dnbr, dos1, dual_pol_water_index, evi,
+    evi2, feather_mosaic, gndvi, histogram_match, index_builder, ir_mad, linear_to_db, mad,
+    median_composite, mndwi, moment_match, msavi, nbr, ndbi, ndmi, ndre, ndsi, ndvi, ndwi, ngrdi,
+    reci, reclassify, sar_water_mask, savi, Dos1Params, EviParams, IrMadParams, LandsatToaParams,
+    ReclassifyParams, S2ReflectanceParams, SaviParams,
 };
 use surtgis_algorithms::pansharpening::{brovey, gram_schmidt, pca_pansharpen};
 
@@ -19,7 +20,7 @@ use crate::commands::{
 };
 use crate::helpers::{
     done, parse_band_assignments, parse_band_math_op, parse_reclass_entry, parse_scl_classes,
-    read_dem, write_result,
+    read_dem, write_result, write_result_u8,
 };
 
 pub fn handle(algorithm: ImageryCommands, compress: bool) -> Result<()> {
@@ -401,6 +402,43 @@ pub fn handle(algorithm: ImageryCommands, compress: bool) -> Result<()> {
                 start.elapsed(),
             );
         }
+
+        ImageryCommands::SarDb { input, output } => {
+            let r = read_dem(&input)?;
+            let start = Instant::now();
+            let result = linear_to_db(&r).context("SAR linear→dB failed")?;
+            write_result(&result, &output, compress)?;
+            done("SAR backscatter (dB)", &output, start.elapsed());
+        }
+
+        ImageryCommands::SarWaterIndex {
+            co_pol,
+            cross_pol,
+            output,
+        } => {
+            let co = read_dem(&co_pol)?;
+            let cross = read_dem(&cross_pol)?;
+            let start = Instant::now();
+            let result =
+                dual_pol_water_index(&co, &cross).context("SAR dual-pol water index failed")?;
+            write_result(&result, &output, compress)?;
+            done("SAR dual-pol water index", &output, start.elapsed());
+        }
+
+        ImageryCommands::SarWaterMask {
+            input,
+            output,
+            threshold,
+            water_above,
+        } => {
+            let r = read_dem(&input)?;
+            let start = Instant::now();
+            // water_below is the default; --water-above inverts it.
+            let mask =
+                sar_water_mask(&r, threshold, !water_above).context("SAR water mask failed")?;
+            write_result_u8(&mask, &output, compress)?;
+            done("SAR water mask", &output, start.elapsed());
+        }
     }
 
     Ok(())
@@ -546,8 +584,7 @@ fn handle_color_balance(action: ColorBalanceCommands, compress: bool) -> Result<
             let src = read_dem(&source)?;
             let refr = read_dem(&reference)?;
             let start = Instant::now();
-            let result =
-                histogram_match(&src, &refr).context("histogram_match failed")?;
+            let result = histogram_match(&src, &refr).context("histogram_match failed")?;
             write_result(&result, &output, compress)?;
             done("Histogram match", &output, start.elapsed());
         }
@@ -601,8 +638,11 @@ fn handle_change_detection(action: ChangeDetectionCommands, compress: bool) -> R
                 write_result(m, &path, compress)?;
             }
             // Pretty-print correlations as a summary line.
-            let rhos: Vec<String> =
-                result.correlations.iter().map(|r| format!("{:.4}", r)).collect();
+            let rhos: Vec<String> = result
+                .correlations
+                .iter()
+                .map(|r| format!("{:.4}", r))
+                .collect();
             println!(
                 "MAD canonical correlations (MAD_1 → MAD_{}): {}",
                 result.correlations.len(),
@@ -659,8 +699,11 @@ fn handle_change_detection(action: ChangeDetectionCommands, compress: bool) -> R
             }
             let weights_path = output_dir.join(format!("{}_nochange_prob.tif", prefix));
             write_result(&result.weights, &weights_path, compress)?;
-            let rhos: Vec<String> =
-                result.correlations.iter().map(|r| format!("{:.4}", r)).collect();
+            let rhos: Vec<String> = result
+                .correlations
+                .iter()
+                .map(|r| format!("{:.4}", r))
+                .collect();
             println!(
                 "IR-MAD converged in {} iterations. Correlations: {}",
                 result.n_iter,

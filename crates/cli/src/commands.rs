@@ -1058,6 +1058,19 @@ pub enum HydrologyCommands {
         #[arg(long, default_value = "1.0")]
         cell_size: f64,
     },
+    /// Melton ruggedness ratio per watershed (debris-flow / lahar screening)
+    Melton {
+        /// Watershed raster (i32 IDs)
+        input: PathBuf,
+        /// DEM raster aligned with the watershed raster
+        #[arg(long)]
+        dem: PathBuf,
+        #[arg(long, default_value = "1.0")]
+        cell_size: f64,
+        /// Optional output raster mapping each basin to its Melton ratio
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
     /// Compute full hydrology pipeline from DEM
     All {
         /// Input DEM file
@@ -1351,6 +1364,38 @@ pub enum ImageryCommands {
         /// Input rasters (repeatable)
         #[arg(long = "input", required = true)]
         inputs: Vec<PathBuf>,
+    },
+    /// SAR: convert linear-power backscatter (σ⁰) to decibels (10·log₁₀)
+    SarDb {
+        /// Input linear-power backscatter raster
+        input: PathBuf,
+        /// Output dB raster
+        output: PathBuf,
+    },
+    /// SAR: dual-pol water index (VV − VH)/(VV + VH)
+    SarWaterIndex {
+        /// Co-pol band (e.g. VV), linear power
+        #[arg(long)]
+        co_pol: PathBuf,
+        /// Cross-pol band (e.g. VH), linear power
+        #[arg(long)]
+        cross_pol: PathBuf,
+        /// Output index raster
+        output: PathBuf,
+    },
+    /// SAR: threshold backscatter/index into a binary water mask
+    SarWaterMask {
+        /// Input backscatter (e.g. VV in dB) or water index
+        input: PathBuf,
+        /// Output u8 water mask (1=water, 0=land, 255=nodata)
+        output: PathBuf,
+        /// Decision threshold
+        #[arg(long)]
+        threshold: f64,
+        /// Water is ABOVE the threshold (use for a water index). Default:
+        /// water is below the threshold (use for backscatter).
+        #[arg(long)]
+        water_above: bool,
     },
 }
 

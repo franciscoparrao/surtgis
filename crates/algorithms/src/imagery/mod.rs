@@ -17,6 +17,7 @@ mod index_builder;
 mod indices;
 mod mad;
 mod reclassify;
+mod sar;
 
 pub use band_math::{BandMathOp, band_math, band_math_binary};
 pub use burn_severity::{burn_severity_classify, dnbr};
@@ -41,3 +42,7 @@ pub use indices::{
 };
 pub use mad::{IrMadParams, IrMadResult, MadResult, ir_mad, mad};
 pub use reclassify::{ReclassEntry, ReclassifyParams, reclassify};
+pub use sar::{
+    SAR_NODATA, SAR_NON_WATER, SAR_WATER, db_to_linear, dual_pol_water_index, linear_to_db,
+    sar_water_mask,
+};

@@ -8,6 +8,9 @@ use numpy::{IntoPyArray, PyArray2, PyArray3, PyReadonlyArray2, PyUntypedArrayMet
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
+#[cfg(feature = "cloud")]
+mod cloud;
+
 use surtgis_algorithms::classification::{
     IsodataParams, KmeansParams, isodata as compute_isodata, kmeans_raster as compute_kmeans,
 };
@@ -31,6 +34,7 @@ use surtgis_algorithms::hydrology::{
     flow_direction_dinf as compute_flow_direction_dinf,
     flow_path_length as compute_flow_path_length,
     hand as compute_hand,
+    melton_ruggedness as compute_melton_ruggedness,
     priority_flood,
     priority_flood_flat as compute_priority_flood_flat,
     strahler_order as compute_strahler_order,
@@ -42,9 +46,12 @@ use surtgis_algorithms::imagery::{
     EviParams,
     SaviParams,
     bsi as compute_bsi,
+    db_to_linear as compute_db_to_linear,
+    dual_pol_water_index as compute_dual_pol_water_index,
     evi as compute_evi,
     evi2 as compute_evi2,
     gndvi as compute_gndvi,
+    linear_to_db as compute_linear_to_db,
     // New imagery imports
     mndwi as compute_mndwi,
     msavi as compute_msavi,
@@ -58,6 +65,7 @@ use surtgis_algorithms::imagery::{
     ngrdi as compute_ngrdi,
     normalized_difference,
     reci as compute_reci,
+    sar_water_mask as compute_sar_water_mask,
     savi as compute_savi,
 };
 use surtgis_algorithms::interpolation::{
@@ -173,6 +181,29 @@ fn numpy_u8_to_raster(arr: &PyReadonlyArray2<'_, u8>, cell_size: f64) -> PyResul
         .as_slice()
         .map_err(|_| PyValueError::new_err("array must be contiguous C-order"))?
         .to_vec();
+    let mut raster =
+        Raster::from_vec(data, rows, cols).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    raster.set_transform(GeoTransform::new(0.0, 0.0, cell_size, -cell_size));
+    Ok(raster)
+}
+
+/// Build a Raster<i32> from a numpy 2D f64 array (rounding to nearest int).
+///
+/// Watershed-id rasters arrive from Python as f64 (that is how
+/// `watershed_compute` returns them), so accept f64 and round.
+fn numpy_f64_to_raster_i32(
+    arr: &PyReadonlyArray2<'_, f64>,
+    cell_size: f64,
+) -> PyResult<Raster<i32>> {
+    let shape = arr.shape();
+    let rows = shape[0];
+    let cols = shape[1];
+    let data: Vec<i32> = arr
+        .as_slice()
+        .map_err(|_| PyValueError::new_err("array must be contiguous C-order"))?
+        .iter()
+        .map(|&v| if v.is_finite() { v.round() as i32 } else { 0 })
+        .collect();
     let mut raster =
         Raster::from_vec(data, rows, cols).map_err(|e| PyValueError::new_err(e.to_string()))?;
     raster.set_transform(GeoTransform::new(0.0, 0.0, cell_size, -cell_size));
@@ -2334,6 +2365,128 @@ fn relief_compute<'py>(
     Ok(arr.into_pyarray(py))
 }
 
+// ===========================================================================
+// SAR water / flood mapping (imagery::sar)
+// ===========================================================================
+
+/// Convert linear-power SAR backscatter to decibels (10·log10).
+///
+/// Args:
+///     backscatter: 2D numpy array (f64), linear power.
+///     cell_size: cell size in map units.
+/// Returns:
+///     2D numpy array of dB values (non-positive inputs -> NaN).
+#[pyfunction]
+#[pyo3(signature = (backscatter, cell_size=1.0))]
+fn sar_linear_to_db<'py>(
+    py: Python<'py>,
+    backscatter: PyReadonlyArray2<'py, f64>,
+    cell_size: f64,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let r = numpy_to_raster(&backscatter, cell_size)?;
+    let out = compute_linear_to_db(&r).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(raster_to_numpy(py, &out))
+}
+
+/// Convert decibel SAR backscatter back to linear power (10^(x/10)).
+#[pyfunction]
+#[pyo3(signature = (backscatter_db, cell_size=1.0))]
+fn sar_db_to_linear<'py>(
+    py: Python<'py>,
+    backscatter_db: PyReadonlyArray2<'py, f64>,
+    cell_size: f64,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let r = numpy_to_raster(&backscatter_db, cell_size)?;
+    let out = compute_db_to_linear(&r).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(raster_to_numpy(py, &out))
+}
+
+/// Dual-pol SAR water index: (co_pol - cross_pol) / (co_pol + cross_pol).
+///
+/// For Sentinel-1, pass co_pol = VV and cross_pol = VH (linear power).
+#[pyfunction]
+#[pyo3(signature = (co_pol, cross_pol, cell_size=1.0))]
+fn sar_dual_pol_water_index<'py>(
+    py: Python<'py>,
+    co_pol: PyReadonlyArray2<'py, f64>,
+    cross_pol: PyReadonlyArray2<'py, f64>,
+    cell_size: f64,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let co = numpy_to_raster(&co_pol, cell_size)?;
+    let cross = numpy_to_raster(&cross_pol, cell_size)?;
+    let out = compute_dual_pol_water_index(&co, &cross)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(raster_to_numpy(py, &out))
+}
+
+/// Threshold a backscatter or index raster into a binary water mask.
+///
+/// Args:
+///     raster: 2D numpy array (f64), backscatter (dB) or a water index.
+///     threshold: decision boundary.
+///     water_above: if True, water is ABOVE the threshold (water index);
+///         if False (default), water is below it (backscatter).
+///     cell_size: cell size in map units.
+/// Returns:
+///     2D numpy array (uint8): 1=water, 0=land, 255=nodata.
+#[pyfunction]
+#[pyo3(signature = (raster, threshold, water_above=false, cell_size=1.0))]
+fn sar_water_mask<'py>(
+    py: Python<'py>,
+    raster: PyReadonlyArray2<'py, f64>,
+    threshold: f64,
+    water_above: bool,
+    cell_size: f64,
+) -> PyResult<Bound<'py, PyArray2<u8>>> {
+    let r = numpy_to_raster(&raster, cell_size)?;
+    let out = compute_sar_water_mask(&r, threshold, !water_above)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(raster_u8_to_numpy(py, &out))
+}
+
+// ===========================================================================
+// Melton ruggedness ratio (hydrology::melton)
+// ===========================================================================
+
+/// Melton ruggedness ratio per basin: (H_max - H_min) / sqrt(area).
+///
+/// Args:
+///     watersheds: 2D numpy array of watershed ids (f64, rounded to int;
+///         values <= 0 are ignored). The output of watershed_compute works.
+///     dem: 2D numpy array (f64) of elevations, aligned with watersheds.
+///     cell_size: cell size in metres.
+/// Returns:
+///     A list of dicts, one per basin, with keys: watershed_id, area_cells,
+///     area_m2, min_elevation, max_elevation, relief, melton_ratio.
+#[pyfunction]
+#[pyo3(signature = (watersheds, dem, cell_size=1.0))]
+fn melton_ruggedness_compute<'py>(
+    py: Python<'py>,
+    watersheds: PyReadonlyArray2<'py, f64>,
+    dem: PyReadonlyArray2<'py, f64>,
+    cell_size: f64,
+) -> PyResult<Bound<'py, pyo3::types::PyList>> {
+    use pyo3::types::{PyDict, PyList};
+    let ws = numpy_f64_to_raster_i32(&watersheds, cell_size)?;
+    let dem_r = numpy_to_raster(&dem, cell_size)?;
+    let metrics = compute_melton_ruggedness(&ws, &dem_r, cell_size)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
+    let out = PyList::empty(py);
+    for m in &metrics {
+        let d = PyDict::new(py);
+        d.set_item("watershed_id", m.watershed_id)?;
+        d.set_item("area_cells", m.area_cells)?;
+        d.set_item("area_m2", m.area_m2)?;
+        d.set_item("min_elevation", m.min_elevation)?;
+        d.set_item("max_elevation", m.max_elevation)?;
+        d.set_item("relief", m.relief)?;
+        d.set_item("melton_ratio", m.melton_ratio)?;
+        out.append(d)?;
+    }
+    Ok(out)
+}
+
 #[pymodule]
 fn surtgis(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Terrain
@@ -2459,6 +2612,19 @@ fn surtgis(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Relief composite (RGBA bytes, not GeoTIFF)
     m.add_function(wrap_pyfunction!(relief_compute, m)?)?;
+
+    // SAR water / flood mapping
+    m.add_function(wrap_pyfunction!(sar_linear_to_db, m)?)?;
+    m.add_function(wrap_pyfunction!(sar_db_to_linear, m)?)?;
+    m.add_function(wrap_pyfunction!(sar_dual_pol_water_index, m)?)?;
+    m.add_function(wrap_pyfunction!(sar_water_mask, m)?)?;
+
+    // Melton ruggedness ratio
+    m.add_function(wrap_pyfunction!(melton_ruggedness_compute, m)?)?;
+
+    // Cloud: remote COG reading + STAC search (feature = "cloud")
+    #[cfg(feature = "cloud")]
+    cloud::register(m)?;
 
     Ok(())
 }

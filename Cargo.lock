@@ -5829,6 +5829,7 @@ dependencies = [
  "numpy",
  "pyo3",
  "surtgis-algorithms",
+ "surtgis-cloud",
  "surtgis-colormap",
  "surtgis-core",
  "surtgis-relief",

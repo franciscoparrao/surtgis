@@ -4,14 +4,13 @@ use anyhow::{Context, Result};
 use std::time::Instant;
 
 use surtgis_algorithms::hydrology::{
-    BreachParams, DrainageDensityParams, FillSinksParams, HandParams, MfdParams,
-    PriorityFloodParams, SedimentConnectivityParams, StreamNetworkParams, WatershedParams,
     basin_morphometry, breach_depressions, drainage_density, fill_sinks, flow_accumulation,
     flow_accumulation_dinf, flow_accumulation_mfd, flow_direction, flow_direction_dinf, hand,
-    hypsometric_integral,
-    priority_flood, sediment_connectivity, stream_network, watershed,
+    hypsometric_integral, melton_ruggedness, priority_flood, sediment_connectivity, stream_network,
+    watershed, BreachParams, DrainageDensityParams, FillSinksParams, HandParams, MfdParams,
+    PriorityFloodParams, SedimentConnectivityParams, StreamNetworkParams, WatershedParams,
 };
-use surtgis_algorithms::terrain::{SlopeParams, SlopeUnits, slope, twi};
+use surtgis_algorithms::terrain::{slope, twi, SlopeParams, SlopeUnits};
 
 use crate::commands::HydrologyCommands;
 use crate::helpers::{
@@ -334,6 +333,63 @@ pub fn handle(
                 );
             }
             println!("\n  Processing time: {:.2?}", elapsed);
+        }
+
+        HydrologyCommands::Melton {
+            input,
+            dem,
+            cell_size,
+            output,
+        } => {
+            let ws_r: surtgis_core::Raster<i32> = surtgis_core::io::read_geotiff(&input, None)
+                .context("Failed to read watershed raster")?;
+            let dem_r = read_dem(&dem)?;
+            let start = Instant::now();
+            let metrics = melton_ruggedness(&ws_r, &dem_r, cell_size)
+                .context("Failed to compute Melton ruggedness ratio")?;
+            let elapsed = start.elapsed();
+
+            println!(
+                "{:<8} {:>12} {:>10} {:>10} {:>8}",
+                "Basin", "Area(m2)", "Relief(m)", "Melton", "Class"
+            );
+            println!("{}", "-".repeat(52));
+            for m in &metrics {
+                // Heuristic geomorphic classes (Wilford et al. 2004).
+                let class = if m.melton_ratio >= 0.5 {
+                    "debris-flow"
+                } else if m.melton_ratio >= 0.3 {
+                    "debris-flood"
+                } else {
+                    "flood"
+                };
+                println!(
+                    "{:<8} {:>12.1} {:>10.1} {:>10.4} {:>8}",
+                    m.watershed_id, m.area_m2, m.relief, m.melton_ratio, class
+                );
+            }
+
+            if let Some(out_path) = output {
+                use std::collections::HashMap;
+                let lookup: HashMap<i32, f64> = metrics
+                    .iter()
+                    .map(|m| (m.watershed_id, m.melton_ratio))
+                    .collect();
+                let (rows, cols) = ws_r.shape();
+                let mut out = ws_r.with_same_meta::<f64>(rows, cols);
+                out.set_nodata(Some(f64::NAN));
+                for row in 0..rows {
+                    for col in 0..cols {
+                        let id = unsafe { ws_r.get_unchecked(row, col) };
+                        let v = lookup.get(&id).copied().unwrap_or(f64::NAN);
+                        out.set(row, col, v).ok();
+                    }
+                }
+                write_result(&out, &out_path, compress)?;
+                done("Melton ruggedness raster", &out_path, elapsed);
+            } else {
+                println!("\n  Processing time: {:.2?}", elapsed);
+            }
         }
 
         HydrologyCommands::All {

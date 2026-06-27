@@ -9,6 +9,43 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+### Added
+
+- **Melton ruggedness ratio** (`hydrology::melton_ruggedness`) — per-basin
+  relief energy `(H_max − H_min) / √area`, a first-order debris-flow / lahar
+  screening metric (Melton 1965; classes after Wilford et al. 2004). New CLI
+  `hydrology melton <watersheds> --dem <dem> --cell-size <m> [--output <ratio.tif>]`
+  prints a per-basin table with a geomorphic class and can write the ratio back
+  as a per-basin raster for use as a susceptibility conditioning factor.
+- **Cloud module in the Python bindings** (`cloud` feature, on by default) — the
+  PyPI wheel now exposes remote I/O so a full pipeline can live in one process:
+  `cog_fetch(url, bbox)`, `cog_fetch_full(url)`, `cog_info(url)`,
+  `stac_search(catalog, bbox=, datetime=, collections=, limit=)` and
+  `stac_sign_href(href, collection)` (Planetary Computer SAS signing). Fetches
+  return `(numpy_f64_array, meta)` where `meta["transform"]` is GDAL-order
+  (`rasterio.transform.Affine.from_gdal(*meta["transform"])`). Datetimes are
+  normalised to RFC 3339 so strict catalogs (Earth Search) accept bare dates.
+  Disable with `--no-default-features` for pure-compute wheels.
+- **SAR water / flood primitives** (`imagery::sar`) — `linear_to_db` /
+  `db_to_linear` backscatter unit conversion, `dual_pol_water_index`
+  ((VV − VH)/(VV + VH)), and `sar_water_mask` (threshold → binary u8 water mask,
+  1=water / 0=land / 255=nodata). New CLI `imagery sar-db`, `imagery
+  sar-water-index --co-pol --cross-pol`, and `imagery sar-water-mask --threshold
+  [--water-above]`. Multi-temporal backscatter compositing and amplitude change
+  detection reuse the existing `temporal_min` / `median_composite` and
+  `raster_difference` / `ir_mad`. A Lee / refined-Lee speckle filter is a
+  tracked follow-up.
+
+  All three were requested by a multi-hazard susceptibility study in Ñuble,
+  Chile (volcanic/lahar, landslide, wildfire, flood around Nevados de Chillán).
+
+### Changed
+
+- **Verbose COG tile-decode diagnostics are now opt-in.** The `[cog]` / `[pred]`
+  per-read tile logging (added while fixing the `bps=15` striping bug) is
+  silenced by default and re-enabled with `SURTGIS_COG_DEBUG=1`. FATAL decode
+  errors are still always printed. Keeps the Python `cog_fetch` output clean.
+
 ## [0.15.5] - 2026-06-24
 
 ### Added
