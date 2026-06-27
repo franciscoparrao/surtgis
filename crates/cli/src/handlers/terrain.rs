@@ -7,21 +7,21 @@ use surtgis_algorithms::terrain::{
     AspectOutput, AspectStreaming, CircularVarianceParams, CircularVarianceStreaming,
     ConvergenceParams, ConvergenceStreaming, CurvatureParams, CurvatureStreaming, CurvatureType,
     DevParams, DevStreaming, DiffFromMeanParams, DiffFromMeanStreaming, DirectionalReliefParams,
-    DownslopeIndexParams, EastnessStreaming, EdgeDensityParams, GeomorphonParams, HillshadeParams,
-    HillshadeStreaming, LandformParams, LsFactorParams, MrvbfParams, MultiHillshadeParams,
-    MultiHillshadeStreaming, NormalDeviationParams, NormalDeviationStreaming, NorthnessStreaming,
-    OpennessParams, PennockParams, PercentElevRangeParams, PercentElevRangeStreaming,
-    RelativeAspectParams, SarParams, SlopeParams, SlopeStreaming, SlopeUnits,
-    SphericalStdDevParams, SphericalStdDevStreaming, SvfParams, TpiParams, TpiStreaming, TriParams,
-    TriStreaming, ViewshedParams, VrmParams, VrmStreaming, advanced_curvatures, aspect,
-    circular_variance_aspect, convergence_index, curvature, dev, diff_from_mean_elev,
-    directional_relief, downslope_index, eastness, edge_density, elev_above_pit,
-    elev_relative_to_min_max, geomorphons, hillshade, hypsometric_hillshade,
-    landform_classification, ls_factor, max_branch_length, mrvbf, multidirectional_hillshade,
-    negative_openness, neighbour_stats, normal_vector_deviation, northness, pennock,
-    percent_elev_range, positive_openness, relative_aspect, relative_slope_position,
-    sky_view_factor, slope, spherical_std_dev, surface_area_ratio, tpi, tri, valley_depth,
-    viewshed, vrm,
+    DownslopeIndexParams, EastnessStreaming, EdgeDensityParams, ExcessTopographyParams,
+    GeomorphonParams, HillshadeParams, HillshadeStreaming, LandformParams, LsFactorParams,
+    MrvbfParams, MultiHillshadeParams, MultiHillshadeStreaming, NormalDeviationParams,
+    NormalDeviationStreaming, NorthnessStreaming, OpennessParams, PennockParams,
+    PercentElevRangeParams, PercentElevRangeStreaming, RelativeAspectParams, SarParams,
+    SlopeParams, SlopeStreaming, SlopeUnits, SphericalStdDevParams, SphericalStdDevStreaming,
+    SvfParams, TpiParams, TpiStreaming, TriParams, TriStreaming, ViewshedParams, VrmParams,
+    VrmStreaming, advanced_curvatures, aspect, circular_variance_aspect, convergence_index,
+    curvature, dev, diff_from_mean_elev, directional_relief, downslope_index, eastness,
+    edge_density, elev_above_pit, elev_relative_to_min_max, excess_topography, geomorphons,
+    hillshade, hypsometric_hillshade, landform_classification, ls_factor, max_branch_length, mrvbf,
+    multidirectional_hillshade, negative_openness, neighbour_stats, normal_vector_deviation,
+    northness, pennock, percent_elev_range, positive_openness, relative_aspect,
+    relative_slope_position, sky_view_factor, slope, spherical_std_dev, surface_area_ratio, tpi,
+    tri, valley_depth, viewshed, vrm,
 };
 use surtgis_core::StripProcessor;
 
@@ -1360,6 +1360,29 @@ pub fn handle(
             pb.finish_and_clear();
             write_result(&result, &output, compress)?;
             done("Max Branch Length", &output, start.elapsed());
+        }
+
+        TerrainCommands::ExcessTopography {
+            input,
+            output,
+            threshold,
+            max_iterations,
+        } => {
+            let dem = read_dem(&input)?;
+            let start = Instant::now();
+            let pb = spinner("Computing excess topography (fast sweeping)...");
+            let result = excess_topography(
+                &dem,
+                ExcessTopographyParams {
+                    threshold_degrees: threshold,
+                    max_iterations,
+                    tolerance: 1e-4,
+                },
+            )
+            .context("Failed to compute excess topography")?;
+            pb.finish_and_clear();
+            write_result(&result, &output, compress)?;
+            done("Excess Topography", &output, start.elapsed());
         }
 
         TerrainCommands::All { input, outdir } => {

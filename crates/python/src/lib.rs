@@ -95,6 +95,7 @@ use surtgis_algorithms::terrain::{
     CurvatureType,
     DerivativeMethod,
     DevParams,
+    ExcessTopographyParams,
     GaussianSmoothingParams,
     GeomorphonParams,
     HillshadeParams,
@@ -124,6 +125,7 @@ use surtgis_algorithms::terrain::{
     curvedness as compute_curvedness,
     dev as compute_dev,
     eastness,
+    excess_topography as compute_excess_topography,
     feature_preserving_smoothing as compute_fps,
     gaussian_smoothing as compute_gaussian_smoothing,
     geomorphons as compute_geomorphons,
@@ -2469,6 +2471,37 @@ fn sar_lee_filter<'py>(
     Ok(raster_to_numpy(py, &out))
 }
 
+/// Excess topography above a threshold hillslope angle (Blöthe et al. 2015).
+///
+/// Args:
+///     dem: 2D numpy array (f64) of elevations.
+///     threshold_degrees: threshold hillslope angle (0 < θ < 90), default 30.
+///     cell_size: cell size in map units.
+///     max_iterations: max fast-sweeping rounds (default 200).
+/// Returns:
+///     2D numpy array (f64): excess height (z − slope-limited surface), >= 0.
+#[pyfunction]
+#[pyo3(signature = (dem, threshold_degrees=30.0, cell_size=1.0, max_iterations=200))]
+fn excess_topography_compute<'py>(
+    py: Python<'py>,
+    dem: PyReadonlyArray2<'py, f64>,
+    threshold_degrees: f64,
+    cell_size: f64,
+    max_iterations: usize,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let raster = numpy_to_raster(&dem, cell_size)?;
+    let out = compute_excess_topography(
+        &raster,
+        ExcessTopographyParams {
+            threshold_degrees,
+            max_iterations,
+            tolerance: 1e-4,
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(raster_to_numpy(py, &out))
+}
+
 // ===========================================================================
 // Melton ruggedness ratio (hydrology::melton)
 // ===========================================================================
@@ -2644,6 +2677,9 @@ fn surtgis(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(sar_dual_pol_water_index, m)?)?;
     m.add_function(wrap_pyfunction!(sar_water_mask, m)?)?;
     m.add_function(wrap_pyfunction!(sar_lee_filter, m)?)?;
+
+    // Excess topography
+    m.add_function(wrap_pyfunction!(excess_topography_compute, m)?)?;
 
     // Melton ruggedness ratio
     m.add_function(wrap_pyfunction!(melton_ruggedness_compute, m)?)?;

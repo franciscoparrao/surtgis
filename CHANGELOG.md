@@ -11,6 +11,13 @@ call them out under a `Breaking` heading when they happen.
 
 ### Added
 
+- **Excess topography** (`terrain::excess_topography`) — the height of terrain
+  above a threshold hillslope angle (Blöthe, Korup & Schwanghart 2015), a
+  first-rate landslide conditioning factor. Reconstructs the maximal
+  slope-limited surface `S ≤ z` with `|∇S| ≤ tan θ` via the fast sweeping
+  method (Zhao 2005, as in TopoToolbox's `fsm2d`) and reports `z − S ≥ 0`.
+  CLI `terrain excess-topography --threshold <deg>`; Python
+  `excess_topography_compute`. Validated against an analytic ramp. 4 unit tests.
 - **Lee speckle filter** (`imagery::lee_filter`) — the classic Lee (1980)
   adaptive MMSE filter for SAR multiplicative speckle. Smooths homogeneous
   areas toward the local mean while preserving edges and point targets, with an
