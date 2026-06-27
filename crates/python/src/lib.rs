@@ -17,6 +17,7 @@ use surtgis_algorithms::classification::{
 use surtgis_algorithms::hydrology::{
     AdaptiveMfdParams,
     BreachParams,
+    EnergyConeParams,
     FillSinksParams,
     HandParams,
     MfdParams,
@@ -25,6 +26,7 @@ use surtgis_algorithms::hydrology::{
     TfgaParams,
     WatershedParams,
     breach_depressions,
+    energy_cone as compute_energy_cone,
     fill_sinks,
     flow_accumulation,
     flow_accumulation_mfd,
@@ -2502,6 +2504,39 @@ fn excess_topography_compute<'py>(
     Ok(raster_to_numpy(py, &out))
 }
 
+/// Energy-cone lahar / mass-flow inundation (Malin & Sheridan 1982).
+///
+/// Args:
+///     dem: 2D numpy array (f64) of elevations.
+///     sources: list of (row, col) source cells.
+///     cone_angle_degrees: energy-cone angle φ (H/L = tan φ); smaller = more mobile.
+///     collapse_height: height added to the source elevation to set the apex.
+///     cell_size: cell size in map units.
+/// Returns:
+///     2D numpy array (f64): energy height above ground (>0 = reached, 0 = not).
+#[pyfunction]
+#[pyo3(signature = (dem, sources, cone_angle_degrees=10.0, collapse_height=0.0, cell_size=1.0))]
+fn energy_cone_compute<'py>(
+    py: Python<'py>,
+    dem: PyReadonlyArray2<'py, f64>,
+    sources: Vec<(usize, usize)>,
+    cone_angle_degrees: f64,
+    collapse_height: f64,
+    cell_size: f64,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let raster = numpy_to_raster(&dem, cell_size)?;
+    let out = compute_energy_cone(
+        &raster,
+        EnergyConeParams {
+            sources,
+            cone_angle_degrees,
+            collapse_height,
+        },
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(raster_to_numpy(py, &out))
+}
+
 // ===========================================================================
 // Melton ruggedness ratio (hydrology::melton)
 // ===========================================================================
@@ -2680,6 +2715,9 @@ fn surtgis(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Excess topography
     m.add_function(wrap_pyfunction!(excess_topography_compute, m)?)?;
+
+    // Energy-cone lahar inundation
+    m.add_function(wrap_pyfunction!(energy_cone_compute, m)?)?;
 
     // Melton ruggedness ratio
     m.add_function(wrap_pyfunction!(melton_ruggedness_compute, m)?)?;

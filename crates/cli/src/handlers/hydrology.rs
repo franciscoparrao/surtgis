@@ -4,12 +4,12 @@ use anyhow::{Context, Result};
 use std::time::Instant;
 
 use surtgis_algorithms::hydrology::{
-    BreachParams, DrainageDensityParams, FillSinksParams, HandParams, MfdParams,
+    BreachParams, DrainageDensityParams, EnergyConeParams, FillSinksParams, HandParams, MfdParams,
     PriorityFloodParams, SedimentConnectivityParams, StreamNetworkParams, WatershedParams,
-    basin_morphometry, breach_depressions, drainage_density, fill_sinks, flow_accumulation,
-    flow_accumulation_dinf, flow_accumulation_mfd, flow_direction, flow_direction_dinf, hand,
-    hypsometric_integral, melton_ruggedness, priority_flood, sediment_connectivity, stream_network,
-    watershed,
+    basin_morphometry, breach_depressions, drainage_density, energy_cone, fill_sinks,
+    flow_accumulation, flow_accumulation_dinf, flow_accumulation_mfd, flow_direction,
+    flow_direction_dinf, hand, hypsometric_integral, melton_ruggedness, priority_flood,
+    sediment_connectivity, stream_network, watershed,
 };
 use surtgis_algorithms::terrain::{SlopeParams, SlopeUnits, slope, twi};
 
@@ -391,6 +391,29 @@ pub fn handle(
             } else {
                 println!("\n  Processing time: {:.2?}", elapsed);
             }
+        }
+
+        HydrologyCommands::EnergyCone {
+            input,
+            output,
+            source,
+            cone_angle,
+            collapse_height,
+        } => {
+            let dem = read_dem(&input)?;
+            let sources = parse_pour_points(&source)?;
+            let start = Instant::now();
+            let result = energy_cone(
+                &dem,
+                EnergyConeParams {
+                    sources,
+                    cone_angle_degrees: cone_angle,
+                    collapse_height,
+                },
+            )
+            .context("Failed to compute energy-cone inundation")?;
+            write_result(&result, &output, compress)?;
+            done("Energy cone", &output, start.elapsed());
         }
 
         HydrologyCommands::All {
