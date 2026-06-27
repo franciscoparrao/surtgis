@@ -1084,6 +1084,22 @@ pub enum HydrologyCommands {
         #[arg(long)]
         output: Option<PathBuf>,
     },
+    /// Energy-cone lahar / mass-flow inundation (Malin & Sheridan 1982)
+    EnergyCone {
+        /// Input DEM file
+        input: PathBuf,
+        /// Output energy-height-above-ground raster (>0 = reached)
+        output: PathBuf,
+        /// Source cell(s) as "row,col" (multiple separated by ';')
+        #[arg(long)]
+        source: String,
+        /// Energy-cone angle φ in degrees (H/L = tan φ); smaller = more mobile
+        #[arg(long, default_value = "10.0")]
+        cone_angle: f64,
+        /// Collapse height added to the source elevation to set the apex
+        #[arg(long, default_value = "0.0")]
+        collapse_height: f64,
+    },
     /// Compute full hydrology pipeline from DEM
     All {
         /// Input DEM file

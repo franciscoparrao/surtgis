@@ -11,6 +11,15 @@ call them out under a `Breaking` heading when they happen.
 
 ### Added
 
+- **Energy-cone inundation** (`hydrology::energy_cone`) — the Malin & Sheridan
+  (1982) energy-line model for volcanic mass-flow / lahar runout. From one or
+  more sources an energy line descends at angle `φ` (`H/L = tan φ`); a cell is
+  reached where the line lies above the ground, and the output is the energy
+  height above ground `max(0, E − z)`. CLI `hydrology energy-cone --source
+  "r,c" --cone-angle --collapse-height`; Python `energy_cone_compute`. 5 unit
+  tests incl. an analytic flat-disc case. Pairs with the Melton ruggedness
+  ratio; a valley-confined LAHARZ (Iverson et al. 1998) model remains a
+  follow-up.
 - **Excess topography** (`terrain::excess_topography`) — the height of terrain
   above a threshold hillslope angle (Blöthe, Korup & Schwanghart 2015), a
   first-rate landslide conditioning factor. Reconstructs the maximal

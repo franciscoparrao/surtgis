@@ -13,6 +13,7 @@ mod advanced;
 mod basin_morphometry;
 mod breach;
 mod drainage_density;
+mod energy_cone;
 pub(crate) mod fill_sinks;
 pub(crate) mod flow_accumulation;
 pub(crate) mod flow_direction;
@@ -37,6 +38,7 @@ pub use advanced::{
 pub use basin_morphometry::{BasinMorphometry, basin_morphometry};
 pub use breach::{BreachParams, breach_depressions};
 pub use drainage_density::{DrainageDensityParams, drainage_density};
+pub use energy_cone::{EnergyConeParams, energy_cone};
 pub use fill_sinks::{FillSinks, FillSinksParams, fill_sinks};
 pub use flow_accumulation::{FlowAccumulation, flow_accumulation};
 pub use flow_direction::{FlowDirection, flow_direction};
