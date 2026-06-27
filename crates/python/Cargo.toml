@@ -13,13 +13,18 @@ name = "surtgis"
 crate-type = ["cdylib"]
 
 [features]
-default = ["parallel"]
+default = ["parallel", "cloud"]
 parallel = ["surtgis-algorithms/parallel"]
+# Remote I/O (COG reader + STAC client) in the Python wheel. Pulls tokio +
+# reqwest/rustls. On by default; disable with --no-default-features for
+# pure-compute / minimal-toolchain builds.
+cloud = ["dep:surtgis-cloud"]
 
 [dependencies]
 surtgis-core = { version = "0.15", path = "../core", default-features = false }
 surtgis-algorithms = { version = "0.15", path = "../algorithms", default-features = false }
 surtgis-relief = { version = "0.15", path = "../relief" }
 surtgis-colormap = { version = "0.15", path = "../colormap" }
+surtgis-cloud = { version = "0.15", path = "../cloud", features = ["native"], optional = true }
 pyo3.workspace = true
 numpy.workspace = true

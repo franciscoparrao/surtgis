@@ -145,11 +145,19 @@ fn parse_wkb_point(wkb: &[u8]) -> Result<(f64, f64)> {
     };
     let u32_at = |off: usize| -> u32 {
         let b: [u8; 4] = wkb[off..off + 4].try_into().unwrap();
-        if le { u32::from_le_bytes(b) } else { u32::from_be_bytes(b) }
+        if le {
+            u32::from_le_bytes(b)
+        } else {
+            u32::from_be_bytes(b)
+        }
     };
     let f64_at = |off: usize| -> f64 {
         let b: [u8; 8] = wkb[off..off + 8].try_into().unwrap();
-        if le { f64::from_le_bytes(b) } else { f64::from_be_bytes(b) }
+        if le {
+            f64::from_le_bytes(b)
+        } else {
+            f64::from_be_bytes(b)
+        }
     };
     let geom_type = u32_at(1);
     // Accept plain (1) and EWKB-with-SRID (0x20000001) points
@@ -162,9 +170,7 @@ fn parse_wkb_point(wkb: &[u8]) -> Result<(f64, f64)> {
     }
     let coord_off = if has_srid { 9 } else { 5 };
     if wkb.len() < coord_off + 16 {
-        return Err(Error::Other(
-            "geoparquet: truncated WKB point".into(),
-        ));
+        return Err(Error::Other("geoparquet: truncated WKB point".into()));
     }
     Ok((f64_at(coord_off), f64_at(coord_off + 8)))
 }
@@ -249,7 +255,10 @@ pub fn write_geoparquet_points<P: AsRef<Path>>(table: &PointTable, path: P) -> R
 
     let mut metadata = vec![KeyValue::new("geo".to_string(), geo_metadata(table))];
     if let Some(epsg) = table.epsg {
-        metadata.push(KeyValue::new(EPSG_METADATA_KEY.to_string(), epsg.to_string()));
+        metadata.push(KeyValue::new(
+            EPSG_METADATA_KEY.to_string(),
+            epsg.to_string(),
+        ));
     }
     let props = Arc::new(
         WriterProperties::builder()
@@ -260,8 +269,8 @@ pub fn write_geoparquet_points<P: AsRef<Path>>(table: &PointTable, path: P) -> R
 
     let file = File::create(path.as_ref())
         .map_err(|e| Error::Other(format!("geoparquet: cannot create file: {}", e)))?;
-    let mut writer = SerializedFileWriter::new(file, schema, props)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    let mut writer =
+        SerializedFileWriter::new(file, schema, props).map_err(|e| Error::Other(e.to_string()))?;
 
     let mut rg = writer
         .next_row_group()
@@ -309,8 +318,7 @@ pub fn write_geoparquet_points<P: AsRef<Path>>(table: &PointTable, path: P) -> R
                     .map_err(|e| Error::Other(e.to_string()))?;
             }
             ColumnData::Str(v) => {
-                let bytes: Vec<ByteArray> =
-                    v.iter().map(|s| ByteArray::from(s.as_str())).collect();
+                let bytes: Vec<ByteArray> = v.iter().map(|s| ByteArray::from(s.as_str())).collect();
                 col.typed::<ByteArrayType>()
                     .write_batch(&bytes, None, None)
                     .map_err(|e| Error::Other(e.to_string()))?;
@@ -526,8 +534,7 @@ pub fn read_geoparquet<P: AsRef<Path>>(path: P) -> Result<FeatureCollection> {
     let mut fc = FeatureCollection::new();
     for i in 0..table.len() {
         let mut feature = Feature::new(geo::Geometry::Point(geo::Point::new(
-            table.x[i],
-            table.y[i],
+            table.x[i], table.y[i],
         )));
         for col in &table.columns {
             let value = match &col.data {

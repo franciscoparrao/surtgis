@@ -170,7 +170,10 @@ pub fn write_cube_zarr<P: AsRef<Path>>(cube: &Cube<f64>, path: P) -> Result<()> 
     fs::create_dir_all(dir)
         .map_err(|e| CloudError::Zarr(format!("zarr write: mkdir store: {}", e)))?;
 
-    write_json(&dir.join(".zgroup"), &serde_json::json!({ "zarr_format": 2 }))?;
+    write_json(
+        &dir.join(".zgroup"),
+        &serde_json::json!({ "zarr_format": 2 }),
+    )?;
     let epsg = cube.slice(0, 0).unwrap().crs().and_then(|c| c.epsg());
     write_json(&dir.join(".zattrs"), &group_attrs(epsg, cube.transform()))?;
 
@@ -216,7 +219,10 @@ pub fn write_raster_zarr<P: AsRef<Path>>(
     fs::create_dir_all(dir)
         .map_err(|e| CloudError::Zarr(format!("zarr write: mkdir store: {}", e)))?;
 
-    write_json(&dir.join(".zgroup"), &serde_json::json!({ "zarr_format": 2 }))?;
+    write_json(
+        &dir.join(".zgroup"),
+        &serde_json::json!({ "zarr_format": 2 }),
+    )?;
     let epsg = raster.crs().and_then(|c| c.epsg());
     write_json(&dir.join(".zattrs"), &group_attrs(epsg, raster.transform()))?;
 
@@ -271,7 +277,7 @@ mod tests {
     use super::*;
     use surtgis_core::{GeoTransform, Raster};
     use zarrs::array::{Array, ArraySubset};
-    
+
     use zarrs::filesystem::FilesystemStore;
 
     fn slice(rows: usize, cols: usize, base: f64) -> Raster<f64> {

@@ -3,9 +3,7 @@
 use anyhow::{Context, Result};
 use std::time::Instant;
 
-use surtgis_algorithms::segmentation::{
-    FelzenszwalbParams, SlicParams, felzenszwalb, slic,
-};
+use surtgis_algorithms::segmentation::{FelzenszwalbParams, SlicParams, felzenszwalb, slic};
 
 use crate::commands::SegmentationCommands;
 use crate::helpers::{done, read_dem, spinner, write_result_i32};
@@ -64,11 +62,8 @@ pub fn handle(algorithm: SegmentationCommands, compress: bool) -> Result<()> {
                 min_size,
                 bands.len()
             ));
-            let result = felzenszwalb(
-                &refs,
-                FelzenszwalbParams { scale, min_size },
-            )
-            .context("Felzenszwalb failed")?;
+            let result = felzenszwalb(&refs, FelzenszwalbParams { scale, min_size })
+                .context("Felzenszwalb failed")?;
             pb.finish_and_clear();
             write_result_i32(&result, &output, compress)?;
             done("Felzenszwalb", &output, start.elapsed());

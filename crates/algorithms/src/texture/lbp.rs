@@ -222,11 +222,7 @@ mod tests {
 
     #[test]
     fn nan_neighbour_propagates() {
-        let r = raster_from_grid(&[
-            &[1.0, 2.0, 3.0],
-            &[4.0, 5.0, f64::NAN],
-            &[7.0, 8.0, 9.0],
-        ]);
+        let r = raster_from_grid(&[&[1.0, 2.0, 3.0], &[4.0, 5.0, f64::NAN], &[7.0, 8.0, 9.0]]);
         let result = lbp(&r, LbpParams::default()).unwrap();
         assert!(result.get(1, 1).unwrap().is_nan());
     }

@@ -312,16 +312,15 @@ mod tests {
         let bg = out_no_min.get(0, 0).unwrap();
         assert_ne!(singleton, bg);
         // With min_size=5 it gets absorbed.
-        assert_eq!(out_with_min.get(3, 3).unwrap(), out_with_min.get(0, 0).unwrap());
+        assert_eq!(
+            out_with_min.get(3, 3).unwrap(),
+            out_with_min.get(0, 0).unwrap()
+        );
     }
 
     #[test]
     fn nan_pixels_emit_sentinel() {
-        let mut r = raster_from_grid(&[
-            &[0.0, 0.0, 0.0],
-            &[0.0, f64::NAN, 0.0],
-            &[0.0, 0.0, 0.0],
-        ]);
+        let mut r = raster_from_grid(&[&[0.0, 0.0, 0.0], &[0.0, f64::NAN, 0.0], &[0.0, 0.0, 0.0]]);
         let _ = &mut r; // settle the borrow
         let out = felzenszwalb(&[&r], FelzenszwalbParams::default()).unwrap();
         assert_eq!(out.get(1, 1).unwrap(), 0);

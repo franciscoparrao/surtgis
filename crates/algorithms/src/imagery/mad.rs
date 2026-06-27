@@ -102,9 +102,7 @@ pub fn mad(t1: &[&Raster<f64>], t2: &[&Raster<f64>]) -> Result<MadResult> {
     let valid_mask = build_valid_mask(t1, t2, rows, cols);
     let n_valid = valid_mask.iter().filter(|v| **v).count();
     if n_valid < 2 {
-        return Err(Error::Algorithm(
-            "MAD: need ≥2 valid pixels".into(),
-        ));
+        return Err(Error::Algorithm("MAD: need ≥2 valid pixels".into()));
     }
     let weights: Option<&[f64]> = None;
     let (a, b_vec, rhos) = solve_cca(t1, t2, &valid_mask, weights, 0.0, b)?;
@@ -128,9 +126,7 @@ pub fn ir_mad(
     let n_px = rows * cols;
     let n_valid = valid_mask.iter().filter(|v| **v).count();
     if n_valid < 2 {
-        return Err(Error::Algorithm(
-            "IR-MAD: need ≥2 valid pixels".into(),
-        ));
+        return Err(Error::Algorithm("IR-MAD: need ≥2 valid pixels".into()));
     }
 
     let mut weights: Vec<f64> = vec![1.0; n_px];
@@ -142,8 +138,14 @@ pub fn ir_mad(
 
     for it in 1..=params.max_iter {
         n_iter = it;
-        let (na, nb, nr) =
-            solve_cca(t1, t2, &valid_mask, Some(&weights), params.regularisation, b)?;
+        let (na, nb, nr) = solve_cca(
+            t1,
+            t2,
+            &valid_mask,
+            Some(&weights),
+            params.regularisation,
+            b,
+        )?;
         a = na;
         bv = nb;
         rhos = nr;
@@ -209,10 +211,7 @@ pub fn ir_mad(
 
 // ─── Shared CCA core ────────────────────────────────────────────────
 
-fn validate_inputs(
-    t1: &[&Raster<f64>],
-    t2: &[&Raster<f64>],
-) -> Result<(usize, usize, usize)> {
+fn validate_inputs(t1: &[&Raster<f64>], t2: &[&Raster<f64>]) -> Result<(usize, usize, usize)> {
     if t1.is_empty() {
         return Err(Error::Algorithm("MAD: need ≥1 band".into()));
     }
@@ -226,9 +225,7 @@ fn validate_inputs(
     let (rows, cols) = t1[0].shape();
     for r in t1.iter().chain(t2.iter()) {
         if r.shape() != (rows, cols) {
-            return Err(Error::Algorithm(
-                "MAD: all bands must share shape".into(),
-            ));
+            return Err(Error::Algorithm("MAD: all bands must share shape".into()));
         }
     }
     Ok((rows, cols, t1.len()))
@@ -730,7 +727,9 @@ mod tests {
         let r1_t2 = r1_t1.clone();
         for row in 8..12 {
             for col in 8..12 {
-                r0_t2.set(row, col, r0_t2.get(row, col).unwrap() + 50.0).unwrap();
+                r0_t2
+                    .set(row, col, r0_t2.get(row, col).unwrap() + 50.0)
+                    .unwrap();
             }
         }
         let result = mad(&[&r0_t1, &r1_t1], &[&r0_t2, &r1_t2]).unwrap();
@@ -772,8 +771,12 @@ mod tests {
         for row in 0..15 {
             for col in 0..15 {
                 let n = ((row * 7 + col * 13) % 11) as f64 - 5.0;
-                r0_t2.set(row, col, r0_t2.get(row, col).unwrap() + 0.3 * n).unwrap();
-                r1_t2.set(row, col, r1_t2.get(row, col).unwrap() + 0.2 * n).unwrap();
+                r0_t2
+                    .set(row, col, r0_t2.get(row, col).unwrap() + 0.3 * n)
+                    .unwrap();
+                r1_t2
+                    .set(row, col, r1_t2.get(row, col).unwrap() + 0.2 * n)
+                    .unwrap();
             }
         }
         let result = mad(&[&r0_t1, &r1_t1], &[&r0_t2, &r1_t2]).unwrap();
@@ -813,7 +816,9 @@ mod tests {
         let r1_t2 = r1_t1.clone();
         for row in 8..12 {
             for col in 8..12 {
-                r0_t2.set(row, col, r0_t2.get(row, col).unwrap() + 50.0).unwrap();
+                r0_t2
+                    .set(row, col, r0_t2.get(row, col).unwrap() + 50.0)
+                    .unwrap();
             }
         }
         let res = ir_mad(

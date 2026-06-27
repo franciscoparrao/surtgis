@@ -18,7 +18,8 @@ fn cube_from_three_dated_geotiffs() {
         r.set_nodata(Some(f64::NAN));
         for row in 0..rows {
             for col in 0..cols {
-                r.set(row, col, (i * 1000 + row * cols + col) as f64).unwrap();
+                r.set(row, col, (i * 1000 + row * cols + col) as f64)
+                    .unwrap();
             }
         }
         let path = dir.path().join(format!("ndvi_{}.tif", t));

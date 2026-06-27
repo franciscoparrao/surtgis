@@ -22,6 +22,7 @@ mod flow_direction_mfd_adaptive;
 mod flow_direction_tfga;
 mod hand;
 mod hypsometric;
+mod melton;
 mod nested_depressions;
 mod priority_flood;
 mod sediment_connectivity;
@@ -39,14 +40,13 @@ pub use drainage_density::{DrainageDensityParams, drainage_density};
 pub use fill_sinks::{FillSinks, FillSinksParams, fill_sinks};
 pub use flow_accumulation::{FlowAccumulation, flow_accumulation};
 pub use flow_direction::{FlowDirection, flow_direction};
-pub use flow_direction_dinf::{
-    DinfResult, flow_accumulation_dinf, flow_dinf, flow_direction_dinf,
-};
+pub use flow_direction_dinf::{DinfResult, flow_accumulation_dinf, flow_dinf, flow_direction_dinf};
 pub use flow_direction_mfd::{MfdParams, flow_accumulation_mfd};
 pub use flow_direction_mfd_adaptive::{AdaptiveMfdParams, flow_accumulation_mfd_adaptive};
 pub use flow_direction_tfga::{TfgaParams, flow_accumulation_tfga};
 pub use hand::{HandParams, hand};
 pub use hypsometric::hypsometric_integral;
+pub use melton::{MeltonRuggedness, melton_ruggedness};
 pub use nested_depressions::{
     Depression, NestedDepressionParams, NestedDepressionResult, nested_depressions,
 };

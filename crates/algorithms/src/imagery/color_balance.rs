@@ -73,15 +73,14 @@ pub fn histogram_match(source: &Raster<f64>, reference: &Raster<f64>) -> Result<
             let lo = pos.floor() as usize;
             let hi = (lo + 1).min(n_ref - 1);
             let frac = pos - lo as f64;
-            out_data[row * cols + col] =
-                ref_sorted[lo] * (1.0 - frac) + ref_sorted[hi] * frac;
+            out_data[row * cols + col] = ref_sorted[lo] * (1.0 - frac) + ref_sorted[hi] * frac;
         }
     }
 
     let mut out = source.with_same_meta::<f64>(rows, cols);
     out.set_nodata(Some(f64::NAN));
-    *out.data_mut() = Array2::from_shape_vec((rows, cols), out_data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *out.data_mut() =
+        Array2::from_shape_vec((rows, cols), out_data).map_err(|e| Error::Other(e.to_string()))?;
     Ok(out)
 }
 
@@ -110,8 +109,8 @@ pub fn moment_match(source: &Raster<f64>, reference: &Raster<f64>) -> Result<Ras
     }
     let mut out = source.with_same_meta::<f64>(rows, cols);
     out.set_nodata(Some(f64::NAN));
-    *out.data_mut() = Array2::from_shape_vec((rows, cols), out_data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *out.data_mut() =
+        Array2::from_shape_vec((rows, cols), out_data).map_err(|e| Error::Other(e.to_string()))?;
     Ok(out)
 }
 
@@ -144,7 +143,8 @@ mod tests {
         r.set_transform(GeoTransform::new(0.0, rows as f64, 1.0, -1.0));
         for row in 0..rows {
             for col in 0..cols {
-                r.set(row, col, offset + scale * (row + col) as f64).unwrap();
+                r.set(row, col, offset + scale * (row + col) as f64)
+                    .unwrap();
             }
         }
         r

@@ -107,9 +107,7 @@ pub fn dn_to_reflectance_s2(
     params: S2ReflectanceParams,
 ) -> Result<Raster<f64>> {
     if params.quantification_value <= 0.0 {
-        return Err(Error::Algorithm(
-            "quantification_value must be > 0".into(),
-        ));
+        return Err(Error::Algorithm("quantification_value must be > 0".into()));
     }
     let nodata = raster.nodata();
     let q = params.quantification_value;

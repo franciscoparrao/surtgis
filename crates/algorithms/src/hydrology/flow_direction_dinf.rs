@@ -538,7 +538,8 @@ mod tests {
             for col in 0..5 {
                 let dr = row as f64 - 2.0;
                 let dc = col as f64 - 2.0;
-                dem.set(row, col, (dr * dr + dc * dc).sqrt() * 10.0).unwrap();
+                dem.set(row, col, (dr * dr + dc * dc).sqrt() * 10.0)
+                    .unwrap();
             }
         }
 

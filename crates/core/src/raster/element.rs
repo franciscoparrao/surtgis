@@ -23,9 +23,7 @@ use std::fmt::Debug;
 /// `Zero` provides the fill value for [`Raster::new`](super::Raster::new);
 /// the nodata methods define the type's missing-data convention
 /// (NaN-based for floats and complex, sentinel-based for integers).
-pub trait RasterCell:
-    Copy + Clone + Debug + PartialEq + Zero + Send + Sync + 'static
-{
+pub trait RasterCell: Copy + Clone + Debug + PartialEq + Zero + Send + Sync + 'static {
     /// Default no-data value for this type
     fn default_nodata() -> Self;
 
