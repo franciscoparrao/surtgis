@@ -9,22 +9,33 @@
 //! B = c_B · V^(2/3)     planimetric (map-view) inundation area
 //! ```
 //!
-//! Starting from a user-supplied source on the drainage, the model marches
-//! downstream along the D8 flow path. At each step it raises an inundation
-//! stage on the valley-perpendicular transect until the wetted cross-section
-//! reaches `A`, marking the flooded cells and their depth. It accumulates the
-//! planimetric area of newly flooded cells and stops once that area reaches
-//! `B`. The result is a downstream-tapering inundation footprint.
+//! Starting from one or more user-supplied sources on the drainage, the model
+//! marches downstream along the D8 flow path. At each step it raises an
+//! inundation stage on the valley-perpendicular transect until the wetted
+//! cross-section reaches `A`, marking the flooded cells and their depth. It
+//! accumulates the planimetric area of newly flooded cells and stops once that
+//! area reaches `B`. The result is a downstream-tapering inundation footprint;
+//! with several sources the footprint is their union.
 //!
 //! Coefficient pairs `(c_A, c_B)` are flow-type specific (Griswold & Iverson
-//! 2008): see [`LaharzFlowType`]. The source is typically placed at the outlet
-//! of a proximal hazard zone (e.g. from an energy cone — see
-//! [`crate::hydrology::energy_cone`]).
+//! 2008): see [`LaharzFlowType`].
 //!
-//! Scope: this is a single-path, D8-confined implementation with a stepped
+//! **Seeding matters.** Seed *proximal channel cells*, not the summit: a summit
+//! cell's D8 steepest descent often runs down the wrong side of a multi-drainage
+//! edifice (the steepest line from the peak need not coincide with the channels
+//! that actually carry the lahars). Pick source cells on the proximal reaches of
+//! the target drainages — for example channel heads inside the energy cone you
+//! already compute ([`crate::hydrology::energy_cone`]) — and pass them all.
+//!
+//! Scope / known limitation: single-path-per-source, D8-confined, with a stepped
 //! valley-perpendicular transect. It captures the LAHARZ volume scaling and
-//! cross-section filling; it does not split flow at distributary junctions or
-//! reproduce the original ArcInfo proximal-hazard-zone construction.
+//! cross-section filling but does not split flow at distributary junctions or
+//! reproduce the original ArcInfo proximal-hazard-zone construction. Note also
+//! that in steep, confined channels the cross-section fills mostly *vertically*,
+//! so small-to-moderate volumes can produce a long, narrow (near-thalweg)
+//! ribbon; the runout of the lowest volumes is the least trustworthy output and
+//! is a target for coefficient/cross-section calibration against documented
+//! events.
 //!
 //! # References
 //! - Iverson, R.M., Schilling, S.P., Vallance, J.W. (1998). Objective
@@ -74,29 +85,32 @@ impl LaharzFlowType {
 /// Parameters for [`laharz`].
 #[derive(Debug, Clone)]
 pub struct LaharzParams {
-    /// Source cell `(row, col)` on the drainage.
-    pub source: (usize, usize),
-    /// Flow volume in m³.
+    /// Source cells `(row, col)` on the drainage. **Seed proximal channel cells,
+    /// not the summit**: a summit cell's D8 steepest descent often runs down the
+    /// wrong drainage for a multi-drainage edifice. Several sources route as
+    /// independent flows and the footprint is their union.
+    pub sources: Vec<(usize, usize)>,
+    /// Flow volume in m³ (applied to each source).
     pub volume_m3: f64,
     /// Cross-sectional area coefficient `c_A` (overrides the flow-type default
     /// when set via [`LaharzParams::from_flow_type`] you get the preset).
     pub coeff_cross: f64,
     /// Planimetric area coefficient `c_B`.
     pub coeff_plan: f64,
-    /// Safety cap on the number of downstream path cells visited.
+    /// Safety cap on the number of downstream path cells visited per source.
     pub max_path_cells: usize,
 }
 
 impl LaharzParams {
-    /// Build parameters from a flow-type preset.
+    /// Build parameters from a flow-type preset, with one or more sources.
     pub fn from_flow_type(
-        source: (usize, usize),
+        sources: Vec<(usize, usize)>,
         volume_m3: f64,
         flow_type: LaharzFlowType,
     ) -> Self {
         let (c_a, c_b) = flow_type.coefficients();
         Self {
-            source,
+            sources,
             volume_m3,
             coeff_cross: c_a,
             coeff_plan: c_b,
@@ -139,16 +153,22 @@ pub fn laharz(
             ac: flow_dir.shape().1,
         });
     }
-    let (sr, sc) = params.source;
-    if sr >= rows || sc >= cols {
-        return Err(Error::Other(format!(
-            "source ({sr}, {sc}) is outside the {rows}x{cols} grid"
-        )));
-    }
     let nodata = dem.nodata();
     let is_nd = |v: f64| v.is_nan() || nodata.map(|nd| v == nd).unwrap_or(false);
-    if is_nd(unsafe { dem.get_unchecked(sr, sc) }) {
-        return Err(Error::Other("source falls on a nodata cell".into()));
+    if params.sources.is_empty() {
+        return Err(Error::Other("at least one source is required".into()));
+    }
+    for &(sr, sc) in &params.sources {
+        if sr >= rows || sc >= cols {
+            return Err(Error::Other(format!(
+                "source ({sr}, {sc}) is outside the {rows}x{cols} grid"
+            )));
+        }
+        if is_nd(unsafe { dem.get_unchecked(sr, sc) }) {
+            return Err(Error::Other(format!(
+                "source ({sr}, {sc}) falls on a nodata cell"
+            )));
+        }
     }
 
     let two_thirds = params.volume_m3.powf(2.0 / 3.0);
@@ -156,8 +176,7 @@ pub fn laharz(
     let b_plan = params.coeff_plan * two_thirds;
     let cell_area = cs * cs;
 
-    // Inundation depth output and the set of already-flooded cells (for the
-    // planimetric area B, counted once per cell).
+    // Inundation depth output (shared across sources; combined by max depth).
     let mut depth = dem.with_same_meta::<f64>(rows, cols);
     depth.set_nodata(Some(f64::NAN));
     for r in 0..rows {
@@ -167,74 +186,77 @@ pub fn laharz(
         }
     }
 
-    let mut flooded: HashSet<(usize, usize)> = HashSet::new();
-    let mut plan_area = 0.0_f64;
-
     let in_bounds = |r: isize, c: isize| r >= 0 && c >= 0 && r < rows as isize && c < cols as isize;
 
-    let (mut r, mut c) = (sr, sc);
-    let mut on_path: HashSet<(usize, usize)> = HashSet::new();
+    // Route each source independently — each gets its own planimetric budget B
+    // (an independent flow of the given volume) — and union the depths.
+    for &(sr, sc) in &params.sources {
+        let mut flooded: HashSet<(usize, usize)> = HashSet::new();
+        let mut plan_area = 0.0_f64;
+        let mut on_path: HashSet<(usize, usize)> = HashSet::new();
+        let (mut r, mut c) = (sr, sc);
 
-    for _ in 0..params.max_path_cells {
-        if !on_path.insert((r, c)) {
-            break; // D8 loop guard
+        for _ in 0..params.max_path_cells {
+            if !on_path.insert((r, c)) {
+                break; // D8 loop guard
+            }
+            let z_p = unsafe { dem.get_unchecked(r, c) };
+            if is_nd(z_p) {
+                break;
+            }
+            let code = unsafe { flow_dir.get_unchecked(r, c) };
+
+            // Perpendicular step from the downstream direction (rotate ±90°).
+            // For a pit/flat (code 0) use a default E-W transect so the terminal
+            // cell still receives some inundation.
+            let (dr, dc) = if (1..=8).contains(&code) {
+                D8_OFFSETS[(code - 1) as usize]
+            } else {
+                (0, 0)
+            };
+            let (pr, pc) = if dr == 0 && dc == 0 {
+                (0, 1)
+            } else {
+                (-dc, dr)
+            };
+            let perp_len = ((pr * pr + pc * pc) as f64).sqrt() * cs;
+
+            // Solve the stage h so the wetted cross-section equals A.
+            let h = solve_stage(dem, r, c, z_p, pr, pc, perp_len, a_cross, &is_nd, in_bounds);
+
+            // Flood the transect at this stage; accumulate new planimetric area.
+            mark_transect(
+                dem,
+                &mut depth,
+                &mut flooded,
+                &mut plan_area,
+                cell_area,
+                r,
+                c,
+                z_p,
+                h,
+                pr,
+                pc,
+                &is_nd,
+                in_bounds,
+            );
+
+            if plan_area >= b_plan {
+                break;
+            }
+
+            // Step downstream.
+            if !(1..=8).contains(&code) {
+                break; // pit / flat: stop
+            }
+            let nr = r as isize + dr;
+            let nc = c as isize + dc;
+            if !in_bounds(nr, nc) {
+                break;
+            }
+            r = nr as usize;
+            c = nc as usize;
         }
-        let z_p = unsafe { dem.get_unchecked(r, c) };
-        if is_nd(z_p) {
-            break;
-        }
-        let code = unsafe { flow_dir.get_unchecked(r, c) };
-
-        // Perpendicular step from the downstream direction (rotate ±90°).
-        // For a pit/flat (code 0) use a default E-W transect so the terminal
-        // cell still receives some inundation.
-        let (dr, dc) = if (1..=8).contains(&code) {
-            D8_OFFSETS[(code - 1) as usize]
-        } else {
-            (0, 0)
-        };
-        let (pr, pc) = if dr == 0 && dc == 0 {
-            (0, 1)
-        } else {
-            (-dc, dr)
-        };
-        let perp_len = ((pr * pr + pc * pc) as f64).sqrt() * cs;
-
-        // Solve the stage h so the wetted cross-section equals A.
-        let h = solve_stage(dem, r, c, z_p, pr, pc, perp_len, a_cross, &is_nd, in_bounds);
-
-        // Flood the transect at this stage; accumulate new planimetric area.
-        mark_transect(
-            dem,
-            &mut depth,
-            &mut flooded,
-            &mut plan_area,
-            cell_area,
-            r,
-            c,
-            z_p,
-            h,
-            pr,
-            pc,
-            &is_nd,
-            in_bounds,
-        );
-
-        if plan_area >= b_plan {
-            break;
-        }
-
-        // Step downstream.
-        if !(1..=8).contains(&code) {
-            break; // pit / flat: stop
-        }
-        let nr = r as isize + dr;
-        let nc = c as isize + dc;
-        if !in_bounds(nr, nc) {
-            break;
-        }
-        r = nr as usize;
-        c = nc as usize;
     }
 
     Ok(depth)
@@ -429,7 +451,7 @@ mod tests {
             &dem,
             &fd,
             LaharzParams {
-                source: (0, 5),
+                sources: vec![(0, 5)],
                 volume_m3: 1000.0,
                 coeff_cross: 0.09,
                 coeff_plan: 0.20,
@@ -465,13 +487,13 @@ mod tests {
         let small = laharz(
             &dem,
             &fd,
-            LaharzParams::from_flow_type((0, 15), 50.0, LaharzFlowType::Lahar),
+            LaharzParams::from_flow_type(vec![(0, 15)], 50.0, LaharzFlowType::Lahar),
         )
         .unwrap();
         let big = laharz(
             &dem,
             &fd,
-            LaharzParams::from_flow_type((0, 15), 500.0, LaharzFlowType::Lahar),
+            LaharzParams::from_flow_type(vec![(0, 15)], 500.0, LaharzFlowType::Lahar),
         )
         .unwrap();
         let area = |r: &Raster<f64>| {
@@ -498,8 +520,8 @@ mod tests {
     #[test]
     fn test_validation_errors() {
         let (dem, fd) = v_valley(5, 5, 2, 100.0, 1.0, 1.0);
-        let p = |src, v, ca, cb| LaharzParams {
-            source: src,
+        let p = |src: (usize, usize), v, ca, cb| LaharzParams {
+            sources: vec![src],
             volume_m3: v,
             coeff_cross: ca,
             coeff_plan: cb,
@@ -508,5 +530,66 @@ mod tests {
         assert!(laharz(&dem, &fd, p((0, 2), 0.0, 0.05, 200.0)).is_err()); // V=0
         assert!(laharz(&dem, &fd, p((9, 9), 1000.0, 0.05, 200.0)).is_err()); // OOB
         assert!(laharz(&dem, &fd, p((0, 2), 1000.0, 0.0, 200.0)).is_err()); // c_A=0
+        // empty sources is an error
+        assert!(
+            laharz(
+                &dem,
+                &fd,
+                LaharzParams {
+                    sources: vec![],
+                    volume_m3: 1000.0,
+                    coeff_cross: 0.05,
+                    coeff_plan: 200.0,
+                    max_path_cells: 100,
+                }
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn test_multi_source_union() {
+        // Two parallel thalwegs (cols 3 and 11) draining south; seeding both
+        // floods both channels — strictly more than seeding one.
+        let rows = 30;
+        let cols = 15;
+        let mut z = vec![0.0; rows * cols];
+        let mut fd = vec![7u8; rows * cols];
+        for i in 0..rows {
+            for j in 0..cols {
+                let d3 = (j as isize - 3).unsigned_abs();
+                let d11 = (j as isize - 11).unsigned_abs();
+                z[i * cols + j] = 1000.0 - 2.0 * i as f64 + d3.min(d11) as f64;
+            }
+        }
+        for j in 0..cols {
+            fd[(rows - 1) * cols + j] = 0;
+        }
+        let dem = raster_f64(z, rows, cols, 1.0);
+        let fdir = raster_u8(fd, rows, cols, 1.0);
+        let area = |r: &Raster<f64>| {
+            (0..rows)
+                .flat_map(|i| (0..cols).map(move |j| (i, j)))
+                .filter(|&(i, j)| r.get(i, j).unwrap() > 1e-6)
+                .count()
+        };
+        let one = laharz(
+            &dem,
+            &fdir,
+            LaharzParams::from_flow_type(vec![(0, 3)], 2000.0, LaharzFlowType::Lahar),
+        )
+        .unwrap();
+        let both = laharz(
+            &dem,
+            &fdir,
+            LaharzParams::from_flow_type(vec![(0, 3), (0, 11)], 2000.0, LaharzFlowType::Lahar),
+        )
+        .unwrap();
+        assert!(
+            area(&both) > area(&one),
+            "two sources must flood more than one: {} !> {}",
+            area(&both),
+            area(&one)
+        );
     }
 }

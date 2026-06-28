@@ -1109,10 +1109,13 @@ pub enum HydrologyCommands {
         flow_dir: PathBuf,
         /// Output inundation-depth raster (>0 = inundated)
         output: PathBuf,
-        /// Source cell as "row,col"
+        /// Source cell(s) as "row,col" (multiple separated by ';'). Seed
+        /// proximal CHANNEL cells, not the summit — a summit cell's D8 descent
+        /// often runs down the wrong drainage. Sources route independently and
+        /// the footprint is their union.
         #[arg(long)]
         source: String,
-        /// Flow volume in m³
+        /// Flow volume in m³ (applied to each source)
         #[arg(long)]
         volume: f64,
         /// Flow type preset: lahar | debris-flow | rock-avalanche

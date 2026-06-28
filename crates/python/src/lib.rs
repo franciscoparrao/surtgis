@@ -2552,19 +2552,21 @@ fn energy_cone_compute<'py>(
 /// Args:
 ///     dem: 2D numpy array (f64) of elevations.
 ///     flow_dir: 2D numpy array (uint8), D8 flow direction.
-///     source: (row, col) source cell on the drainage.
-///     volume_m3: flow volume in cubic metres.
+///     sources: list of (row, col) source cells. Seed proximal CHANNEL cells,
+///         not the summit (a summit cell's D8 descent often runs down the wrong
+///         drainage). Sources route independently; the footprint is their union.
+///     volume_m3: flow volume in cubic metres (applied to each source).
 ///     flow_type: "lahar" | "debris-flow" | "rock-avalanche".
 ///     cell_size: cell size in metres.
 /// Returns:
 ///     2D numpy array (f64): inundation depth (>0 = inundated, 0 = dry).
 #[pyfunction]
-#[pyo3(signature = (dem, flow_dir, source, volume_m3, flow_type="lahar", cell_size=1.0))]
+#[pyo3(signature = (dem, flow_dir, sources, volume_m3, flow_type="lahar", cell_size=1.0))]
 fn laharz_compute<'py>(
     py: Python<'py>,
     dem: PyReadonlyArray2<'py, f64>,
     flow_dir: PyReadonlyArray2<'py, u8>,
-    source: (usize, usize),
+    sources: Vec<(usize, usize)>,
     volume_m3: f64,
     flow_type: &str,
     cell_size: f64,
@@ -2584,7 +2586,7 @@ fn laharz_compute<'py>(
     let out = compute_laharz(
         &dem_r,
         &fdir,
-        LaharzParams::from_flow_type(source, volume_m3, ft),
+        LaharzParams::from_flow_type(sources, volume_m3, ft),
     )
     .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &out))
