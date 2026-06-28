@@ -9,6 +9,12 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-06-28
+
+Multi-hazard release: a full set of geomorphic-hazard algorithms and Python
+parity, driven by a multi-hazard susceptibility study in Ñuble, Chile (volcanic
+/ lahar, landslide, wildfire, flood around Nevados de Chillán).
+
 ### Added
 
 - **LAHARZ inundation** (`hydrology::laharz`) — the Iverson, Schilling &
