@@ -423,6 +423,7 @@ pub fn handle(
             source,
             volume,
             flow_type,
+            spread_aspect,
         } => {
             let dem = read_dem(&input)?;
             let fdir = read_u8(&flow_dir)?;
@@ -438,13 +439,13 @@ pub fn handle(
                     "unknown flow type '{other}' (use lahar | debris-flow | rock-avalanche)"
                 ),
             };
+            let mut lparams = LaharzParams::from_flow_type(sources, volume, ft);
+            if let Some(a) = spread_aspect {
+                lparams.spread_aspect = a;
+            }
             let start = Instant::now();
-            let result = laharz(
-                &dem,
-                &fdir,
-                LaharzParams::from_flow_type(sources, volume, ft),
-            )
-            .context("Failed to compute LAHARZ inundation")?;
+            let result =
+                laharz(&dem, &fdir, lparams).context("Failed to compute LAHARZ inundation")?;
             write_result(&result, &output, compress)?;
             done("LAHARZ inundation", &output, start.elapsed());
         }

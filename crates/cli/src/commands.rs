@@ -1121,6 +1121,10 @@ pub enum HydrologyCommands {
         /// Flow type preset: lahar | debris-flow | rock-avalanche
         #[arg(long, default_value = "lahar")]
         flow_type: String,
+        /// Override the lateral-spread aspect ratio (width:depth). Omit to use
+        /// the preset default; 0 = canonical fill-to-area-A (long thin ribbons).
+        #[arg(long)]
+        spread_aspect: Option<f64>,
     },
     /// Compute full hydrology pipeline from DEM
     All {

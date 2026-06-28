@@ -9,6 +9,25 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+### Fixed
+
+- **LAHARZ small-volume runout is now physical** (the Ñuble calibration target).
+  Two changes, fitted against the Diguillín fixture (documented 2020/2021
+  Nevados de Chillán lahars):
+  1. The valley-perpendicular cross-section is now **confined to the valley** —
+     an arm stops when it drops below the thalweg (an open downslope), not just
+     at a wall. This alone removes most of the artefact: a 1e6 m³ lahar's runout
+     drops from ~65 km to ~20 km.
+  2. A calibrated **lateral-spread** term (`LaharzParams.spread_aspect`, the
+     minimum width-to-depth aspect ratio; CLI `--spread-aspect`, Python
+     `spread_aspect=`) mantles the valley floor up to `w = sqrt(aspect·A)`
+     instead of incising a 1-cell thread. The lahar preset now defaults to
+     `aspect = 1000`, bringing 1e6 m³ runout to ~6 km (observed: deposits within
+     1–5 km) and 1e7 to ~12 km (observed ~15). The largest volumes (≥1e8) remain
+     ~30 % long where the valley confines the spread; spatial IoU against an
+     independent HAND-based model stays modest as the two schemes distribute
+     inundation differently — runout is the robust cross-comparable quantity.
+
 ### Changed
 
 - **LAHARZ now takes multiple sources** (`LaharzParams.source: (usize,usize)` →

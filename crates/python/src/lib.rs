@@ -2561,7 +2561,7 @@ fn energy_cone_compute<'py>(
 /// Returns:
 ///     2D numpy array (f64): inundation depth (>0 = inundated, 0 = dry).
 #[pyfunction]
-#[pyo3(signature = (dem, flow_dir, sources, volume_m3, flow_type="lahar", cell_size=1.0))]
+#[pyo3(signature = (dem, flow_dir, sources, volume_m3, flow_type="lahar", cell_size=1.0, spread_aspect=None))]
 fn laharz_compute<'py>(
     py: Python<'py>,
     dem: PyReadonlyArray2<'py, f64>,
@@ -2570,6 +2570,7 @@ fn laharz_compute<'py>(
     volume_m3: f64,
     flow_type: &str,
     cell_size: f64,
+    spread_aspect: Option<f64>,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let dem_r = numpy_to_raster(&dem, cell_size)?;
     let fdir = numpy_u8_to_raster(&flow_dir, cell_size)?;
@@ -2583,12 +2584,12 @@ fn laharz_compute<'py>(
             )));
         }
     };
-    let out = compute_laharz(
-        &dem_r,
-        &fdir,
-        LaharzParams::from_flow_type(sources, volume_m3, ft),
-    )
-    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let mut params = LaharzParams::from_flow_type(sources, volume_m3, ft);
+    if let Some(a) = spread_aspect {
+        params.spread_aspect = a;
+    }
+    let out =
+        compute_laharz(&dem_r, &fdir, params).map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &out))
 }
 
