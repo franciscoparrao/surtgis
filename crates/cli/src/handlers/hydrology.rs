@@ -4,12 +4,12 @@ use anyhow::{Context, Result};
 use std::time::Instant;
 
 use surtgis_algorithms::hydrology::{
-    BreachParams, DrainageDensityParams, EnergyConeParams, FillSinksParams, HandParams, MfdParams,
-    PriorityFloodParams, SedimentConnectivityParams, StreamNetworkParams, WatershedParams,
-    basin_morphometry, breach_depressions, drainage_density, energy_cone, fill_sinks,
-    flow_accumulation, flow_accumulation_dinf, flow_accumulation_mfd, flow_direction,
-    flow_direction_dinf, hand, hypsometric_integral, melton_ruggedness, priority_flood,
-    sediment_connectivity, stream_network, watershed,
+    BreachParams, DrainageDensityParams, EnergyConeParams, FillSinksParams, HandParams,
+    LaharzFlowType, LaharzParams, MfdParams, PriorityFloodParams, SedimentConnectivityParams,
+    StreamNetworkParams, WatershedParams, basin_morphometry, breach_depressions, drainage_density,
+    energy_cone, fill_sinks, flow_accumulation, flow_accumulation_dinf, flow_accumulation_mfd,
+    flow_direction, flow_direction_dinf, hand, hypsometric_integral, laharz, melton_ruggedness,
+    priority_flood, sediment_connectivity, stream_network, watershed,
 };
 use surtgis_algorithms::terrain::{SlopeParams, SlopeUnits, slope, twi};
 
@@ -414,6 +414,33 @@ pub fn handle(
             .context("Failed to compute energy-cone inundation")?;
             write_result(&result, &output, compress)?;
             done("Energy cone", &output, start.elapsed());
+        }
+
+        HydrologyCommands::Laharz {
+            input,
+            flow_dir,
+            output,
+            source,
+            volume,
+            flow_type,
+        } => {
+            let dem = read_dem(&input)?;
+            let fdir = read_u8(&flow_dir)?;
+            let src = parse_pour_points(&source)?;
+            let src = *src.first().context("a source 'row,col' is required")?;
+            let ft = match flow_type.to_lowercase().as_str() {
+                "lahar" => LaharzFlowType::Lahar,
+                "debris-flow" | "debris" => LaharzFlowType::DebrisFlow,
+                "rock-avalanche" | "rock" => LaharzFlowType::RockAvalanche,
+                other => anyhow::bail!(
+                    "unknown flow type '{other}' (use lahar | debris-flow | rock-avalanche)"
+                ),
+            };
+            let start = Instant::now();
+            let result = laharz(&dem, &fdir, LaharzParams::from_flow_type(src, volume, ft))
+                .context("Failed to compute LAHARZ inundation")?;
+            write_result(&result, &output, compress)?;
+            done("LAHARZ inundation", &output, start.elapsed());
         }
 
         HydrologyCommands::All {

@@ -27,6 +27,8 @@ use surtgis_algorithms::hydrology::{
     EnergyConeParams,
     FillSinksParams,
     HandParams,
+    LaharzFlowType,
+    LaharzParams,
     MfdParams,
     PriorityFloodParams,
     StreamNetworkParams,
@@ -43,6 +45,7 @@ use surtgis_algorithms::hydrology::{
     flow_direction_dinf as compute_flow_direction_dinf,
     flow_path_length as compute_flow_path_length,
     hand as compute_hand,
+    laharz as compute_laharz,
     melton_ruggedness as compute_melton_ruggedness,
     priority_flood,
     priority_flood_flat as compute_priority_flood_flat,
@@ -2544,6 +2547,49 @@ fn energy_cone_compute<'py>(
     Ok(raster_to_numpy(py, &out))
 }
 
+/// LAHARZ lahar / debris-flow inundation (Iverson, Schilling & Vallance 1998).
+///
+/// Args:
+///     dem: 2D numpy array (f64) of elevations.
+///     flow_dir: 2D numpy array (uint8), D8 flow direction.
+///     source: (row, col) source cell on the drainage.
+///     volume_m3: flow volume in cubic metres.
+///     flow_type: "lahar" | "debris-flow" | "rock-avalanche".
+///     cell_size: cell size in metres.
+/// Returns:
+///     2D numpy array (f64): inundation depth (>0 = inundated, 0 = dry).
+#[pyfunction]
+#[pyo3(signature = (dem, flow_dir, source, volume_m3, flow_type="lahar", cell_size=1.0))]
+fn laharz_compute<'py>(
+    py: Python<'py>,
+    dem: PyReadonlyArray2<'py, f64>,
+    flow_dir: PyReadonlyArray2<'py, u8>,
+    source: (usize, usize),
+    volume_m3: f64,
+    flow_type: &str,
+    cell_size: f64,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let dem_r = numpy_to_raster(&dem, cell_size)?;
+    let fdir = numpy_u8_to_raster(&flow_dir, cell_size)?;
+    let ft = match flow_type.to_lowercase().as_str() {
+        "lahar" => LaharzFlowType::Lahar,
+        "debris-flow" | "debris" => LaharzFlowType::DebrisFlow,
+        "rock-avalanche" | "rock" => LaharzFlowType::RockAvalanche,
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "unknown flow type '{other}' (use lahar | debris-flow | rock-avalanche)"
+            )));
+        }
+    };
+    let out = compute_laharz(
+        &dem_r,
+        &fdir,
+        LaharzParams::from_flow_type(source, volume_m3, ft),
+    )
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(raster_to_numpy(py, &out))
+}
+
 // ===========================================================================
 // Melton ruggedness ratio (hydrology::melton)
 // ===========================================================================
@@ -2967,6 +3013,9 @@ fn surtgis(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Energy-cone lahar inundation
     m.add_function(wrap_pyfunction!(energy_cone_compute, m)?)?;
+
+    // LAHARZ inundation
+    m.add_function(wrap_pyfunction!(laharz_compute, m)?)?;
 
     // Melton ruggedness ratio
     m.add_function(wrap_pyfunction!(melton_ruggedness_compute, m)?)?;

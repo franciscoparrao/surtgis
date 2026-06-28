@@ -11,6 +11,15 @@ call them out under a `Breaking` heading when they happen.
 
 ### Added
 
+- **LAHARZ inundation** (`hydrology::laharz`) — the Iverson, Schilling &
+  Vallance (1998) semi-empirical lahar / debris-flow hazard-zone model. From a
+  source it marches down the D8 flow path, filling the valley-perpendicular
+  transect to the volume-scaled cross-section `A = c_A·V^(2/3)` at each step and
+  stopping when the planimetric area reaches `B = c_B·V^(2/3)`. Flow-type
+  presets (lahar / debris-flow / rock-avalanche; Griswold & Iverson 2008). CLI
+  `hydrology laharz --flow-dir --source "r,c" --volume --flow-type`; Python
+  `laharz_compute`. 4 unit tests incl. an analytic prismatic-V-valley case.
+  Completes the A2 lahar request alongside the energy cone and Melton ratio.
 - **Fluvial toolkit in the Python bindings** — `chi_compute` and `ksn_compute`
   return per-cell rasters; `knickpoints_compute`, `concavity_compute` and
   `divide_migration_compute` return lists of dicts (with coordinates / basin

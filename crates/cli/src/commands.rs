@@ -1100,6 +1100,25 @@ pub enum HydrologyCommands {
         #[arg(long, default_value = "0.0")]
         collapse_height: f64,
     },
+    /// LAHARZ lahar / debris-flow inundation (Iverson, Schilling & Vallance 1998)
+    Laharz {
+        /// Input DEM file
+        input: PathBuf,
+        /// D8 flow-direction raster (u8, from `hydrology flow-direction`)
+        #[arg(long)]
+        flow_dir: PathBuf,
+        /// Output inundation-depth raster (>0 = inundated)
+        output: PathBuf,
+        /// Source cell as "row,col"
+        #[arg(long)]
+        source: String,
+        /// Flow volume in m³
+        #[arg(long)]
+        volume: f64,
+        /// Flow type preset: lahar | debris-flow | rock-avalanche
+        #[arg(long, default_value = "lahar")]
+        flow_type: String,
+    },
     /// Compute full hydrology pipeline from DEM
     All {
         /// Input DEM file
