@@ -9,6 +9,13 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-06-28
+
+LAHARZ hardening from the Nevados de Chillán (Ñuble) field validation: physical
+small-volume runout, multi-source seeding, and build-doc fixes. Note: the
+`LaharzParams` API changed (`source` → `sources`, new `spread_aspect`); the
+type is days old (0.16.0) and the project is pre-1.0.
+
 ### Fixed
 
 - **LAHARZ small-volume runout is now physical** (the Ñuble calibration target).
