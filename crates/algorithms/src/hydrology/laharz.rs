@@ -80,6 +80,22 @@ impl LaharzFlowType {
             LaharzFlowType::RockAvalanche => (0.2, 20.0),
         }
     }
+
+    /// Default lateral-spread aspect ratio for the preset. The lahar value is
+    /// calibrated against documented Nevados de Chillán events (Ñuble fixture);
+    /// the others default to `0` (canonical) pending their own calibration.
+    pub fn default_spread_aspect(self) -> f64 {
+        match self {
+            // Calibrated on the Diguillín (Nevados de Chillán) fixture: with the
+            // valley-confined cross-section this brings 1e6 m³ runout from ~65 km
+            // to ~6 km (the documented 2020/2021 proximal lahars deposited within
+            // 1–5 km) and 1e7 to ~12 km (observed ~15). The largest volumes
+            // (≥1e8) remain ~30 % long where the valley confines the spread.
+            LaharzFlowType::Lahar => 1000.0,
+            LaharzFlowType::DebrisFlow => 0.0,
+            LaharzFlowType::RockAvalanche => 0.0,
+        }
+    }
 }
 
 /// Parameters for [`laharz`].
@@ -97,6 +113,15 @@ pub struct LaharzParams {
     pub coeff_cross: f64,
     /// Planimetric area coefficient `c_B`.
     pub coeff_plan: f64,
+    /// Minimum cross-section **width-to-mean-depth aspect ratio** (lateral
+    /// spread). `0` reproduces the canonical fill-to-area-A behaviour, which in
+    /// confined channels produces a deep, near-thalweg thread and
+    /// unphysically long small-volume runout. With `aspect > 0`, when the
+    /// natural cross-section is narrower than `w = sqrt(aspect · A)`, the flow
+    /// is spread laterally across the valley floor (mantling up to the local
+    /// ridge crests) to that width, shortening the runout. Calibrated against
+    /// documented Nevados de Chillán lahars (see the flow-type presets).
+    pub spread_aspect: f64,
     /// Safety cap on the number of downstream path cells visited per source.
     pub max_path_cells: usize,
 }
@@ -114,6 +139,7 @@ impl LaharzParams {
             volume_m3,
             coeff_cross: c_a,
             coeff_plan: c_b,
+            spread_aspect: flow_type.default_spread_aspect(),
             max_path_cells: 100_000,
         }
     }
@@ -223,23 +249,51 @@ pub fn laharz(
 
             // Solve the stage h so the wetted cross-section equals A.
             let h = solve_stage(dem, r, c, z_p, pr, pc, perp_len, a_cross, &is_nd, in_bounds);
+            let nat_w = transect_width(dem, r, c, z_p, h, pr, pc, perp_len, &is_nd, in_bounds);
 
-            // Flood the transect at this stage; accumulate new planimetric area.
-            mark_transect(
-                dem,
-                &mut depth,
-                &mut flooded,
-                &mut plan_area,
-                cell_area,
-                r,
-                c,
-                z_p,
-                h,
-                pr,
-                pc,
-                &is_nd,
-                in_bounds,
-            );
+            // Lateral spread: if the natural cross-section is narrower than the
+            // target aspect width, mantle the valley floor up to that width
+            // (stopping at ridge crests); otherwise fill naturally to area A.
+            let target_w = if params.spread_aspect > 0.0 {
+                (params.spread_aspect * a_cross).sqrt()
+            } else {
+                0.0
+            };
+            if target_w > nat_w {
+                spread_transect(
+                    dem,
+                    &mut depth,
+                    &mut flooded,
+                    &mut plan_area,
+                    cell_area,
+                    r,
+                    c,
+                    z_p,
+                    a_cross,
+                    target_w,
+                    perp_len,
+                    pr,
+                    pc,
+                    &is_nd,
+                    in_bounds,
+                );
+            } else {
+                mark_transect(
+                    dem,
+                    &mut depth,
+                    &mut flooded,
+                    &mut plan_area,
+                    cell_area,
+                    r,
+                    c,
+                    z_p,
+                    h,
+                    pr,
+                    pc,
+                    &is_nd,
+                    in_bounds,
+                );
+            }
 
             if plan_area >= b_plan {
                 break;
@@ -289,7 +343,10 @@ fn cross_area(
                 break;
             }
             let z = unsafe { dem.get_unchecked(rr as usize, cc as usize) };
-            if is_nd(z) || z >= stage {
+            // Confine the cross-section to the valley: a wall (>= stage), a
+            // nodata cell, or a cell *below* the thalweg (the perpendicular has
+            // left the valley onto an open downslope) ends the arm.
+            if is_nd(z) || z >= stage || z < z_p {
                 break;
             }
             area += (stage - z) * perp_len;
@@ -381,11 +438,116 @@ fn mark_transect(
                 break;
             }
             let z = unsafe { dem.get_unchecked(rr as usize, cc as usize) };
-            if is_nd(z) || z >= stage {
+            // Confine the cross-section to the valley: a wall (>= stage), a
+            // nodata cell, or a cell *below* the thalweg (the perpendicular has
+            // left the valley onto an open downslope) ends the arm.
+            if is_nd(z) || z >= stage || z < z_p {
                 break;
             }
             flood_cell(rr as usize, cc as usize, z);
             k += 1;
+        }
+    }
+}
+
+/// Flooded width (metres) of the transect at stage `z_p + h`: the centre cell
+/// plus both perpendicular arms out to the first wall (cell at or above stage).
+#[allow(clippy::too_many_arguments)]
+fn transect_width(
+    dem: &Raster<f64>,
+    r: usize,
+    c: usize,
+    z_p: f64,
+    h: f64,
+    pr: isize,
+    pc: isize,
+    perp_len: f64,
+    is_nd: &impl Fn(f64) -> bool,
+    in_bounds: impl Fn(isize, isize) -> bool + Copy,
+) -> f64 {
+    let stage = z_p + h;
+    let mut cells = 1usize; // centre
+    for sign in [1isize, -1] {
+        let mut k = 1isize;
+        loop {
+            let rr = r as isize + sign * k * pr;
+            let cc = c as isize + sign * k * pc;
+            if !in_bounds(rr, cc) {
+                break;
+            }
+            let z = unsafe { dem.get_unchecked(rr as usize, cc as usize) };
+            // Confine the cross-section to the valley: a wall (>= stage), a
+            // nodata cell, or a cell *below* the thalweg (the perpendicular has
+            // left the valley onto an open downslope) ends the arm.
+            if is_nd(z) || z >= stage || z < z_p {
+                break;
+            }
+            cells += 1;
+            k += 1;
+        }
+    }
+    cells as f64 * perp_len
+}
+
+/// Lateral-spread fill: mantle the valley floor with a uniform sheet of depth
+/// `d = A / target_w` out to a half-width of `target_w / 2` on each arm, but
+/// stopping at the first ridge crest (where the transect starts to descend into
+/// the neighbouring catchment) so the flow does not leak across drainage
+/// divides. Accumulates newly flooded cells into `plan_area`.
+#[allow(clippy::too_many_arguments)]
+fn spread_transect(
+    dem: &Raster<f64>,
+    depth: &mut Raster<f64>,
+    flooded: &mut HashSet<(usize, usize)>,
+    plan_area: &mut f64,
+    cell_area: f64,
+    r: usize,
+    c: usize,
+    z_p: f64,
+    a_cross: f64,
+    target_w: f64,
+    perp_len: f64,
+    pr: isize,
+    pc: isize,
+    is_nd: &impl Fn(f64) -> bool,
+    in_bounds: impl Fn(isize, isize) -> bool + Copy,
+) {
+    let d = a_cross / target_w; // uniform sheet thickness
+    let half_cells = (target_w / (2.0 * perp_len)).round().max(1.0) as isize;
+
+    let mut flood_cell = |rr: usize, cc: usize| {
+        let prev = depth.get(rr, cc).unwrap_or(0.0);
+        if d > prev {
+            depth.set(rr, cc, d).ok();
+        }
+        if flooded.insert((rr, cc)) {
+            *plan_area += cell_area;
+        }
+    };
+
+    flood_cell(r, c);
+    for sign in [1isize, -1] {
+        let mut prev_z = z_p;
+        let mut rising = false;
+        for k in 1..=half_cells {
+            let rr = r as isize + sign * k * pr;
+            let cc = c as isize + sign * k * pc;
+            if !in_bounds(rr, cc) {
+                break;
+            }
+            let z = unsafe { dem.get_unchecked(rr as usize, cc as usize) };
+            if is_nd(z) || z < z_p {
+                break; // nodata, or left the valley onto an open downslope
+            }
+            // Ridge crest: once we have climbed the valley wall, a descent means
+            // we are crossing into the next catchment — stop the arm.
+            if z > prev_z {
+                rising = true;
+            } else if rising && z < prev_z {
+                break;
+            }
+            flood_cell(rr as usize, cc as usize);
+            prev_z = z;
         }
     }
 }
@@ -455,6 +617,7 @@ mod tests {
                 volume_m3: 1000.0,
                 coeff_cross: 0.09,
                 coeff_plan: 0.20,
+                spread_aspect: 0.0,
                 max_path_cells: 1000,
             },
         )
@@ -525,6 +688,7 @@ mod tests {
             volume_m3: v,
             coeff_cross: ca,
             coeff_plan: cb,
+            spread_aspect: 0.0,
             max_path_cells: 100,
         };
         assert!(laharz(&dem, &fd, p((0, 2), 0.0, 0.05, 200.0)).is_err()); // V=0
@@ -540,10 +704,42 @@ mod tests {
                     volume_m3: 1000.0,
                     coeff_cross: 0.05,
                     coeff_plan: 200.0,
+                    spread_aspect: 0.0,
                     max_path_cells: 100,
                 }
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn test_spread_shortens_runout_in_confined_valley() {
+        // Steep, narrow V-gorge: the canonical fill makes a deep, near-thalweg
+        // thread that runs far; lateral spread widens it and so shortens the
+        // runout (fewer downstream rows reached for the same B). The valley is
+        // long and B/A small, so B (not the valley end) is the binding limit.
+        let rows = 400;
+        let cols = 21;
+        let (dem, fd) = v_valley(rows, cols, 10, 5000.0, 2.0, 5.0);
+        let flooded_rows = |aspect: f64| {
+            let p = LaharzParams {
+                sources: vec![(0, 10)],
+                volume_m3: 100.0,
+                coeff_cross: 2.0,
+                coeff_plan: 20.0,
+                spread_aspect: aspect,
+                max_path_cells: 1000,
+            };
+            let out = laharz(&dem, &fd, p).unwrap();
+            (0..rows)
+                .filter(|&i| (0..cols).any(|j| out.get(i, j).unwrap() > 1e-6))
+                .count()
+        };
+        let canonical = flooded_rows(0.0);
+        let spread = flooded_rows(600.0);
+        assert!(
+            spread < canonical,
+            "lateral spread should shorten runout: spread={spread} canonical={canonical}"
         );
     }
 
