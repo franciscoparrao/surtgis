@@ -18,6 +18,26 @@ Install from crates.io:
 cargo install surtgis
 ```
 
+Or build the latest from git — name the `surtgis` package explicitly (the repo
+ships two binaries, `surtgis` and `surtgis-gui`):
+
+```bash
+cargo install --git https://github.com/franciscoparrao/surtgis surtgis
+```
+
+The default feature set reads NetCDF/HDF5, so the system libraries must be
+present (the `netcdf-sys` / `hdf5-metno-sys` build scripts need them):
+
+```bash
+# Debian / Ubuntu
+sudo apt install libhdf5-dev libnetcdf-dev
+# macOS (Homebrew)
+brew install hdf5 netcdf
+```
+
+To skip those (and the C dependencies entirely), build without default
+features: `cargo install surtgis --no-default-features --features cloud,projections`.
+
 End-to-end: download a cloud-free Sentinel-2 composite over a small
 Chilean bbox (5×5 km, one month) and compute NDVI. The example below
 takes ~65 seconds on a warm connection against Microsoft Planetary

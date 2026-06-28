@@ -9,6 +9,24 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+### Changed
+
+- **LAHARZ now takes multiple sources** (`LaharzParams.source: (usize,usize)` →
+  `sources: Vec<(usize,usize)>`; CLI `hydrology laharz --source "r,c;r,c"`;
+  Python `laharz_compute(..., sources=[(r,c), ...])`). Each source routes as an
+  independent flow and the footprint is their union. Driven by Ñuble validation
+  feedback: seeding a multi-drainage edifice at the summit sends the single D8
+  path down the wrong drainage. Docs and `--source` help now state explicitly:
+  **seed proximal channel cells, not the summit**, and note that small-volume
+  runout (a near-thalweg ribbon in confined valleys) is the least trustworthy
+  output, pending cross-section/coefficient calibration against documented events.
+
+### Fixed
+
+- **README build notes** for `cargo install --git`: name the package explicitly
+  (`cargo install --git <url> surtgis`, since the repo ships two binaries) and
+  document the `libhdf5-dev` / `libnetcdf-dev` system dependencies.
+
 ## [0.16.0] - 2026-06-28
 
 Multi-hazard release: a full set of geomorphic-hazard algorithms and Python

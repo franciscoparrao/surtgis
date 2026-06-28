@@ -426,8 +426,10 @@ pub fn handle(
         } => {
             let dem = read_dem(&input)?;
             let fdir = read_u8(&flow_dir)?;
-            let src = parse_pour_points(&source)?;
-            let src = *src.first().context("a source 'row,col' is required")?;
+            let sources = parse_pour_points(&source)?;
+            if sources.is_empty() {
+                anyhow::bail!("at least one source 'row,col' is required");
+            }
             let ft = match flow_type.to_lowercase().as_str() {
                 "lahar" => LaharzFlowType::Lahar,
                 "debris-flow" | "debris" => LaharzFlowType::DebrisFlow,
@@ -437,8 +439,12 @@ pub fn handle(
                 ),
             };
             let start = Instant::now();
-            let result = laharz(&dem, &fdir, LaharzParams::from_flow_type(src, volume, ft))
-                .context("Failed to compute LAHARZ inundation")?;
+            let result = laharz(
+                &dem,
+                &fdir,
+                LaharzParams::from_flow_type(sources, volume, ft),
+            )
+            .context("Failed to compute LAHARZ inundation")?;
             write_result(&result, &output, compress)?;
             done("LAHARZ inundation", &output, start.elapsed());
         }
