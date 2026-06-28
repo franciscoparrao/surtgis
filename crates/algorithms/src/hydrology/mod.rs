@@ -23,6 +23,7 @@ mod flow_direction_mfd_adaptive;
 mod flow_direction_tfga;
 mod hand;
 mod hypsometric;
+mod laharz;
 mod melton;
 mod nested_depressions;
 mod priority_flood;
@@ -48,6 +49,7 @@ pub use flow_direction_mfd_adaptive::{AdaptiveMfdParams, flow_accumulation_mfd_a
 pub use flow_direction_tfga::{TfgaParams, flow_accumulation_tfga};
 pub use hand::{HandParams, hand};
 pub use hypsometric::hypsometric_integral;
+pub use laharz::{LaharzFlowType, LaharzParams, laharz};
 pub use melton::{MeltonRuggedness, melton_ruggedness};
 pub use nested_depressions::{
     Depression, NestedDepressionParams, NestedDepressionResult, nested_depressions,
