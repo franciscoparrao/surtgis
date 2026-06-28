@@ -48,19 +48,16 @@ jobs:
   linux:
     name: Linux ${{ matrix.target }}
     runs-on: ubuntu-latest
-    # Point the `cc` crate at the cross toolchain so C/asm deps (e.g. `ring`,
-    # pulled in by the cloud feature's reqwest/rustls) build for aarch64 instead
-    # of being mis-compiled with the host x86 compiler (the "__ARM_ARCH" error).
-    # Only consulted for the matching target, so harmless for x86_64.
-    env:
-      CC_aarch64_unknown_linux_gnu: aarch64-unknown-linux-gnu-gcc
-      CXX_aarch64_unknown_linux_gnu: aarch64-unknown-linux-gnu-g++
-      CC_aarch64_unknown_linux_musl: aarch64-unknown-linux-musl-gcc
-      CXX_aarch64_unknown_linux_musl: aarch64-unknown-linux-musl-g++
     strategy:
       fail-fast: false
       matrix:
-        target: [x86_64, aarch64]
+        # Linux aarch64 is dropped for now: the cloud feature pulls `ring`,
+        # which fails to cross-compile in the manylinux aarch64 container
+        # ("ARM assembler must define __ARM_ARCH"). macOS arm64 (the macos job
+        # below) covers Apple Silicon; Linux aarch64 (servers / Raspberry Pi)
+        # is a tracked follow-up — re-add it once the cross-build is fixed
+        # (e.g. via maturin `--zig`).
+        target: [x86_64]
     steps:
       - uses: actions/checkout@v4
         with:
