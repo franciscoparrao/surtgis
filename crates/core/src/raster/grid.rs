@@ -20,7 +20,7 @@ use ndarray::{Array2, ArrayView2, ArrayViewMut2};
 /// use surtgis_core::Raster;
 ///
 /// // Create a 100x100 raster filled with zeros
-/// let mut raster: `Raster<f32>` = Raster::new(100, 100);
+/// let mut raster: Raster<f32> = Raster::new(100, 100);
 ///
 /// // Set a value
 /// raster.set(10, 20, 42.0)?;

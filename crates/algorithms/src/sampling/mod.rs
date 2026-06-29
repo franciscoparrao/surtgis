@@ -48,8 +48,8 @@ fn check_same_shape(rasters: &[&Raster<f64>]) -> Result<(usize, usize)> {
 /// # Example
 /// ```no_run
 /// # use surtgis_algorithms::sampling::sample_at_points;
-/// # let slope: surtgis_core::`Raster<f64>` = unimplemented!();
-/// # let aspect: surtgis_core::`Raster<f64>` = unimplemented!();
+/// # let slope: surtgis_core::Raster<f64> = unimplemented!();
+/// # let aspect: surtgis_core::Raster<f64> = unimplemented!();
 /// let rows = sample_at_points(&[&slope, &aspect], &[(350_000.0, 6_300_000.0)])?;
 /// # Ok::<(), surtgis_core::Error>(())
 /// ```

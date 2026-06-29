@@ -41,7 +41,7 @@ impl Default for GeoTiffOptions {
 ///
 /// # Example
 /// ```ignore
-/// let raster: `Raster<f32>` = read_geotiff("dem.tif", None)?;
+/// let raster: Raster<f32> = read_geotiff("dem.tif", None)?;
 /// ```
 pub fn read_geotiff<T, P>(path: P, band: Option<usize>) -> Result<Raster<T>>
 where
