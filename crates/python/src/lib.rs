@@ -78,6 +78,7 @@ use surtgis_algorithms::imagery::{
     ngrdi as compute_ngrdi,
     normalized_difference,
     reci as compute_reci,
+    refined_lee_filter as compute_refined_lee_filter,
     sar_water_mask as compute_sar_water_mask,
     savi as compute_savi,
 };
@@ -2459,27 +2460,34 @@ fn sar_water_mask<'py>(
     Ok(raster_u8_to_numpy(py, &out))
 }
 
-/// Lee adaptive speckle filter (Lee 1980) for SAR backscatter.
+/// Lee adaptive speckle filter for SAR backscatter.
 ///
 /// Args:
 ///     image: 2D numpy array (f64), single-band backscatter (linear power).
 ///     window_size: odd window side length (default 7).
 ///     looks: equivalent number of looks / ENL (default 1.0).
 ///     cell_size: cell size in map units.
+///     refined: use the edge-aligned refined Lee (1981) instead of the classic
+///         Lee (1980); preserves edges and linear features better (default False).
 /// Returns:
 ///     2D numpy array (f64), speckle-filtered.
 #[pyfunction]
-#[pyo3(signature = (image, window_size=7, looks=1.0, cell_size=1.0))]
+#[pyo3(signature = (image, window_size=7, looks=1.0, cell_size=1.0, refined=false))]
 fn sar_lee_filter<'py>(
     py: Python<'py>,
     image: PyReadonlyArray2<'py, f64>,
     window_size: usize,
     looks: f64,
     cell_size: f64,
+    refined: bool,
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let r = numpy_to_raster(&image, cell_size)?;
-    let out = compute_lee_filter(&r, window_size, looks)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let out = if refined {
+        compute_refined_lee_filter(&r, window_size, looks)
+    } else {
+        compute_lee_filter(&r, window_size, looks)
+    }
+    .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, &out))
 }
 

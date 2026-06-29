@@ -1464,6 +1464,9 @@ pub enum ImageryCommands {
         /// Equivalent number of looks (ENL); 1.0 for single-look
         #[arg(long, default_value = "1.0")]
         looks: f64,
+        /// Use the edge-aligned refined Lee (1981) instead of the classic Lee
+        #[arg(long)]
+        refined: bool,
     },
 }
 

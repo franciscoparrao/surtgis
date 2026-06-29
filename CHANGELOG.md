@@ -9,6 +9,16 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+### Added
+
+- **Refined Lee speckle filter** (`imagery::refined_lee_filter`, Lee 1981) — the
+  edge-aligned refinement of the classic Lee filter: it estimates the local
+  statistics from the half-window on the homogeneous side of the dominant edge
+  (chosen among 4 orientations), so it preserves edges and linear features
+  instead of blurring across them. CLI `imagery sar-lee --refined`; Python
+  `sar_lee_filter(..., refined=True)`. Closes the SAR speckle follow-up from the
+  v0.16.0 A3 work. 3 unit tests (incl. edge-preservation vs the classic Lee).
+
 ## [0.16.1] - 2026-06-28
 
 LAHARZ hardening from the Nevados de Chillán (Ñuble) field validation: physical
