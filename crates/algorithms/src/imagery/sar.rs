@@ -21,7 +21,11 @@
 //!   binary water/flood mask.
 //! - [`lee_filter`] — the classic Lee (1980) adaptive speckle filter, applied
 //!   before thresholding to suppress multiplicative speckle while preserving
-//!   edges. The directional *refined* Lee is a possible further enhancement.
+//!   edges.
+//! - [`refined_lee_filter`] — the edge-aligned *refined* Lee (1981): estimates
+//!   the local statistics from the half-window on the homogeneous side of the
+//!   dominant edge, so it preserves edges and linear features better than the
+//!   square-window classic Lee.
 
 use crate::imagery::normalized_difference;
 use crate::maybe_rayon::*;
@@ -169,8 +173,8 @@ pub fn sar_water_mask(
 /// Operates on linear-power (intensity) backscatter. `looks` is the equivalent
 /// number of looks (ENL) of the product — use 1.0 for single-look data; higher
 /// ENL (multi-look / RTC products) yields a weaker speckle model and less
-/// smoothing. This is the classic Lee filter; the directional *refined* Lee
-/// (Lee 1981) is a further enhancement not implemented here.
+/// smoothing. This is the classic Lee filter; see [`refined_lee_filter`] for the
+/// edge-aligned refined Lee (1981).
 ///
 /// # Arguments
 /// * `image` - single-band SAR backscatter (linear power).
@@ -233,6 +237,167 @@ pub fn lee_filter(image: &Raster<f64>, window_size: usize, looks: f64) -> Result
                     continue;
                 }
 
+                let var = (sumsq / n as f64 - mean * mean).max(0.0);
+                let ci2 = var / (mean * mean);
+                let w = if ci2 <= cu2 { 0.0 } else { 1.0 - cu2 / ci2 };
+                *out = mean + w * (center - mean);
+            }
+            row_data
+        })
+        .collect();
+
+    let mut output = image.with_same_meta::<f64>(rows, cols);
+    output.set_nodata(Some(f64::NAN));
+    *output.data_mut() =
+        Array2::from_shape_vec((rows, cols), data).map_err(|e| Error::Other(e.to_string()))?;
+    Ok(output)
+}
+
+/// Refined Lee speckle filter (Lee 1981) for SAR backscatter.
+///
+/// An edge-aware refinement of [`lee_filter`]. The classic Lee filter estimates
+/// the local statistics from the full square window, so it blurs across edges;
+/// the refined Lee instead estimates them from an **edge-aligned half-window**,
+/// preserving edges and linear features while still smoothing speckle in
+/// homogeneous areas.
+///
+/// For each pixel it (1) finds the dominant edge orientation among four
+/// directions (horizontal, vertical, and the two diagonals) from the
+/// across-edge mean contrast, (2) keeps the half of the window on the
+/// *homogeneous* side of that edge — the side whose mean is closer to the centre
+/// pixel — and (3) applies the same MMSE estimator as [`lee_filter`]
+/// (`out = μ + W·(centre − μ)`, `W = max(0, 1 − Cu²/Ci²)`, `Cu² = 1/ENL`) using
+/// only that half-window's mean and variance. Where no edge is detected the full
+/// window is used (it reduces to the classic Lee filter).
+///
+/// Operates on linear-power backscatter. `window_size` is the odd side length
+/// (classically 7); `looks` is the equivalent number of looks (ENL).
+///
+/// # References
+/// - Lee, J.-S. (1981). Refined filtering of image noise using local statistics.
+///   *Computer Graphics and Image Processing* 15(4), 380–389.
+pub fn refined_lee_filter(
+    image: &Raster<f64>,
+    window_size: usize,
+    looks: f64,
+) -> Result<Raster<f64>> {
+    if window_size < 3 || window_size % 2 == 0 {
+        return Err(Error::Other(
+            "window_size must be an odd number >= 3".into(),
+        ));
+    }
+    if looks <= 0.0 {
+        return Err(Error::Other("looks (ENL) must be positive".into()));
+    }
+
+    let (rows, cols) = image.shape();
+    let nodata = image.nodata();
+    let radius = window_size / 2;
+    let cu2 = 1.0 / looks;
+
+    // Signed across-edge projection for each of the four edge orientations.
+    let proj = |d: usize, di: isize, dj: isize| -> isize {
+        match d {
+            0 => di,      // horizontal edge / N-S contrast
+            1 => dj,      // vertical edge / E-W contrast
+            2 => di + dj, // diagonal
+            _ => di - dj, // anti-diagonal
+        }
+    };
+
+    let data: Vec<f64> = (0..rows)
+        .into_par_iter()
+        .flat_map(|row| {
+            let mut row_data = vec![f64::NAN; cols];
+            for (col, out) in row_data.iter_mut().enumerate() {
+                let center = unsafe { image.get_unchecked(row, col) };
+                if is_nodata(center, nodata) {
+                    continue;
+                }
+                let r0 = row.saturating_sub(radius);
+                let r1 = (row + radius).min(rows - 1);
+                let c0 = col.saturating_sub(radius);
+                let c1 = (col + radius).min(cols - 1);
+
+                // Pass 1: per-direction means of the two half-windows.
+                let mut s_neg = [0.0_f64; 4];
+                let mut n_neg = [0usize; 4];
+                let mut s_pos = [0.0_f64; 4];
+                let mut n_pos = [0usize; 4];
+                for wr in r0..=r1 {
+                    for wc in c0..=c1 {
+                        let v = unsafe { image.get_unchecked(wr, wc) };
+                        if is_nodata(v, nodata) {
+                            continue;
+                        }
+                        let di = wr as isize - row as isize;
+                        let dj = wc as isize - col as isize;
+                        for d in 0..4 {
+                            let p = proj(d, di, dj);
+                            if p < 0 {
+                                s_neg[d] += v;
+                                n_neg[d] += 1;
+                            } else if p > 0 {
+                                s_pos[d] += v;
+                                n_pos[d] += 1;
+                            }
+                        }
+                    }
+                }
+
+                // Dominant edge = max across-edge mean contrast; keep the side
+                // whose mean is closer to the centre (the homogeneous side).
+                let mut best_d = 0usize;
+                let mut best_g = -1.0_f64;
+                let mut keep_pos = true;
+                for d in 0..4 {
+                    if n_neg[d] == 0 || n_pos[d] == 0 {
+                        continue;
+                    }
+                    let mn = s_neg[d] / n_neg[d] as f64;
+                    let mp = s_pos[d] / n_pos[d] as f64;
+                    let g = (mp - mn).abs();
+                    if g > best_g {
+                        best_g = g;
+                        best_d = d;
+                        keep_pos = (center - mp).abs() <= (center - mn).abs();
+                    }
+                }
+
+                // Pass 2: mean/variance over the kept half-window (or the full
+                // window if no edge orientation was resolvable).
+                let mut n = 0usize;
+                let mut sum = 0.0;
+                let mut sumsq = 0.0;
+                for wr in r0..=r1 {
+                    for wc in c0..=c1 {
+                        let v = unsafe { image.get_unchecked(wr, wc) };
+                        if is_nodata(v, nodata) {
+                            continue;
+                        }
+                        let keep = if best_g < 0.0 {
+                            true
+                        } else {
+                            let p = proj(
+                                best_d,
+                                wr as isize - row as isize,
+                                wc as isize - col as isize,
+                            );
+                            p == 0 || (keep_pos && p > 0) || (!keep_pos && p < 0)
+                        };
+                        if keep {
+                            n += 1;
+                            sum += v;
+                            sumsq += v * v;
+                        }
+                    }
+                }
+
+                let mean = sum / n as f64;
+                if n < 2 || mean == 0.0 {
+                    *out = mean;
+                    continue;
+                }
                 let var = (sumsq / n as f64 - mean * mean).max(0.0);
                 let ci2 = var / (mean * mean);
                 let w = if ci2 <= cu2 { 0.0 } else { 1.0 - cu2 / ci2 };
@@ -391,5 +556,52 @@ mod tests {
         assert!(lee_filter(&img, 2, 1.0).is_err()); // even window
         assert!(lee_filter(&img, 1, 1.0).is_err()); // too small
         assert!(lee_filter(&img, 3, 0.0).is_err()); // bad ENL
+    }
+
+    #[test]
+    fn test_refined_lee_homogeneous_unchanged() {
+        let img = r(vec![5.0; 49], 7, 7);
+        let out = refined_lee_filter(&img, 7, 1.0).unwrap();
+        for v in out.data().iter() {
+            assert!((v - 5.0).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn test_refined_lee_preserves_edge_better_than_classic() {
+        // Vertical step: left half = 1, right half = 100. At a pixel on the
+        // dark (left) side next to the edge, the refined Lee keeps the dark
+        // half-window, so its output stays near 1 — closer to the homogeneous
+        // side than the classic Lee, which averages across the bright edge.
+        let n = 9;
+        let mut data = vec![0.0; n * n];
+        for i in 0..n {
+            for j in 0..n {
+                data[i * n + j] = if j < n / 2 { 1.0 } else { 100.0 };
+            }
+        }
+        let img = r(data, n, n);
+        let refined = refined_lee_filter(&img, 7, 4.0).unwrap();
+        let classic = lee_filter(&img, 7, 4.0).unwrap();
+        // pixel just left of the edge (col 3, edge between 3 and 4)
+        let (i, j) = (4, 3);
+        let rf = refined.get(i, j).unwrap();
+        let cl = classic.get(i, j).unwrap();
+        assert!(
+            (rf - 1.0).abs() < (cl - 1.0).abs(),
+            "refined Lee should preserve the dark side: refined={rf} classic={cl}"
+        );
+        assert!(
+            rf < 30.0,
+            "refined Lee should stay near the dark side, got {rf}"
+        );
+    }
+
+    #[test]
+    fn test_refined_lee_validation() {
+        let img = r(vec![1.0; 9], 3, 3);
+        assert!(refined_lee_filter(&img, 2, 1.0).is_err());
+        assert!(refined_lee_filter(&img, 1, 1.0).is_err());
+        assert!(refined_lee_filter(&img, 3, 0.0).is_err());
     }
 }
