@@ -9,6 +9,8 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.16.2] - 2026-06-29
+
 ### Added
 
 - **Refined Lee speckle filter** (`imagery::refined_lee_filter`, Lee 1981) — the
