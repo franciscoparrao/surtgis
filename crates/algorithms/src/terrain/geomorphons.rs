@@ -67,7 +67,7 @@ const DIRECTIONS: [(isize, isize); 8] = [
 /// * `params` - Search radius and flatness threshold
 ///
 /// # Returns
-/// Raster<u8> with landform class codes (1-10)
+/// `Raster<u8>` with landform class codes (1-10)
 pub fn geomorphons(dem: &Raster<f64>, params: GeomorphonParams) -> Result<Raster<u8>> {
     if params.radius == 0 {
         return Err(Error::Algorithm("Radius must be > 0".into()));

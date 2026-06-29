@@ -37,7 +37,7 @@ impl Default for SvfParams {
 /// * `params` - Search radius and number of directions
 ///
 /// # Returns
-/// Raster<f64> with SVF values [0, 1]
+/// `Raster<f64>` with SVF values [0, 1]
 pub fn sky_view_factor(dem: &Raster<f64>, params: SvfParams) -> Result<Raster<f64>> {
     if params.radius == 0 || params.directions == 0 {
         return Err(Error::Algorithm("Radius and directions must be > 0".into()));

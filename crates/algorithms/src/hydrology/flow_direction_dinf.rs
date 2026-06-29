@@ -87,7 +87,7 @@ pub struct DinfResult {
 /// * `dem` - Input DEM (should be hydrologically conditioned)
 ///
 /// # Returns
-/// Raster<f64> with flow direction angles in radians.
+/// `Raster<f64>` with flow direction angles in radians.
 /// -1.0 indicates a pit/flat cell (no downslope).
 pub fn flow_direction_dinf(dem: &Raster<f64>) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
@@ -251,7 +251,7 @@ fn dinf_receivers(angle: f64) -> [(usize, f64); 2] {
 ///   convention)
 ///
 /// # Returns
-/// Raster<f64> with fractional accumulation values; NaN where the
+/// `Raster<f64>` with fractional accumulation values; NaN where the
 /// input angle is NaN.
 pub fn flow_accumulation_dinf(angles: &Raster<f64>) -> Result<Raster<f64>> {
     let (rows, cols) = angles.shape();

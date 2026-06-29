@@ -73,7 +73,7 @@ impl Default for AdaptiveMfdParams {
 /// * `params` — Adaptive MFD parameters
 ///
 /// # Returns
-/// Raster<f64> with flow accumulation (contributing area in cell counts)
+/// `Raster<f64>` with flow accumulation (contributing area in cell counts)
 pub fn flow_accumulation_mfd_adaptive(
     dem: &Raster<f64>,
     params: AdaptiveMfdParams,

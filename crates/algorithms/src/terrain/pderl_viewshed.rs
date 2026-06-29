@@ -61,7 +61,7 @@ impl Default for PderlViewshedParams {
 /// * `params` — Observer position and parameters
 ///
 /// # Returns
-/// Raster<u8> where 1 = visible, 0 = not visible
+/// `Raster<u8>` where 1 = visible, 0 = not visible
 pub fn viewshed_pderl(dem: &Raster<f64>, params: PderlViewshedParams) -> Result<Raster<u8>> {
     let (rows, cols) = dem.shape();
     let cell_size = dem.cell_size();

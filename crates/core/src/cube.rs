@@ -18,7 +18,7 @@
 //!
 //! let mut slices = Vec::new();
 //! for t in 0..3 {
-//!     let mut r: Raster<f64> = Raster::new(4, 4);
+//!     let mut r: `Raster<f64>` = Raster::new(4, 4);
 //!     r.set_transform(GeoTransform::new(0.0, 4.0, 1.0, -1.0));
 //!     for row in 0..4 {
 //!         for col in 0..4 {

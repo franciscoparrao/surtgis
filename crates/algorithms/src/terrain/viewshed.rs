@@ -58,7 +58,7 @@ impl Default for ViewshedParams {
 /// * `params` - Observer position and height parameters
 ///
 /// # Returns
-/// Raster<u8> where 1 = visible, 0 = not visible
+/// `Raster<u8>` where 1 = visible, 0 = not visible
 pub fn viewshed(dem: &Raster<f64>, params: ViewshedParams) -> Result<Raster<u8>> {
     let (rows, cols) = dem.shape();
 
@@ -225,7 +225,7 @@ fn trace_ray(
 /// * `params` — Observer position and height parameters (same as [`viewshed`])
 ///
 /// # Returns
-/// Raster<u8> where 1 = visible, 0 = not visible
+/// `Raster<u8>` where 1 = visible, 0 = not visible
 pub fn viewshed_xdraw(dem: &Raster<f64>, params: ViewshedParams) -> Result<Raster<u8>> {
     let (rows, cols) = dem.shape();
 
@@ -531,7 +531,7 @@ impl Lcg {
 /// * `params` — Probabilistic viewshed parameters
 ///
 /// # Returns
-/// Raster<f64> with visibility probabilities in [0.0, 1.0]
+/// `Raster<f64>` with visibility probabilities in [0.0, 1.0]
 pub fn viewshed_probabilistic(
     dem: &Raster<f64>,
     params: ProbabilisticViewshedParams,

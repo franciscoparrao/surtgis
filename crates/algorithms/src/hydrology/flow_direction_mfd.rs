@@ -82,7 +82,7 @@ impl Default for MfdParams {
 /// * `params` - MFD parameters (exponent)
 ///
 /// # Returns
-/// Raster<f64> with MFD flow accumulation (contributing area in cell counts)
+/// `Raster<f64>` with MFD flow accumulation (contributing area in cell counts)
 pub fn flow_accumulation_mfd(dem: &Raster<f64>, params: MfdParams) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
     let nodata = dem.nodata();

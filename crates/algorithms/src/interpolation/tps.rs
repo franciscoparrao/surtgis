@@ -64,7 +64,7 @@ fn tps_kernel(r: f64) -> f64 {
 /// * `params` — Output grid specification and smoothing parameter
 ///
 /// # Returns
-/// Raster<f64> with interpolated values. Cells outside the convex hull of
+/// `Raster<f64>` with interpolated values. Cells outside the convex hull of
 /// sample points are extrapolated (TPS naturally handles extrapolation,
 /// though values may be unreliable far from data).
 ///

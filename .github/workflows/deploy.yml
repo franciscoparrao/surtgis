@@ -60,6 +60,20 @@ jobs:
           mkdir -p web/dist/book
           cp -r docs/book/book/. web/dist/book/
 
+      # --- API reference (rustdoc), deployed as /api/ within the same site ---
+      - name: Build API reference (cargo doc)
+        run: |
+          cargo doc --no-deps --workspace \
+            --exclude surtgis-gui --exclude surtgis-python
+
+      - name: Merge API docs into Pages artifact
+        run: |
+          mkdir -p web/dist/api
+          cp -r target/doc/. web/dist/api/
+          # Land /api/ on the core crate's docs.
+          printf '<!doctype html><meta http-equiv="refresh" content="0; url=surtgis_core/index.html">\n' \
+            > web/dist/api/index.html
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:

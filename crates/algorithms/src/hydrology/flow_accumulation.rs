@@ -57,7 +57,7 @@ impl Algorithm for FlowAccumulation {
 /// * `flow_dir` - D8 flow direction raster (output from `flow_direction`)
 ///
 /// # Returns
-/// Raster<f64> with flow accumulation values
+/// `Raster<f64>` with flow accumulation values
 pub fn flow_accumulation(flow_dir: &Raster<u8>) -> Result<Raster<f64>> {
     let (rows, cols) = flow_dir.shape();
 

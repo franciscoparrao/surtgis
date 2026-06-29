@@ -82,7 +82,7 @@ impl Algorithm for FlowDirection {
 /// * `dem` - Input DEM (ideally filled)
 ///
 /// # Returns
-/// Raster<u8> with flow direction codes
+/// `Raster<u8>` with flow direction codes
 pub fn flow_direction(dem: &Raster<f64>) -> Result<Raster<u8>> {
     let (rows, cols) = dem.shape();
     let nodata = dem.nodata();

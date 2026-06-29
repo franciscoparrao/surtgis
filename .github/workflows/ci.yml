@@ -25,6 +25,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # The PyPI wheel version (crates/python/pyproject.toml) is independent of
+      # the Cargo workspace version and has silently drifted before (it sat at
+      # 0.8.1 while the crates were 0.15.x). Fail fast if they disagree.
+      - name: Version consistency (workspace vs pyproject)
+        run: |
+          ws=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          py=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/python/pyproject.toml | head -1)
+          echo "workspace=$ws  pyproject=$py"
+          if [ "$ws" != "$py" ]; then
+            echo "::error::version mismatch: Cargo workspace $ws != pyproject $py"
+            exit 1
+          fi
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy

@@ -54,7 +54,7 @@ const OFFSETS: [(isize, isize); 8] = [
 /// * `params` — TFGA parameters
 ///
 /// # Returns
-/// Raster<f64> with flow accumulation (contributing area in cell counts)
+/// `Raster<f64>` with flow accumulation (contributing area in cell counts)
 pub fn flow_accumulation_tfga(dem: &Raster<f64>, params: TfgaParams) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
     let nodata = dem.nodata();

@@ -76,7 +76,7 @@ impl Algorithm for Watershed {
 /// * `params` - Watershed parameters (pour points)
 ///
 /// # Returns
-/// Raster<i32> with basin labels (0 = unassigned/nodata)
+/// `Raster<i32>` with basin labels (0 = unassigned/nodata)
 pub fn watershed(flow_dir: &Raster<u8>, params: WatershedParams) -> Result<Raster<i32>> {
     let (rows, cols) = flow_dir.shape();
     let mut basins = Array2::<i32>::zeros((rows, cols));

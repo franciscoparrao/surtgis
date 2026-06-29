@@ -163,7 +163,7 @@ impl VertexC {
 
 /// Per-frame uniforms — 144 bytes, every field a vec4 slot to keep the
 /// std140-equivalent layout obvious on both sides of the FFI:
-///   view_proj            : mat4x4<f32>   (offset   0,  64 B)
+///   view_proj            : `mat4x4<f32>`   (offset   0,  64 B)
 ///   light_dir.xyz        : vec3 in vec4  (offset  64,  16 B)  // direction TOWARDS light
 ///   light_color.xyz / .w : colour + amb. (offset  80,  16 B)
 ///   vertical_scale.x     : f32 in vec4   (offset  96,  16 B)
