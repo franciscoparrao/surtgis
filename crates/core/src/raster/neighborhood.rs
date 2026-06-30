@@ -122,6 +122,7 @@ pub struct NeighborhoodIterator<'a, T: RasterElement> {
 }
 
 impl<'a, T: RasterElement> NeighborhoodIterator<'a, T> {
+    /// Iterate over the cells of `neighborhood` centred on `(row, col)`.
     pub fn new(raster: &'a Raster<T>, row: usize, col: usize, neighborhood: Neighborhood) -> Self {
         Self {
             raster,

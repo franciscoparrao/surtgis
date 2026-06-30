@@ -38,9 +38,13 @@ use crate::error::{Error, Result};
 /// A typed attribute column of a [`PointTable`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum ColumnData {
+    /// 64-bit float values.
     F64(Vec<f64>),
+    /// 32-bit float values.
     F32(Vec<f32>),
+    /// 64-bit signed integer values.
     I64(Vec<i64>),
+    /// UTF-8 string values.
     Str(Vec<String>),
 }
 
@@ -58,7 +62,9 @@ impl ColumnData {
 /// A named attribute column.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Column {
+    /// Column name.
     pub name: String,
+    /// Column values.
     pub data: ColumnData,
 }
 
@@ -69,18 +75,23 @@ pub struct Column {
 /// one column per attribute or embedding dimension.
 #[derive(Debug, Clone, Default)]
 pub struct PointTable {
+    /// X coordinates, one per point.
     pub x: Vec<f64>,
+    /// Y coordinates, one per point.
     pub y: Vec<f64>,
     /// EPSG code of the point coordinates, if known.
     pub epsg: Option<u32>,
+    /// Attribute columns; each has the same length as `x` / `y`.
     pub columns: Vec<Column>,
 }
 
 impl PointTable {
+    /// Number of points (rows).
     pub fn len(&self) -> usize {
         self.x.len()
     }
 
+    /// Whether the table has no points.
     pub fn is_empty(&self) -> bool {
         self.x.is_empty()
     }
