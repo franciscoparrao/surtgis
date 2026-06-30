@@ -30,6 +30,9 @@
 //! img.save_png("relief.png")?;
 //! ```
 
+// Part of the engine ecosystem's stable surface: every public item must be documented.
+#![deny(missing_docs)]
+
 use thiserror::Error;
 
 mod ambient;
@@ -55,12 +58,16 @@ pub use surtgis_colormap::{rgba_to_png_bytes, save_png};
 /// Errors produced by the relief crate.
 #[derive(Debug, Error)]
 pub enum ReliefError {
+    /// An underlying terrain algorithm (in `surtgis-algorithms`/`surtgis-core`) failed.
     #[error("algorithm: {0}")]
     Algorithm(#[from] surtgis_core::Error),
+    /// Pixel-buffer or PNG encoding failed.
     #[error("encode: {0}")]
     Encode(#[from] EncodeError),
+    /// Two inputs had incompatible dimensions; the message names the mismatch.
     #[error("shape mismatch: {0}")]
     Shape(String),
+    /// A parameter was outside its valid range; the message names the parameter.
     #[error("invalid parameter: {0}")]
     InvalidParam(String),
 }

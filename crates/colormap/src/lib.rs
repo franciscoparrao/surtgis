@@ -15,6 +15,9 @@
 //! let rgba = raster_to_rgba(&raster, &params);
 //! ```
 
+// Part of the engine ecosystem's stable surface: every public item must be documented.
+#![deny(missing_docs)]
+
 mod encode;
 mod render;
 mod scheme;

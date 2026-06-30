@@ -5,12 +5,16 @@
 /// RGB color as (r, g, b) with values in 0..=255.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rgb {
+    /// Red channel, 0..=255.
     pub r: u8,
+    /// Green channel, 0..=255.
     pub g: u8,
+    /// Blue channel, 0..=255.
     pub b: u8,
 }
 
 impl Rgb {
+    /// Construct an RGB color from its three 8-bit channels.
     pub const fn new(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b }
     }
@@ -22,11 +26,14 @@ impl Rgb {
 /// A color stop: position in [0, 1] mapped to an RGB color.
 #[derive(Debug, Clone, Copy)]
 pub struct ColorStop {
+    /// Position of the stop along the ramp, in `[0, 1]`.
     pub t: f64,
+    /// Color at this stop.
     pub color: Rgb,
 }
 
 impl ColorStop {
+    /// Construct a color stop at position `t` (in `[0, 1]`) with the given RGB channels.
     pub const fn new(t: f64, r: u8, g: u8, b: u8) -> Self {
         Self {
             t,

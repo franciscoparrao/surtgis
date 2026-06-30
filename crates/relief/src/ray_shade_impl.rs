@@ -29,6 +29,8 @@ pub struct SunSample {
 }
 
 impl SunSample {
+    /// Create a sun position from its azimuth (degrees clockwise from North)
+    /// and altitude (degrees above the horizon).
     pub fn new(azimuth_deg: f64, altitude_deg: f64) -> Self {
         Self {
             azimuth_deg,
