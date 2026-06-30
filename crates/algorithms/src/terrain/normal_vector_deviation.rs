@@ -156,6 +156,7 @@ pub fn normal_vector_deviation(
 /// Streaming normal vector angular deviation implementing `WindowAlgorithm`.
 #[derive(Debug, Clone)]
 pub struct NormalDeviationStreaming {
+    /// Neighborhood radius in cells.
     pub radius: usize,
 }
 

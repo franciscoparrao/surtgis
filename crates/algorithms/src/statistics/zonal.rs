@@ -10,30 +10,50 @@ use surtgis_core::{Error, Result};
 /// Available zonal statistics
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ZonalStatistic {
+    /// Arithmetic mean of the zone's values.
     Mean,
+    /// Population standard deviation of the zone's values.
     StdDev,
+    /// Minimum value in the zone.
     Min,
+    /// Maximum value in the zone.
     Max,
+    /// Difference between the zone's maximum and minimum.
     Range,
+    /// Sum of the zone's values.
     Sum,
+    /// Number of valid cells in the zone.
     Count,
+    /// Median value of the zone.
     Median,
+    /// Most frequent value in the zone (mode).
     Majority,
+    /// Least frequent value in the zone.
     Minority,
+    /// Count of distinct values in the zone.
     Variety,
 }
 
 /// Result of zonal statistics for one zone
 #[derive(Debug, Clone)]
 pub struct ZonalResult {
+    /// Integer identifier of the zone.
     pub zone_id: i32,
+    /// Number of valid cells in the zone.
     pub count: usize,
+    /// Sum of the zone's values.
     pub sum: f64,
+    /// Arithmetic mean of the zone's values.
     pub mean: f64,
+    /// Population standard deviation of the zone's values.
     pub std_dev: f64,
+    /// Minimum value in the zone.
     pub min: f64,
+    /// Maximum value in the zone.
     pub max: f64,
+    /// Difference between the zone's maximum and minimum.
     pub range: f64,
+    /// Median value of the zone.
     pub median: f64,
 }
 

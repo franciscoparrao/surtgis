@@ -60,6 +60,7 @@ pub struct MadResult {
     pub correlations: Vec<f64>,
 }
 
+/// Parameters controlling the iteratively re-weighted MAD (IR-MAD) iteration.
 #[derive(Debug, Clone)]
 pub struct IrMadParams {
     /// Maximum iterations.
@@ -83,9 +84,12 @@ impl Default for IrMadParams {
     }
 }
 
+/// Output of an IR-MAD change-detection run.
 #[derive(Debug)]
 pub struct IrMadResult {
+    /// One MAD variate raster per input band.
     pub mad: Vec<Raster<f64>>,
+    /// Canonical correlation for each MAD variate.
     pub correlations: Vec<f64>,
     /// Per-pixel "no-change" probability from the chi-square test
     /// on the standardised MAD norm — `0` = clear change, `1` =

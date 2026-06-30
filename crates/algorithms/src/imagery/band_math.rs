@@ -11,12 +11,19 @@ use surtgis_core::{Error, Result};
 /// Binary operations for band math
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BandMathOp {
+    /// Per-pixel sum of the two bands.
     Add,
+    /// Per-pixel difference (first minus second band).
     Subtract,
+    /// Per-pixel product of the two bands.
     Multiply,
+    /// Per-pixel ratio (first divided by second band).
     Divide,
+    /// Per-pixel exponentiation (first band raised to the second).
     Power,
+    /// Per-pixel minimum of the two bands.
     Min,
+    /// Per-pixel maximum of the two bands.
     Max,
 }
 

@@ -25,6 +25,7 @@ use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
+/// Parameters for SLIC superpixel segmentation.
 #[derive(Debug, Clone)]
 pub struct SlicParams {
     /// Approximate target number of superpixels. The actual count is

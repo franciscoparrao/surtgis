@@ -141,6 +141,7 @@ pub fn spherical_std_dev(dem: &Raster<f64>, params: SphericalStdDevParams) -> Re
 /// Streaming spherical standard deviation implementing `WindowAlgorithm`.
 #[derive(Debug, Clone)]
 pub struct SphericalStdDevStreaming {
+    /// Neighborhood radius in cells.
     pub radius: usize,
 }
 

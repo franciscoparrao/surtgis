@@ -101,6 +101,7 @@ pub fn percent_elev_range(
 /// Streaming percent elevation range implementing `WindowAlgorithm`.
 #[derive(Debug, Clone)]
 pub struct PercentElevRangeStreaming {
+    /// Neighborhood radius in cells.
     pub radius: usize,
 }
 

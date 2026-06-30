@@ -20,6 +20,7 @@ pub enum AnomalyMethod {
 }
 
 impl AnomalyMethod {
+    /// Parse a method from its name (e.g. `"zscore"`, `"difference"`, `"percent"`).
     pub fn from_str(s: &str) -> Result<Self> {
         match s.to_lowercase().as_str() {
             "zscore" | "z-score" | "z" => Ok(Self::ZScore),

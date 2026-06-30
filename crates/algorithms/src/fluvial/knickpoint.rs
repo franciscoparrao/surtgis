@@ -114,14 +114,19 @@ pub struct Knickpoint {
     pub polarity: KnickpointPolarity,
 }
 
+/// Errors specific to knickpoint detection.
 #[derive(Debug, thiserror::Error)]
 pub enum KnickpointError {
+    /// Building the stream graph failed.
     #[error(transparent)]
     Graph(#[from] StreamGraphError),
+    /// Two input rasters had incompatible shapes.
     #[error("input raster shapes disagree: {0:?} vs {1:?}")]
     ShapeMismatch((usize, usize), (usize, usize)),
+    /// `cell_size_m` was not strictly positive.
     #[error("KnickpointParams.cell_size_m must be > 0 (got {0})")]
     NonPositiveCellSize(f64),
+    /// The total-variation denoising weight `tvd_lambda` was not strictly positive.
     #[error("KnickpointParams.tvd_lambda must be > 0 (got {0})")]
     NonPositiveLambda(f64),
 }

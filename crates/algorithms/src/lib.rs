@@ -16,6 +16,9 @@
 //! - **morphology**: Erosion, dilation, opening, closing, gradient, top-hat, black-hat
 //! - **statistics**: Focal statistics, zonal statistics, spatial autocorrelation
 
+// Part of the engine ecosystem's stable surface: every public item must be documented.
+#![deny(missing_docs)]
+
 mod maybe_rayon;
 
 pub mod classification;

@@ -256,9 +256,13 @@ pub fn curvature(dem: &Raster<f64>, params: CurvatureParams) -> Result<Raster<f6
 /// and full/simplified curvature formulas as `curvature()`.
 #[derive(Debug, Clone)]
 pub struct CurvatureStreaming {
+    /// Which curvature component to compute (profile, plan, mean, etc.).
     pub curvature_type: CurvatureType,
+    /// Finite-difference derivative method (Evans-Young or Zevenbergen-Thorne).
     pub method: DerivativeMethod,
+    /// Full or simplified curvature formula variant.
     pub formula: CurvatureFormula,
+    /// Vertical exaggeration applied to elevations before the derivatives.
     pub z_factor: f64,
 }
 

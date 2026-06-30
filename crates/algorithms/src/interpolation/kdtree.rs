@@ -33,8 +33,11 @@ struct KdNode {
 /// Result of a nearest-neighbor query
 #[derive(Debug, Clone, Copy)]
 pub struct NearestResult {
+    /// The matched sample point.
     pub point: SamplePoint,
+    /// Squared Euclidean distance from the query to `point`.
     pub distance_sq: f64,
+    /// Index of `point` in the original sample array.
     pub index: usize,
 }
 

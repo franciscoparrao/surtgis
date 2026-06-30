@@ -74,11 +74,17 @@ impl Default for SwathParams {
 pub struct SwathStats {
     /// Cumulative along-track distance from the baseline's first point, in metres.
     pub distance_along_m: f64,
+    /// Minimum sampled value in the bin.
     pub min: f64,
+    /// Maximum sampled value in the bin.
     pub max: f64,
+    /// Mean of the sampled values in the bin.
     pub mean: f64,
+    /// Median of the sampled values in the bin.
     pub median: f64,
+    /// 25th percentile of the sampled values in the bin.
     pub p25: f64,
+    /// 75th percentile of the sampled values in the bin.
     pub p75: f64,
     /// Count of valid (non-NaN, in-bounds) samples that contributed to the stats.
     pub n_samples: usize,
@@ -97,14 +103,19 @@ pub struct SwathProfile {
 /// Errors specific to [`swath_profile`].
 #[derive(Debug, thiserror::Error)]
 pub enum SwathError {
+    /// The baseline had fewer than two points.
     #[error("baseline must have at least 2 points (got {0})")]
     DegenerateBaseline(usize),
+    /// `half_width_m` was not strictly positive.
     #[error("SwathParams.half_width_m must be > 0 (got {0})")]
     NonPositiveHalfWidth(f64),
+    /// `step_along_m` was not strictly positive.
     #[error("SwathParams.step_along_m must be > 0 (got {0})")]
     NonPositiveStepAlong(f64),
+    /// `step_cross_m` was not strictly positive.
     #[error("SwathParams.step_cross_m must be > 0 (got {0})")]
     NonPositiveStepCross(f64),
+    /// All baseline vertices coincided, giving zero total length.
     #[error("baseline has zero total length (all vertices coincident)")]
     ZeroLengthBaseline,
 }

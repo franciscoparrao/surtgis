@@ -30,6 +30,7 @@ use surtgis_core::{Error, Result};
 
 // ─── Landsat 8/9 Collection 2 Level-1 → TOA reflectance ─────────────
 
+/// Per-band coefficients for Landsat 8/9 Collection 2 Level-1 → TOA reflectance.
 #[derive(Debug, Clone, Copy)]
 pub struct LandsatToaParams {
     /// `M_p` from MTL: `REFLECTANCE_MULT_BAND_x` (typically 2e-5).
@@ -77,6 +78,7 @@ pub fn dn_to_surface_reflectance_landsat_c2(raster: &Raster<f64>) -> Result<Rast
 
 // ─── Sentinel-2 → TOA / BOA reflectance ─────────────────────────────
 
+/// Quantification value and offset for Sentinel-2 → TOA/BOA reflectance.
 #[derive(Debug, Clone, Copy)]
 pub struct S2ReflectanceParams {
     /// `BOA_QUANTIFICATION_VALUE` (L2A) or `QUANTIFICATION_VALUE`
@@ -117,6 +119,7 @@ pub fn dn_to_reflectance_s2(
 
 // ─── DOS1 (dark-object subtraction) ────────────────────────────────
 
+/// Parameters for DOS1 (dark-object subtraction) atmospheric correction.
 #[derive(Debug, Clone, Copy)]
 pub struct Dos1Params {
     /// Quantile used to estimate the per-band dark-object value.

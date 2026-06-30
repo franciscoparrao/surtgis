@@ -9,13 +9,18 @@ use std::collections::HashMap;
 /// Axis-aligned bounding box
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BoundingBox {
+    /// Minimum x (left edge).
     pub min_x: f64,
+    /// Minimum y (bottom edge).
     pub min_y: f64,
+    /// Maximum x (right edge).
     pub max_x: f64,
+    /// Maximum y (top edge).
     pub max_y: f64,
 }
 
 impl BoundingBox {
+    /// Construct a bounding box from its minimum and maximum coordinates.
     pub fn new(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> Self {
         Self {
             min_x,
@@ -25,18 +30,22 @@ impl BoundingBox {
         }
     }
 
+    /// Width of the box (`max_x - min_x`).
     pub fn width(&self) -> f64 {
         self.max_x - self.min_x
     }
 
+    /// Height of the box (`max_y - min_y`).
     pub fn height(&self) -> f64 {
         self.max_y - self.min_y
     }
 
+    /// Area of the box (`width * height`).
     pub fn area(&self) -> f64 {
         self.width() * self.height()
     }
 
+    /// Centre point of the box as `(x, y)`.
     pub fn center(&self) -> (f64, f64) {
         (
             (self.min_x + self.max_x) / 2.0,
@@ -44,10 +53,12 @@ impl BoundingBox {
         )
     }
 
+    /// Whether the point `(x, y)` lies within the box (edges inclusive).
     pub fn contains_point(&self, x: f64, y: f64) -> bool {
         x >= self.min_x && x <= self.max_x && y >= self.min_y && y <= self.max_y
     }
 
+    /// Whether this box overlaps `other` (edges inclusive).
     pub fn intersects(&self, other: &BoundingBox) -> bool {
         self.min_x <= other.max_x
             && self.max_x >= other.min_x
@@ -55,6 +66,7 @@ impl BoundingBox {
             && self.max_y >= other.min_y
     }
 
+    /// Convert the box to a closed rectangular [`Polygon`].
     pub fn to_polygon(&self) -> Polygon<f64> {
         Polygon::new(
             LineString::from(vec![

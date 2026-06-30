@@ -27,9 +27,11 @@ impl Default for RasterDiffParams {
     }
 }
 
-/// Change categories from raster difference
+/// Change category for cells whose value decreased beyond the threshold.
 pub const CHANGE_DECREASE: f64 = 1.0;
+/// Change category for cells whose value stayed within the threshold.
 pub const CHANGE_NO_CHANGE: f64 = 2.0;
+/// Change category for cells whose value increased beyond the threshold.
 pub const CHANGE_INCREASE: f64 = 3.0;
 
 /// Compute raster difference with change categories.

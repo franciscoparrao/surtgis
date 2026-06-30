@@ -139,6 +139,7 @@ pub fn circular_variance_aspect(
 /// Streaming circular variance of aspect implementing `WindowAlgorithm`.
 #[derive(Debug, Clone)]
 pub struct CircularVarianceStreaming {
+    /// Neighborhood radius in cells.
     pub radius: usize,
 }
 

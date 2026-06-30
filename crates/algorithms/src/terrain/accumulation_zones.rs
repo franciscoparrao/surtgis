@@ -24,10 +24,13 @@ use surtgis_core::{Error, Result};
 
 use super::curvature::{CurvatureParams, CurvatureType, curvature};
 
-/// Zone classification codes
+/// Zone code for accumulation areas (convergent, concave terrain).
 pub const ZONE_ACCUMULATION: f64 = 1.0;
+/// Zone code for transitional terrain leaning toward accumulation.
 pub const ZONE_TRANSITIONAL_ACC: f64 = 2.0;
+/// Zone code for transitional terrain leaning toward dispersion.
 pub const ZONE_TRANSITIONAL_DISP: f64 = 3.0;
+/// Zone code for dispersion areas (divergent, convex terrain).
 pub const ZONE_DISPERSION: f64 = 4.0;
 
 /// Classify terrain into accumulation and dispersion zones

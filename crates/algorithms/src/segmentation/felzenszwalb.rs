@@ -22,6 +22,7 @@ use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
+/// Parameters for Felzenszwalb–Huttenlocher graph-based segmentation.
 #[derive(Debug, Clone)]
 pub struct FelzenszwalbParams {
     /// Scale parameter `k`. Roughly the smallest edge weight that

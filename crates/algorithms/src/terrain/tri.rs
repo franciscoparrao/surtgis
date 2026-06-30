@@ -136,6 +136,7 @@ pub fn tri(dem: &Raster<f64>, params: TriParams) -> Result<Raster<f64>> {
 /// `TRI = sqrt( sum( (z_neighbor - z_center)^2 ) / n )`
 #[derive(Debug, Clone)]
 pub struct TriStreaming {
+    /// Neighborhood radius in cells.
     pub radius: usize,
 }
 

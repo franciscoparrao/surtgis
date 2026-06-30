@@ -164,6 +164,7 @@ fn compute_aspect_at(data: &Array2<f64>, row: usize, col: usize, rows: usize, co
 /// neighbor requires a 3x3 Horn window around that neighbor.
 #[derive(Debug, Clone)]
 pub struct ConvergenceStreaming {
+    /// Neighborhood radius in cells.
     pub radius: usize,
 }
 

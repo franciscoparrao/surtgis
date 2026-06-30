@@ -31,10 +31,13 @@ use super::{KsnResult, KsnSegment, LongProfile, SwathProfile, SwathStats};
 /// Errors raised by the writers.
 #[derive(Debug, thiserror::Error)]
 pub enum ExportError {
+    /// CSV serialization failed.
     #[error("csv error: {0}")]
     Csv(#[from] csv::Error),
+    /// JSON serialization failed.
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
+    /// Writing the output file failed.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -144,6 +147,7 @@ struct SwathRow {
     n_samples: usize,
 }
 
+/// Write a swath profile as CSV, one row per bin, to the given writer.
 pub fn write_swath_csv<W: Write>(swath: &SwathProfile, w: W) -> Result<(), ExportError> {
     let mut wtr = csv::Writer::from_writer(w);
     for (i, b) in swath.bins.iter().enumerate() {
@@ -170,6 +174,7 @@ pub fn write_swath_csv<W: Write>(swath: &SwathProfile, w: W) -> Result<(), Expor
     Ok(())
 }
 
+/// Write a swath profile as a JSON array of per-bin records to the given writer.
 pub fn write_swath_json<W: Write>(swath: &SwathProfile, w: W) -> Result<(), ExportError> {
     let rows: Vec<SwathRow> = swath
         .bins

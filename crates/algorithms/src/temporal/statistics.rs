@@ -11,10 +11,15 @@ use surtgis_core::{Error, Result};
 
 /// All temporal statistics in a single pass.
 pub struct TemporalStats {
+    /// Per-cell mean across the time stack.
     pub mean: Raster<f64>,
+    /// Per-cell population standard deviation across the time stack.
     pub std: Raster<f64>,
+    /// Per-cell minimum across the time stack.
     pub min: Raster<f64>,
+    /// Per-cell maximum across the time stack.
     pub max: Raster<f64>,
+    /// Per-cell count of valid (non-NoData) observations.
     pub count: Raster<f64>,
 }
 

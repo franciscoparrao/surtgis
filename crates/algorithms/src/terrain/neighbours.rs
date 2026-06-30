@@ -19,10 +19,15 @@ use surtgis_core::{Error, Result};
 
 /// All 5 neighbour statistics in a single pass.
 pub struct NeighbourStatsResult {
+    /// Largest elevation drop to a lower neighbour (steepest descent).
     pub max_downslope_change: Raster<f64>,
+    /// Smallest elevation drop to a lower neighbour (gentlest descent).
     pub min_downslope_change: Raster<f64>,
+    /// Largest elevation rise to a higher neighbour (steepest ascent).
     pub max_upslope_change: Raster<f64>,
+    /// Count of neighbours lower than the centre cell.
     pub num_downslope: Raster<f64>,
+    /// Count of neighbours higher than the centre cell.
     pub num_upslope: Raster<f64>,
 }
 

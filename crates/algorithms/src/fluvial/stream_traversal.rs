@@ -57,6 +57,7 @@ const D8_OFFSETS: [(isize, isize); 9] = [
 /// Errors that can be raised by [`build_stream_graph`].
 #[derive(Debug, thiserror::Error)]
 pub enum StreamGraphError {
+    /// The stream and flow-direction rasters had incompatible shapes.
     #[error("stream and flow_dir rasters disagree on shape: stream is {0:?}, flow_dir is {1:?}")]
     ShapeMismatch((usize, usize), (usize, usize)),
 }
@@ -81,9 +82,13 @@ pub enum StreamGraphError {
 /// for convenience so consumers can iterate outlets without scanning.
 #[derive(Debug, Clone)]
 pub struct StreamGraph {
+    /// `(row, col)` of each stream cell; its index is the node identifier.
     pub stream_cells: Vec<(usize, usize)>,
+    /// Downstream node each node flows into, or `None` for outlets.
     pub downstream_link: Vec<Option<usize>>,
+    /// Upstream nodes feeding into each node (length ≥ 2 at confluences).
     pub upstream_links: Vec<Vec<usize>>,
+    /// Whether each node is an outlet (has no downstream link).
     pub is_outlet: Vec<bool>,
 }
 

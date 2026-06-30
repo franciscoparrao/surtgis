@@ -79,10 +79,13 @@ pub struct LongProfile {
 /// Errors specific to long-profile extraction.
 #[derive(Debug, thiserror::Error)]
 pub enum LongProfileError {
+    /// Building the stream graph failed.
     #[error(transparent)]
     Graph(#[from] StreamGraphError),
+    /// Two input rasters had incompatible shapes.
     #[error("input raster shapes disagree: {0:?} vs {1:?}")]
     ShapeMismatch((usize, usize), (usize, usize)),
+    /// `cell_size_m` was not strictly positive.
     #[error("LongProfileParams.cell_size_m must be > 0 (got {0})")]
     NonPositiveCellSize(f64),
 }
