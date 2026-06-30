@@ -16,18 +16,26 @@ use thiserror::Error;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 
+/// Errors produced when building or encoding an [`RgbaImage`].
 #[derive(Debug, Error)]
 pub enum EncodeError {
+    /// The pixel buffer length did not match `width * height * 4`.
     #[error("shape mismatch: pixels.len()={got}, expected={expected} ({width}x{height}x4)")]
     Shape {
+        /// Image width in pixels.
         width: usize,
+        /// Image height in pixels.
         height: usize,
+        /// Actual length of the supplied buffer.
         got: usize,
+        /// Length the buffer should have had (`width * height * 4`).
         expected: usize,
     },
+    /// The `image` crate failed to encode the PNG (native builds only).
     #[cfg(not(target_arch = "wasm32"))]
     #[error("png encode: {0}")]
     Png(#[from] image::ImageError),
+    /// Writing the PNG to disk failed (native builds only).
     #[cfg(not(target_arch = "wasm32"))]
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
@@ -43,8 +51,11 @@ pub type Result<T> = std::result::Result<T, EncodeError>;
 /// [`crate::raster_to_rgba`].
 #[derive(Debug, Clone)]
 pub struct RgbaImage {
+    /// Image width in pixels.
     pub width: usize,
+    /// Image height in pixels.
     pub height: usize,
+    /// Row-major RGBA bytes; length is `width * height * 4`.
     pub pixels: Vec<u8>,
 }
 
