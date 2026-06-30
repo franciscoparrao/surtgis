@@ -35,13 +35,18 @@ pub use gpkg_reader::{list_gpkg_layers, read_gpkg};
 #[cfg(feature = "shapefile")]
 pub use shapefile_reader::read_shapefile;
 
-/// Attribute value types
+/// A feature attribute value (one cell of a vector attribute table).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AttributeValue {
+    /// No value / missing.
     Null,
+    /// Boolean.
     Bool(bool),
+    /// 64-bit signed integer.
     Int(i64),
+    /// 64-bit float.
     Float(f64),
+    /// UTF-8 string.
     String(String),
 }
 
@@ -86,31 +91,37 @@ impl Feature {
     }
 }
 
-/// Collection of features
+/// An ordered collection of [`Feature`]s.
 #[derive(Debug, Clone, Default)]
 pub struct FeatureCollection {
+    /// The features, in insertion order.
     pub features: Vec<Feature>,
 }
 
 impl FeatureCollection {
+    /// Create an empty collection.
     pub fn new() -> Self {
         Self {
             features: Vec::new(),
         }
     }
 
+    /// Append a feature.
     pub fn push(&mut self, feature: Feature) {
         self.features.push(feature);
     }
 
+    /// Number of features.
     pub fn len(&self) -> usize {
         self.features.len()
     }
 
+    /// Whether the collection has no features.
     pub fn is_empty(&self) -> bool {
         self.features.is_empty()
     }
 
+    /// Iterate over the features by reference.
     pub fn iter(&self) -> impl Iterator<Item = &Feature> {
         self.features.iter()
     }

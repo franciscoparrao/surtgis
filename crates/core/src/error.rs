@@ -2,54 +2,81 @@
 
 use thiserror::Error;
 
-/// Main error type for SurtGis operations
+/// Main error type for SurtGis operations.
 #[derive(Error, Debug)]
 pub enum Error {
+    /// An underlying filesystem / I/O error.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
+    /// A raster was requested with zero or otherwise invalid dimensions.
     #[error("Invalid raster dimensions: {width}x{height}")]
-    InvalidDimensions { width: usize, height: usize },
+    InvalidDimensions {
+        /// Requested width in cells.
+        width: usize,
+        /// Requested height in cells.
+        height: usize,
+    },
 
+    /// A `(row, col)` access fell outside the raster bounds.
     #[error("Index out of bounds: ({row}, {col}) in raster of size ({rows}, {cols})")]
     IndexOutOfBounds {
+        /// Requested row.
         row: usize,
+        /// Requested column.
         col: usize,
+        /// Raster height (number of rows).
         rows: usize,
+        /// Raster width (number of columns).
         cols: usize,
     },
 
+    /// Two rasters that had to be the same shape disagreed.
     #[error("Raster size mismatch: expected ({er}, {ec}), got ({ar}, {ac})")]
     SizeMismatch {
+        /// Expected number of rows.
         er: usize,
+        /// Expected number of columns.
         ec: usize,
+        /// Actual number of rows.
         ar: usize,
+        /// Actual number of columns.
         ac: usize,
     },
 
+    /// Two inputs declared incompatible coordinate reference systems.
     #[error("CRS mismatch: {0} vs {1}")]
     CrsMismatch(String, String),
 
+    /// A pixel data type the operation does not support.
     #[error("Unsupported data type: {0}")]
     UnsupportedDataType(String),
 
+    /// An operation that needs a nodata value was called on a raster without one.
     #[error("No data value not set")]
     NoDataNotSet,
 
+    /// An error surfaced by the optional GDAL backend.
     #[error("GDAL error: {0}")]
     #[cfg(feature = "gdal")]
     Gdal(String),
 
+    /// A caller-supplied parameter was out of range or otherwise invalid.
     #[error("Invalid parameter: {name} = {value} ({reason})")]
     InvalidParameter {
+        /// Parameter name.
         name: &'static str,
+        /// The offending value (formatted).
         value: String,
+        /// Why it was rejected.
         reason: String,
     },
 
+    /// A numerical / algorithmic failure inside a computation.
     #[error("Algorithm error: {0}")]
     Algorithm(String),
 
+    /// Any other error, carrying a human-readable message.
     #[error("{0}")]
     Other(String),
 }

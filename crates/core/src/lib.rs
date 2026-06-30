@@ -21,6 +21,10 @@
 //! `surtgis-core = "0.15"` alone; the CLI and GUI crates carry no
 //! stability promise.
 
+// The foundation crate's public API is part of the stability contract, so every
+// public item must be documented — enforced at build time.
+#![deny(missing_docs)]
+
 pub mod crs;
 pub mod cube;
 pub mod error;
