@@ -258,7 +258,7 @@ pub fn vincenty_distance(
 /// * `params` — Spheroid parameters
 ///
 /// # Returns
-/// Raster<f64> with slope in radians
+/// `Raster<f64>` with slope in radians
 pub fn slope_geographic(dem: &Raster<f64>, params: SpheroidalParams) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
     let tf = dem.transform();

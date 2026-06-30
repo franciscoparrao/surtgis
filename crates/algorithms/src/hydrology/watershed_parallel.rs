@@ -48,7 +48,7 @@ impl Default for ParallelWatershedParams {
 /// * `params` — Parameters
 ///
 /// # Returns
-/// Raster<u32> with basin labels (1-indexed, 0 = unassigned)
+/// `Raster<u32>` with basin labels (1-indexed, 0 = unassigned)
 pub fn watershed_parallel(
     flow_dir: &Raster<u8>,
     flow_acc: &Raster<f64>,

@@ -292,7 +292,7 @@ impl CogReader {
         }
     }
 
-    /// Fetch tiles, decompress, and assemble into a Raster<T>.
+    /// Fetch tiles, decompress, and assemble into a `Raster<T>`.
     async fn assemble_raster<T: RasterElement>(
         &mut self,
         ifd_idx: usize,

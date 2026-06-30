@@ -223,7 +223,7 @@ pub fn horizon_angles(dem: &Raster<f64>, params: HorizonParams) -> Result<Horizo
 /// * `radius` — Search radius in cells
 ///
 /// # Returns
-/// Raster<f64> with horizon angles in radians at each cell.
+/// `Raster<f64>` with horizon angles in radians at each cell.
 pub fn horizon_angle_map(
     dem: &Raster<f64>,
     azimuth_rad: f64,

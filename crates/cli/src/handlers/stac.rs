@@ -268,7 +268,7 @@ struct StacIndexCatalog {
     pub url: Option<String>,
 }
 
-/// Fetch catalogs from OGC STAC Index API (https://stacindex.org/api/v1)
+/// Fetch catalogs from OGC STAC Index API (<https://stacindex.org/api/v1>)
 ///
 /// Returns a list of catalog summaries with ID, title, description, and URL.
 /// This is optional - if it fails, users can still use curated catalogs.

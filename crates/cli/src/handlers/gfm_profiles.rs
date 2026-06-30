@@ -11,13 +11,13 @@
 //!                     6 bands (B02, B03, B04, B05, B06, B07), tile 224x224,
 //!                     DN units (Sentinel-2 L2A surface reflectance × 10000).
 //!                     Normalization stats from the official model config:
-//!                     https://huggingface.co/ibm-nasa-geospatial/Prithvi-EO-2.0-300M
+//!                     <https://huggingface.co/ibm-nasa-geospatial/Prithvi-EO-2.0-300M>
 //!
 //!   - `clay-v1.5`   → Clay Foundation Model v1.5 (Sentinel-2 path)
 //!                     10 bands (B02-B12 less B09/B10), tile 256x256.
 //!                     Reflectance [0,1] units. Normalization stats from the
 //!                     official Clay metadata.yaml:
-//!                     https://github.com/Clay-foundation/model
+//!                     <https://github.com/Clay-foundation/model>
 //!
 //! Both profiles are intended as sensible defaults for the most common
 //! pre-trained variants. Fine-tuned model variants may use different bands

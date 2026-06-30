@@ -51,7 +51,7 @@ impl Default for VrmParams {
 /// * `params` — VRM parameters (neighborhood radius)
 ///
 /// # Returns
-/// Raster<f64> with VRM values in [0, 1].
+/// `Raster<f64>` with VRM values in [0, 1].
 pub fn vrm(dem: &Raster<f64>, params: VrmParams) -> Result<Raster<f64>> {
     let rows = dem.rows();
     let cols = dem.cols();

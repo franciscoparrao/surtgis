@@ -248,7 +248,7 @@ fn collect_bands(expr: &Expr, names: &mut Vec<String>) {
 ///   the same dimensions.
 ///
 /// # Returns
-/// Raster<f64> with the computed index values.
+/// `Raster<f64>` with the computed index values.
 ///
 /// # Errors
 /// - If formula is invalid (parse error)

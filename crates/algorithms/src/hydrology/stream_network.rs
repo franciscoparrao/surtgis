@@ -34,7 +34,7 @@ impl Default for StreamNetworkParams {
 /// * `params` - Stream network parameters (threshold)
 ///
 /// # Returns
-/// Raster<u8> with 1 = stream cell, 0 = non-stream cell
+/// `Raster<u8>` with 1 = stream cell, 0 = non-stream cell
 pub fn stream_network(flow_acc: &Raster<f64>, params: StreamNetworkParams) -> Result<Raster<u8>> {
     let (rows, cols) = flow_acc.shape();
     let threshold = params.threshold;

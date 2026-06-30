@@ -53,7 +53,7 @@ impl Default for Ssa2dParams {
 /// * `params` — 2D-SSA parameters
 ///
 /// # Returns
-/// Raster<f64> with denoised DEM
+/// `Raster<f64>` with denoised DEM
 pub fn ssa_2d(dem: &Raster<f64>, params: Ssa2dParams) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
     let lr = params.window_rows;

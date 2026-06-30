@@ -21,7 +21,7 @@
 //! No compression in v1 — users who want it can re-roll with the
 //! `zarr` Python package, which can read this output directly.
 //!
-//! Spec reference: https://zarr.readthedocs.io/en/stable/spec/v2.html
+//! Spec reference: <https://zarr.readthedocs.io/en/stable/spec/v2.html>
 
 use anyhow::{Context, Result};
 use std::fs::{self, File};

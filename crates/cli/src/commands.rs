@@ -123,8 +123,8 @@ pub enum Commands {
         #[arg(long, default_value = "npy")]
         output_format: String,
         /// Emit STAC ML-AOI Collection + Items describing the chips as
-        /// labelled training data. Writes <output>/stac/collection.json
-        /// and <output>/stac/items/chip_NNNNNN.json. When a --profile is
+        /// labelled training data. Writes `<output>/stac/collection.json`
+        /// and `<output>/stac/items/chip_NNNNNN.json`. When a --profile is
         /// also set, the Collection embeds the MLM extension declaring
         /// the target foundation model.
         #[arg(long)]

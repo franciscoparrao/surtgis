@@ -57,7 +57,7 @@ impl Default for HandParams {
 /// * `params` - HAND parameters (stream threshold)
 ///
 /// # Returns
-/// Raster<f64> with HAND values (meters). Stream cells have HAND = 0.
+/// `Raster<f64>` with HAND values (meters). Stream cells have HAND = 0.
 /// Cells that cannot reach a stream (e.g., pits) get NaN.
 pub fn hand(
     dem: &Raster<f64>,
