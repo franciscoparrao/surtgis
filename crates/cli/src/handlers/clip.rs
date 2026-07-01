@@ -121,7 +121,7 @@ pub fn handle_rasterize(
 
     let (rows, cols) = ref_raster.shape();
     let start = Instant::now();
-    let result = surtgis_core::vector::rasterize_polygons(
+    let mut result = surtgis_core::vector::rasterize_polygons(
         &features,
         ref_raster.transform(),
         rows,
@@ -129,6 +129,10 @@ pub fn handle_rasterize(
         attribute.as_deref(),
     )
     .context("Failed to rasterize")?;
+    // Inherit the reference CRS so the mask stays georeferenced. Without this
+    // the writer emits a bare raster that downstream tools read as LOCAL_CS
+    // (metres), mislabelling geographic (degree) grids and breaking alignment.
+    result.set_crs(ref_raster.crs().cloned());
     let elapsed = start.elapsed();
 
     helpers::write_result(&result, &output, compress)?;
