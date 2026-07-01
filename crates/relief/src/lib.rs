@@ -17,7 +17,7 @@
 //! ## What is re-exported
 //!
 //! Pixel-buffer and PNG output live in
-//! [`surtgis_colormap`](surtgis_colormap); we re-export the relevant types
+//! [`surtgis_colormap`]; we re-export the relevant types
 //! at the crate root for ergonomics.
 //!
 //! ```ignore
