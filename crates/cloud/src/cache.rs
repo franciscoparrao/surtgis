@@ -6,7 +6,9 @@ use std::num::NonZeroUsize;
 /// Key for cached tiles: (IFD index, tile index).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TileKey {
+    /// Index of the IFD (overview level) the tile belongs to.
     pub ifd_idx: usize,
+    /// Index of the tile within that IFD's tile array.
     pub tile_idx: usize,
 }
 

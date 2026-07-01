@@ -36,8 +36,11 @@ pub enum TimeReduction {
     Single(TimeSelector),
     /// Aggregate a time range with a function.
     Aggregate {
+        /// Inclusive start of the time range.
         start: DateTime<Utc>,
+        /// Inclusive end of the time range.
         end: DateTime<Utc>,
+        /// Reduction applied across the selected time steps.
         method: AggMethod,
     },
 }
@@ -58,23 +61,32 @@ pub enum TimeSelector {
 /// Aggregation method for time ranges.
 #[derive(Debug, Clone, Copy)]
 pub enum AggMethod {
+    /// Arithmetic mean over the time range.
     Mean,
+    /// Sum over the time range.
     Sum,
+    /// Minimum over the time range.
     Min,
+    /// Maximum over the time range.
     Max,
 }
 
 /// Metadata about a Zarr store and the selected variable.
 #[derive(Debug, Clone)]
 pub struct ZarrMetadata {
+    /// URL of the Zarr store.
     pub store_url: String,
+    /// Name of the selected variable.
     pub variable: String,
     /// Array shape, e.g. `[8760, 721, 1440]` for `[time, lat, lon]`.
     pub shape: Vec<u64>,
     /// Dimension names, e.g. `["time", "latitude", "longitude"]`.
     pub dimension_names: Vec<String>,
+    /// Affine transform mapping pixel coordinates to world coordinates.
     pub geo_transform: GeoTransform,
+    /// Coordinate reference system, if resolvable.
     pub crs: Option<CRS>,
+    /// Nodata / fill value, if declared.
     pub nodata: Option<f64>,
     /// First and last decoded time step (if time dimension exists).
     pub time_range: Option<(DateTime<Utc>, DateTime<Utc>)>,

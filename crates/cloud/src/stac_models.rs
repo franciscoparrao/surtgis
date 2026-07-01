@@ -14,15 +14,19 @@ use std::collections::HashMap;
 /// Body for `POST /search` (STAC API – Item Search).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StacSearchParams {
+    /// Spatial filter `[west, south, east, north]`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bbox: Option<Vec<f64>>,
 
+    /// Temporal filter: an RFC 3339 datetime or `start/end` range.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub datetime: Option<String>,
 
+    /// Restrict the search to these collection IDs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub collections: Option<Vec<String>>,
 
+    /// Maximum number of items per page.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
 
@@ -109,11 +113,14 @@ impl Default for StacSearchParams {
 /// A STAC Item Collection (GeoJSON FeatureCollection).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StacItemCollection {
+    /// GeoJSON type discriminator (`"FeatureCollection"`).
     #[serde(rename = "type")]
     pub type_: String,
 
+    /// The STAC items (features) returned in this page.
     pub features: Vec<StacItem>,
 
+    /// Pagination and related links (e.g. the `"next"` link).
     #[serde(default)]
     pub links: Vec<StacLink>,
 
@@ -146,6 +153,7 @@ impl StacItemCollection {
         self.features.len()
     }
 
+    /// Whether this page contains no items.
     pub fn is_empty(&self) -> bool {
         self.features.is_empty()
     }
@@ -154,6 +162,7 @@ impl StacItemCollection {
 /// A single STAC Item (GeoJSON Feature).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StacItem {
+    /// GeoJSON type discriminator (`"Feature"`).
     #[serde(rename = "type")]
     pub type_: String,
 
@@ -168,14 +177,17 @@ pub struct StacItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bbox: Option<Vec<f64>>,
 
+    /// Item properties, including `datetime` and any extension fields.
     pub properties: StacItemProperties,
 
+    /// Downloadable assets keyed by asset name (e.g. band name).
     pub assets: HashMap<String, StacAsset>,
 
     /// Collection this item belongs to.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub collection: Option<String>,
 
+    /// Links related to this item (e.g. `self`, `parent`, `collection`).
     #[serde(default)]
     pub links: Vec<StacLink>,
 }

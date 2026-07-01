@@ -12,10 +12,15 @@ use crate::tile_index::BBox;
 /// Unified metadata for any cloud raster source.
 #[derive(Debug, Clone)]
 pub struct RasterMeta {
+    /// Affine transform mapping pixel coordinates to world coordinates.
     pub geo_transform: GeoTransform,
+    /// Coordinate reference system, if known.
     pub crs: Option<CRS>,
+    /// Nodata value, if declared.
     pub nodata: Option<f64>,
+    /// Raster width in pixels.
     pub width: usize,
+    /// Raster height in pixels.
     pub height: usize,
 }
 

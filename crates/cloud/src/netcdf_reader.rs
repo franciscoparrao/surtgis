@@ -60,14 +60,23 @@ mod time_types {
 /// Metadata about an opened NetCDF file.
 #[derive(Debug, Clone)]
 pub struct NetCdfMetadata {
+    /// Filesystem path of the NetCDF file.
     pub path: PathBuf,
+    /// Name of the selected variable.
     pub variable: String,
+    /// Shape of the variable's array.
     pub shape: Vec<usize>,
+    /// Names of the variable's dimensions.
     pub dimension_names: Vec<String>,
+    /// Affine transform mapping pixel coordinates to world coordinates.
     pub geo_transform: GeoTransform,
+    /// Coordinate reference system, if resolvable.
     pub crs: Option<CRS>,
+    /// Nodata / fill value, if declared.
     pub nodata: Option<f64>,
+    /// First and last time step, if the variable has a time dimension.
     pub time_range: Option<(DateTime<Utc>, DateTime<Utc>)>,
+    /// All variable names found in the file.
     pub available_variables: Vec<String>,
 }
 
