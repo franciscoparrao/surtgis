@@ -94,6 +94,7 @@ pub fn diff_from_mean_elev(dem: &Raster<f64>, params: DiffFromMeanParams) -> Res
 /// Streaming difference from mean elevation implementing `WindowAlgorithm`.
 #[derive(Debug, Clone)]
 pub struct DiffFromMeanStreaming {
+    /// Neighborhood radius in cells.
     pub radius: usize,
 }
 

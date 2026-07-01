@@ -182,6 +182,7 @@ pub fn vrm(dem: &Raster<f64>, params: VrmParams) -> Result<Raster<f64>> {
 /// to compute normals at each neighbor, plus the neighborhood radius.
 #[derive(Debug, Clone)]
 pub struct VrmStreaming {
+    /// Neighborhood radius in cells.
     pub radius: usize,
 }
 

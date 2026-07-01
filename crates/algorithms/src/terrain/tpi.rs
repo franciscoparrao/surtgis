@@ -128,6 +128,7 @@ pub fn tpi(dem: &Raster<f64>, params: TpiParams) -> Result<Raster<f64>> {
 /// Uses the same square neighborhood as `tpi()`.
 #[derive(Debug, Clone)]
 pub struct TpiStreaming {
+    /// Neighborhood radius in cells.
     pub radius: usize,
 }
 

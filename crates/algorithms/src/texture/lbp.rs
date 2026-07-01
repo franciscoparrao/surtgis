@@ -32,8 +32,10 @@ pub enum LbpVariant {
     RotationInvariantUniform,
 }
 
+/// Parameters for the Local Binary Pattern texture operator.
 #[derive(Debug, Clone)]
 pub struct LbpParams {
+    /// Which LBP variant to compute (standard, uniform, or rotation-invariant).
     pub variant: LbpVariant,
 }
 

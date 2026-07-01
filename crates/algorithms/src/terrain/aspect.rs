@@ -179,6 +179,7 @@ pub fn aspect(dem: &Raster<f64>, output_format: AspectOutput) -> Result<Raster<f
 /// Uses the same Horn (1981) 3×3 method as `aspect()`.
 #[derive(Debug, Clone)]
 pub struct AspectStreaming {
+    /// How the aspect is encoded (compass degrees, radians, or categorical class).
     pub output_format: AspectOutput,
 }
 

@@ -157,7 +157,9 @@ pub fn slope(dem: &Raster<f64>, params: SlopeParams) -> Result<Raster<f64>> {
 /// Uses the same Horn (1981) 3×3 method as `slope()`.
 #[derive(Debug, Clone)]
 pub struct SlopeStreaming {
+    /// Output units for the slope angle (degrees, radians, or percent).
     pub units: SlopeUnits,
+    /// Vertical exaggeration applied to elevations before the gradient.
     pub z_factor: f64,
 }
 

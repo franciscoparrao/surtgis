@@ -94,12 +94,16 @@ pub struct DivideSegment {
     pub n_pairs: usize,
 }
 
+/// Errors specific to divide-migration analysis.
 #[derive(Debug, thiserror::Error)]
 pub enum DivideMigrationError {
+    /// Two input rasters had incompatible shapes.
     #[error("raster shape mismatch: {0:?} vs {1:?}")]
     ShapeMismatch((usize, usize), (usize, usize)),
+    /// `cell_size_m` was not strictly positive.
     #[error("DivideMigrationParams.cell_size_m must be > 0 (got {0})")]
     NonPositiveCellSize(f64),
+    /// `min_divide_length_m` was negative.
     #[error("DivideMigrationParams.min_divide_length_m must be >= 0 (got {0})")]
     NegativeMinLength(f64),
 }

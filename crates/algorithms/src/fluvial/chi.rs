@@ -90,23 +90,33 @@ impl Default for ChiParams {
 /// Errors specific to χ computation.
 #[derive(Debug, thiserror::Error)]
 pub enum ChiError {
+    /// Building the stream graph failed.
     #[error(transparent)]
     Graph(#[from] StreamGraphError),
 
+    /// The flow-accumulation raster did not match the stream raster's shape.
     #[error("flow_acc shape {0:?} does not match stream shape {1:?}")]
     AccShapeMismatch((usize, usize), (usize, usize)),
 
+    /// `cell_size_m` was not strictly positive.
     #[error("ChiParams.cell_size_m must be > 0 (got {0})")]
     NonPositiveCellSize(f64),
 
+    /// The reference drainage area `a_0_m2` was not strictly positive.
     #[error("ChiParams.a_0_m2 must be > 0 (got {0})")]
     NonPositiveA0(f64),
 
+    /// The requested base outlet does not fall on a stream cell.
     #[error(
         "Base outlet ({row}, {col}) is not a stream cell — \
          either the coordinate is outside the raster or stream[r, c] != 1"
     )]
-    BaseOutletNotStream { row: usize, col: usize },
+    BaseOutletNotStream {
+        /// Row index of the offending outlet coordinate.
+        row: usize,
+        /// Column index of the offending outlet coordinate.
+        col: usize,
+    },
 }
 
 /// Compute χ per stream cell.

@@ -8,13 +8,18 @@ use geo::{Coord, Geometry, LineString, Polygon};
 /// A clipping rectangle
 #[derive(Debug, Clone, Copy)]
 pub struct ClipRect {
+    /// Minimum x (left edge).
     pub min_x: f64,
+    /// Minimum y (bottom edge).
     pub min_y: f64,
+    /// Maximum x (right edge).
     pub max_x: f64,
+    /// Maximum y (top edge).
     pub max_y: f64,
 }
 
 impl ClipRect {
+    /// Construct a clipping rectangle from its minimum and maximum coordinates.
     pub fn new(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> Self {
         Self {
             min_x,

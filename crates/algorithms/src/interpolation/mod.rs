@@ -43,12 +43,16 @@ pub use variogram::{
 /// A sample point with x, y coordinates and a value.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SamplePoint {
+    /// X coordinate.
     pub x: f64,
+    /// Y coordinate.
     pub y: f64,
+    /// Sample value at `(x, y)`.
     pub value: f64,
 }
 
 impl SamplePoint {
+    /// Construct a sample point from its coordinates and value.
     pub fn new(x: f64, y: f64, value: f64) -> Self {
         Self { x, y, value }
     }

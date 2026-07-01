@@ -111,22 +111,28 @@ pub struct KsnSegment {
 /// Combined raster + optional vector segments output.
 #[derive(Debug)]
 pub struct KsnResult {
+    /// Per-cell `ksn` raster.
     pub ksn_raster: Raster<f64>,
+    /// Vector segments with aggregated `ksn`, when segment output was requested.
     pub segments: Option<Vec<KsnSegment>>,
 }
 
 /// Errors specific to ksn computation.
 #[derive(Debug, thiserror::Error)]
 pub enum KsnError {
+    /// Building the stream graph failed.
     #[error(transparent)]
     Graph(#[from] StreamGraphError),
 
+    /// Two input rasters had incompatible shapes.
     #[error("input raster shapes disagree: {0:?} vs {1:?}")]
     ShapeMismatch((usize, usize), (usize, usize)),
 
+    /// `cell_size_m` was not strictly positive.
     #[error("KsnParams.cell_size_m must be > 0 (got {0})")]
     NonPositiveCellSize(f64),
 
+    /// `segment_length_m` was not strictly positive.
     #[error("KsnParams.segment_length_m must be > 0 (got {0})")]
     NonPositiveSegmentLength(f64),
 }

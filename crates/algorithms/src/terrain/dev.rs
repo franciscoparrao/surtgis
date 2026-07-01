@@ -144,6 +144,7 @@ pub fn dev(dem: &Raster<f64>, params: DevParams) -> Result<Raster<f64>> {
 /// Uses the same (z - mean) / stddev method as `dev()`.
 #[derive(Debug, Clone)]
 pub struct DevStreaming {
+    /// Neighborhood radius in cells.
     pub radius: usize,
 }
 

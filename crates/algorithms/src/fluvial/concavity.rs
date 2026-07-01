@@ -74,26 +74,35 @@ impl Default for ConcavityParams {
 /// One row of the concavity-index output table.
 #[derive(Debug, Clone)]
 pub struct ConcavityResult {
+    /// Identifier of the basin this row describes.
     pub basin_id: i32,
+    /// Best-fit concavity index θ for the basin.
     pub theta_opt: f64,
     /// `(low, high)` 95 % CI from the bootstrap. Equal to `(theta_opt,
     /// theta_opt)` when bootstrap is disabled.
     pub theta_ci: (f64, f64),
+    /// Number of stream cells that contributed to the fit.
     pub n_cells: usize,
     /// Residual RMSE of the elevation~χ regression at `theta_opt`.
     pub rmse: f64,
 }
 
+/// Errors specific to concavity-index estimation.
 #[derive(Debug, thiserror::Error)]
 pub enum ConcavityError {
+    /// Building the stream graph failed.
     #[error(transparent)]
     Graph(#[from] StreamGraphError),
+    /// Two input rasters had incompatible shapes.
     #[error("raster shape mismatch: {0:?} vs {1:?}")]
     ShapeMismatch((usize, usize), (usize, usize)),
+    /// `cell_size_m` was not strictly positive.
     #[error("ConcavityParams.cell_size_m must be > 0 (got {0})")]
     NonPositiveCellSize(f64),
+    /// The θ search range was empty or inverted (`low >= high`).
     #[error("ConcavityParams.theta_range invalid: low={0} high={1}")]
     BadThetaRange(f64, f64),
+    /// `theta_step` was not strictly positive.
     #[error("ConcavityParams.theta_step must be > 0 (got {0})")]
     NonPositiveStep(f64),
 }

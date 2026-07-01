@@ -162,8 +162,11 @@ pub fn multidirectional_hillshade(
 /// weighted blend of hillshade from 6 azimuths.
 #[derive(Debug, Clone)]
 pub struct MultiHillshadeStreaming {
+    /// Sun altitude above the horizon, in degrees.
     pub altitude: f64,
+    /// Vertical exaggeration applied to elevations before shading.
     pub z_factor: f64,
+    /// Whether to rescale the blended output to the full `[0, 255]` range.
     pub normalized: bool,
 }
 
