@@ -7,6 +7,9 @@
 //! - Row-parallel processing using Rayon
 //! - Streaming for memory-efficient processing
 
+// Part of the engine ecosystem's stable surface: every public item must be documented.
+#![deny(missing_docs)]
+
 #[cfg(feature = "parallel")]
 pub mod strategy;
 #[cfg(feature = "parallel")]
