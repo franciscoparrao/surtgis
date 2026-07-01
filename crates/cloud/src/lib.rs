@@ -13,6 +13,9 @@
 //! - `native`: Sync API via tokio `block_on` (not available on WASM)
 //! - `wasm`: WASM bindings via `wasm-bindgen`
 
+// Part of the engine ecosystem's stable surface: every public item must be documented.
+#![deny(missing_docs)]
+
 pub mod auth;
 pub mod cache;
 pub mod cloud_reader;

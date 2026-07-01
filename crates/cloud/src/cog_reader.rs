@@ -57,25 +57,40 @@ impl Default for CogReaderOptions {
 /// Metadata exposed by [`CogReader::metadata`].
 #[derive(Debug, Clone)]
 pub struct CogMetadata {
+    /// Source URL of the COG.
     pub url: String,
+    /// Full-resolution image width in pixels.
     pub width: u32,
+    /// Full-resolution image height in pixels.
     pub height: u32,
+    /// Tile width in pixels.
     pub tile_width: u32,
+    /// Tile height in pixels.
     pub tile_height: u32,
+    /// Bits per sample.
     pub bits_per_sample: u16,
+    /// Sample format: 1=uint, 2=int, 3=float.
     pub sample_format: u16,
+    /// TIFF compression code.
     pub compression: u16,
+    /// Affine transform mapping pixel coordinates to world coordinates.
     pub geo_transform: GeoTransform,
+    /// Coordinate reference system, if it could be resolved from GeoKeys.
     pub crs: Option<CRS>,
+    /// Nodata value, if declared.
     pub nodata: Option<f64>,
+    /// Number of overview (reduced-resolution) levels.
     pub num_overviews: usize,
 }
 
 /// Overview level information.
 #[derive(Debug, Clone)]
 pub struct OverviewInfo {
+    /// Index of the overview in the IFD chain (0 = full resolution).
     pub index: usize,
+    /// Width of this overview level in pixels.
     pub width: u32,
+    /// Height of this overview level in pixels.
     pub height: u32,
 }
 

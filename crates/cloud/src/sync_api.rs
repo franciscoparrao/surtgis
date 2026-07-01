@@ -230,7 +230,9 @@ mod zarr_inner {
     /// Wraps a [`ZarrReaderBlocking`] with a fixed [`TimeReduction`] for use
     /// through the [`CloudRasterReader`](crate::cloud_reader::CloudRasterReader) trait.
     pub struct ZarrReaderWithTime {
+        /// The underlying blocking Zarr reader.
         pub reader: ZarrReaderBlocking,
+        /// The fixed time reduction applied on every read.
         pub time: TimeReduction,
     }
 

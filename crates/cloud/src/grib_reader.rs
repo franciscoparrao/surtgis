@@ -16,16 +16,22 @@ use crate::tile_index::BBox;
 /// Information about a single GRIB2 message.
 #[derive(Debug, Clone)]
 pub struct GribMessageInfo {
+    /// Sequential index of the message in the file.
     pub index: usize,
+    /// Underlying `(submessage, message)` index pair from the GRIB decoder.
     pub message_index: (usize, usize),
+    /// Human-readable parameter/level description.
     pub description: String,
 }
 
 /// Metadata about an opened GRIB2 file.
 #[derive(Debug, Clone)]
 pub struct GribMetadata {
+    /// Filesystem path of the GRIB2 file.
     pub path: PathBuf,
+    /// Total number of messages in the file.
     pub message_count: usize,
+    /// Per-message metadata.
     pub messages: Vec<GribMessageInfo>,
 }
 
@@ -148,9 +154,11 @@ impl GribReader {
         crop_raster(&full, bbox)
     }
 
+    /// Metadata about the opened GRIB2 file.
     pub fn metadata(&self) -> &GribMetadata {
         &self.metadata
     }
+    /// List the messages contained in the file.
     pub fn list_messages(&self) -> &[GribMessageInfo] {
         &self.metadata.messages
     }

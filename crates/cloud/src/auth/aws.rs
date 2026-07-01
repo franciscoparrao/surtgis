@@ -15,9 +15,13 @@ use crate::error::{CloudError, Result};
 /// AWS credentials loaded from environment variables.
 #[derive(Debug, Clone)]
 pub struct AwsCredentials {
+    /// AWS access key ID (`AWS_ACCESS_KEY_ID`).
     pub access_key_id: String,
+    /// AWS secret access key (`AWS_SECRET_ACCESS_KEY`).
     pub secret_access_key: String,
+    /// Optional temporary session token (`AWS_SESSION_TOKEN`).
     pub session_token: Option<String>,
+    /// AWS region (`AWS_REGION`, defaults to `us-east-1`).
     pub region: String,
 }
 

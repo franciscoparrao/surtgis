@@ -13,8 +13,11 @@ use crate::ifd::{self, RawTagEntry, TiffByteOrder, tags};
 /// GeoTIFF metadata extracted from IFD entries.
 #[derive(Debug, Clone)]
 pub struct GeoTiffMeta {
+    /// Affine transform derived from pixel scale/tiepoint or transformation matrix.
     pub geo_transform: GeoTransform,
+    /// Coordinate reference system resolved from the GeoKey directory.
     pub crs: Option<CRS>,
+    /// Nodata value parsed from the `GDAL_NODATA` tag.
     pub nodata: Option<f64>,
 }
 

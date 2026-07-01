@@ -8,16 +8,23 @@ use surtgis_core::RasterElement;
 
 /// TIFF compression codes.
 pub mod compression {
+    /// No compression (raw samples).
     pub const NONE: u16 = 1;
+    /// LZW compression.
     pub const LZW: u16 = 5;
+    /// DEFLATE (zlib) compression.
     pub const DEFLATE: u16 = 8;
+    /// Adobe's DEFLATE variant (same codec, different tag value).
     pub const ADOBE_DEFLATE: u16 = 32946;
 }
 
 /// TIFF sample format codes.
 pub mod sample_format {
+    /// Unsigned integer samples.
     pub const UNSIGNED_INT: u16 = 1;
+    /// Signed (two's complement) integer samples.
     pub const SIGNED_INT: u16 = 2;
+    /// IEEE floating-point samples.
     pub const FLOAT: u16 = 3;
 }
 

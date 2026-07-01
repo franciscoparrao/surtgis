@@ -8,13 +8,18 @@ use surtgis_core::raster::GeoTransform;
 /// A geographic bounding box.
 #[derive(Debug, Clone, Copy)]
 pub struct BBox {
+    /// Minimum x (western/left) coordinate.
     pub min_x: f64,
+    /// Minimum y (southern/bottom) coordinate.
     pub min_y: f64,
+    /// Maximum x (eastern/right) coordinate.
     pub max_x: f64,
+    /// Maximum y (northern/top) coordinate.
     pub max_y: f64,
 }
 
 impl BBox {
+    /// Construct a bounding box from its four corner coordinates.
     pub fn new(min_x: f64, min_y: f64, max_x: f64, max_y: f64) -> Self {
         Self {
             min_x,
