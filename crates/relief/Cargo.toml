@@ -11,9 +11,9 @@ keywords = ["gis", "hillshade", "relief", "visualization", "terrain"]
 categories = ["science::geo", "graphics"]
 
 [dependencies]
-surtgis-core = { version = "0.16", path = "../core", default-features = false }
-surtgis-algorithms = { version = "0.16", path = "../algorithms", default-features = false }
-surtgis-colormap = { version = "0.16", path = "../colormap", default-features = false }
+surtgis-core = { version = "0.17", path = "../core", default-features = false }
+surtgis-algorithms = { version = "0.17", path = "../algorithms", default-features = false }
+surtgis-colormap = { version = "0.17", path = "../colormap", default-features = false }
 ndarray.workspace = true
 num-traits.workspace = true
 thiserror.workspace = true
