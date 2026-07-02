@@ -138,6 +138,86 @@ pub fn northness_eastness(dem: &Raster<f64>) -> Result<(Raster<f64>, Raster<f64>
 
 // ─── Streaming implementations ─────────────────────────────────────────
 
+/// Per-cell aspect kernel shared by the streaming northness/eastness paths.
+///
+/// Computes the compass-bearing aspect (radians, 0 = North, clockwise) from
+/// Horn (1981) gradients on the 3×3 window centered at `(row, col)`.
+/// Gradients are left unnormalised — the `8 · cell_size` factor cancels in
+/// `atan2`. Returns NaN for NaN/nodata centers, NaN stencils, or flat cells
+/// (zero gradient), matching the sentinel handling of the batch `aspect()`
+/// path (which cannot be shared directly because it lives in `aspect.rs`).
+///
+/// The caller must guarantee that `(row ± 1, col ± 1)` lies inside `data`.
+#[inline]
+fn aspect_rad_kernel(data: &Array2<f64>, row: usize, col: usize, nodata: Option<f64>) -> f64 {
+    const FLAT_THRESHOLD: f64 = 1e-10;
+
+    let e = data[[row, col]];
+    if e.is_nan() || nodata.is_some_and(|nd| (e - nd).abs() < f64::EPSILON) {
+        return f64::NAN;
+    }
+
+    let a = data[[row - 1, col - 1]];
+    let b = data[[row - 1, col]];
+    let cv = data[[row - 1, col + 1]];
+    let d = data[[row, col - 1]];
+    let f = data[[row, col + 1]];
+    let g = data[[row + 1, col - 1]];
+    let h = data[[row + 1, col]];
+    let i = data[[row + 1, col + 1]];
+
+    if [a, b, cv, d, f, g, h, i].iter().any(|v| v.is_nan()) {
+        return f64::NAN;
+    }
+
+    // Horn's method for gradients (unnormalised — the 8*cs factor
+    // cancels out in atan2 so we can skip it for aspect)
+    let dz_dx = (cv + 2.0 * f + i) - (a + 2.0 * d + g);
+    let dz_dy = (g + 2.0 * h + i) - (a + 2.0 * b + cv);
+
+    if dz_dx.abs() < FLAT_THRESHOLD && dz_dy.abs() < FLAT_THRESHOLD {
+        return f64::NAN;
+    }
+
+    // Compass bearing (0=North, clockwise)
+    (-dz_dx).atan2(dz_dy)
+}
+
+/// Shared `process_chunk` body for the streaming northness/eastness
+/// calculators: applies `component` (cos for northness, sin for eastness)
+/// to the aspect of every interior cell, NaN elsewhere.
+fn process_chunk_aspect_component(
+    input: &Array2<f64>,
+    output: &mut Array2<f64>,
+    nodata: Option<f64>,
+    component: fn(f64) -> f64,
+) {
+    let (in_rows, cols) = input.dim();
+    let radius = 1;
+
+    output
+        .as_slice_mut()
+        .expect("process_chunk output must be in standard layout")
+        .par_chunks_mut(cols)
+        .enumerate()
+        .for_each(|(r, out_row)| {
+            let ir = r + radius;
+            if ir == 0 || ir >= in_rows - 1 {
+                out_row.fill(f64::NAN);
+                return;
+            }
+
+            for (c, out_v) in out_row.iter_mut().enumerate() {
+                if c == 0 || c >= cols - 1 {
+                    *out_v = f64::NAN;
+                    continue;
+                }
+
+                *out_v = component(aspect_rad_kernel(input, ir, c, nodata));
+            }
+        });
+}
+
 /// Streaming northness calculator implementing `WindowAlgorithm`.
 ///
 /// Computes Horn (1981) gradients and returns `cos(aspect)`.
@@ -158,62 +238,7 @@ impl surtgis_core::WindowAlgorithm for NorthnessStreaming {
         _cell_size_x: f64,
         _cell_size_y: f64,
     ) {
-        let (in_rows, cols) = input.dim();
-        let out_rows = output.nrows();
-        let radius = 1;
-
-        const FLAT_THRESHOLD: f64 = 1e-10;
-
-        for r in 0..out_rows {
-            let ir = r + radius;
-            if ir == 0 || ir >= in_rows - 1 {
-                for c in 0..cols {
-                    output[[r, c]] = f64::NAN;
-                }
-                continue;
-            }
-
-            for c in 0..cols {
-                if c == 0 || c >= cols - 1 {
-                    output[[r, c]] = f64::NAN;
-                    continue;
-                }
-
-                let e = input[[ir, c]];
-                if e.is_nan() || nodata.map_or(false, |nd| (e - nd).abs() < f64::EPSILON) {
-                    output[[r, c]] = f64::NAN;
-                    continue;
-                }
-
-                let a = input[[ir - 1, c - 1]];
-                let b = input[[ir - 1, c]];
-                let cv = input[[ir - 1, c + 1]];
-                let d = input[[ir, c - 1]];
-                let f = input[[ir, c + 1]];
-                let g = input[[ir + 1, c - 1]];
-                let h = input[[ir + 1, c]];
-                let i = input[[ir + 1, c + 1]];
-
-                if [a, b, cv, d, f, g, h, i].iter().any(|v| v.is_nan()) {
-                    output[[r, c]] = f64::NAN;
-                    continue;
-                }
-
-                // Horn's method for gradients (unnormalised — the 8*cs factor
-                // cancels out in atan2 so we can skip it for aspect)
-                let dz_dx = (cv + 2.0 * f + i) - (a + 2.0 * d + g);
-                let dz_dy = (g + 2.0 * h + i) - (a + 2.0 * b + cv);
-
-                if dz_dx.abs() < FLAT_THRESHOLD && dz_dy.abs() < FLAT_THRESHOLD {
-                    output[[r, c]] = f64::NAN;
-                    continue;
-                }
-
-                // Compass bearing (0=North, clockwise)
-                let aspect_rad = (-dz_dx).atan2(dz_dy);
-                output[[r, c]] = aspect_rad.cos();
-            }
-        }
+        process_chunk_aspect_component(input, output, nodata, f64::cos);
     }
 }
 
@@ -237,59 +262,7 @@ impl surtgis_core::WindowAlgorithm for EastnessStreaming {
         _cell_size_x: f64,
         _cell_size_y: f64,
     ) {
-        let (in_rows, cols) = input.dim();
-        let out_rows = output.nrows();
-        let radius = 1;
-
-        const FLAT_THRESHOLD: f64 = 1e-10;
-
-        for r in 0..out_rows {
-            let ir = r + radius;
-            if ir == 0 || ir >= in_rows - 1 {
-                for c in 0..cols {
-                    output[[r, c]] = f64::NAN;
-                }
-                continue;
-            }
-
-            for c in 0..cols {
-                if c == 0 || c >= cols - 1 {
-                    output[[r, c]] = f64::NAN;
-                    continue;
-                }
-
-                let e = input[[ir, c]];
-                if e.is_nan() || nodata.map_or(false, |nd| (e - nd).abs() < f64::EPSILON) {
-                    output[[r, c]] = f64::NAN;
-                    continue;
-                }
-
-                let a = input[[ir - 1, c - 1]];
-                let b = input[[ir - 1, c]];
-                let cv = input[[ir - 1, c + 1]];
-                let d = input[[ir, c - 1]];
-                let f = input[[ir, c + 1]];
-                let g = input[[ir + 1, c - 1]];
-                let h = input[[ir + 1, c]];
-                let i = input[[ir + 1, c + 1]];
-
-                if [a, b, cv, d, f, g, h, i].iter().any(|v| v.is_nan()) {
-                    output[[r, c]] = f64::NAN;
-                    continue;
-                }
-
-                let dz_dx = (cv + 2.0 * f + i) - (a + 2.0 * d + g);
-                let dz_dy = (g + 2.0 * h + i) - (a + 2.0 * b + cv);
-
-                if dz_dx.abs() < FLAT_THRESHOLD && dz_dy.abs() < FLAT_THRESHOLD {
-                    output[[r, c]] = f64::NAN;
-                    continue;
-                }
-
-                let aspect_rad = (-dz_dx).atan2(dz_dy);
-                output[[r, c]] = aspect_rad.sin();
-            }
-        }
+        process_chunk_aspect_component(input, output, nodata, f64::sin);
     }
 }
 

@@ -67,6 +67,32 @@ impl CRS {
         self.proj.as_deref()
     }
 
+    /// Whether this CRS is geographic (longitude/latitude in degrees).
+    ///
+    /// Detection is heuristic but covers the practical cases:
+    /// - Known geographic EPSG codes (4326, 4269, 4258, 4267, 4283, 4617,
+    ///   4674, 4759, plus the 4000–4999 block, which EPSG reserves for
+    ///   geographic 2D CRS).
+    /// - WKT starting with `GEOGCS`/`GEOGCRS` (WKT1/WKT2 geographic).
+    /// - PROJ strings containing `+proj=longlat`.
+    ///
+    /// Returns `false` when the CRS carries no usable information — callers
+    /// must not silently assume projected in that case if it matters.
+    pub fn is_geographic(&self) -> bool {
+        if let Some(code) = self.epsg {
+            // The EPSG 4000-4999 block is geographic 2D (4326, 4269, ...).
+            return (4000..5000).contains(&code);
+        }
+        if let Some(wkt) = &self.wkt {
+            let head = wkt.trim_start().to_ascii_uppercase();
+            return head.starts_with("GEOGCS") || head.starts_with("GEOGCRS");
+        }
+        if let Some(proj) = &self.proj {
+            return proj.contains("+proj=longlat");
+        }
+        false
+    }
+
     /// Check if two CRS are equivalent
     pub fn is_equivalent(&self, other: &CRS) -> bool {
         // Simple check: if both have EPSG codes, compare them
@@ -96,8 +122,16 @@ impl CRS {
             return proj.clone();
         }
         if let Some(wkt) = &self.wkt {
-            // Return first 50 chars of WKT
-            return format!("WKT:{}", &wkt[..wkt.len().min(50)]);
+            // First ~50 chars of WKT, cut at a char boundary (byte slicing
+            // panics if byte 50 falls inside a multi-byte character, e.g.
+            // accented datum names).
+            let cut = wkt
+                .char_indices()
+                .map(|(i, _)| i)
+                .take_while(|&i| i <= 50)
+                .last()
+                .unwrap_or(0);
+            return format!("WKT:{}", &wkt[..cut.min(wkt.len())]);
         }
         "Unknown".to_string()
     }
@@ -124,6 +158,26 @@ mod tests {
         let crs = CRS::from_epsg(4326);
         assert_eq!(crs.epsg(), Some(4326));
         assert_eq!(crs.identifier(), "EPSG:4326");
+    }
+
+    #[test]
+    fn test_is_geographic() {
+        assert!(CRS::from_epsg(4326).is_geographic());
+        assert!(CRS::from_epsg(4269).is_geographic()); // NAD83
+        assert!(!CRS::from_epsg(32719).is_geographic()); // UTM 19S
+        assert!(!CRS::from_epsg(3857).is_geographic());
+        assert!(CRS::from_wkt("GEOGCS[\"WGS 84\",DATUM[...]]").is_geographic());
+        assert!(!CRS::from_wkt("PROJCS[\"UTM 19S\",GEOGCS[...]]").is_geographic());
+        assert!(CRS::from_proj("+proj=longlat +datum=WGS84").is_geographic());
+        assert!(!CRS::from_proj("+proj=utm +zone=19 +south").is_geographic());
+    }
+
+    #[test]
+    fn test_identifier_multibyte_wkt_no_panic() {
+        // Byte 50 falls inside a multi-byte char — must not panic
+        let wkt = format!("GEOGCS[\"{}\"]", "á".repeat(60));
+        let crs = CRS::from_wkt(wkt);
+        let _ = crs.identifier();
     }
 
     #[test]

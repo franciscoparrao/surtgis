@@ -53,17 +53,9 @@ impl Ord for Cell {
     }
 }
 
-/// D8 neighbor offsets
-const D8_OFFSETS: [(isize, isize); 8] = [
-    (-1, -1),
-    (-1, 0),
-    (-1, 1),
-    (0, -1),
-    (0, 1),
-    (1, -1),
-    (1, 0),
-    (1, 1),
-];
+// Row-major scan order (not D8-code order): preserves the historical
+// visit order, which affects epsilon-gradient tie-breaking. See `d8` docs.
+use super::d8::SCAN_OFFSETS as D8_OFFSETS;
 
 /// Parameters for Priority-Flood filling
 #[derive(Debug, Clone)]

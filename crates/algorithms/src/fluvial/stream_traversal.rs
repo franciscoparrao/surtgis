@@ -36,23 +36,7 @@
 
 use surtgis_core::Raster;
 
-/// D8 neighbour offsets keyed by the 1-8 flow-direction code (index 0 is
-/// the "pit/flat" sentinel and is never indexed into this table). Mirrors
-/// the table in [`crate::hydrology::flow_direction`].
-///
-/// Encoding (matches hydrology/flow_direction.rs):
-///   1=E, 2=NE, 3=N, 4=NW, 5=W, 6=SW, 7=S, 8=SE.
-const D8_OFFSETS: [(isize, isize); 9] = [
-    (0, 0),   // 0: pit/flat — sentinel, never used
-    (0, 1),   // 1: E
-    (-1, 1),  // 2: NE
-    (-1, 0),  // 3: N
-    (-1, -1), // 4: NW
-    (0, -1),  // 5: W
-    (1, -1),  // 6: SW
-    (1, 0),   // 7: S
-    (1, 1),   // 8: SE
-];
+use crate::hydrology::d8::D8_OFFSETS_9 as D8_OFFSETS;
 
 /// Errors that can be raised by [`build_stream_graph`].
 #[derive(Debug, thiserror::Error)]

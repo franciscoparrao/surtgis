@@ -50,7 +50,10 @@ pub mod prelude {
     pub use crate::Algorithm;
     pub use crate::crs::CRS;
     pub use crate::error::{Error, Result};
-    pub use crate::raster::{GeoTransform, Raster, RasterCell, RasterElement};
+    pub use crate::raster::{
+        GeoTransform, Raster, RasterCell, RasterElement, check_aligned, check_same_crs,
+        check_same_shape,
+    };
 }
 
 /// Core trait for all algorithms in SurtGis.

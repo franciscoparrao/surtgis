@@ -44,6 +44,34 @@ pub enum Error {
         ac: usize,
     },
 
+    /// Two rasters that had to share a grid shape `(rows, cols)` disagreed.
+    ///
+    /// Structured successor of [`Error::SizeMismatch`]: carries the shapes
+    /// as `(rows, cols)` tuples plus a free-form `context` describing which
+    /// inputs disagreed (e.g. `"input raster 2 vs raster 0"`), so callers
+    /// can both match programmatically and render an actionable message.
+    #[error("Shape mismatch ({context}): expected {expected:?} (rows, cols), got {got:?}")]
+    ShapeMismatch {
+        /// Shape of the reference raster as `(rows, cols)`.
+        expected: (usize, usize),
+        /// Shape of the offending raster as `(rows, cols)`.
+        got: (usize, usize),
+        /// Which inputs disagreed (operation and/or input positions).
+        context: String,
+    },
+
+    /// Multi-raster inputs are not on the same georeferenced grid.
+    ///
+    /// Returned when rasters share a shape but their geotransforms
+    /// (origin, pixel size, rotation) or EPSG codes differ, so a
+    /// cell-by-cell operation across them would silently combine
+    /// pixels from different ground locations.
+    #[error("Misaligned rasters: {reason}")]
+    Misaligned {
+        /// Human-readable description of the first alignment violation found.
+        reason: String,
+    },
+
     /// Two inputs declared incompatible coordinate reference systems.
     #[error("CRS mismatch: {0} vs {1}")]
     CrsMismatch(String, String),

@@ -372,7 +372,7 @@ pub enum TerrainCommands {
         /// Output units: degrees, percent, radians
         #[arg(short, long, default_value = "degrees")]
         units: String,
-        /// Z-factor for unit conversion
+        /// Vertical exaggeration: z' = z_factor * z (GDAL convention)
         #[arg(short, long, default_value = "1.0")]
         z_factor: f64,
     },
@@ -398,7 +398,7 @@ pub enum TerrainCommands {
         /// Sun altitude in degrees above horizon
         #[arg(short = 'l', long, default_value = "45")]
         altitude: f64,
-        /// Z-factor for vertical exaggeration
+        /// Vertical exaggeration: z' = z_factor * z (GDAL convention)
         #[arg(short, long, default_value = "1.0")]
         z_factor: f64,
     },
@@ -411,7 +411,7 @@ pub enum TerrainCommands {
         /// Curvature type: general, profile, plan
         #[arg(short = 't', long, default_value = "general")]
         curvature_type: String,
-        /// Z-factor for unit conversion
+        /// Vertical exaggeration: z' = z_factor * z (GDAL convention)
         #[arg(short, long, default_value = "1.0")]
         z_factor: f64,
     },
@@ -787,7 +787,7 @@ pub enum TerrainCommands {
         /// Sun altitude in degrees
         #[arg(short = 'l', long, default_value = "45")]
         altitude: f64,
-        /// Z-factor
+        /// Vertical exaggeration: z' = z_factor * z (GDAL convention)
         #[arg(short, long, default_value = "1.0")]
         z_factor: f64,
     },
@@ -1816,7 +1816,7 @@ pub enum CogCommands {
         /// Output units: degrees, percent, radians
         #[arg(short, long, default_value = "degrees")]
         units: String,
-        /// Z-factor for unit conversion
+        /// Vertical exaggeration: z' = z_factor * z (GDAL convention)
         #[arg(short, long, default_value = "1.0")]
         z_factor: f64,
     },
@@ -1848,7 +1848,7 @@ pub enum CogCommands {
         /// Sun altitude in degrees above horizon
         #[arg(short = 'l', long, default_value = "45")]
         altitude: f64,
-        /// Z-factor for vertical exaggeration
+        /// Vertical exaggeration: z' = z_factor * z (GDAL convention)
         #[arg(short, long, default_value = "1.0")]
         z_factor: f64,
     },

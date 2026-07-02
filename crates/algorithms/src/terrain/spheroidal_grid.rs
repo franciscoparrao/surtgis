@@ -447,3 +447,80 @@ mod tests {
         );
     }
 }
+
+/// Per-row cell sizes for terrain derivatives.
+///
+/// Projected rasters have constant cell sizes; geographic (lon/lat)
+/// rasters need per-row metric sizes because one degree of longitude
+/// shrinks with latitude (at 53°S it is ~40% shorter than at the
+/// equator). Terrain algorithms build this once per raster and query
+/// it per row — the geographic branch costs a handful of trig calls
+/// per row, negligible next to the per-cell kernel.
+#[derive(Debug, Clone)]
+pub enum CellSizes {
+    /// Projected grid: constant `(dx, dy)` in CRS units.
+    Constant {
+        /// East-west cell size.
+        dx: f64,
+        /// North-south cell size.
+        dy: f64,
+    },
+    /// Geographic grid: metric sizes computed per row on the spheroid.
+    Geographic {
+        /// Y coordinate of the raster's top-left corner (degrees).
+        origin_y: f64,
+        /// Pixel height in degrees (usually negative).
+        pixel_height: f64,
+        /// Longitude grid spacing in degrees.
+        d_lon: f64,
+        /// Latitude grid spacing in degrees.
+        d_lat: f64,
+    },
+}
+
+impl CellSizes {
+    /// Build from a raster: geographic per-row sizes when the raster's
+    /// CRS declares itself geographic ([`surtgis_core::crs::CRS::is_geographic`]),
+    /// constant sizes otherwise (including when no CRS is present —
+    /// without metadata we cannot assume degrees).
+    pub fn for_dem(dem: &Raster<f64>) -> Self {
+        let tf = dem.transform();
+        if dem.crs().is_some_and(|c| c.is_geographic()) {
+            CellSizes::Geographic {
+                origin_y: tf.origin_y,
+                pixel_height: tf.pixel_height,
+                d_lon: tf.pixel_width.abs(),
+                d_lat: tf.pixel_height.abs(),
+            }
+        } else {
+            CellSizes::Constant {
+                dx: tf.pixel_width.abs(),
+                dy: tf.pixel_height.abs(),
+            }
+        }
+    }
+
+    /// Cell sizes `(dx, dy)` at a given row (meters for geographic grids,
+    /// CRS units for projected ones).
+    #[inline]
+    pub fn at_row(&self, row: usize) -> (f64, f64) {
+        match self {
+            CellSizes::Constant { dx, dy } => (*dx, *dy),
+            CellSizes::Geographic {
+                origin_y,
+                pixel_height,
+                d_lon,
+                d_lat,
+            } => {
+                let lat = origin_y + (row as f64 + 0.5) * pixel_height;
+                let dims = cell_dimensions(lat, *d_lon, *d_lat, &SpheroidalParams::default());
+                (dims.dx, dims.dy)
+            }
+        }
+    }
+
+    /// Whether this grid gets per-row geographic correction.
+    pub fn is_geographic(&self) -> bool {
+        matches!(self, CellSizes::Geographic { .. })
+    }
+}

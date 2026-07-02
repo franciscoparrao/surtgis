@@ -29,29 +29,8 @@ impl Default for DownslopeIndexParams {
     }
 }
 
-/// 8-connected neighbor offsets
-const D8_OFFSETS: [(isize, isize); 8] = [
-    (-1, -1),
-    (-1, 0),
-    (-1, 1),
-    (0, -1),
-    (0, 1),
-    (1, -1),
-    (1, 0),
-    (1, 1),
-];
-
-/// Distance factor for each offset (1.0 for cardinal, sqrt(2) for diagonal)
-const D8_DIST: [f64; 8] = [
-    std::f64::consts::SQRT_2,
-    1.0,
-    std::f64::consts::SQRT_2,
-    1.0,
-    1.0,
-    std::f64::consts::SQRT_2,
-    1.0,
-    std::f64::consts::SQRT_2,
-];
+// Row-major scan order (not D8-code order). See `d8` module docs.
+use crate::hydrology::d8::{SCAN_DISTANCE as D8_DIST, SCAN_OFFSETS as D8_OFFSETS};
 
 /// Compute downslope index.
 ///

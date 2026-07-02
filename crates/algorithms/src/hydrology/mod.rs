@@ -8,6 +8,10 @@
 //! - Watershed: basin delineation from pour points
 //! - HAND: Height Above Nearest Drainage (flood mapping)
 //! - Stream network: drainage network extraction
+//!
+//! The D8 direction encoding shared by all these algorithms lives in [`d8`].
+
+pub mod d8;
 
 mod advanced;
 mod basin_morphometry;
