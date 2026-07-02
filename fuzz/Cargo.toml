@@ -1,0 +1,55 @@
+# Standalone workspace: this crate lives inside a git worktree nested under the
+# main SurtGIS repo, so cargo would otherwise attach it to the OUTER repo's
+# workspace. An empty `[workspace]` table makes `fuzz/` its own workspace root
+# and keeps it independent (complements `workspace.exclude = ["fuzz"]` in the
+# worktree root Cargo.toml).
+[workspace]
+
+[package]
+name = "surtgis-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+# The parsers under test. Paths point at the workspace crates. We depend only on
+# the two crates that own the hand-rolled binary parsers we want to exercise:
+#  - surtgis-core: native GeoTIFF reader (`read_geotiff_from_buffer`)
+#  - surtgis-cloud: IFD/COG parser (`ifd`) + tile decompression (`decompress`)
+# Default features are kept minimal; surtgis-cloud brings deflate+lzw (its
+# defaults) so `decompress_tile` covers the real codecs.
+surtgis-core = { path = "../crates/core", default-features = false }
+surtgis-cloud = { path = "../crates/cloud", default-features = false }
+
+[[bin]]
+name = "fuzz_read_geotiff"
+path = "fuzz_targets/fuzz_read_geotiff.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_ifd_parse"
+path = "fuzz_targets/fuzz_ifd_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_decompress"
+path = "fuzz_targets/fuzz_decompress.rs"
+test = false
+doc = false
+bench = false
+
+# Release-ish profile so the fuzzers run fast but keep debug assertions on to
+# catch arithmetic overflow (the classic predictor bug vector).
+[profile.release]
+debug = 1
+debug-assertions = true
+overflow-checks = true
