@@ -23,21 +23,20 @@ use surtgis_core::{Error, Result};
 
 /// Apply the Brovey transform.
 ///
-/// `pan` and every `ms` band must share the same shape. Pixels
-/// where any input is NaN, or where `P_synth ≤ 0`, are emitted as
-/// NaN. Returns one output band per input MS band.
+/// `pan` and every `ms` band must live on the same grid (shape,
+/// geotransform and EPSG-comparable CRS — the MS bands are assumed
+/// to be already resampled to the pan grid). Pixels where any input
+/// is NaN, or where `P_synth ≤ 0`, are emitted as NaN. Returns one
+/// output band per input MS band.
 pub fn brovey(pan: &Raster<f64>, ms: &[&Raster<f64>]) -> Result<Vec<Raster<f64>>> {
     if ms.is_empty() {
         return Err(Error::Algorithm("Brovey needs at least one MS band".into()));
     }
+    let mut all: Vec<&Raster<f64>> = Vec::with_capacity(ms.len() + 1);
+    all.push(pan);
+    all.extend_from_slice(ms);
+    surtgis_core::raster::check_aligned(&all)?;
     let (rows, cols) = pan.shape();
-    for b in ms.iter() {
-        if b.shape() != (rows, cols) {
-            return Err(Error::Algorithm(
-                "Brovey: pan and all MS bands must share shape".into(),
-            ));
-        }
-    }
     let n_bands = ms.len();
     let n_px = rows * cols;
     let inv_n = 1.0 / n_bands as f64;

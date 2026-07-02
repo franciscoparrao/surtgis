@@ -35,20 +35,10 @@ impl Default for StiParams {
 /// * `flow_acc` - Flow accumulation (cell counts)
 /// * `slope_rad` - Slope in radians
 pub fn spi(flow_acc: &Raster<f64>, slope_rad: &Raster<f64>) -> Result<Raster<f64>> {
-    let (rows_a, cols_a) = flow_acc.shape();
-    let (rows_s, cols_s) = slope_rad.shape();
-
-    if rows_a != rows_s || cols_a != cols_s {
-        return Err(Error::SizeMismatch {
-            er: rows_a,
-            ec: cols_a,
-            ar: rows_s,
-            ac: cols_s,
-        });
-    }
-
-    let rows = rows_a;
-    let cols = cols_a;
+    // Both grids are combined cell-by-cell: enforce shape +
+    // geotransform + EPSG-comparable CRS, not just dimensions.
+    surtgis_core::raster::check_aligned(&[flow_acc, slope_rad])?;
+    let (rows, cols) = flow_acc.shape();
     let cell_size = flow_acc.cell_size();
 
     let output_data: Vec<f64> = (0..rows)
@@ -93,20 +83,10 @@ pub fn sti(
     slope_rad: &Raster<f64>,
     params: StiParams,
 ) -> Result<Raster<f64>> {
-    let (rows_a, cols_a) = flow_acc.shape();
-    let (rows_s, cols_s) = slope_rad.shape();
-
-    if rows_a != rows_s || cols_a != cols_s {
-        return Err(Error::SizeMismatch {
-            er: rows_a,
-            ec: cols_a,
-            ar: rows_s,
-            ac: cols_s,
-        });
-    }
-
-    let rows = rows_a;
-    let cols = cols_a;
+    // Both grids are combined cell-by-cell: enforce shape +
+    // geotransform + EPSG-comparable CRS, not just dimensions.
+    surtgis_core::raster::check_aligned(&[flow_acc, slope_rad])?;
+    let (rows, cols) = flow_acc.shape();
     let cell_size = flow_acc.cell_size();
     let m = params.m;
     let n = params.n;

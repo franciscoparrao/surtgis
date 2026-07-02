@@ -656,16 +656,11 @@ fn is_nodata_f64(value: f64, nodata: Option<f64>) -> bool {
     }
 }
 
+/// Bands combined pixel-by-pixel must live on the same grid:
+/// shape, geotransform and (EPSG-comparable) CRS. Delegates to
+/// [`surtgis_core::raster::check_aligned`].
 fn check_dimensions(a: &Raster<f64>, b: &Raster<f64>) -> Result<()> {
-    if a.shape() != b.shape() {
-        return Err(Error::SizeMismatch {
-            er: a.rows(),
-            ec: a.cols(),
-            ar: b.rows(),
-            ac: b.cols(),
-        });
-    }
-    Ok(())
+    surtgis_core::raster::check_aligned(&[a, b])
 }
 
 fn build_output(

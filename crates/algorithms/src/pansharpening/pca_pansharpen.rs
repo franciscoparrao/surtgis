@@ -39,14 +39,14 @@ pub fn pca_pansharpen(pan: &Raster<f64>, ms: &[&Raster<f64>]) -> Result<Vec<Rast
             "PCA pansharpening needs at least one MS band".into(),
         ));
     }
+    // Pan and MS bands must live on the same grid (shape,
+    // geotransform and EPSG-comparable CRS): MS is assumed to be
+    // already resampled to the pan grid.
+    let mut all: Vec<&Raster<f64>> = Vec::with_capacity(ms.len() + 1);
+    all.push(pan);
+    all.extend_from_slice(ms);
+    surtgis_core::raster::check_aligned(&all)?;
     let (rows, cols) = pan.shape();
-    for b in ms.iter() {
-        if b.shape() != (rows, cols) {
-            return Err(Error::Algorithm(
-                "PCA pansharpening: pan and MS bands must share shape".into(),
-            ));
-        }
-    }
     let n_bands = ms.len();
     let n_px = rows * cols;
 
