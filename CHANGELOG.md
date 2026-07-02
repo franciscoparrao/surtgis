@@ -9,6 +9,38 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+### Added
+
+- **Nightly fuzzing** (`cargo-fuzz`) of the hand-rolled binary parsers:
+  `read_geotiff_from_buffer`, the COG IFD/header parser (both byte
+  orders) and tile decompression + TIFF predictors with overflow checks —
+  the input of the COG reader arrives from the network. Seed corpus
+  committed; crashes upload as CI artifacts.
+- **CI hardening**: tests now run on macOS and Windows (core crates);
+  the real-DEM integration fixtures download from the `test-fixtures-v1`
+  release with sha256 verification, so the integration and GDAL/GRASS
+  cross-validation suites actually run in CI (previously the fixture was
+  absent and both suites silently never executed); `cargo-deny`
+  (advisories/licenses/sources) with a documented ignore list; MSRV
+  declared (`rust-version = "1.88"`) and verified by a pinned job.
+
+### Fixed
+
+- **Unbounded allocation in the native TIFF reader (OOM/DoS)** — found by
+  the new fuzzer on its first run: a 338-byte file declaring ~63000²
+  dimensions forced a single ~32 GB allocation because the reader used
+  `Limits::unlimited()`. Decode buffers are now capped at
+  `max(1 GiB, source_len · 4096)` — proportional to the input, still far
+  above any real DEM. Regression test + corpus seed committed.
+- **Cloud async hygiene**: the retry backoff used `std::thread::sleep`
+  inside async code (two concurrent retries could freeze all I/O on the
+  2-worker blocking runtime) — now `tokio::time::sleep`; `HttpClient`
+  retries 429/500/502/503/504 honouring `Retry-After` (previously only
+  transport errors retried, and the CLI re-opened the whole COG on 429);
+  new structured `CloudError::HttpStatus`; the Zarr V2 metadata fallback
+  no longer calls `block_on` inside an async fn (deadlock risk); blocking
+  wrappers share one global runtime instead of one per reader.
+
 ### Breaking
 
 - **`z_factor` now follows the GDAL/ArcGIS convention** in `slope`,

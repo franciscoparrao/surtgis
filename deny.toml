@@ -1,0 +1,67 @@
+# cargo-deny configuration — checked by the `deny` CI job.
+#
+# Scope: advisories (RUSTSEC vulnerabilities), licenses, sources.
+# `bans` (duplicate versions) is intentionally not enforced yet: the GUI
+# crate drags a graphics stack with ~68 known duplicates; enforcing it is
+# tracked as follow-up work once the GUI moves out of default-members.
+
+[graph]
+all-features = false
+no-default-features = false
+# The GUI is publish = false and drags a desktop stack (egui/winit/zbus
+# accessibility) whose advisories are irrelevant to the published library
+# crates and unfixable from here (pinned by upstream semver).
+exclude = ["surtgis-gui"]
+
+[advisories]
+version = 2
+yanked = "warn"
+ignore = [
+    # unmaintained (no vulnerability): transitive, no drop-in replacement.
+    { id = "RUSTSEC-2025-0119", reason = "number_prefix via indicatif (CLI progress bars); cosmetic dep" },
+    { id = "RUSTSEC-2024-0436", reason = "paste proc-macro via zarrs; compile-time only" },
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser via the GUI font stack (publish = false)" },
+    # quick-xml 0.38 pinned by zbus_xml (GUI accessibility, publish = false);
+    # DoS-class issues in an XML path the library crates never execute.
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml via GUI zbus stack only" },
+    { id = "RUSTSEC-2026-0195", reason = "quick-xml via GUI zbus stack only" },
+    # pyo3 < 0.24.1 / < 0.29: PyString::from_object overflow + PyCFunction
+    # Sync bound. REAL — tracked follow-up: bump pyo3+numpy after the
+    # Sprint 4 allow_threads migration lands (same file, avoid conflict).
+    { id = "RUSTSEC-2025-0020", reason = "pyo3 bump to >=0.24.1 is the tracked follow-up" },
+    { id = "RUSTSEC-2026-0177", reason = "pyo3 bump is the tracked follow-up" },
+]
+
+[licenses]
+version = 2
+# Permissive licenses only. Additions require review — copyleft beyond
+# MPL-2.0 (file-level) must not enter the dependency tree of the
+# publishable crates.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "BSL-1.0",
+    "CC0-1.0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CDLA-Permissive-2.0",
+    "OpenSSL",
+]
+confidence-threshold = 0.8
+
+[[licenses.clarify]]
+crate = "ring"
+# ring's license file is a concatenation; treat as ISC+MIT+OpenSSL
+expression = "ISC AND MIT AND OpenSSL"
+license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-git = []

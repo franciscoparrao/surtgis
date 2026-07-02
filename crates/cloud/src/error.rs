@@ -45,6 +45,20 @@ pub enum CloudError {
     #[error("authentication error: {0}")]
     Auth(String),
 
+    /// The server answered with a non-success HTTP status (after the client
+    /// exhausted its retries for retryable statuses such as 429/5xx).
+    ///
+    /// Carries the [`reqwest::StatusCode`] structurally so callers can match
+    /// on it (e.g. rate limiting vs. server error) instead of parsing the
+    /// error message.
+    #[error("HTTP {status} fetching {url}")]
+    HttpStatus {
+        /// The HTTP status code returned by the server.
+        status: reqwest::StatusCode,
+        /// URL of the request that failed.
+        url: String,
+    },
+
     /// A network-level failure not represented by a specific HTTP error.
     #[error("network error: {0}")]
     Network(String),
@@ -113,5 +127,46 @@ pub enum CloudError {
     },
 }
 
+impl CloudError {
+    /// Return the HTTP status code carried by this error, if any.
+    ///
+    /// Covers both the structured [`CloudError::HttpStatus`] variant and
+    /// status errors surfaced through the underlying [`reqwest::Error`].
+    pub fn status(&self) -> Option<reqwest::StatusCode> {
+        match self {
+            CloudError::HttpStatus { status, .. } => Some(*status),
+            CloudError::Http(e) => e.status(),
+            _ => None,
+        }
+    }
+}
+
 /// Result alias for cloud operations.
 pub type Result<T> = std::result::Result<T, CloudError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn http_status_variant_exposes_structured_status() {
+        let err = CloudError::HttpStatus {
+            status: reqwest::StatusCode::TOO_MANY_REQUESTS,
+            url: "https://example.com/cog.tif".into(),
+        };
+        assert_eq!(err.status(), Some(reqwest::StatusCode::TOO_MANY_REQUESTS));
+        // Display keeps the "HTTP <code> <reason> fetching <url>" shape that
+        // downstream substring-based classifiers rely on (e.g. " 429").
+        let msg = err.to_string();
+        assert!(msg.contains(" 429"), "message was: {msg}");
+        assert!(msg.contains("fetching https://example.com/cog.tif"));
+    }
+
+    #[test]
+    fn non_http_errors_have_no_status() {
+        let err = CloudError::Network("connection reset".into());
+        assert_eq!(err.status(), None);
+        let err = CloudError::NoIfd;
+        assert_eq!(err.status(), None);
+    }
+}

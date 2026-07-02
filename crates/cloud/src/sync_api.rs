@@ -1,7 +1,40 @@
 //! Blocking (synchronous) API for native platforms.
 //!
-//! Wraps the async [`CogReader`] with a Tokio runtime so callers don't need
-//! to manage their own async runtime.
+//! Wraps the async [`CogReader`](crate::cog_reader::CogReader) with a shared
+//! Tokio runtime so callers don't need to manage their own async runtime.
+//!
+//! # Do not call from async contexts
+//!
+//! Every function and method in this module drives futures with
+//! `Runtime::block_on`, which **panics** when invoked from within an async
+//! runtime (e.g. inside a `tokio::spawn` task or an `async fn`). From async
+//! code, use the async API ([`CogReader`](crate::cog_reader::CogReader),
+//! [`StacClient`](crate::stac_client::StacClient), …) directly instead.
+
+/// Shared Tokio runtime for the blocking API.
+///
+/// A single lazily-initialised, process-wide runtime (2 worker threads) is
+/// reused by every blocking reader/client. This avoids spawning one runtime
+/// per reader (N readers previously meant N runtimes and 2·N idle threads)
+/// and keeps HTTP connection pools warm across readers.
+#[cfg(feature = "native")]
+fn shared_runtime() -> crate::error::Result<&'static tokio::runtime::Runtime> {
+    use std::sync::OnceLock;
+    static RT: OnceLock<std::result::Result<tokio::runtime::Runtime, String>> = OnceLock::new();
+
+    RT.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .thread_name("surtgis-cloud-blocking")
+            .enable_all()
+            .build()
+            .map_err(|e| e.to_string())
+    })
+    .as_ref()
+    .map_err(|e| {
+        crate::error::CloudError::Network(format!("failed to build shared tokio runtime: {e}"))
+    })
+}
 
 #[cfg(feature = "native")]
 mod inner {
@@ -13,22 +46,22 @@ mod inner {
 
     /// Blocking wrapper around [`CogReader`].
     ///
-    /// Uses a multi-threaded Tokio runtime (2 worker threads) for efficient
-    /// parallel HTTP range request I/O. Not available on WASM.
+    /// Drives I/O on the process-wide shared Tokio runtime (2 worker
+    /// threads). Not available on WASM.
+    ///
+    /// # Panics
+    ///
+    /// Methods panic if called from within an async runtime — see the
+    /// [module docs](crate::sync_api).
     pub struct CogReaderBlocking {
-        rt: tokio::runtime::Runtime,
+        rt: &'static tokio::runtime::Runtime,
         inner: CogReader,
     }
 
     impl CogReaderBlocking {
         /// Open a remote COG (blocking).
         pub fn open(url: &str, options: CogReaderOptions) -> Result<Self> {
-            let rt = tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(2)
-                .enable_all()
-                .build()
-                .map_err(|e| crate::error::CloudError::Network(e.to_string()))?;
-
+            let rt = super::shared_runtime()?;
             let inner = rt.block_on(CogReader::open(url, options))?;
 
             Ok(Self { rt, inner })
@@ -87,19 +120,20 @@ mod inner {
     use crate::stac_models::{StacItem, StacItemCollection, StacSearchParams};
 
     /// Blocking wrapper around [`StacClient`].
+    ///
+    /// # Panics
+    ///
+    /// Methods panic if called from within an async runtime — see the
+    /// [module docs](crate::sync_api).
     pub struct StacClientBlocking {
-        rt: tokio::runtime::Runtime,
+        rt: &'static tokio::runtime::Runtime,
         inner: StacClient,
     }
 
     impl StacClientBlocking {
         /// Create a new blocking STAC client.
         pub fn new(catalog: StacCatalog, options: StacClientOptions) -> Result<Self> {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| crate::error::CloudError::Network(e.to_string()))?;
-
+            let rt = super::shared_runtime()?;
             let inner = StacClient::new(catalog, options)?;
             Ok(Self { rt, inner })
         }
@@ -132,18 +166,18 @@ mod inner {
     }
 
     /// One-shot: search a STAC catalog and read the first matching COG asset (blocking).
+    ///
+    /// # Panics
+    ///
+    /// Panics if called from within an async runtime — see the
+    /// [module docs](crate::sync_api).
     pub fn stac_search_and_read<T: RasterElement>(
         catalog: StacCatalog,
         params: &StacSearchParams,
         asset_key: Option<&str>,
         bbox: &BBox,
     ) -> Result<Raster<T>> {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| crate::error::CloudError::Network(e.to_string()))?;
-
-        rt.block_on(crate::stac_reader::search_and_read(
+        super::shared_runtime()?.block_on(crate::stac_reader::search_and_read(
             catalog, params, asset_key, bbox,
         ))
     }
@@ -182,20 +216,20 @@ mod zarr_inner {
     use crate::zarr_reader::{TimeReduction, ZarrMetadata, ZarrReader, ZarrReaderOptions};
 
     /// Blocking wrapper around [`ZarrReader`].
+    ///
+    /// # Panics
+    ///
+    /// Methods panic if called from within an async runtime — see the
+    /// [module docs](crate::sync_api).
     pub struct ZarrReaderBlocking {
-        rt: tokio::runtime::Runtime,
+        rt: &'static tokio::runtime::Runtime,
         inner: ZarrReader,
     }
 
     impl ZarrReaderBlocking {
         /// Open a Zarr store and select a variable (blocking).
         pub fn open(store_url: &str, variable: &str, options: ZarrReaderOptions) -> Result<Self> {
-            let rt = tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(2)
-                .enable_all()
-                .build()
-                .map_err(|e| crate::error::CloudError::Network(e.to_string()))?;
-
+            let rt = super::shared_runtime()?;
             let inner = rt.block_on(ZarrReader::open(store_url, variable, options))?;
             Ok(Self { rt, inner })
         }
@@ -217,12 +251,13 @@ mod zarr_inner {
     }
 
     /// One-shot: list variables in a Zarr store (blocking).
+    ///
+    /// # Panics
+    ///
+    /// Panics if called from within an async runtime — see the
+    /// [module docs](crate::sync_api).
     pub fn zarr_list_variables(store_url: &str, options: ZarrReaderOptions) -> Result<Vec<String>> {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| crate::error::CloudError::Network(e.to_string()))?;
-        rt.block_on(ZarrReader::list_variables(store_url, options))
+        super::shared_runtime()?.block_on(ZarrReader::list_variables(store_url, options))
     }
 
     // ── CloudRasterReader impl for ZarrReaderBlocking ───────────────

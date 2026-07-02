@@ -417,7 +417,7 @@ mod tests {
 
     #[test]
     fn test_read_nonexistent_gpkg() {
-        let result = read_gpkg(Path::new("/tmp/nonexistent_surtgis_test.gpkg"), None);
+        let result = read_gpkg(Path::new("nonexistent_surtgis_test.gpkg"), None);
         assert!(result.is_err());
     }
 

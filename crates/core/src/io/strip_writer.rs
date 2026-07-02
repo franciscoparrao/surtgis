@@ -228,7 +228,10 @@ mod tests {
 
     #[test]
     fn test_write_and_read_back() {
-        let path = std::path::Path::new("/tmp/surtgis_strip_writer_test.tif");
+        // A hardcoded /tmp path fails on Windows (found by the OS matrix).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("surtgis_strip_writer_test.tif");
+        let path = path.as_path();
         let rows = 100;
         let cols = 50;
         let config = StripWriterConfig {
@@ -266,8 +269,6 @@ mod tests {
         // Check CRS
         assert!(reader.crs().is_some());
         assert_eq!(reader.crs().unwrap().epsg(), Some(32719));
-
-        // Clean up
-        let _ = std::fs::remove_file(path);
+        // TempDir cleans up on drop.
     }
 }
