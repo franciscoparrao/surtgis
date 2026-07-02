@@ -237,9 +237,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.102"
+version = "1.0.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
+checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
 name = "approx"
@@ -3256,15 +3256,6 @@ checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "lru"
-version = "0.12.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "234cf4f4a04dc1f57e24b96cc0cd600cf2af460d4161ac5ecdd0af8e1f3b2a38"
-dependencies = [
- "hashbrown 0.15.5",
-]
-
-[[package]]
-name = "lru"
 version = "0.16.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a1dc47f592c06f33f8e3aea9591776ec7c9f9e4124778ff8a3c3b87159f7e593"
@@ -5735,7 +5726,7 @@ dependencies = [
  "futures",
  "grib",
  "js-sys",
- "lru 0.12.5",
+ "lru",
  "ndarray",
  "netcdf",
  "num-traits",
@@ -6546,7 +6537,7 @@ dependencies = [
  "http-cache-reqwest",
  "image",
  "log",
- "lru 0.16.3",
+ "lru",
  "reqwest",
  "reqwest-middleware",
  "thiserror 2.0.18",
@@ -7970,7 +7961,7 @@ dependencies = [
  "itoa",
  "libz-sys",
  "log",
- "lru 0.16.3",
+ "lru",
  "moka",
  "num",
  "num-complex",
