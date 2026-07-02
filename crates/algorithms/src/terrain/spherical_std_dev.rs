@@ -33,11 +33,93 @@ impl Default for SphericalStdDevParams {
     }
 }
 
+/// Per-cell kernel shared by the batch (`spherical_std_dev`) and streaming
+/// (`SphericalStdDevStreaming`) paths.
+///
+/// Computes `sqrt(-2 · ln(R̄))` from the unit surface normals (Horn 1981
+/// gradients scaled by `8 · cell_size`) of every valid pixel in the
+/// `(2r+1)²` window centered at `(row, col)`. NaN/nodata pixels and pixels
+/// whose 3×3 Horn stencil would leave `data` are skipped. Returns NaN when
+/// fewer than 2 normals are available, 0.0 for perfect alignment and π for
+/// complete dispersion.
+///
+/// The caller must guarantee that the full window plus a 1-cell stencil
+/// margin lies inside `data` (border of `r + 1`).
+#[inline]
+fn spherical_std_dev_kernel(
+    data: &Array2<f64>,
+    row: usize,
+    col: usize,
+    r: isize,
+    cell_size: f64,
+    nodata: Option<f64>,
+) -> f64 {
+    let (rows, cols) = data.dim();
+    let mut sum_nx = 0.0;
+    let mut sum_ny = 0.0;
+    let mut sum_nz = 0.0;
+    let mut count = 0u32;
+
+    for dr in -r..=r {
+        for dc in -r..=r {
+            let nr = (row as isize + dr) as usize;
+            let nc = (col as isize + dc) as usize;
+
+            let nv = data[[nr, nc]];
+            if nv.is_nan() || nodata.is_some_and(|nd| (nv - nd).abs() < f64::EPSILON) {
+                continue;
+            }
+            if nr == 0 || nr >= rows - 1 || nc == 0 || nc >= cols - 1 {
+                continue;
+            }
+
+            let dzdx = (data[[nr - 1, nc + 1]] + 2.0 * data[[nr, nc + 1]] + data[[nr + 1, nc + 1]]
+                - data[[nr - 1, nc - 1]]
+                - 2.0 * data[[nr, nc - 1]]
+                - data[[nr + 1, nc - 1]])
+                / (8.0 * cell_size);
+            let dzdy = (data[[nr + 1, nc - 1]] + 2.0 * data[[nr + 1, nc]] + data[[nr + 1, nc + 1]]
+                - data[[nr - 1, nc - 1]]
+                - 2.0 * data[[nr - 1, nc]]
+                - data[[nr - 1, nc + 1]])
+                / (8.0 * cell_size);
+
+            let nx = -dzdx;
+            let ny = -dzdy;
+            let nz = 1.0;
+            let len = (nx * nx + ny * ny + nz * nz).sqrt();
+
+            sum_nx += nx / len;
+            sum_ny += ny / len;
+            sum_nz += nz / len;
+            count += 1;
+        }
+    }
+
+    if count < 2 {
+        return f64::NAN;
+    }
+
+    let n = count as f64;
+    let r_bar = ((sum_nx / n).powi(2) + (sum_ny / n).powi(2) + (sum_nz / n).powi(2)).sqrt();
+
+    if r_bar >= 1.0 {
+        // Perfect alignment
+        0.0
+    } else if r_bar < 1e-10 {
+        // Complete dispersion
+        std::f64::consts::PI // max theoretical value
+    } else {
+        (-2.0 * r_bar.ln()).sqrt()
+    }
+}
+
 /// Compute spherical standard deviation of surface normals.
 pub fn spherical_std_dev(dem: &Raster<f64>, params: SphericalStdDevParams) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
     let r = params.radius as isize;
     let nodata = dem.nodata();
+    let data = dem.data();
 
     let cell_size = dem.cell_size();
 
@@ -63,65 +145,7 @@ pub fn spherical_std_dev(dem: &Raster<f64>, params: SphericalStdDevParams) -> Re
                     continue;
                 }
 
-                let mut sum_nx = 0.0;
-                let mut sum_ny = 0.0;
-                let mut sum_nz = 0.0;
-                let mut count = 0u32;
-
-                for dr in -r..=r {
-                    for dc in -r..=r {
-                        let nr = (ri + dr) as usize;
-                        let nc = (ci + dc) as usize;
-
-                        let nv = unsafe { dem.get_unchecked(nr, nc) };
-                        if nv.is_nan() || nodata.is_some_and(|nd| (nv - nd).abs() < f64::EPSILON) {
-                            continue;
-                        }
-                        if nr == 0 || nr >= rows - 1 || nc == 0 || nc >= cols - 1 {
-                            continue;
-                        }
-
-                        let z = |r: usize, c: usize| unsafe { dem.get_unchecked(r, c) };
-                        let dzdx = (z(nr - 1, nc + 1) + 2.0 * z(nr, nc + 1) + z(nr + 1, nc + 1)
-                            - z(nr - 1, nc - 1)
-                            - 2.0 * z(nr, nc - 1)
-                            - z(nr + 1, nc - 1))
-                            / (8.0 * cell_size);
-                        let dzdy = (z(nr + 1, nc - 1) + 2.0 * z(nr + 1, nc) + z(nr + 1, nc + 1)
-                            - z(nr - 1, nc - 1)
-                            - 2.0 * z(nr - 1, nc)
-                            - z(nr - 1, nc + 1))
-                            / (8.0 * cell_size);
-
-                        let nx = -dzdx;
-                        let ny = -dzdy;
-                        let nz = 1.0;
-                        let len = (nx * nx + ny * ny + nz * nz).sqrt();
-
-                        sum_nx += nx / len;
-                        sum_ny += ny / len;
-                        sum_nz += nz / len;
-                        count += 1;
-                    }
-                }
-
-                if count < 2 {
-                    continue;
-                }
-
-                let n = count as f64;
-                let r_bar =
-                    ((sum_nx / n).powi(2) + (sum_ny / n).powi(2) + (sum_nz / n).powi(2)).sqrt();
-
-                if r_bar >= 1.0 {
-                    // Perfect alignment
-                    *out = 0.0;
-                } else if r_bar < 1e-10 {
-                    // Complete dispersion
-                    *out = std::f64::consts::PI; // max theoretical value
-                } else {
-                    *out = (-2.0 * r_bar.ln()).sqrt();
-                }
+                *out = spherical_std_dev_kernel(data, row, col, r, cell_size, nodata);
             }
 
             row_data
@@ -155,100 +179,42 @@ impl surtgis_core::WindowAlgorithm for SphericalStdDevStreaming {
         input: &Array2<f64>,
         output: &mut Array2<f64>,
         nodata: Option<f64>,
-        _cell_size_x: f64,
+        cell_size_x: f64,
         _cell_size_y: f64,
     ) {
         let (in_rows, cols) = input.dim();
-        let out_rows = output.nrows();
         let kr = self.radius + 1;
         let r = self.radius as isize;
 
-        for row in 0..out_rows {
-            let ir = row + kr;
-            if ir < kr || ir + kr >= in_rows {
-                for c in 0..cols {
-                    output[[row, c]] = f64::NAN;
-                }
-                continue;
-            }
-
-            for c in 0..cols {
-                if c < kr || c + kr >= cols {
-                    output[[row, c]] = f64::NAN;
-                    continue;
+        output
+            .as_slice_mut()
+            .expect("process_chunk output must be in standard layout")
+            .par_chunks_mut(cols)
+            .enumerate()
+            .for_each(|(row, out_row)| {
+                let ir = row + kr;
+                if ir < kr || ir + kr >= in_rows {
+                    out_row.fill(f64::NAN);
+                    return;
                 }
 
-                let center = input[[ir, c]];
-                if center.is_nan() || nodata.map_or(false, |nd| (center - nd).abs() < f64::EPSILON)
-                {
-                    output[[row, c]] = f64::NAN;
-                    continue;
-                }
-
-                let mut sum_nx = 0.0;
-                let mut sum_ny = 0.0;
-                let mut sum_nz = 0.0;
-                let mut count = 0u32;
-
-                for dr in -r..=r {
-                    for dc in -r..=r {
-                        let nr = (ir as isize + dr) as usize;
-                        let nc = (c as isize + dc) as usize;
-
-                        let nv = input[[nr, nc]];
-                        if nv.is_nan() || nodata.map_or(false, |nd| (nv - nd).abs() < f64::EPSILON)
-                        {
-                            continue;
-                        }
-                        if nr == 0 || nr + 1 >= in_rows || nc == 0 || nc + 1 >= cols {
-                            continue;
-                        }
-
-                        let dzdx = (input[[nr - 1, nc + 1]]
-                            + 2.0 * input[[nr, nc + 1]]
-                            + input[[nr + 1, nc + 1]]
-                            - input[[nr - 1, nc - 1]]
-                            - 2.0 * input[[nr, nc - 1]]
-                            - input[[nr + 1, nc - 1]])
-                            / 8.0;
-                        let dzdy = (input[[nr + 1, nc - 1]]
-                            + 2.0 * input[[nr + 1, nc]]
-                            + input[[nr + 1, nc + 1]]
-                            - input[[nr - 1, nc - 1]]
-                            - 2.0 * input[[nr - 1, nc]]
-                            - input[[nr - 1, nc + 1]])
-                            / 8.0;
-
-                        let nx = -dzdx;
-                        let ny = -dzdy;
-                        let nz = 1.0;
-                        let len = (nx * nx + ny * ny + nz * nz).sqrt();
-
-                        sum_nx += nx / len;
-                        sum_ny += ny / len;
-                        sum_nz += nz / len;
-                        count += 1;
+                for (c, out_v) in out_row.iter_mut().enumerate() {
+                    if c < kr || c + kr >= cols {
+                        *out_v = f64::NAN;
+                        continue;
                     }
-                }
 
-                if count < 2 {
-                    output[[row, c]] = f64::NAN;
-                    continue;
-                }
+                    let center = input[[ir, c]];
+                    if center.is_nan()
+                        || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON)
+                    {
+                        *out_v = f64::NAN;
+                        continue;
+                    }
 
-                let n = count as f64;
-                let r_bar =
-                    ((sum_nx / n).powi(2) + (sum_ny / n).powi(2) + (sum_nz / n).powi(2)).sqrt();
-
-                if r_bar >= 1.0 {
-                    output[[row, c]] = 0.0;
-                } else if r_bar < 1e-10 {
-                    output[[row, c]] = std::f64::consts::PI;
-                } else {
-                    output[[row, c]] = (-2.0 * r_bar.ln()).sqrt();
+                    *out_v = spherical_std_dev_kernel(input, ir, c, r, cell_size_x, nodata);
                 }
-            }
-        }
+            });
     }
 }
 
