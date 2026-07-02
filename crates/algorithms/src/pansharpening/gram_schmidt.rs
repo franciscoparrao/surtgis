@@ -35,22 +35,21 @@ use surtgis_core::{Error, Result};
 
 /// Apply Gram-Schmidt pansharpening (Laben & Brower 2000).
 ///
-/// `pan` and every `ms` band must share the same shape. Pixels
-/// where any input is NaN are emitted as NaN in every output band.
+/// `pan` and every `ms` band must live on the same grid (shape,
+/// geotransform and EPSG-comparable CRS — the MS bands are assumed
+/// to be already resampled to the pan grid). Pixels where any input
+/// is NaN are emitted as NaN in every output band.
 pub fn gram_schmidt(pan: &Raster<f64>, ms: &[&Raster<f64>]) -> Result<Vec<Raster<f64>>> {
     if ms.is_empty() {
         return Err(Error::Algorithm(
             "Gram-Schmidt needs at least one MS band".into(),
         ));
     }
+    let mut all: Vec<&Raster<f64>> = Vec::with_capacity(ms.len() + 1);
+    all.push(pan);
+    all.extend_from_slice(ms);
+    surtgis_core::raster::check_aligned(&all)?;
     let (rows, cols) = pan.shape();
-    for b in ms.iter() {
-        if b.shape() != (rows, cols) {
-            return Err(Error::Algorithm(
-                "Gram-Schmidt: pan and MS bands must share shape".into(),
-            ));
-        }
-    }
     let n_bands = ms.len();
     let n_px = rows * cols;
     let inv_b = 1.0 / n_bands as f64;

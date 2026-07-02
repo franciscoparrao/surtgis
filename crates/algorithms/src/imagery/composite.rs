@@ -26,14 +26,17 @@ pub fn median_composite(rasters: &[&Raster<f64>]) -> Result<Raster<f64>> {
         ));
     }
 
-    // Check if all rasters have the same dimensions
-    let all_same_size = {
-        let (r0, c0) = rasters[0].shape();
-        rasters.iter().all(|r| r.shape() == (r0, c0))
-    };
+    // Mixing CRSs is never recoverable here (the union-bbox path
+    // assumes a common CRS), so reject that up front. Uses the
+    // lenient EPSG-only semantics of `check_same_crs`.
+    surtgis_core::raster::check_same_crs(rasters)?;
 
-    if all_same_size {
-        // Fast path: same dimensions, direct pixel-wise median
+    if surtgis_core::raster::check_aligned(rasters).is_ok() {
+        // Fast path: same grid (shape + geotransform), direct
+        // pixel-wise median. Note this is stricter than a shape-only
+        // check: two rasters with equal dimensions but shifted
+        // origins go through the georeferenced slow path instead of
+        // being combined pixel-by-pixel.
         median_composite_aligned(rasters)
     } else {
         // Different extents: align to union bbox first, then median
@@ -195,23 +198,18 @@ fn compute_median(values: &mut Vec<f64>) -> f64 {
 /// hides hard seams between adjacent tiles without solving the
 /// full min-cost-path seam problem.
 ///
-/// All input rasters must share the same shape. Pixels where every
-/// raster is NaN are emitted as NaN. Distance is computed in
-/// raster-pixel units, so the weighting is purely geometric.
+/// All input rasters must be on the same grid (shape, geotransform
+/// and EPSG-comparable CRS — see `surtgis_core::raster::check_aligned`).
+/// Pixels where every raster is NaN are emitted as NaN. Distance is
+/// computed in raster-pixel units, so the weighting is purely geometric.
 pub fn feather_mosaic(rasters: &[&Raster<f64>]) -> Result<Raster<f64>> {
     if rasters.len() < 2 {
         return Err(Error::Other(
             "feather_mosaic requires at least 2 rasters".into(),
         ));
     }
+    surtgis_core::raster::check_aligned(rasters)?;
     let (rows, cols) = rasters[0].shape();
-    for r in rasters.iter().skip(1) {
-        if r.shape() != (rows, cols) {
-            return Err(Error::Other(
-                "feather_mosaic: all rasters must share shape".into(),
-            ));
-        }
-    }
 
     // Per-raster distance map: distance from each valid cell to
     // the nearest invalid cell *or* the raster boundary.

@@ -226,12 +226,12 @@ fn validate_inputs(t1: &[&Raster<f64>], t2: &[&Raster<f64>]) -> Result<(usize, u
             t2.len()
         )));
     }
+    // Every band of both dates must live on the same grid
+    // (shape + geotransform + EPSG-comparable CRS): the CCA pairs
+    // pixels across dates positionally.
+    let all: Vec<&Raster<f64>> = t1.iter().chain(t2.iter()).copied().collect();
+    surtgis_core::raster::check_aligned(&all)?;
     let (rows, cols) = t1[0].shape();
-    for r in t1.iter().chain(t2.iter()) {
-        if r.shape() != (rows, cols) {
-            return Err(Error::Algorithm("MAD: all bands must share shape".into()));
-        }
-    }
     Ok((rows, cols, t1.len()))
 }
 
