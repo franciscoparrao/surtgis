@@ -9,6 +9,15 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-07-02
+
+Engine-audit release: Sprints 2–4 (performance, structural debt, process
+hardening). **Contains breaking changes** — see below.
+
+> ⚠️ **`z_factor` changed to the GDAL/ArcGIS convention.** If you passed a
+> non-default `z_factor` (especially the `111320` lat/lon hack), read the
+> Breaking section. Geographic DEMs are now corrected automatically.
+
 ### Added
 
 - **Nightly fuzzing** (`cargo-fuzz`) of the hand-rolled binary parsers:
