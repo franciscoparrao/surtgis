@@ -39,14 +39,21 @@ pub fn hypsometric_hillshade(dem: &Raster<f64>, params: HillshadeParams) -> Resu
         }
     }
 
+    // The documented contract is output in [0, 1], so the internal
+    // hillshade must be normalized regardless of what the caller set.
+    let hs_params = HillshadeParams {
+        normalized: true,
+        ..params
+    };
+
     let range = global_max - global_min;
     if range < f64::EPSILON {
         // Flat DEM: return hillshade as-is
-        return hillshade(dem, params);
+        return hillshade(dem, hs_params);
     }
 
     // Compute hillshade
-    let hs = hillshade(dem, params)?;
+    let hs = hillshade(dem, hs_params)?;
 
     // Pass 2: multiply hillshade by normalized elevation
     let output_data: Vec<f64> = (0..rows)

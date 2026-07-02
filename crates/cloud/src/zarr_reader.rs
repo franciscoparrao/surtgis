@@ -193,7 +193,11 @@ impl ZarrReader {
         } else {
             raw_lat
         };
-        let lon_coords = normalise_longitude(raw_lon);
+        // Keep longitudes in the dataset's physical order (0-360 for
+        // ERA5-style grids): sorting them here would break the mapping
+        // between coordinate positions and physical array indices, so a
+        // western-hemisphere bbox would read the wrong columns.
+        let lon_coords = raw_lon;
 
         // Time coordinates: read time array and its own CF attributes
         let time_coords = if let Some(time_dim_idx) = cf.time_dim {
@@ -328,8 +332,16 @@ impl ZarrReader {
 
         // Build GeoTransform for subset
         let sub_lat = &self.lat_coords[lat_start..lat_end];
-        let sub_lon = &self.lon_coords[lon_start..lon_end];
-        let geo_transform = build_geotransform(sub_lat, sub_lon);
+        // Present western-hemisphere subsets of 0-360 grids in -180..180.
+        // Safe only when the whole subset is > 180 (shifting keeps it
+        // monotonic); subsets spanning 180 keep the 0-360 convention.
+        let sub_lon_raw = &self.lon_coords[lon_start..lon_end];
+        let sub_lon: Vec<f64> = if sub_lon_raw.iter().all(|&v| v > 180.0) {
+            sub_lon_raw.iter().map(|&v| v - 360.0).collect()
+        } else {
+            sub_lon_raw.to_vec()
+        };
+        let geo_transform = build_geotransform(sub_lat, &sub_lon);
 
         let mut raster = Raster::from_array(data_2d);
         raster.set_transform(geo_transform);
@@ -404,12 +416,7 @@ impl ZarrReader {
     }
 
     fn lon_range_for_bbox(&self, bbox: &BBox) -> Result<(usize, usize)> {
-        let start = find_nearest(&self.lon_coords, bbox.min_x);
-        let end = (find_nearest(&self.lon_coords, bbox.max_x) + 1).min(self.lon_coords.len());
-        if start >= end {
-            return Err(CloudError::BBoxOutside);
-        }
-        Ok((start, end))
+        lon_range_physical(&self.lon_coords, bbox.min_x, bbox.max_x)
     }
 
     fn time_indices(&self, time: &TimeReduction) -> Result<(usize, usize)> {
@@ -554,17 +561,37 @@ async fn read_coord_array(
     Ok(values_f32.iter().map(|&v| v as f64).collect())
 }
 
-/// Normalise longitude from 0-360 to -180..180.
-fn normalise_longitude(lon: Vec<f64>) -> Vec<f64> {
-    if lon.is_empty() || !lon.iter().any(|&v| v > 180.0) {
-        return lon;
+/// Map a bbox longitude range to physical array indices.
+///
+/// For 0-360 grids (ERA5 style), negative bbox longitudes are converted
+/// to the dataset convention (x + 360) so `find_nearest` runs against the
+/// physical coordinate array — indices then address the correct columns.
+/// A bbox that crosses the 0/360 seam after conversion (e.g. -10..30 on a
+/// 0-360 grid) would need two discontiguous reads; that is rejected with
+/// an explicit error rather than returning wrong columns silently.
+fn lon_range_physical(lon_coords: &[f64], min_x: f64, max_x: f64) -> Result<(usize, usize)> {
+    let is_0_360 = lon_coords.iter().any(|&v| v > 180.0);
+    let (mut lo, mut hi) = (min_x, max_x);
+    if is_0_360 {
+        if lo < 0.0 {
+            lo += 360.0;
+        }
+        if hi < 0.0 {
+            hi += 360.0;
+        }
+        if lo > hi {
+            return Err(CloudError::Zarr(format!(
+                "bbox longitude range {min_x}..{max_x} crosses the 0/360 seam \
+                 of this 0-360 grid; split the request at longitude 0"
+            )));
+        }
     }
-    let mut out: Vec<f64> = lon
-        .iter()
-        .map(|&v| if v > 180.0 { v - 360.0 } else { v })
-        .collect();
-    out.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    out
+    let start = find_nearest(lon_coords, lo);
+    let end = (find_nearest(lon_coords, hi) + 1).min(lon_coords.len());
+    if start >= end {
+        return Err(CloudError::BBoxOutside);
+    }
+    Ok((start, end))
 }
 
 /// Build a GeoTransform from sorted lat/lon coordinate arrays.
@@ -772,4 +799,57 @@ fn compute_strides(shape: &[usize]) -> Vec<usize> {
         strides[i] = strides[i + 1] * shape[i + 1];
     }
     strides
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ERA5-style physical grid: 0, 0.25, ..., 359.75
+    fn era5_lons() -> Vec<f64> {
+        (0..1440).map(|i| i as f64 * 0.25).collect()
+    }
+
+    /// Regression: a western-hemisphere bbox (Chile) on a 0-360 grid must
+    /// address the physical columns of the converted longitudes, not the
+    /// columns that a sorted -180..180 copy of the array would suggest.
+    #[test]
+    fn test_lon_range_western_hemisphere_on_0_360_grid() {
+        let lons = era5_lons();
+        // Chile: lon -76..-66  →  284..294 in dataset convention
+        let (start, end) = lon_range_physical(&lons, -76.0, -66.0).unwrap();
+        assert_eq!(start, 1136, "physical index of 284.0"); // 284 / 0.25
+        assert_eq!(end, 1177, "physical index just past 294.0");
+        // The buggy sorted-array logic mapped -76 near logical index 416
+        assert!(
+            start > 720,
+            "western longitudes live in the second half of a 0-360 grid"
+        );
+    }
+
+    #[test]
+    fn test_lon_range_eastern_hemisphere_unchanged() {
+        let lons = era5_lons();
+        let (start, end) = lon_range_physical(&lons, 10.0, 20.0).unwrap();
+        assert_eq!(start, 40); // 10 / 0.25
+        assert_eq!(end, 81);
+    }
+
+    #[test]
+    fn test_lon_range_seam_crossing_rejected() {
+        let lons = era5_lons();
+        // -10..30 crosses the 0/360 seam on this grid: must be an explicit
+        // error, never a silent wrong-columns read.
+        let err = lon_range_physical(&lons, -10.0, 30.0);
+        assert!(err.is_err(), "seam-crossing bbox must be rejected");
+    }
+
+    #[test]
+    fn test_lon_range_regular_grid_minus180_180() {
+        // Grids already in -180..180 are untouched by the conversion
+        let lons: Vec<f64> = (0..360).map(|i| -180.0 + i as f64).collect();
+        let (start, end) = lon_range_physical(&lons, -76.0, -66.0).unwrap();
+        assert_eq!(start, 104);
+        assert_eq!(end, 115);
+    }
 }

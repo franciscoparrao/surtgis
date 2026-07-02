@@ -70,7 +70,7 @@ pub fn multidirectional_hillshade(
     let output_data: Vec<f64> = (0..rows)
         .into_par_iter()
         .flat_map(|row| {
-            let mut row_data = vec![0.0; cols];
+            let mut row_data = vec![f64::NAN; cols];
 
             for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let e = unsafe { dem.get_unchecked(row, col) };
@@ -106,7 +106,9 @@ pub fn multidirectional_hillshade(
                 let aspect_rad = if dz_dx.abs() < 1e-10 && dz_dy.abs() < 1e-10 {
                     0.0
                 } else {
-                    let asp = (-dz_dy).atan2(-dz_dx);
+                    // Downslope in (east, north): dz_dy is south-minus-north,
+                    // already the northward component (see hillshade()).
+                    let asp = dz_dy.atan2(-dz_dx);
                     if asp < 0.0 { 2.0 * PI + asp } else { asp }
                 };
 
@@ -146,7 +148,8 @@ pub fn multidirectional_hillshade(
         .collect();
 
     let mut output = dem.with_same_meta::<f64>(rows, cols);
-    output.set_nodata(Some(0.0));
+    // NaN, not 0.0: a shade of 0 is a valid value (full shadow).
+    output.set_nodata(Some(f64::NAN));
     *output.data_mut() = Array2::from_shape_vec((rows, cols), output_data)
         .map_err(|e| Error::Other(e.to_string()))?;
 
@@ -255,7 +258,9 @@ impl surtgis_core::WindowAlgorithm for MultiHillshadeStreaming {
                 let aspect_rad = if dz_dx.abs() < 1e-10 && dz_dy.abs() < 1e-10 {
                     0.0
                 } else {
-                    let asp = (-dz_dy).atan2(-dz_dx);
+                    // Downslope in (east, north): dz_dy is south-minus-north,
+                    // already the northward component (see hillshade()).
+                    let asp = dz_dy.atan2(-dz_dx);
                     if asp < 0.0 { 2.0 * PI + asp } else { asp }
                 };
 
@@ -316,6 +321,9 @@ mod tests {
         for row in 0..result.rows() {
             for col in 0..result.cols() {
                 let val = result.get(row, col).unwrap();
+                if val.is_nan() {
+                    continue; // edges / nodata
+                }
                 assert!(
                     val >= 0.0 && val <= 255.0,
                     "Value {} out of range at ({}, {})",

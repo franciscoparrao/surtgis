@@ -179,13 +179,14 @@ where
     // GDAL_NODATA tag (42113) — write as ASCII string
     if let Some(nd) = config.nodata {
         let nodata_str = if nd.is_nan() {
-            "nan\0".to_string()
+            "nan".to_string()
         } else {
-            format!("{}\0", nd)
+            format!("{}", nd)
         };
+        // ASCII tag; the str impl appends the NUL (see native::write_geotiff).
         image
             .encoder()
-            .write_tag(Tag::Unknown(42113), nodata_str.as_bytes())
+            .write_tag(Tag::Unknown(42113), nodata_str.as_str())
             .map_err(|e| Error::Other(format!("Cannot write nodata tag: {}", e)))?;
     }
 

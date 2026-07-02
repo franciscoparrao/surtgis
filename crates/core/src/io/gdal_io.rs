@@ -37,7 +37,9 @@ impl Default for GeoTiffOptions {
 ///
 /// # Arguments
 /// * `path` - Path to the GeoTIFF file
-/// * `band` - Band number (1-indexed), defaults to 1
+/// * `band` - Band index (**0-based**, same convention as the native
+///   backend), defaults to 0. Converted internally to GDAL's 1-based
+///   band numbering.
 ///
 /// # Example
 /// ```ignore
@@ -49,7 +51,8 @@ where
     P: AsRef<Path>,
 {
     let dataset = Dataset::open(path.as_ref())?;
-    let band_idx = band.unwrap_or(1);
+    // Public API is 0-based (matching the native backend); GDAL is 1-based.
+    let band_idx = band.unwrap_or(0) + 1;
     let rasterband = dataset.rasterband(band_idx)?;
 
     let (cols, rows) = dataset.raster_size();

@@ -9,6 +9,70 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Hillshade illumination was mirrored North–South** (`hillshade`,
+  `multi-hillshade`, `hypsometric-hillshade`). The internal aspect used
+  `atan2(-dz_dy, -dz_dx)` instead of `atan2(dz_dy, -dz_dx)`, so a north-facing
+  slope was shaded as if it faced south — with the default NW sun (az 315°) the
+  result was equivalent to lighting from the SW. Now matches `gdaldem hillshade`
+  bit-exactly on synthetic slopes (218 vs the previous 104 for a north-facing
+  tan=0.5 slope) and within ±1 DN (rounding) on real terrain. Every hillshade
+  produced by previous versions has inverted N–S lighting. New directional
+  regression test pins the GDAL value.
+- **Priority-Flood lost valid data enclosed by a NaN collar.** Only
+  physical-border cells seeded the queue, so the valid interior of a
+  reprojected DEM (WGS84→UTM leaves a NaN curtain) was unreachable and came out
+  all-NaN. Valid cells adjacent to nodata now seed the queue as drainage
+  outlets (Barnes et al. 2014), matching `fill_sinks`. Ported the nodata-curtain
+  regression test.
+- **`GeoTransform::geo_to_pixel` returned NaN for fine-resolution geographic
+  rasters.** The degeneracy check used an absolute determinant threshold
+  (`1e-10`); a 1 m pixel in EPSG:4326 gives det ≈ 8e-11, so valid drone-imagery
+  transforms were declared degenerate — silently breaking `rasterize` and
+  `geo_to_pixel`. The threshold is now relative to the transform's scale.
+- **Float nodata matching corrupted small valid values.** `is_nodata` used an
+  absolute epsilon (`EPSILON * 100`), so with `nodata = 0.0` any value below
+  ~1.2e-5 (NDVI ≈ 0, low reflectances) was classified nodata and rewritten to
+  NaN on read — irreversible corruption. Matching is now exact (as GDAL and
+  rasterio do), which also fixes large sentinels missed when off by 1 ULP.
+- **`read_geotiff` band index differed between backends.** The native backend
+  was 0-based while the GDAL feature was 1-based, so `Some(1)` read a different
+  band depending on compile flags. Both are now 0-based; the GDAL backend
+  converts internally.
+- **Zarr reader read the wrong columns for western-hemisphere bboxes on 0–360
+  grids (ERA5).** Longitudes were converted to −180..180 *and sorted*, breaking
+  the mapping between coordinate positions and physical array indices; any
+  Chilean bbox read columns from the wrong hemisphere. The reader now keeps the
+  dataset's physical coordinate order and converts the bbox to the dataset
+  convention instead (as the NetCDF reader always did). Bboxes crossing the
+  0/360 seam are rejected with an explicit error instead of returning wrong
+  data. Regression tests cover western, eastern and seam-crossing cases.
+- **COG reader returned an all-nodata raster as success for striped TIFFs.**
+  A TIFF without `TileOffsets` never fetched anything and every tile was
+  silently "skipped". Striped (non-tiled) TIFFs are now rejected at open with a
+  clear error, and any non-sparse tile that fails to fetch/decode aborts the
+  read instead of returning a partially-empty raster. Sparse COGs (byte count
+  0 = intentionally missing tile) still fill with nodata as before.
+- **Sentinel nodata round-trip was incoherent for external tools.** Reading a
+  file with `GDAL_NODATA = -9999` normalized pixels to NaN but kept the
+  sentinel in metadata, so a subsequent write emitted `GDAL_NODATA = -9999`
+  over NaN pixels — GDAL/QGIS then treated the NaNs as valid data. Metadata now
+  follows the pixels to NaN.
+- **`GDAL_NODATA` was written as a BYTE-typed tag** (via `as_bytes()`), which
+  SurtGIS's own reader rejected (`InvalidTypeForTag`) — the nodata of
+  SurtGIS-written files was invisible to SurtGIS itself. The tag is now written
+  as a proper ASCII tag; reading falls back to BYTE for files written by
+  ≤ 0.16.3.
+- **`hillshade` declared `nodata = 0.0`**, but 0 is a valid shade (full
+  shadow) — masking nodata erased real cast shadows. Edges and nodata cells are
+  now NaN, consistent with the rest of the terrain algorithms.
+- `hypsometric_hillshade` multiplied a 0–255 hillshade by the normalized
+  elevation while documenting output in [0, 1]; it now forces the internal
+  hillshade to normalized mode, honouring the documented contract.
+- Removed leftover debug `eprintln!` lines from `resample_to_grid` that
+  polluted stderr of every consumer.
+
 ## [0.16.3] - 2026-07-01
 
 ### Fixed

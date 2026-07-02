@@ -33,6 +33,8 @@ pub mod tags {
     pub const SAMPLES_PER_PIXEL: u16 = 277;
     /// `PlanarConfiguration` (284): 1 = chunky/interleaved, 2 = planar.
     pub const PLANAR_CONFIG: u16 = 284;
+    /// `StripOffsets` (273): byte offset of each strip (striped TIFFs).
+    pub const STRIP_OFFSETS: u16 = 273;
     /// `TileWidth` (322): tile width in pixels.
     pub const TILE_WIDTH: u16 = 322;
     /// `TileLength` (323): tile height in pixels.

@@ -168,6 +168,8 @@ impl CogReader {
             return Err(CloudError::NoIfd);
         }
 
+        validate_tiled(&ifds[0])?;
+
         // 4. Extract GeoTIFF metadata from the first (full-res) IFD.
         let geo_meta = resolve_geotiff_meta(
             &client,
@@ -404,7 +406,7 @@ impl CogReader {
         let mut output = Array2::<T>::from_elem((out_rows, out_cols), T::default_nodata());
         let mut tiles_written = 0usize;
         let mut tiles_skipped = 0usize;
-        let mut tiles_fetched = mapping.tiles.len();
+        let tiles_fetched = mapping.tiles.len();
 
         for tr in &mapping.tiles {
             let key = TileKey {
@@ -418,8 +420,27 @@ impl CogReader {
                     data.clone()
                 }
                 None => {
-                    tiles_skipped += 1;
-                    continue;
+                    // Sparse COGs mark intentionally-missing tiles with
+                    // byte count 0: the window stays nodata, which is the
+                    // correct fill. Any other cache miss means requested
+                    // data was never fetched/decoded — that is data loss,
+                    // not a skippable condition.
+                    let sparse = ifd
+                        .tile_byte_counts
+                        .get(tr.tile_idx)
+                        .is_some_and(|&c| c == 0);
+                    if sparse {
+                        tiles_skipped += 1;
+                        continue;
+                    }
+                    return Err(CloudError::InvalidTiff {
+                        reason: format!(
+                            "tile {} (col {}, row {}) was requested but never \
+                             fetched or decoded; refusing to return a \
+                             partially-empty raster",
+                            tr.tile_idx, tr.tile_col, tr.tile_row
+                        ),
+                    });
                 }
             };
 
@@ -803,5 +824,86 @@ fn get_tag_u64_array(
             Some((_, data)) => ifd::read_offset_values_u64(byte_order, entry, data),
             None => Vec::new(),
         }
+    }
+}
+
+/// Reject TIFFs the tile path cannot read.
+///
+/// A TIFF without `TileOffsets` cannot be addressed by tile index. If it
+/// has `StripOffsets` it is a striped (non-tiled) TIFF — common outside
+/// strict COGs. Before this check, such files produced an all-nodata
+/// raster returned as success (no tile was ever fetched, every tile was
+/// "skipped"): silent wrong data.
+fn validate_tiled(ifd_info: &IfdInfo) -> Result<()> {
+    if !ifd_info.tile_offsets.is_empty() {
+        return Ok(());
+    }
+    let has_strips = ifd_info
+        .raw_entries
+        .iter()
+        .any(|e| e.tag == ifd::tags::STRIP_OFFSETS);
+    let reason = if has_strips {
+        "striped (non-tiled) TIFF is not supported by the COG reader; \
+         convert to a tiled COG (e.g. gdal_translate -of COG)"
+    } else {
+        "no TileOffsets found: not a valid tiled TIFF"
+    };
+    Err(CloudError::InvalidTiff {
+        reason: reason.into(),
+    })
+}
+
+#[cfg(test)]
+mod strip_rejection_tests {
+    use super::*;
+
+    fn base_ifd(tile_offsets: Vec<u64>, raw_entries: Vec<RawTagEntry>) -> IfdInfo {
+        IfdInfo {
+            width: 100,
+            height: 100,
+            tile_width: 100,
+            tile_height: 100,
+            tile_offsets,
+            tile_byte_counts: vec![],
+            bits_per_sample: 32,
+            sample_format: 3,
+            compression: 1,
+            samples_per_pixel: 1,
+            planar_config: 1,
+            predictor: 1,
+            raw_entries,
+        }
+    }
+
+    fn entry(tag: u16) -> RawTagEntry {
+        RawTagEntry {
+            tag,
+            type_id: 4,
+            count: 1,
+            value_or_offset: 8,
+            inline: true,
+        }
+    }
+
+    /// Regression: a striped TIFF (StripOffsets, no TileOffsets) must be
+    /// rejected at open — not silently produce an all-nodata raster.
+    #[test]
+    fn striped_tiff_is_rejected_with_clear_error() {
+        let ifd_info = base_ifd(vec![], vec![entry(ifd::tags::STRIP_OFFSETS)]);
+        let err = validate_tiled(&ifd_info).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("striped"), "unhelpful error: {msg}");
+    }
+
+    #[test]
+    fn tiff_without_any_offsets_is_rejected() {
+        let ifd_info = base_ifd(vec![], vec![]);
+        assert!(validate_tiled(&ifd_info).is_err());
+    }
+
+    #[test]
+    fn tiled_tiff_passes() {
+        let ifd_info = base_ifd(vec![8], vec![entry(ifd::tags::TILE_OFFSETS)]);
+        assert!(validate_tiled(&ifd_info).is_ok());
     }
 }

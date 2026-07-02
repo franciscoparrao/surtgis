@@ -133,22 +133,33 @@ pub fn priority_flood(dem: &Raster<f64>, params: PriorityFloodParams) -> Result<
     let mut visited = Array2::<bool>::from_elem((rows, cols), false);
     let mut heap = BinaryHeap::new();
 
-    // Step 1: Seed the priority queue with border cells
+    let is_nodata = |v: f64| v.is_nan() || nodata.is_some_and(|nd| (v - nd).abs() < f64::EPSILON);
+
+    // Step 1: Seed the priority queue with border cells AND valid cells
+    // adjacent to nodata. Nodata acts as a drainage outlet (elevation −∞),
+    // per Barnes et al. (2014): without this, valid regions enclosed by a
+    // nodata collar (e.g. a reprojected DEM) are unreachable from the
+    // physical border and would be lost.
     for row in 0..rows {
         for col in 0..cols {
             let val = unsafe { dem.get_unchecked(row, col) };
 
-            // Check if nodata
-            let is_nd = val.is_nan() || nodata.is_some_and(|nd| (val - nd).abs() < f64::EPSILON);
-
-            if is_nd {
+            if is_nodata(val) {
                 visited[(row, col)] = true;
                 output[(row, col)] = val; // preserve nodata
                 continue;
             }
 
-            // Border cells seed the queue
-            if row == 0 || row == rows - 1 || col == 0 || col == cols - 1 {
+            let on_border = row == 0 || row == rows - 1 || col == 0 || col == cols - 1;
+
+            let touches_nodata = !on_border
+                && D8_OFFSETS.iter().any(|&(dr, dc)| {
+                    let nr = (row as isize + dr) as usize;
+                    let nc = (col as isize + dc) as usize;
+                    is_nodata(unsafe { dem.get_unchecked(nr, nc) })
+                });
+
+            if on_border || touches_nodata {
                 heap.push(Cell {
                     elevation: val,
                     row,
@@ -374,6 +385,55 @@ mod tests {
             "Sink should fill to outlet level (~2.0–5.0), got {}",
             center
         );
+    }
+
+    /// Regression test: valid data enclosed by a NaN collar (the typical
+    /// shape of a DEM reprojected WGS84→UTM) must be filled, not lost.
+    /// Before the fix, only physical-border cells seeded the queue, so the
+    /// interior island was unreachable and came out as all-NaN.
+    #[test]
+    fn test_priority_flood_with_nodata_curtain() {
+        let n = 9;
+        let mut dem = Raster::new(n, n);
+        dem.set_transform(GeoTransform::new(0.0, n as f64, 1.0, -1.0));
+
+        // NaN collar (2 cells wide), valid island in the middle with a sink
+        for row in 0..n {
+            for col in 0..n {
+                let inside = (2..n - 2).contains(&row) && (2..n - 2).contains(&col);
+                dem.set(row, col, if inside { 8.0 } else { f64::NAN })
+                    .unwrap();
+            }
+        }
+        dem.set(4, 4, 1.0).unwrap(); // sink in the center of the island
+
+        let filled = priority_flood(&dem, PriorityFloodParams { epsilon: 0.0 }).unwrap();
+
+        // Valid cells must remain valid (not converted to NaN)
+        for row in 2..n - 2 {
+            for col in 2..n - 2 {
+                let v = filled.get(row, col).unwrap();
+                assert!(
+                    !v.is_nan(),
+                    "Valid cell ({}, {}) was lost (NaN) behind the nodata curtain",
+                    row,
+                    col
+                );
+            }
+        }
+
+        // The island's edge touches nodata (an outlet), so the sink fills
+        // up to the island rim level (8.0), never above it.
+        let center = filled.get(4, 4).unwrap();
+        assert!(
+            center >= 1.0 && center <= 8.0,
+            "Sink should fill to at most the island rim (8.0), got {}",
+            center
+        );
+
+        // Nodata cells must be preserved as nodata
+        assert!(filled.get(0, 0).unwrap().is_nan());
+        assert!(filled.get(1, 4).unwrap().is_nan());
     }
 
     #[test]
