@@ -31,6 +31,54 @@ impl Default for PercentElevRangeParams {
     }
 }
 
+/// Per-cell kernel shared by the batch (`percent_elev_range`) and streaming
+/// (`PercentElevRangeStreaming`) paths.
+///
+/// Computes `(center - min) / (max - min) × 100` over the `(2r+1)²` window
+/// centered at `(row, col)` (center cell included), skipping NaN/nodata
+/// values. Returns 0.0 when the local range is (near) zero.
+///
+/// The caller must guarantee that the full window lies inside `data`.
+#[inline]
+fn percent_elev_range_kernel(
+    data: &Array2<f64>,
+    row: usize,
+    col: usize,
+    r: isize,
+    nodata: Option<f64>,
+) -> f64 {
+    debug_assert!(row as isize >= r && (row as isize) < data.nrows() as isize - r);
+    debug_assert!(col as isize >= r && (col as isize) < data.ncols() as isize - r);
+
+    let center = data[[row, col]];
+    let mut local_min = f64::INFINITY;
+    let mut local_max = f64::NEG_INFINITY;
+
+    for dr in -r..=r {
+        for dc in -r..=r {
+            let nr = (row as isize + dr) as usize;
+            let nc = (col as isize + dc) as usize;
+            // SAFETY: the caller guarantees the full window is in bounds.
+            let nv = unsafe { *data.uget((nr, nc)) };
+            if !nv.is_nan() && nodata.is_none_or(|nd| (nv - nd).abs() >= f64::EPSILON) {
+                if nv < local_min {
+                    local_min = nv;
+                }
+                if nv > local_max {
+                    local_max = nv;
+                }
+            }
+        }
+    }
+
+    let range = local_max - local_min;
+    if range < f64::EPSILON {
+        0.0
+    } else {
+        (center - local_min) / range * 100.0
+    }
+}
+
 /// Compute percent elevation range.
 pub fn percent_elev_range(
     dem: &Raster<f64>,
@@ -39,6 +87,7 @@ pub fn percent_elev_range(
     let (rows, cols) = dem.shape();
     let r = params.radius as isize;
     let nodata = dem.nodata();
+    let data = dem.data();
 
     let output_data: Vec<f64> = (0..rows)
         .into_par_iter()
@@ -57,31 +106,7 @@ pub fn percent_elev_range(
                     continue;
                 }
 
-                let mut local_min = f64::INFINITY;
-                let mut local_max = f64::NEG_INFINITY;
-
-                for dr in -r..=r {
-                    for dc in -r..=r {
-                        let nr = (ri + dr) as usize;
-                        let nc = (ci + dc) as usize;
-                        let nv = unsafe { dem.get_unchecked(nr, nc) };
-                        if !nv.is_nan() && nodata.is_none_or(|nd| (nv - nd).abs() >= f64::EPSILON) {
-                            if nv < local_min {
-                                local_min = nv;
-                            }
-                            if nv > local_max {
-                                local_max = nv;
-                            }
-                        }
-                    }
-                }
-
-                let range = local_max - local_min;
-                if range < f64::EPSILON {
-                    *out = 0.0;
-                } else {
-                    *out = (center - local_min) / range * 100.0;
-                }
+                *out = percent_elev_range_kernel(data, row, col, r, nodata);
             }
 
             row_data
@@ -125,61 +150,38 @@ impl surtgis_core::WindowAlgorithm for PercentElevRangeStreaming {
         _cell_size_y: f64,
     ) {
         let (in_rows, cols) = input.dim();
-        let out_rows = output.nrows();
         let radius = self.radius;
         let r_i = radius as isize;
 
-        for r in 0..out_rows {
-            let ir = r + radius;
-            if ir < radius || ir + radius >= in_rows {
-                for c in 0..cols {
-                    output[[r, c]] = f64::NAN;
-                }
-                continue;
-            }
-
-            for c in 0..cols {
-                if c < radius || c + radius >= cols {
-                    output[[r, c]] = f64::NAN;
-                    continue;
+        output
+            .as_slice_mut()
+            .expect("process_chunk output must be in standard layout")
+            .par_chunks_mut(cols)
+            .enumerate()
+            .for_each(|(r, out_row)| {
+                let ir = r + radius;
+                if ir < radius || ir + radius >= in_rows {
+                    out_row.fill(f64::NAN);
+                    return;
                 }
 
-                let center = input[[ir, c]];
-                if center.is_nan() || nodata.map_or(false, |nd| (center - nd).abs() < f64::EPSILON)
-                {
-                    output[[r, c]] = f64::NAN;
-                    continue;
-                }
-
-                let mut local_min = f64::INFINITY;
-                let mut local_max = f64::NEG_INFINITY;
-                let ci = c as isize;
-
-                for dr in -r_i..=r_i {
-                    for dc in -r_i..=r_i {
-                        let nr = (ir as isize + dr) as usize;
-                        let nc = (ci + dc) as usize;
-                        let nv = input[[nr, nc]];
-                        if !nv.is_nan() && nodata.map_or(true, |nd| (nv - nd).abs() >= f64::EPSILON)
-                        {
-                            if nv < local_min {
-                                local_min = nv;
-                            }
-                            if nv > local_max {
-                                local_max = nv;
-                            }
-                        }
+                for (c, out_v) in out_row.iter_mut().enumerate() {
+                    if c < radius || c + radius >= cols {
+                        *out_v = f64::NAN;
+                        continue;
                     }
-                }
 
-                let range = local_max - local_min;
-                if range < f64::EPSILON {
-                    output[[r, c]] = 0.0;
-                } else {
-                    output[[r, c]] = (center - local_min) / range * 100.0;
+                    let center = input[[ir, c]];
+                    if center.is_nan()
+                        || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON)
+                    {
+                        *out_v = f64::NAN;
+                        continue;
+                    }
+
+                    *out_v = percent_elev_range_kernel(input, ir, c, r_i, nodata);
                 }
-            }
-        }
+            });
     }
 }
 

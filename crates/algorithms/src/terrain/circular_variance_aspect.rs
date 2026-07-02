@@ -32,6 +32,84 @@ impl Default for CircularVarianceParams {
     }
 }
 
+/// Per-cell kernel shared by the batch (`circular_variance_aspect`) and
+/// streaming (`CircularVarianceStreaming`) paths.
+///
+/// Computes `1 - R̄` from the aspects (Horn 1981) of every valid pixel in
+/// the `(2r+1)²` window centered at `(row, col)`. Flat pixels (undefined
+/// aspect) and NaN/nodata pixels are skipped; pixels whose 3×3 Horn stencil
+/// would leave `data` are skipped. Returns NaN when fewer than 2 aspects
+/// are available.
+///
+/// Gradients are left unnormalised: the `8 · cell_size` factor cancels in
+/// `atan2`, and the flat-area threshold (1e-10) is applied to the raw
+/// gradient sums, matching the batch implementation.
+///
+/// The caller must guarantee that the full window plus a 1-cell stencil
+/// margin lies inside `data` (border of `r + 1`).
+#[inline]
+fn circular_variance_kernel(
+    data: &Array2<f64>,
+    row: usize,
+    col: usize,
+    r: isize,
+    nodata: Option<f64>,
+) -> f64 {
+    let (rows, cols) = data.dim();
+    let mut sum_cos = 0.0;
+    let mut sum_sin = 0.0;
+    let mut count = 0u32;
+
+    for dr in -r..=r {
+        for dc in -r..=r {
+            let nr = (row as isize + dr) as usize;
+            let nc = (col as isize + dc) as usize;
+
+            // Compute aspect at (nr, nc) using Horn's 3x3 stencil
+            let nv = data[[nr, nc]];
+            if nv.is_nan() || nodata.is_some_and(|nd| (nv - nd).abs() < f64::EPSILON) {
+                continue;
+            }
+
+            // Check that 3x3 stencil around (nr,nc) is valid
+            if nr == 0 || nr >= rows - 1 || nc == 0 || nc >= cols - 1 {
+                continue;
+            }
+
+            // Horn's method for dz/dx and dz/dy (cell_size cancels for aspect)
+            let dzdx = data[[nr - 1, nc + 1]] + 2.0 * data[[nr, nc + 1]] + data[[nr + 1, nc + 1]]
+                - data[[nr - 1, nc - 1]]
+                - 2.0 * data[[nr, nc - 1]]
+                - data[[nr + 1, nc - 1]];
+            let dzdy = data[[nr + 1, nc - 1]] + 2.0 * data[[nr + 1, nc]] + data[[nr + 1, nc + 1]]
+                - data[[nr - 1, nc - 1]]
+                - 2.0 * data[[nr - 1, nc]]
+                - data[[nr - 1, nc + 1]];
+
+            // Flat check
+            if dzdx.abs() < 1e-10 && dzdy.abs() < 1e-10 {
+                continue; // Skip flat areas (undefined aspect)
+            }
+
+            let aspect_rad = (-dzdx).atan2(-dzdy);
+
+            sum_cos += aspect_rad.cos();
+            sum_sin += aspect_rad.sin();
+            count += 1;
+        }
+    }
+
+    if count < 2 {
+        return f64::NAN;
+    }
+
+    let mean_cos = sum_cos / count as f64;
+    let mean_sin = sum_sin / count as f64;
+    let r_bar = (mean_cos * mean_cos + mean_sin * mean_sin).sqrt();
+
+    1.0 - r_bar
+}
+
 /// Compute circular variance of aspect.
 ///
 /// Internally computes aspect via the Horn (1981) method from the DEM
@@ -43,6 +121,7 @@ pub fn circular_variance_aspect(
     let (rows, cols) = dem.shape();
     let r = params.radius as isize;
     let nodata = dem.nodata();
+    let data = dem.data();
 
     let output_data: Vec<f64> = (0..rows)
         .into_par_iter()
@@ -67,59 +146,7 @@ pub fn circular_variance_aspect(
                     continue;
                 }
 
-                let mut sum_cos = 0.0;
-                let mut sum_sin = 0.0;
-                let mut count = 0u32;
-
-                for dr in -r..=r {
-                    for dc in -r..=r {
-                        let nr = (ri + dr) as usize;
-                        let nc = (ci + dc) as usize;
-
-                        // Compute aspect at (nr, nc) using Horn's 3x3 stencil
-                        let nv = unsafe { dem.get_unchecked(nr, nc) };
-                        if nv.is_nan() || nodata.is_some_and(|nd| (nv - nd).abs() < f64::EPSILON) {
-                            continue;
-                        }
-
-                        // Check that 3x3 stencil around (nr,nc) is valid
-                        if nr == 0 || nr >= rows - 1 || nc == 0 || nc >= cols - 1 {
-                            continue;
-                        }
-
-                        // Horn's method for dz/dx and dz/dy (cell_size cancels for aspect)
-                        let z = |r: usize, c: usize| unsafe { dem.get_unchecked(r, c) };
-                        let dzdx = (z(nr - 1, nc + 1) + 2.0 * z(nr, nc + 1) + z(nr + 1, nc + 1)
-                            - z(nr - 1, nc - 1)
-                            - 2.0 * z(nr, nc - 1)
-                            - z(nr + 1, nc - 1));
-                        let dzdy = (z(nr + 1, nc - 1) + 2.0 * z(nr + 1, nc) + z(nr + 1, nc + 1)
-                            - z(nr - 1, nc - 1)
-                            - 2.0 * z(nr - 1, nc)
-                            - z(nr - 1, nc + 1));
-
-                        // Flat check
-                        if dzdx.abs() < 1e-10 && dzdy.abs() < 1e-10 {
-                            continue; // Skip flat areas (undefined aspect)
-                        }
-
-                        let aspect_rad = (-dzdx).atan2(-dzdy);
-
-                        sum_cos += aspect_rad.cos();
-                        sum_sin += aspect_rad.sin();
-                        count += 1;
-                    }
-                }
-
-                if count < 2 {
-                    continue;
-                }
-
-                let mean_cos = sum_cos / count as f64;
-                let mean_sin = sum_sin / count as f64;
-                let r_bar = (mean_cos * mean_cos + mean_sin * mean_sin).sqrt();
-
-                *out = 1.0 - r_bar;
+                *out = circular_variance_kernel(data, row, col, r, nodata);
             }
 
             row_data
@@ -164,88 +191,38 @@ impl surtgis_core::WindowAlgorithm for CircularVarianceStreaming {
         _cell_size_y: f64,
     ) {
         let (in_rows, cols) = input.dim();
-        let out_rows = output.nrows();
         let kr = self.radius + 1; // kernel_radius
         let r = self.radius as isize;
 
-        for row in 0..out_rows {
-            let ir = row + kr; // center in input
-            if ir < kr || ir + kr >= in_rows {
-                for c in 0..cols {
-                    output[[row, c]] = f64::NAN;
-                }
-                continue;
-            }
-
-            for c in 0..cols {
-                if c < kr || c + kr >= cols {
-                    output[[row, c]] = f64::NAN;
-                    continue;
+        output
+            .as_slice_mut()
+            .expect("process_chunk output must be in standard layout")
+            .par_chunks_mut(cols)
+            .enumerate()
+            .for_each(|(row, out_row)| {
+                let ir = row + kr; // center in input
+                if ir < kr || ir + kr >= in_rows {
+                    out_row.fill(f64::NAN);
+                    return;
                 }
 
-                let center = input[[ir, c]];
-                if center.is_nan() || nodata.map_or(false, |nd| (center - nd).abs() < f64::EPSILON)
-                {
-                    output[[row, c]] = f64::NAN;
-                    continue;
-                }
-
-                let mut sum_cos = 0.0;
-                let mut sum_sin = 0.0;
-                let mut count = 0u32;
-
-                for dr in -r..=r {
-                    for dc in -r..=r {
-                        let nr = (ir as isize + dr) as usize;
-                        let nc = (c as isize + dc) as usize;
-
-                        let nv = input[[nr, nc]];
-                        if nv.is_nan() || nodata.map_or(false, |nd| (nv - nd).abs() < f64::EPSILON)
-                        {
-                            continue;
-                        }
-
-                        if nr == 0 || nr + 1 >= in_rows || nc == 0 || nc + 1 >= cols {
-                            continue;
-                        }
-
-                        let dzdx = (input[[nr - 1, nc + 1]]
-                            + 2.0 * input[[nr, nc + 1]]
-                            + input[[nr + 1, nc + 1]]
-                            - input[[nr - 1, nc - 1]]
-                            - 2.0 * input[[nr, nc - 1]]
-                            - input[[nr + 1, nc - 1]])
-                            / 8.0;
-                        let dzdy = (input[[nr + 1, nc - 1]]
-                            + 2.0 * input[[nr + 1, nc]]
-                            + input[[nr + 1, nc + 1]]
-                            - input[[nr - 1, nc - 1]]
-                            - 2.0 * input[[nr - 1, nc]]
-                            - input[[nr - 1, nc + 1]])
-                            / 8.0;
-
-                        if dzdx.abs() < 1e-10 && dzdy.abs() < 1e-10 {
-                            continue;
-                        }
-
-                        let aspect_rad = (-dzdx).atan2(-dzdy);
-                        sum_cos += aspect_rad.cos();
-                        sum_sin += aspect_rad.sin();
-                        count += 1;
+                for (c, out_v) in out_row.iter_mut().enumerate() {
+                    if c < kr || c + kr >= cols {
+                        *out_v = f64::NAN;
+                        continue;
                     }
-                }
 
-                if count < 2 {
-                    output[[row, c]] = f64::NAN;
-                    continue;
-                }
+                    let center = input[[ir, c]];
+                    if center.is_nan()
+                        || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON)
+                    {
+                        *out_v = f64::NAN;
+                        continue;
+                    }
 
-                let mean_cos = sum_cos / count as f64;
-                let mean_sin = sum_sin / count as f64;
-                let r_bar = (mean_cos * mean_cos + mean_sin * mean_sin).sqrt();
-                output[[row, c]] = 1.0 - r_bar;
-            }
-        }
+                    *out_v = circular_variance_kernel(input, ir, c, r, nodata);
+                }
+            });
     }
 }
 

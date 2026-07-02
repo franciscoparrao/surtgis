@@ -53,58 +53,7 @@ pub fn convergence_index(dem: &Raster<f64>, params: ConvergenceParams) -> Result
                     continue;
                 }
 
-                let mut sum_deviation = 0.0;
-                let mut count = 0;
-
-                for dr in -r..=r {
-                    for dc in -r..=r {
-                        if dr == 0 && dc == 0 {
-                            continue;
-                        }
-
-                        let nr = row as isize + dr;
-                        let nc = col as isize + dc;
-
-                        if nr < 0 || nc < 0 || (nr as usize) >= rows || (nc as usize) >= cols {
-                            continue;
-                        }
-
-                        // Compute aspect at neighbor
-                        let aspect_n =
-                            compute_aspect_at(data, nr as usize, nc as usize, rows, cols);
-                        if aspect_n.is_nan() {
-                            continue;
-                        }
-
-                        // Direction from neighbor toward center (azimuth from north)
-                        // dr,dc are offsets from center to neighbor; reverse and convert
-                        // East component = -dc, North component = dr (row goes south = -north)
-                        let dir_to_center = (-(dc as f64)).atan2(dr as f64);
-                        let dir_deg = dir_to_center.to_degrees();
-                        let dir_deg = if dir_deg < 0.0 {
-                            dir_deg + 360.0
-                        } else {
-                            dir_deg
-                        };
-
-                        // Angular difference
-                        let mut diff = (aspect_n - dir_deg).abs();
-                        if diff > 180.0 {
-                            diff = 360.0 - diff;
-                        }
-
-                        // Convergence: aspect points toward center (diff near 0)
-                        // Divergence: aspect points away (diff near 180)
-                        sum_deviation += diff;
-                        count += 1;
-                    }
-                }
-
-                if count > 0 {
-                    let avg_deviation = sum_deviation / count as f64;
-                    // Scale to [-100, 100]: 0° → -100 (convergent), 90° → 0, 180° → +100 (divergent)
-                    *row_data_col = (avg_deviation / 90.0 - 1.0) * 100.0;
-                }
+                *row_data_col = convergence_kernel(data, row, col, r);
             }
 
             row_data
@@ -119,8 +68,13 @@ pub fn convergence_index(dem: &Raster<f64>, params: ConvergenceParams) -> Result
     Ok(output)
 }
 
-/// Compute aspect at a single cell (degrees, 0=N, clockwise)
-fn compute_aspect_at(data: &Array2<f64>, row: usize, col: usize, rows: usize, cols: usize) -> f64 {
+/// Compute aspect at a single cell (degrees, 0=N, clockwise) using Horn's
+/// method. Returns NaN for edge cells, NaN stencils, or flat areas.
+///
+/// Shared by the batch (`convergence_index`) and streaming
+/// (`ConvergenceStreaming`) paths.
+fn compute_aspect_at(data: &Array2<f64>, row: usize, col: usize) -> f64 {
+    let (rows, cols) = data.dim();
     if row == 0 || row >= rows - 1 || col == 0 || col >= cols - 1 {
         return f64::NAN;
     }
@@ -152,6 +106,72 @@ fn compute_aspect_at(data: &Array2<f64>, row: usize, col: usize, rows: usize, co
     aspect
 }
 
+/// Per-cell convergence index kernel shared by the batch
+/// (`convergence_index`) and streaming (`ConvergenceStreaming`) paths.
+///
+/// For each neighbor in the `(2r+1)²` window (center excluded), computes
+/// the deviation between the neighbor's aspect and the direction toward
+/// the center cell, then scales the mean deviation to [-100, 100].
+/// Neighbors outside `data` or without a defined aspect are skipped.
+/// Returns NaN when no neighbor has a defined aspect.
+#[inline]
+fn convergence_kernel(data: &Array2<f64>, row: usize, col: usize, r: isize) -> f64 {
+    let (rows, cols) = data.dim();
+    let mut sum_deviation = 0.0;
+    let mut count = 0;
+
+    for dr in -r..=r {
+        for dc in -r..=r {
+            if dr == 0 && dc == 0 {
+                continue;
+            }
+
+            let nr = row as isize + dr;
+            let nc = col as isize + dc;
+
+            if nr < 0 || nc < 0 || (nr as usize) >= rows || (nc as usize) >= cols {
+                continue;
+            }
+
+            // Compute aspect at neighbor
+            let aspect_n = compute_aspect_at(data, nr as usize, nc as usize);
+            if aspect_n.is_nan() {
+                continue;
+            }
+
+            // Direction from neighbor toward center (azimuth from north)
+            // dr,dc are offsets from center to neighbor; reverse and convert
+            // East component = -dc, North component = dr (row goes south = -north)
+            let dir_to_center = (-(dc as f64)).atan2(dr as f64);
+            let dir_deg = dir_to_center.to_degrees();
+            let dir_deg = if dir_deg < 0.0 {
+                dir_deg + 360.0
+            } else {
+                dir_deg
+            };
+
+            // Angular difference
+            let mut diff = (aspect_n - dir_deg).abs();
+            if diff > 180.0 {
+                diff = 360.0 - diff;
+            }
+
+            // Convergence: aspect points toward center (diff near 0)
+            // Divergence: aspect points away (diff near 180)
+            sum_deviation += diff;
+            count += 1;
+        }
+    }
+
+    if count > 0 {
+        let avg_deviation = sum_deviation / count as f64;
+        // Scale to [-100, 100]: 0° → -100 (convergent), 90° → 0, 180° → +100 (divergent)
+        (avg_deviation / 90.0 - 1.0) * 100.0
+    } else {
+        f64::NAN
+    }
+}
+
 // ─── Streaming implementation ──────────────────────────────────────────
 
 /// Streaming Convergence Index calculator implementing `WindowAlgorithm`.
@@ -174,43 +194,6 @@ impl Default for ConvergenceStreaming {
     }
 }
 
-impl ConvergenceStreaming {
-    /// Compute aspect at a single cell using Horn's method.
-    /// Returns aspect in degrees (0=N, clockwise) or `None` if flat/edge/NaN.
-    fn aspect_at(input: &Array2<f64>, row: usize, col: usize) -> Option<f64> {
-        let (rows, cols) = input.dim();
-        if row == 0 || row >= rows - 1 || col == 0 || col >= cols - 1 {
-            return None;
-        }
-
-        let a = input[[row - 1, col - 1]];
-        let b = input[[row - 1, col]];
-        let c = input[[row - 1, col + 1]];
-        let d = input[[row, col - 1]];
-        let f = input[[row, col + 1]];
-        let g = input[[row + 1, col - 1]];
-        let h = input[[row + 1, col]];
-        let i = input[[row + 1, col + 1]];
-
-        if [a, b, c, d, f, g, h, i].iter().any(|v| v.is_nan()) {
-            return None;
-        }
-
-        let dz_dx = ((c + 2.0 * f + i) - (a + 2.0 * d + g)) / 8.0;
-        let dz_dy = ((g + 2.0 * h + i) - (a + 2.0 * b + c)) / 8.0;
-
-        if dz_dx.abs() < f64::EPSILON && dz_dy.abs() < f64::EPSILON {
-            return None; // Flat, no aspect
-        }
-
-        let mut aspect = (-dz_dx).atan2(dz_dy).to_degrees();
-        if aspect < 0.0 {
-            aspect += 360.0;
-        }
-        Some(aspect)
-    }
-}
-
 impl surtgis_core::WindowAlgorithm for ConvergenceStreaming {
     fn kernel_radius(&self) -> usize {
         // Need radius for neighborhood + 1 for Horn's method at border neighbors
@@ -226,84 +209,39 @@ impl surtgis_core::WindowAlgorithm for ConvergenceStreaming {
         _cell_size_y: f64,
     ) {
         let (in_rows, cols) = input.dim();
-        let out_rows = output.nrows();
         let kr = self.radius + 1; // kernel radius (the value returned by kernel_radius)
         let r = self.radius as isize;
 
-        for row_out in 0..out_rows {
-            let ir = row_out + kr; // input row corresponding to output row
+        output
+            .as_slice_mut()
+            .expect("process_chunk output must be in standard layout")
+            .par_chunks_mut(cols)
+            .enumerate()
+            .for_each(|(row_out, out_row)| {
+                let ir = row_out + kr; // input row corresponding to output row
 
-            // Check vertical edges: need full kernel above and below
-            if ir < kr || ir + kr >= in_rows {
-                for c in 0..cols {
-                    output[[row_out, c]] = f64::NAN;
-                }
-                continue;
-            }
-
-            for c in 0..cols {
-                // Check horizontal edges
-                if c < kr || c + kr >= cols {
-                    output[[row_out, c]] = f64::NAN;
-                    continue;
+                // Check vertical edges: need full kernel above and below
+                if ir < kr || ir + kr >= in_rows {
+                    out_row.fill(f64::NAN);
+                    return;
                 }
 
-                let z0 = input[[ir, c]];
-                if z0.is_nan() || nodata.map_or(false, |nd| (z0 - nd).abs() < f64::EPSILON) {
-                    output[[row_out, c]] = f64::NAN;
-                    continue;
-                }
-
-                let mut sum_deviation = 0.0;
-                let mut count = 0;
-
-                for dr in -r..=r {
-                    for dc in -r..=r {
-                        if dr == 0 && dc == 0 {
-                            continue;
-                        }
-
-                        let nr = (ir as isize + dr) as usize;
-                        let nc = (c as isize + dc) as usize;
-
-                        // Compute aspect at neighbor
-                        let aspect_n = match Self::aspect_at(input, nr, nc) {
-                            Some(a) => a,
-                            None => continue,
-                        };
-
-                        // Direction from neighbor toward center (azimuth from north)
-                        // dr,dc are offsets from center to neighbor; reverse and convert
-                        let dir_to_center = (-(dc as f64)).atan2(dr as f64);
-                        let dir_deg = dir_to_center.to_degrees();
-                        let dir_deg = if dir_deg < 0.0 {
-                            dir_deg + 360.0
-                        } else {
-                            dir_deg
-                        };
-
-                        // Angular difference
-                        let mut diff = (aspect_n - dir_deg).abs();
-                        if diff > 180.0 {
-                            diff = 360.0 - diff;
-                        }
-
-                        // Convergence: aspect points toward center (diff near 0)
-                        // Divergence: aspect points away (diff near 180)
-                        sum_deviation += diff;
-                        count += 1;
+                for (c, out_v) in out_row.iter_mut().enumerate() {
+                    // Check horizontal edges
+                    if c < kr || c + kr >= cols {
+                        *out_v = f64::NAN;
+                        continue;
                     }
-                }
 
-                if count > 0 {
-                    let avg_deviation = sum_deviation / count as f64;
-                    // Scale to [-100, 100]: 0° → -100 (convergent), 90° → 0, 180° → +100 (divergent)
-                    output[[row_out, c]] = (avg_deviation / 90.0 - 1.0) * 100.0;
-                } else {
-                    output[[row_out, c]] = f64::NAN;
+                    let z0 = input[[ir, c]];
+                    if z0.is_nan() || nodata.is_some_and(|nd| (z0 - nd).abs() < f64::EPSILON) {
+                        *out_v = f64::NAN;
+                        continue;
+                    }
+
+                    *out_v = convergence_kernel(input, ir, c, r);
                 }
-            }
-        }
+            });
     }
 }
 

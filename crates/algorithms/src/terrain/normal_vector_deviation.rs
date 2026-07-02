@@ -29,6 +29,105 @@ impl Default for NormalDeviationParams {
     }
 }
 
+/// Per-cell kernel shared by the batch (`normal_vector_deviation`) and
+/// streaming (`NormalDeviationStreaming`) paths.
+///
+/// Computes the mean angular deviation (degrees) of the unit surface
+/// normals (Horn 1981 gradients scaled by `8 · cell_size`) of every valid
+/// pixel in the `(2r+1)²` window centered at `(row, col)` from their mean
+/// normal. NaN/nodata pixels and pixels whose 3×3 Horn stencil would leave
+/// `data` are skipped. Returns NaN when fewer than 2 normals are available
+/// or the mean normal degenerates.
+///
+/// The caller must guarantee that the full window plus a 1-cell stencil
+/// margin lies inside `data` (border of `r + 1`).
+#[inline]
+fn normal_deviation_kernel(
+    data: &Array2<f64>,
+    row: usize,
+    col: usize,
+    r: isize,
+    cell_size: f64,
+    nodata: Option<f64>,
+) -> f64 {
+    let (rows, cols) = data.dim();
+
+    // Collect normals in window
+    let mut normals: Vec<[f64; 3]> = Vec::new();
+    let mut mean_nx = 0.0;
+    let mut mean_ny = 0.0;
+    let mut mean_nz = 0.0;
+
+    for dr in -r..=r {
+        for dc in -r..=r {
+            let nr = (row as isize + dr) as usize;
+            let nc = (col as isize + dc) as usize;
+
+            let nv = data[[nr, nc]];
+            if nv.is_nan() || nodata.is_some_and(|nd| (nv - nd).abs() < f64::EPSILON) {
+                continue;
+            }
+            if nr == 0 || nr >= rows - 1 || nc == 0 || nc >= cols - 1 {
+                continue;
+            }
+
+            // Horn's method with cell_size
+            let dzdx = (data[[nr - 1, nc + 1]] + 2.0 * data[[nr, nc + 1]] + data[[nr + 1, nc + 1]]
+                - data[[nr - 1, nc - 1]]
+                - 2.0 * data[[nr, nc - 1]]
+                - data[[nr + 1, nc - 1]])
+                / (8.0 * cell_size);
+            let dzdy = (data[[nr + 1, nc - 1]] + 2.0 * data[[nr + 1, nc]] + data[[nr + 1, nc + 1]]
+                - data[[nr - 1, nc - 1]]
+                - 2.0 * data[[nr - 1, nc]]
+                - data[[nr - 1, nc + 1]])
+                / (8.0 * cell_size);
+
+            // Normal: (-dz/dx, -dz/dy, 1) normalized
+            let nx = -dzdx;
+            let ny = -dzdy;
+            let nz = 1.0;
+            let len = (nx * nx + ny * ny + nz * nz).sqrt();
+            let nx = nx / len;
+            let ny = ny / len;
+            let nz = nz / len;
+
+            mean_nx += nx;
+            mean_ny += ny;
+            mean_nz += nz;
+            normals.push([nx, ny, nz]);
+        }
+    }
+
+    let count = normals.len();
+    if count < 2 {
+        return f64::NAN;
+    }
+
+    // Normalize mean vector
+    let n = count as f64;
+    mean_nx /= n;
+    mean_ny /= n;
+    mean_nz /= n;
+    let mean_len = (mean_nx * mean_nx + mean_ny * mean_ny + mean_nz * mean_nz).sqrt();
+    if mean_len < 1e-10 {
+        return f64::NAN;
+    }
+    mean_nx /= mean_len;
+    mean_ny /= mean_len;
+    mean_nz /= mean_len;
+
+    // Mean angular deviation
+    let mut sum_angle = 0.0;
+    for normal in &normals {
+        let dot =
+            (normal[0] * mean_nx + normal[1] * mean_ny + normal[2] * mean_nz).clamp(-1.0, 1.0);
+        sum_angle += dot.acos();
+    }
+
+    (sum_angle / count as f64).to_degrees()
+}
+
 /// Compute average normal vector angular deviation.
 pub fn normal_vector_deviation(
     dem: &Raster<f64>,
@@ -37,6 +136,7 @@ pub fn normal_vector_deviation(
     let (rows, cols) = dem.shape();
     let r = params.radius as isize;
     let nodata = dem.nodata();
+    let data = dem.data();
 
     let cell_size = dem.cell_size();
 
@@ -62,81 +162,7 @@ pub fn normal_vector_deviation(
                     continue;
                 }
 
-                // Collect normals in window
-                let mut normals: Vec<[f64; 3]> = Vec::new();
-                let mut mean_nx = 0.0;
-                let mut mean_ny = 0.0;
-                let mut mean_nz = 0.0;
-
-                for dr in -r..=r {
-                    for dc in -r..=r {
-                        let nr = (ri + dr) as usize;
-                        let nc = (ci + dc) as usize;
-
-                        let nv = unsafe { dem.get_unchecked(nr, nc) };
-                        if nv.is_nan() || nodata.is_some_and(|nd| (nv - nd).abs() < f64::EPSILON) {
-                            continue;
-                        }
-                        if nr == 0 || nr >= rows - 1 || nc == 0 || nc >= cols - 1 {
-                            continue;
-                        }
-
-                        // Horn's method with cell_size
-                        let z = |r: usize, c: usize| unsafe { dem.get_unchecked(r, c) };
-                        let dzdx = (z(nr - 1, nc + 1) + 2.0 * z(nr, nc + 1) + z(nr + 1, nc + 1)
-                            - z(nr - 1, nc - 1)
-                            - 2.0 * z(nr, nc - 1)
-                            - z(nr + 1, nc - 1))
-                            / (8.0 * cell_size);
-                        let dzdy = (z(nr + 1, nc - 1) + 2.0 * z(nr + 1, nc) + z(nr + 1, nc + 1)
-                            - z(nr - 1, nc - 1)
-                            - 2.0 * z(nr - 1, nc)
-                            - z(nr - 1, nc + 1))
-                            / (8.0 * cell_size);
-
-                        // Normal: (-dz/dx, -dz/dy, 1) normalized
-                        let nx = -dzdx;
-                        let ny = -dzdy;
-                        let nz = 1.0;
-                        let len = (nx * nx + ny * ny + nz * nz).sqrt();
-                        let nx = nx / len;
-                        let ny = ny / len;
-                        let nz = nz / len;
-
-                        mean_nx += nx;
-                        mean_ny += ny;
-                        mean_nz += nz;
-                        normals.push([nx, ny, nz]);
-                    }
-                }
-
-                let count = normals.len();
-                if count < 2 {
-                    continue;
-                }
-
-                // Normalize mean vector
-                let n = count as f64;
-                mean_nx /= n;
-                mean_ny /= n;
-                mean_nz /= n;
-                let mean_len = (mean_nx * mean_nx + mean_ny * mean_ny + mean_nz * mean_nz).sqrt();
-                if mean_len < 1e-10 {
-                    continue;
-                }
-                mean_nx /= mean_len;
-                mean_ny /= mean_len;
-                mean_nz /= mean_len;
-
-                // Mean angular deviation
-                let mut sum_angle = 0.0;
-                for normal in &normals {
-                    let dot = (normal[0] * mean_nx + normal[1] * mean_ny + normal[2] * mean_nz)
-                        .clamp(-1.0, 1.0);
-                    sum_angle += dot.acos();
-                }
-
-                *out = (sum_angle / count as f64).to_degrees();
+                *out = normal_deviation_kernel(data, row, col, r, cell_size, nodata);
             }
 
             row_data
@@ -170,115 +196,42 @@ impl surtgis_core::WindowAlgorithm for NormalDeviationStreaming {
         input: &Array2<f64>,
         output: &mut Array2<f64>,
         nodata: Option<f64>,
-        _cell_size_x: f64,
+        cell_size_x: f64,
         _cell_size_y: f64,
     ) {
         let (in_rows, cols) = input.dim();
-        let out_rows = output.nrows();
         let kr = self.radius + 1;
         let r = self.radius as isize;
 
-        for row in 0..out_rows {
-            let ir = row + kr;
-            if ir < kr || ir + kr >= in_rows {
-                for c in 0..cols {
-                    output[[row, c]] = f64::NAN;
-                }
-                continue;
-            }
-
-            for c in 0..cols {
-                if c < kr || c + kr >= cols {
-                    output[[row, c]] = f64::NAN;
-                    continue;
+        output
+            .as_slice_mut()
+            .expect("process_chunk output must be in standard layout")
+            .par_chunks_mut(cols)
+            .enumerate()
+            .for_each(|(row, out_row)| {
+                let ir = row + kr;
+                if ir < kr || ir + kr >= in_rows {
+                    out_row.fill(f64::NAN);
+                    return;
                 }
 
-                let center = input[[ir, c]];
-                if center.is_nan() || nodata.map_or(false, |nd| (center - nd).abs() < f64::EPSILON)
-                {
-                    output[[row, c]] = f64::NAN;
-                    continue;
-                }
-
-                let mut normals: Vec<[f64; 3]> = Vec::new();
-                let mut mean_nx = 0.0;
-                let mut mean_ny = 0.0;
-                let mut mean_nz = 0.0;
-
-                for dr in -r..=r {
-                    for dc in -r..=r {
-                        let nr = (ir as isize + dr) as usize;
-                        let nc = (c as isize + dc) as usize;
-
-                        let nv = input[[nr, nc]];
-                        if nv.is_nan() || nodata.map_or(false, |nd| (nv - nd).abs() < f64::EPSILON)
-                        {
-                            continue;
-                        }
-                        if nr == 0 || nr + 1 >= in_rows || nc == 0 || nc + 1 >= cols {
-                            continue;
-                        }
-
-                        let dzdx = (input[[nr - 1, nc + 1]]
-                            + 2.0 * input[[nr, nc + 1]]
-                            + input[[nr + 1, nc + 1]]
-                            - input[[nr - 1, nc - 1]]
-                            - 2.0 * input[[nr, nc - 1]]
-                            - input[[nr + 1, nc - 1]])
-                            / 8.0;
-                        let dzdy = (input[[nr + 1, nc - 1]]
-                            + 2.0 * input[[nr + 1, nc]]
-                            + input[[nr + 1, nc + 1]]
-                            - input[[nr - 1, nc - 1]]
-                            - 2.0 * input[[nr - 1, nc]]
-                            - input[[nr - 1, nc + 1]])
-                            / 8.0;
-
-                        let nx = -dzdx;
-                        let ny = -dzdy;
-                        let nz = 1.0;
-                        let len = (nx * nx + ny * ny + nz * nz).sqrt();
-
-                        let nx = nx / len;
-                        let ny = ny / len;
-                        let nz = nz / len;
-
-                        mean_nx += nx;
-                        mean_ny += ny;
-                        mean_nz += nz;
-                        normals.push([nx, ny, nz]);
+                for (c, out_v) in out_row.iter_mut().enumerate() {
+                    if c < kr || c + kr >= cols {
+                        *out_v = f64::NAN;
+                        continue;
                     }
-                }
 
-                let count = normals.len();
-                if count < 2 {
-                    output[[row, c]] = f64::NAN;
-                    continue;
-                }
+                    let center = input[[ir, c]];
+                    if center.is_nan()
+                        || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON)
+                    {
+                        *out_v = f64::NAN;
+                        continue;
+                    }
 
-                let n = count as f64;
-                mean_nx /= n;
-                mean_ny /= n;
-                mean_nz /= n;
-                let mean_len = (mean_nx * mean_nx + mean_ny * mean_ny + mean_nz * mean_nz).sqrt();
-                if mean_len < 1e-10 {
-                    output[[row, c]] = f64::NAN;
-                    continue;
+                    *out_v = normal_deviation_kernel(input, ir, c, r, cell_size_x, nodata);
                 }
-                mean_nx /= mean_len;
-                mean_ny /= mean_len;
-                mean_nz /= mean_len;
-
-                let mut sum_angle = 0.0;
-                for normal in &normals {
-                    let dot = (normal[0] * mean_nx + normal[1] * mean_ny + normal[2] * mean_nz)
-                        .clamp(-1.0, 1.0);
-                    sum_angle += dot.acos();
-                }
-
-                output[[row, c]] = (sum_angle / count as f64).to_degrees();
-            }
-        }
+            });
     }
 }
 

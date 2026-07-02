@@ -31,11 +31,59 @@ impl Default for DiffFromMeanParams {
     }
 }
 
+/// Per-cell kernel shared by the batch (`diff_from_mean_elev`) and streaming
+/// (`DiffFromMeanStreaming`) paths.
+///
+/// Computes `center - mean(neighbors)` over the `(2r+1)²` window centered
+/// at `(row, col)`, excluding the center cell and any NaN/nodata neighbors.
+/// Returns NaN when no valid neighbor exists. (Same math as the TPI kernel;
+/// kept local so each algorithm remains self-contained.)
+///
+/// The caller must guarantee that the full window lies inside `data`.
+#[inline]
+fn diff_from_mean_kernel(
+    data: &Array2<f64>,
+    row: usize,
+    col: usize,
+    r: isize,
+    nodata: Option<f64>,
+) -> f64 {
+    debug_assert!(row as isize >= r && (row as isize) < data.nrows() as isize - r);
+    debug_assert!(col as isize >= r && (col as isize) < data.ncols() as isize - r);
+
+    let center = data[[row, col]];
+    let mut sum = 0.0;
+    let mut count = 0u32;
+
+    for dr in -r..=r {
+        for dc in -r..=r {
+            if dr == 0 && dc == 0 {
+                continue;
+            }
+            let nr = (row as isize + dr) as usize;
+            let nc = (col as isize + dc) as usize;
+            // SAFETY: the caller guarantees the full window is in bounds.
+            let nv = unsafe { *data.uget((nr, nc)) };
+            if !nv.is_nan() && nodata.is_none_or(|nd| (nv - nd).abs() >= f64::EPSILON) {
+                sum += nv;
+                count += 1;
+            }
+        }
+    }
+
+    if count > 0 {
+        center - sum / count as f64
+    } else {
+        f64::NAN
+    }
+}
+
 /// Compute difference from mean elevation.
 pub fn diff_from_mean_elev(dem: &Raster<f64>, params: DiffFromMeanParams) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
     let r = params.radius as isize;
     let nodata = dem.nodata();
+    let data = dem.data();
 
     let output_data: Vec<f64> = (0..rows)
         .into_par_iter()
@@ -54,27 +102,7 @@ pub fn diff_from_mean_elev(dem: &Raster<f64>, params: DiffFromMeanParams) -> Res
                     continue;
                 }
 
-                let mut sum = 0.0;
-                let mut count = 0u32;
-
-                for dr in -r..=r {
-                    for dc in -r..=r {
-                        if dr == 0 && dc == 0 {
-                            continue;
-                        }
-                        let nr = (ri + dr) as usize;
-                        let nc = (ci + dc) as usize;
-                        let nv = unsafe { dem.get_unchecked(nr, nc) };
-                        if !nv.is_nan() && nodata.is_none_or(|nd| (nv - nd).abs() >= f64::EPSILON) {
-                            sum += nv;
-                            count += 1;
-                        }
-                    }
-                }
-
-                if count > 0 {
-                    *out = center - sum / count as f64;
-                }
+                *out = diff_from_mean_kernel(data, row, col, r, nodata);
             }
 
             row_data
@@ -118,59 +146,38 @@ impl surtgis_core::WindowAlgorithm for DiffFromMeanStreaming {
         _cell_size_y: f64,
     ) {
         let (in_rows, cols) = input.dim();
-        let out_rows = output.nrows();
         let radius = self.radius;
         let r_i = radius as isize;
 
-        for r in 0..out_rows {
-            let ir = r + radius;
-            if ir < radius || ir + radius >= in_rows {
-                for c in 0..cols {
-                    output[[r, c]] = f64::NAN;
-                }
-                continue;
-            }
-
-            for c in 0..cols {
-                if c < radius || c + radius >= cols {
-                    output[[r, c]] = f64::NAN;
-                    continue;
+        output
+            .as_slice_mut()
+            .expect("process_chunk output must be in standard layout")
+            .par_chunks_mut(cols)
+            .enumerate()
+            .for_each(|(r, out_row)| {
+                let ir = r + radius;
+                if ir < radius || ir + radius >= in_rows {
+                    out_row.fill(f64::NAN);
+                    return;
                 }
 
-                let center = input[[ir, c]];
-                if center.is_nan() || nodata.map_or(false, |nd| (center - nd).abs() < f64::EPSILON)
-                {
-                    output[[r, c]] = f64::NAN;
-                    continue;
-                }
-
-                let mut sum = 0.0;
-                let mut count = 0u32;
-                let ci = c as isize;
-
-                for dr in -r_i..=r_i {
-                    for dc in -r_i..=r_i {
-                        if dr == 0 && dc == 0 {
-                            continue;
-                        }
-                        let nr = (ir as isize + dr) as usize;
-                        let nc = (ci + dc) as usize;
-                        let nv = input[[nr, nc]];
-                        if !nv.is_nan() && nodata.map_or(true, |nd| (nv - nd).abs() >= f64::EPSILON)
-                        {
-                            sum += nv;
-                            count += 1;
-                        }
+                for (c, out_v) in out_row.iter_mut().enumerate() {
+                    if c < radius || c + radius >= cols {
+                        *out_v = f64::NAN;
+                        continue;
                     }
-                }
 
-                if count > 0 {
-                    output[[r, c]] = center - sum / count as f64;
-                } else {
-                    output[[r, c]] = f64::NAN;
+                    let center = input[[ir, c]];
+                    if center.is_nan()
+                        || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON)
+                    {
+                        *out_v = f64::NAN;
+                        continue;
+                    }
+
+                    *out_v = diff_from_mean_kernel(input, ir, c, r_i, nodata);
                 }
-            }
-        }
+            });
     }
 }
 
