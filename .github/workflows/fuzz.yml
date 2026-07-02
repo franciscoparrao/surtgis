@@ -1,0 +1,38 @@
+# Nightly fuzzing of the hand-rolled binary parsers (S1 of the July 2026
+# engine audit). The COG reader's input arrives from the network (arbitrary
+# hrefs from third-party STAC catalogs); decode bugs have shipped before
+# (predictor=3 in v0.6.21, GDAL_NODATA tag typing in v0.16.4). Five minutes
+# per target per night is cheap insurance against panics/OOB in that path.
+name: Fuzz
+
+on:
+  schedule:
+    - cron: '30 6 * * *'   # daily, before the RAM benchmark at 07:00
+  workflow_dispatch: {}
+
+jobs:
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [fuzz_read_geotiff, fuzz_ifd_parse, fuzz_decompress]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+          key: fuzz-${{ matrix.target }}
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Run fuzzer (5 min)
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=300
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}/
+          if-no-files-found: ignore
