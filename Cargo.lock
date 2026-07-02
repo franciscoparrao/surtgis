@@ -5674,7 +5674,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "surtgis"
-version = "0.16.3"
+version = "0.16.4"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5704,7 +5704,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-algorithms"
-version = "0.16.3"
+version = "0.16.4"
 dependencies = [
  "anyhow",
  "approx",
@@ -5726,7 +5726,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-cloud"
-version = "0.16.3"
+version = "0.16.4"
 dependencies = [
  "approx",
  "byteorder",
@@ -5758,7 +5758,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-colormap"
-version = "0.16.3"
+version = "0.16.4"
 dependencies = [
  "image",
  "num-traits",
@@ -5768,7 +5768,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-core"
-version = "0.16.3"
+version = "0.16.4"
 dependencies = [
  "anyhow",
  "approx",
@@ -5791,7 +5791,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-gui"
-version = "0.16.3"
+version = "0.16.4"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -5812,7 +5812,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-parallel"
-version = "0.16.3"
+version = "0.16.4"
 dependencies = [
  "criterion",
  "crossbeam",
@@ -5824,7 +5824,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-python"
-version = "0.16.3"
+version = "0.16.4"
 dependencies = [
  "numpy",
  "pyo3",
@@ -5837,7 +5837,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-relief"
-version = "0.16.3"
+version = "0.16.4"
 dependencies = [
  "ndarray",
  "num-traits",
@@ -5850,7 +5850,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-relief-3d"
-version = "0.16.3"
+version = "0.16.4"
 dependencies = [
  "bytemuck",
  "console_error_panic_hook",
@@ -5871,7 +5871,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-wasm"
-version = "0.16.3"
+version = "0.16.4"
 dependencies = [
  "js-sys",
  "serde",
