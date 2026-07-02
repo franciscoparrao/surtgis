@@ -39,7 +39,8 @@ where
     P: AsRef<Path>,
 {
     let file = File::open(path.as_ref())?;
-    decode_geotiff(file, band)
+    let len = file.metadata().ok().map(|m| m.len());
+    decode_geotiff(file, band, len)
 }
 
 /// Read a GeoTIFF from an in-memory buffer into a Raster
@@ -51,7 +52,7 @@ where
     T: RasterElement,
 {
     let cursor = Cursor::new(data);
-    decode_geotiff(cursor, band)
+    decode_geotiff(cursor, band, Some(data.len() as u64))
 }
 
 /// Read every band of a (multi-band) GeoTIFF as separate rasters.
@@ -66,7 +67,8 @@ where
     P: AsRef<Path>,
 {
     let file = File::open(path.as_ref())?;
-    decode_geotiff_bands(file)
+    let len = file.metadata().ok().map(|m| m.len());
+    decode_geotiff_bands(file, len)
 }
 
 /// Read every band of a GeoTIFF from an in-memory buffer.
@@ -74,7 +76,7 @@ pub fn read_geotiff_bands_from_buffer<T>(data: &[u8]) -> Result<Vec<Raster<T>>>
 where
     T: RasterElement,
 {
-    decode_geotiff_bands(Cursor::new(data))
+    decode_geotiff_bands(Cursor::new(data), Some(data.len() as u64))
 }
 
 /// A decoded GeoTIFF: interleaved sample buffer plus geo-metadata, shared
@@ -93,14 +95,33 @@ struct DecodedImage<T> {
 }
 
 /// Internal: decode a GeoTIFF (all bands, interleaved) plus its geo-tags.
-fn decode_image<T, R>(reader: R) -> Result<DecodedImage<T>>
+fn decode_image<T, R>(reader: R, source_len: Option<u64>) -> Result<DecodedImage<T>>
 where
     T: RasterElement,
     R: std::io::Read + std::io::Seek,
 {
+    // A hostile TIFF can declare huge ImageWidth/ImageLength or tag counts;
+    // `Limits::unlimited()` honours them with a single multi-GB allocation
+    // (a 338-byte file forced ~32 GB — found by fuzzing). We keep the
+    // limits far above any real DEM but bound them to the source size:
+    // decoded pixels cannot legitimately exceed the input by more than the
+    // best-case compression ratio. Floor at 1 GiB so uncompressed/large
+    // DEMs (the reason `unlimited` was originally used) still read in one
+    // shot; ceiling scales with the input so a tiny file can't demand GBs.
+    const FLOOR: usize = 1024 * 1024 * 1024; // 1 GiB
+    const RATIO: u64 = 4096; // generous decompression headroom
+    let buf_cap = source_len
+        .map(|n| (n.saturating_mul(RATIO)).min(usize::MAX as u64) as usize)
+        .unwrap_or(usize::MAX)
+        .max(FLOOR);
+    let mut limits = Limits::unlimited();
+    limits.decoding_buffer_size = buf_cap;
+    limits.intermediate_buffer_size = buf_cap;
+    // No legitimate GeoTIFF metadata tag exceeds a few MB.
+    limits.ifd_value_size = (64 * 1024 * 1024).min(buf_cap);
     let mut decoder = Decoder::new(reader)
         .map_err(|e| Error::Other(format!("TIFF decode error: {}", e)))?
-        .with_limits(Limits::unlimited());
+        .with_limits(limits);
 
     let (width, height) = decoder
         .dimensions()
@@ -235,12 +256,16 @@ fn select_band<T: RasterElement>(img: &DecodedImage<T>, band: usize) -> Result<R
 }
 
 /// Internal: decode a GeoTIFF, selecting one band (0-based; default: first).
-fn decode_geotiff<T, R>(reader: R, band: Option<usize>) -> Result<Raster<T>>
+fn decode_geotiff<T, R>(
+    reader: R,
+    band: Option<usize>,
+    source_len: Option<u64>,
+) -> Result<Raster<T>>
 where
     T: RasterElement,
     R: std::io::Read + std::io::Seek,
 {
-    let img = decode_image::<T, R>(reader)?;
+    let img = decode_image::<T, R>(reader, source_len)?;
     let b = band.unwrap_or(0);
     if b >= img.spp {
         return Err(Error::Other(format!(
@@ -264,12 +289,12 @@ where
 }
 
 /// Internal: decode every band of a GeoTIFF as separate rasters.
-fn decode_geotiff_bands<T, R>(reader: R) -> Result<Vec<Raster<T>>>
+fn decode_geotiff_bands<T, R>(reader: R, source_len: Option<u64>) -> Result<Vec<Raster<T>>>
 where
     T: RasterElement,
     R: std::io::Read + std::io::Seek,
 {
-    let img = decode_image::<T, R>(reader)?;
+    let img = decode_image::<T, R>(reader, source_len)?;
     (0..img.spp).map(|b| select_band(&img, b)).collect()
 }
 
