@@ -85,19 +85,19 @@ pub fn hillshade(dem: &Raster<f64>, params: HillshadeParams) -> Result<Raster<f6
     let output_data: Vec<f64> = (0..rows)
         .into_par_iter()
         .flat_map(|row| {
-            let mut row_data = vec![0.0; cols];
+            let mut row_data = vec![f64::NAN; cols];
 
             for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 // Skip edges first
                 if row == 0 || row == rows - 1 || col == 0 || col == cols - 1 {
-                    *row_data_col = 0.0;
+                    *row_data_col = f64::NAN;
                     continue;
                 }
 
                 // Get center value
                 let e = data[[row, col]];
                 if e.is_nan() || (nodata.is_some() && (e - nodata.unwrap()).abs() < f64::EPSILON) {
-                    *row_data_col = 0.0;
+                    *row_data_col = f64::NAN;
                     continue;
                 }
 
@@ -113,7 +113,7 @@ pub fn hillshade(dem: &Raster<f64>, params: HillshadeParams) -> Result<Raster<f6
 
                 // Check for nodata
                 if [a, b, c, d, f, g, h, i].iter().any(|v| v.is_nan()) {
-                    *row_data_col = 0.0;
+                    *row_data_col = f64::NAN;
                     continue;
                 }
 
@@ -127,7 +127,10 @@ pub fn hillshade(dem: &Raster<f64>, params: HillshadeParams) -> Result<Raster<f6
                 let aspect_rad = if dz_dx.abs() < 1e-10 && dz_dy.abs() < 1e-10 {
                     0.0 // Flat
                 } else {
-                    let aspect = (-dz_dy).atan2(-dz_dx);
+                    // Downslope direction in the (east, north) frame is
+                    // (-dz_dx, +dz_dy): dz_dy is computed south-minus-north,
+                    // so it is already the northward component of downslope.
+                    let aspect = dz_dy.atan2(-dz_dx);
                     if aspect < 0.0 {
                         2.0 * PI + aspect
                     } else {
@@ -155,7 +158,8 @@ pub fn hillshade(dem: &Raster<f64>, params: HillshadeParams) -> Result<Raster<f6
         .collect();
 
     let mut output = dem.with_same_meta::<f64>(rows, cols);
-    output.set_nodata(Some(0.0));
+    // NaN, not 0.0: a shade of 0 is a valid value (full shadow).
+    output.set_nodata(Some(f64::NAN));
     *output.data_mut() = Array2::from_shape_vec((rows, cols), output_data)
         .map_err(|e| Error::Other(e.to_string()))?;
 
@@ -260,7 +264,9 @@ impl surtgis_core::WindowAlgorithm for HillshadeStreaming {
                 let aspect_rad = if dz_dx.abs() < 1e-10 && dz_dy.abs() < 1e-10 {
                     0.0 // Flat
                 } else {
-                    let asp = (-dz_dy).atan2(-dz_dx);
+                    // Downslope in (east, north): dz_dy is south-minus-north,
+                    // already the northward component (see hillshade()).
+                    let asp = dz_dy.atan2(-dz_dx);
                     if asp < 0.0 { 2.0 * PI + asp } else { asp }
                 };
 
@@ -295,10 +301,14 @@ mod tests {
         let dem = create_test_dem();
         let result = hillshade(&dem, HillshadeParams::default()).unwrap();
 
-        // All values should be in [0, 255]
+        // All valid values should be in [0, 255]; edges are NaN (nodata)
         for row in 0..result.rows() {
             for col in 0..result.cols() {
                 let val = result.get(row, col).unwrap();
+                if row == 0 || row == result.rows() - 1 || col == 0 || col == result.cols() - 1 {
+                    assert!(val.is_nan(), "Edge should be NaN at ({}, {})", row, col);
+                    continue;
+                }
                 assert!(
                     val >= 0.0 && val <= 255.0,
                     "Hillshade value {} out of range at ({}, {})",
@@ -308,6 +318,63 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Regression test for the N–S mirrored illumination bug.
+    ///
+    /// A uniform north-facing slope (elevation increasing southward) lit
+    /// from the NW (az=315, alt=45) must be bright. Verified against
+    /// `gdaldem hillshade`: expected 218 for slope tan = 0.5; the mirrored
+    /// formula produced 104. The south-facing slope must be darker.
+    #[test]
+    fn test_hillshade_directional_north_vs_south() {
+        let n = 20;
+        let cell = 10.0;
+        // North-facing: z increases with row (rows go south in a north-up raster)
+        let mut north = Raster::new(n, n);
+        north.set_transform(surtgis_core::GeoTransform::new(
+            0.0,
+            n as f64 * cell,
+            cell,
+            -cell,
+        ));
+        // South-facing: z decreases with row
+        let mut south = Raster::new(n, n);
+        south.set_transform(surtgis_core::GeoTransform::new(
+            0.0,
+            n as f64 * cell,
+            cell,
+            -cell,
+        ));
+        for row in 0..n {
+            for col in 0..n {
+                north.set(row, col, row as f64 * cell * 0.5).unwrap();
+                south
+                    .set(row, col, (n - 1 - row) as f64 * cell * 0.5)
+                    .unwrap();
+            }
+        }
+
+        let params = HillshadeParams::default(); // az 315, alt 45
+        let hn = hillshade(&north, params.clone()).unwrap();
+        let hs = hillshade(&south, params).unwrap();
+
+        let vn = hn.get(n / 2, n / 2).unwrap();
+        let vs = hs.get(n / 2, n / 2).unwrap();
+
+        // GDAL gives 218 for the north-facing slope with these parameters
+        assert!(
+            (vn - 218.0).abs() <= 1.0,
+            "North-facing slope with NW sun should be ~218 (GDAL), got {}",
+            vn
+        );
+        // North-facing must be brighter than south-facing under NW sun
+        assert!(
+            vn > vs + 50.0,
+            "North-facing ({}) must be brighter than south-facing ({}) under NW sun",
+            vn,
+            vs
+        );
     }
 
     #[test]
@@ -341,10 +408,13 @@ mod tests {
 
         let result = hillshade(&dem, params).unwrap();
 
-        // All values should be in [0, 1]
+        // All valid values should be in [0, 1]; edges are NaN
         for row in 0..result.rows() {
             for col in 0..result.cols() {
                 let val = result.get(row, col).unwrap();
+                if val.is_nan() {
+                    continue;
+                }
                 assert!(
                     val >= 0.0 && val <= 1.0,
                     "Normalized hillshade {} out of range",

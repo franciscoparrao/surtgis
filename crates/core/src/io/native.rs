@@ -200,7 +200,6 @@ fn finish_raster<T: RasterElement>(
     if let Some(nodata_f64) = nodata
         && let Some(nd) = num_traits::cast::<f64, T>(nodata_f64)
     {
-        raster.set_nodata(Some(nd));
         if T::is_float() {
             let nan_val = T::default_nodata();
             for val in raster.data_mut().iter_mut() {
@@ -208,6 +207,14 @@ fn finish_raster<T: RasterElement>(
                     *val = nan_val;
                 }
             }
+            // Pixels were rewritten to NaN, so the metadata must say NaN
+            // too. Keeping the original sentinel here would make a
+            // subsequent write emit GDAL_NODATA = <sentinel> over NaN
+            // pixels — external tools (GDAL/QGIS) would then treat the
+            // NaNs as valid data.
+            raster.set_nodata(Some(nan_val));
+        } else {
+            raster.set_nodata(Some(nd));
         }
     }
     Ok(raster)
@@ -329,7 +336,15 @@ fn read_geotransform<R: std::io::Read + std::io::Seek>(
 
 /// Read GDAL_NODATA tag (42113) — stored as ASCII string, parsed to f64.
 fn read_nodata<R: std::io::Read + std::io::Seek>(decoder: &mut Decoder<R>) -> Option<f64> {
-    let s = decoder.get_tag_ascii_string(Tag::Unknown(42113)).ok()?;
+    let s = match decoder.get_tag_ascii_string(Tag::Unknown(42113)) {
+        Ok(s) => s,
+        // Fallback: SurtGIS <= 0.16.3 wrote this tag via as_bytes(),
+        // producing type BYTE, which get_tag_ascii_string rejects.
+        Err(_) => {
+            let bytes = decoder.get_tag_u8_vec(Tag::Unknown(42113)).ok()?;
+            String::from_utf8_lossy(&bytes).into_owned()
+        }
+    };
     s.trim().trim_end_matches('\0').parse::<f64>().ok()
 }
 
@@ -492,13 +507,16 @@ where
     if let Some(nd) = raster.nodata() {
         if let Some(nd_f64) = nd.to_f64() {
             let nodata_str = if nd_f64.is_nan() {
-                "nan\0".to_string()
+                "nan".to_string()
             } else {
-                format!("{}\0", nd_f64)
+                format!("{}", nd_f64)
             };
+            // Write as a proper ASCII tag (the str impl appends the NUL);
+            // writing via as_bytes() produced a BYTE-typed tag that
+            // get_tag_ascii_string rejects on read-back.
             image
                 .encoder()
-                .write_tag(Tag::Unknown(42113), nodata_str.as_bytes())
+                .write_tag(Tag::Unknown(42113), nodata_str.as_str())
                 .map_err(|e| Error::Other(format!("Cannot write nodata tag: {}", e)))?;
         }
     }
@@ -673,13 +691,14 @@ where
         && let Some(nd_f64) = nd.to_f64()
     {
         let nodata_str = if nd_f64.is_nan() {
-            "nan\0".to_string()
+            "nan".to_string()
         } else {
-            format!("{}\0", nd_f64)
+            format!("{}", nd_f64)
         };
+        // ASCII tag; the str impl appends the NUL (see write_geotiff).
         image
             .encoder()
-            .write_tag(Tag::Unknown(42113), nodata_str.as_bytes())
+            .write_tag(Tag::Unknown(42113), nodata_str.as_str())
             .map_err(|e| Error::Other(format!("Cannot write nodata tag: {}", e)))?;
     }
 
@@ -704,6 +723,40 @@ mod tests {
             }
         }
         r
+    }
+
+    /// Regression: a file with a sentinel GDAL_NODATA (e.g. -9999) has its
+    /// pixels normalized to NaN on read, so the in-memory metadata must be
+    /// NaN too. Otherwise a subsequent write emits GDAL_NODATA=-9999 over
+    /// NaN pixels and external tools treat the NaNs as valid data.
+    #[test]
+    fn sentinel_nodata_roundtrip_stays_coherent() {
+        let mut r = ramp_band(6, 6, 0.0);
+        // Write file 1 with a sentinel nodata and one nodata pixel
+        r.set(2, 3, -9999.0).unwrap();
+        r.set_nodata(Some(-9999.0));
+        let dir = TempDir::new().unwrap();
+        let p1 = dir.path().join("sentinel.tif");
+        write_geotiff(&r, &p1, None).unwrap();
+
+        // Read: pixel must be NaN AND metadata must be NaN
+        let back: Raster<f64> = read_geotiff(&p1, None).unwrap();
+        assert!(back.get(2, 3).unwrap().is_nan(), "pixel not normalized");
+        let nd = back.nodata().expect("nodata metadata lost");
+        assert!(
+            nd.is_nan(),
+            "metadata nodata should be NaN after normalization, got {}",
+            nd
+        );
+
+        // Write file 2 and re-read: still coherent (GDAL_NODATA=nan)
+        let p2 = dir.path().join("rewritten.tif");
+        write_geotiff(&back, &p2, None).unwrap();
+        let again: Raster<f64> = read_geotiff(&p2, None).unwrap();
+        assert!(again.get(2, 3).unwrap().is_nan());
+        assert!(again.nodata().expect("nodata lost on rewrite").is_nan());
+        // Valid data untouched
+        assert_eq!(again.get(0, 0).unwrap(), 0.0);
     }
 
     #[test]

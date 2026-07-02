@@ -94,8 +94,13 @@ macro_rules! impl_raster_element_float {
                 if self.is_nan() {
                     return true;
                 }
+                // Exact comparison, as in GDAL/rasterio: the sentinel is
+                // written verbatim to the file, so if it survives the binary
+                // round-trip exact equality is correct. A tolerance-based
+                // match corrupts small valid values (e.g. NDVI ≈ 0 with
+                // nodata = 0.0) and misses large sentinels off by 1 ULP.
                 match nodata {
-                    Some(nd) => (self - nd).abs() < <$t>::EPSILON * 100.0,
+                    Some(nd) => *self == nd,
                     None => false,
                 }
             }
@@ -145,11 +150,9 @@ macro_rules! impl_raster_cell_complex {
                 if self.re.is_nan() && self.im.is_nan() {
                     return true;
                 }
+                // Exact comparison — see the float impl for rationale.
                 match nodata {
-                    Some(nd) => {
-                        (self.re - nd.re).abs() < <$t>::EPSILON * 100.0
-                            && (self.im - nd.im).abs() < <$t>::EPSILON * 100.0
-                    }
+                    Some(nd) => self.re == nd.re && self.im == nd.im,
                     None => false,
                 }
             }
@@ -161,3 +164,45 @@ macro_rules! impl_raster_cell_complex {
 impl_raster_cell_complex!(f32);
 #[cfg(feature = "complex")]
 impl_raster_cell_complex!(f64);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression: with nodata = 0.0, small valid values (NDVI ≈ 0,
+    /// low reflectances) must NOT be classified as nodata. The old
+    /// epsilon-based match treated |v| < 1.19e-5 (f32) as nodata and
+    /// the reader then rewrote them to NaN — irreversible corruption.
+    #[test]
+    fn test_float_nodata_small_valid_values_near_zero_sentinel() {
+        let nd = Some(0.0f32);
+        assert!(0.0f32.is_nodata(nd));
+        assert!(!1e-6f32.is_nodata(nd));
+        assert!(!(-1e-6f32).is_nodata(nd));
+        assert!(!1e-7f64.is_nodata(Some(0.0f64)));
+    }
+
+    #[test]
+    fn test_float_nodata_exact_sentinel_matches() {
+        let nd = -9999.0f64;
+        assert!((-9999.0f64).is_nodata(Some(nd)));
+        assert!(!(-9998.9999f64).is_nodata(Some(nd)));
+        // GDAL's Float32 default sentinel
+        let big = -3.4e38f32;
+        assert!(big.is_nodata(Some(big)));
+    }
+
+    #[test]
+    fn test_float_nan_always_nodata() {
+        assert!(f64::NAN.is_nodata(None));
+        assert!(f64::NAN.is_nodata(Some(-9999.0)));
+        assert!(f32::NAN.is_nodata(None));
+    }
+
+    #[test]
+    fn test_int_nodata_exact() {
+        assert!(255u8.is_nodata(Some(255)));
+        assert!(!0u8.is_nodata(Some(255)));
+        assert!(!5i32.is_nodata(None));
+    }
+}

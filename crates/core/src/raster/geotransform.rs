@@ -96,7 +96,12 @@ impl GeoTransform {
         // Solve the inverse transformation
         let det = self.pixel_width * self.pixel_height - self.row_rotation * self.col_rotation;
 
-        if det.abs() < 1e-10 {
+        // Degeneracy must be judged relative to the transform's own scale:
+        // an absolute threshold rejects valid fine-resolution geographic
+        // transforms (a 1 m pixel in EPSG:4326 gives det ≈ 8e-11).
+        let scale = (self.pixel_width * self.pixel_height).abs()
+            + (self.row_rotation * self.col_rotation).abs();
+        if det == 0.0 || det.abs() < scale * 1e-12 {
             // Degenerate transformation
             return (f64::NAN, f64::NAN);
         }
@@ -158,6 +163,37 @@ mod tests {
 
         assert_relative_eq!(col, 5.5, epsilon = 1e-10);
         assert_relative_eq!(row, 10.5, epsilon = 1e-10);
+    }
+
+    /// Regression test: fine-resolution geographic transforms (drone imagery
+    /// in EPSG:4326) must not be declared degenerate. A 1 m pixel is
+    /// ≈ 8.98e-6°, so det ≈ 8e-11 — below the old absolute 1e-10 threshold.
+    #[test]
+    fn test_geo_to_pixel_fine_geographic_resolution() {
+        let deg_per_m = 1.0 / 111_320.0;
+        for res_m in [1.0, 0.3, 0.05] {
+            let px = res_m * deg_per_m;
+            let gt = GeoTransform::new(-70.0, -33.0, px, -px);
+
+            let (x, y) = gt.pixel_to_geo(10, 20);
+            let (col, row) = gt.geo_to_pixel(x, y);
+
+            assert!(
+                !col.is_nan() && !row.is_nan(),
+                "geo_to_pixel returned NaN for a valid {} m geographic transform",
+                res_m
+            );
+            assert_relative_eq!(col, 10.5, epsilon = 1e-6);
+            assert_relative_eq!(row, 20.5, epsilon = 1e-6);
+        }
+    }
+
+    #[test]
+    fn test_geo_to_pixel_degenerate_still_rejected() {
+        // Truly degenerate: zero pixel size
+        let gt = GeoTransform::new(0.0, 0.0, 0.0, 0.0);
+        let (col, row) = gt.geo_to_pixel(1.0, 1.0);
+        assert!(col.is_nan() && row.is_nan());
     }
 
     #[test]

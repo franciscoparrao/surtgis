@@ -256,7 +256,14 @@ fn read_geotransform_from_decoder<R: std::io::Read + std::io::Seek>(
 fn read_nodata_from_decoder<R: std::io::Read + std::io::Seek>(
     decoder: &mut Decoder<R>,
 ) -> Option<f64> {
-    let s = decoder.get_tag_ascii_string(Tag::Unknown(42113)).ok()?;
+    let s = match decoder.get_tag_ascii_string(Tag::Unknown(42113)) {
+        Ok(s) => s,
+        // Fallback: SurtGIS <= 0.16.3 wrote this tag as type BYTE.
+        Err(_) => {
+            let bytes = decoder.get_tag_u8_vec(Tag::Unknown(42113)).ok()?;
+            String::from_utf8_lossy(&bytes).into_owned()
+        }
+    };
     s.trim().trim_end_matches('\0').parse::<f64>().ok()
 }
 
