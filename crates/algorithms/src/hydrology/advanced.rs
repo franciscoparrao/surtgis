@@ -11,18 +11,7 @@ use std::collections::VecDeque;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
-/// D8 neighbor offsets: (dr, dc) indexed 1..=8
-/// 1=E, 2=NE, 3=N, 4=NW, 5=W, 6=SW, 7=S, 8=SE
-const D8_OFFSETS: [(isize, isize); 8] = [
-    (0, 1),
-    (-1, 1),
-    (-1, 0),
-    (-1, -1),
-    (0, -1),
-    (1, -1),
-    (1, 0),
-    (1, 1),
-];
+use super::d8::D8_OFFSETS;
 
 // ─────────────────────────────────────────────────────────
 // Strahler Order

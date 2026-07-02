@@ -48,17 +48,7 @@ use std::collections::HashSet;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
-/// D8 neighbour offsets for codes 1..=8 (matches `flow_direction`).
-const D8_OFFSETS: [(isize, isize); 8] = [
-    (0, 1),
-    (-1, 1),
-    (-1, 0),
-    (-1, -1),
-    (0, -1),
-    (1, -1),
-    (1, 0),
-    (1, 1),
-];
+use super::d8::D8_OFFSETS;
 
 /// Flow type, selecting the `(c_A, c_B)` mobility coefficients.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

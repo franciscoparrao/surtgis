@@ -17,29 +17,9 @@ use ndarray::Array2;
 use surtgis_core::Result;
 use surtgis_core::raster::Raster;
 
-/// D8 neighbor offsets (E, NE, N, NW, W, SW, S, SE)
-const D8_OFFSETS: [(isize, isize); 8] = [
-    (0, 1),   // 0: E
-    (-1, 1),  // 1: NE
-    (-1, 0),  // 2: N
-    (-1, -1), // 3: NW
-    (0, -1),  // 4: W
-    (1, -1),  // 5: SW
-    (1, 0),   // 6: S
-    (1, 1),   // 7: SE
-];
-
-/// Distance factors for each D8 direction
-const D8_DIST: [f64; 8] = [
-    1.0,
-    std::f64::consts::SQRT_2,
-    1.0,
-    std::f64::consts::SQRT_2,
-    1.0,
-    std::f64::consts::SQRT_2,
-    1.0,
-    std::f64::consts::SQRT_2,
-];
+// NOTE: the facet decomposition below indexes these tables 0-based
+// (facet index), unlike the 1-based D8 codes; the array order is identical.
+use super::d8::{D8_DISTANCE as D8_DIST, D8_OFFSETS};
 
 /// Tarboton (1997) facet decomposition — matches TauDEM exactly.
 ///

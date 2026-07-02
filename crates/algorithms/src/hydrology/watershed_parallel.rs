@@ -17,9 +17,7 @@ use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
-/// D8 direction encoding: 1=E, 2=NE, 3=N, 4=NW, 5=W, 6=SW, 7=S, 8=SE, 0=pit
-const D8_DR: [isize; 9] = [0, 0, -1, -1, -1, 0, 1, 1, 1];
-const D8_DC: [isize; 9] = [0, 1, 1, 0, -1, -1, -1, 0, 1];
+use super::d8::{D8_COL_OFF as D8_DC, D8_ROW_OFF as D8_DR};
 
 /// Parameters for parallel watershed delineation
 #[derive(Debug, Clone)]

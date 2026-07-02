@@ -21,29 +21,9 @@ use std::collections::BinaryHeap;
 use surtgis_core::Result;
 use surtgis_core::raster::Raster;
 
-/// D8 neighbor offsets
-const D8_OFFSETS: [(isize, isize); 8] = [
-    (-1, -1),
-    (-1, 0),
-    (-1, 1),
-    (0, -1),
-    (0, 1),
-    (1, -1),
-    (1, 0),
-    (1, 1),
-];
-
-/// D8 distance factors
-const D8_DIST: [f64; 8] = [
-    std::f64::consts::SQRT_2,
-    1.0,
-    std::f64::consts::SQRT_2,
-    1.0,
-    1.0,
-    std::f64::consts::SQRT_2,
-    1.0,
-    std::f64::consts::SQRT_2,
-];
+// Row-major scan order (not D8-code order): preserves the historical
+// tie-breaking of breach path selection. See `d8` module docs.
+use super::d8::{SCAN_DISTANCE as D8_DIST, SCAN_OFFSETS as D8_OFFSETS};
 
 /// Parameters for breach depressions
 #[derive(Debug, Clone)]
