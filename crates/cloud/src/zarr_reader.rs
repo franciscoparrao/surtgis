@@ -485,17 +485,16 @@ async fn read_time_cf_metadata(
 
     for name in names {
         let path = format!("/{name}");
-        let arr = Array::async_open(store.clone(), &path)
-            .await
-            .or_else(|_| {
-                // V2 fallback in a sync-compatible way — try sync approach
-                futures::executor::block_on(Array::async_open_opt(
-                    store.clone(),
-                    &path,
-                    &MetadataRetrieveVersion::V2,
-                ))
-            })
-            .ok()?;
+        let arr = match Array::async_open(store.clone(), &path).await {
+            Ok(a) => a,
+            // V2 metadata fallback. Awaited normally — a `block_on` here
+            // would park the worker on a future that may need this very
+            // runtime to make progress (deadlock under the 2-worker
+            // blocking wrapper).
+            Err(_) => Array::async_open_opt(store.clone(), &path, &MetadataRetrieveVersion::V2)
+                .await
+                .ok()?,
+        };
 
         let attrs = serde_json::Value::Object(arr.attributes().clone());
         // Check if this array has time units

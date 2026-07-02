@@ -153,10 +153,10 @@ impl HttpClient {
         }
 
         if !status.is_success() {
-            return Err(CloudError::Network(format!(
-                "HTTP {} fetching {}",
-                status, url
-            )));
+            return Err(CloudError::HttpStatus {
+                status,
+                url: url.to_string(),
+            });
         }
 
         let bytes = resp.bytes().await?;
@@ -237,64 +237,196 @@ impl HttpClient {
         Ok(results)
     }
 
-    /// Execute a request with exponential backoff retry.
+    /// Execute a request with retry.
+    ///
+    /// Two failure classes are retried, up to `max_retries` times:
+    ///
+    /// - **Transport errors** (timeout / connect), with exponential backoff
+    ///   plus jitter ([`backoff_with_jitter`]).
+    /// - **Retryable HTTP statuses** (429, 500, 502, 503, 504 — see
+    ///   [`is_retryable_status`]), honouring the server's `Retry-After`
+    ///   header (delta-seconds or HTTP-date, capped at [`RETRY_AFTER_CAP`])
+    ///   and falling back to the same exponential backoff + jitter when the
+    ///   header is absent or unparseable.
+    ///
+    /// The backoff sleep is async ([`backoff_sleep`]) so it never blocks a
+    /// runtime worker thread. A retryable status on the final attempt is
+    /// returned as a response; callers map non-success statuses to
+    /// [`CloudError::HttpStatus`](crate::error::CloudError::HttpStatus).
     async fn execute_with_retry(
         &self,
         request: reqwest::RequestBuilder,
     ) -> std::result::Result<reqwest::Response, reqwest::Error> {
-        let mut last_err = None;
+        let mut last_err: Option<reqwest::Error> = None;
+        let mut server_delay: Option<Duration> = None;
 
         for attempt in 0..=self.max_retries {
             if attempt > 0 {
-                let backoff_ms = 100u64 * 2u64.pow(attempt - 1);
-                // Platform-agnostic sleep: on native use a simple future-based
-                // approach that doesn't require tokio::time. On WASM, reqwest
-                // handles its own async runtime.
-                futures::future::ready(()).await;
-                // Simple busy-wait-free backoff using the runtime's timer if
-                // available.  Since reqwest already depends on tokio on native
-                // and wasm_bindgen on WASM, we can use a platform-conditional
-                // sleep.
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    // On native, use std::thread::sleep in a spawn_blocking
-                    // context or simply rely on the retry itself as backoff.
-                    // For simplicity without requiring tokio::time, we use
-                    // std::thread::sleep which blocks the current thread
-                    // briefly—acceptable for retry backoff.
-                    std::thread::sleep(Duration::from_millis(backoff_ms));
-                }
-                #[cfg(target_arch = "wasm32")]
-                {
-                    // On WASM, we cannot block. Just yield and proceed.
-                    // Real WASM retry backoff would need gloo_timers, but
-                    // we keep deps minimal.
-                    let _ = backoff_ms;
-                }
+                let delay = server_delay
+                    .take()
+                    .unwrap_or_else(|| backoff_with_jitter(attempt));
+                backoff_sleep(delay).await;
             }
 
-            match request.try_clone() {
-                Some(cloned) => match cloned.send().await {
-                    Ok(resp) => return Ok(resp),
-                    Err(e) if e.is_timeout() || e.is_connect() => {
-                        last_err = Some(e);
+            let cloned = match request.try_clone() {
+                Some(c) => c,
+                // Non-cloneable request (streaming body): single attempt only.
+                None => return request.send().await,
+            };
+
+            match cloned.send().await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    if is_retryable_status(status) && attempt < self.max_retries {
+                        server_delay = resp
+                            .headers()
+                            .get("retry-after")
+                            .and_then(|v| v.to_str().ok())
+                            .and_then(|v| parse_retry_after(v, unix_now_secs(), RETRY_AFTER_CAP));
                         continue;
                     }
-                    Err(e) => return Err(e),
-                },
-                None => {
-                    return request.send().await;
+                    return Ok(resp);
                 }
+                Err(e) if e.is_timeout() || e.is_connect() => {
+                    last_err = Some(e);
+                    continue;
+                }
+                Err(e) => return Err(e),
             }
         }
 
-        Err(last_err.unwrap())
+        // Only reachable when the final iteration hit the transport-error
+        // `continue` above, which always sets `last_err` first.
+        Err(last_err.expect("retry loop exhausted without a transport error"))
     }
 
     /// Getter for the timeout duration.
     pub fn request_timeout(&self) -> Duration {
         self.request_timeout
     }
+}
+
+// ---------------------------------------------------------------------------
+// Retry helpers
+// ---------------------------------------------------------------------------
+
+/// Maximum delay honoured from a `Retry-After` header.
+///
+/// Servers occasionally send very large values (or far-future HTTP-dates);
+/// anything above this cap is clamped to the cap rather than stalling the
+/// caller for minutes.
+const RETRY_AFTER_CAP: Duration = Duration::from_secs(60);
+
+/// HTTP statuses worth retrying: rate limiting (429) and transient
+/// server-side failures (500, 502, 503, 504).
+fn is_retryable_status(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 429 | 500 | 502 | 503 | 504)
+}
+
+/// Seconds since the Unix epoch, saturating to 0 on pre-epoch clocks.
+fn unix_now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Exponential backoff with jitter: base 100ms · 2^(attempt-1), plus up to
+/// +50% jitter (derived from the clock's sub-second nanos — no `rand` dep)
+/// to de-synchronize concurrent retries against the same host.
+fn backoff_with_jitter(attempt: u32) -> Duration {
+    let base_ms = 100u64 << attempt.saturating_sub(1).min(10);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| u64::from(d.subsec_nanos()))
+        .unwrap_or(0);
+    let jitter_ms = nanos % (base_ms / 2).max(1);
+    Duration::from_millis(base_ms + jitter_ms)
+}
+
+/// Async, runtime-friendly sleep for retry backoff.
+///
+/// Uses `tokio::time::sleep` so the backoff yields the worker thread instead
+/// of blocking it — with a small shared runtime (see `sync_api`), a blocking
+/// sleep here would freeze all in-flight I/O for the whole process.
+#[cfg(not(target_arch = "wasm32"))]
+async fn backoff_sleep(delay: Duration) {
+    tokio::time::sleep(delay).await;
+}
+
+/// On WASM there is no timer without extra deps (`gloo-timers`); yield to the
+/// microtask queue and rely on the retry round-trip itself as backoff.
+#[cfg(target_arch = "wasm32")]
+async fn backoff_sleep(_delay: Duration) {
+    futures::future::ready(()).await;
+}
+
+/// Parse a `Retry-After` header value into a wait [`Duration`].
+///
+/// Supports both forms from RFC 9110 §10.2.3:
+/// - delta-seconds, e.g. `"120"`;
+/// - IMF-fixdate, e.g. `"Wed, 21 Oct 2015 07:28:00 GMT"` (interpreted
+///   relative to `now_unix`, seconds since the Unix epoch).
+///
+/// The result is clamped to `cap`; dates in the past yield a zero duration.
+/// Returns `None` when the value matches neither form.
+fn parse_retry_after(value: &str, now_unix: i64, cap: Duration) -> Option<Duration> {
+    let value = value.trim();
+    if let Ok(secs) = value.parse::<u64>() {
+        return Some(Duration::from_secs(secs).min(cap));
+    }
+    let target = parse_imf_fixdate(value)?;
+    let delta = target.saturating_sub(now_unix).max(0);
+    Some(Duration::from_secs(delta as u64).min(cap))
+}
+
+/// Parse an IMF-fixdate (`"Sun, 06 Nov 1994 08:49:37 GMT"`) into Unix seconds.
+///
+/// Hand-rolled to avoid pulling `chrono`/`httpdate` into the default feature
+/// set; precision needs are modest since the result is capped anyway.
+fn parse_imf_fixdate(s: &str) -> Option<i64> {
+    // "<day-name>, <day> <month> <year> <HH>:<MM>:<SS> GMT"
+    let rest = s.split_once(',')?.1;
+    let mut parts = rest.split_whitespace();
+    let day: i64 = parts.next()?.parse().ok()?;
+    let month: i64 = match parts.next()? {
+        "Jan" => 1,
+        "Feb" => 2,
+        "Mar" => 3,
+        "Apr" => 4,
+        "May" => 5,
+        "Jun" => 6,
+        "Jul" => 7,
+        "Aug" => 8,
+        "Sep" => 9,
+        "Oct" => 10,
+        "Nov" => 11,
+        "Dec" => 12,
+        _ => return None,
+    };
+    let year: i64 = parts.next()?.parse().ok()?;
+    let mut time = parts.next()?.split(':');
+    let h: i64 = time.next()?.parse().ok()?;
+    let m: i64 = time.next()?.parse().ok()?;
+    let sec: i64 = time.next()?.parse().ok()?;
+    if parts.next()? != "GMT" {
+        return None;
+    }
+    if !(1..=31).contains(&day) || h > 23 || m > 59 || sec > 60 {
+        return None;
+    }
+    Some(days_from_civil(year, month, day) * 86_400 + h * 3600 + m * 60 + sec)
+}
+
+/// Days since 1970-01-01 for a proleptic Gregorian date (Howard Hinnant's
+/// `days_from_civil` algorithm).
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
 }
 
 // ---------------------------------------------------------------------------
@@ -392,5 +524,102 @@ mod tests {
         let url = "s3://mybucket";
         let out = normalize_url(url);
         assert_eq!(out.as_ref(), url);
+    }
+
+    // ── Retry helpers ────────────────────────────────────────────────
+
+    #[test]
+    fn retryable_statuses_are_429_and_transient_5xx() {
+        use reqwest::StatusCode;
+        for code in [429u16, 500, 502, 503, 504] {
+            assert!(
+                is_retryable_status(StatusCode::from_u16(code).unwrap()),
+                "{code} should be retryable"
+            );
+        }
+        for code in [200u16, 206, 301, 400, 403, 404, 416, 501] {
+            assert!(
+                !is_retryable_status(StatusCode::from_u16(code).unwrap()),
+                "{code} should NOT be retryable"
+            );
+        }
+    }
+
+    #[test]
+    fn retry_after_delta_seconds() {
+        let cap = Duration::from_secs(60);
+        assert_eq!(parse_retry_after("5", 0, cap), Some(Duration::from_secs(5)));
+        assert_eq!(
+            parse_retry_after(" 30 ", 0, cap),
+            Some(Duration::from_secs(30))
+        );
+        // Values above the cap are clamped to the cap.
+        assert_eq!(parse_retry_after("120", 0, cap), Some(cap));
+        assert_eq!(parse_retry_after("0", 0, cap), Some(Duration::ZERO));
+    }
+
+    #[test]
+    fn retry_after_http_date() {
+        let cap = Duration::from_secs(60);
+        // 2015-10-21 07:28:00 UTC == 1445412480 (verified against `date -u`).
+        let date = "Wed, 21 Oct 2015 07:28:00 GMT";
+        let target = 1_445_412_480i64;
+
+        // 30 seconds in the future → wait 30s.
+        assert_eq!(
+            parse_retry_after(date, target - 30, cap),
+            Some(Duration::from_secs(30))
+        );
+        // Date in the past → zero wait (retry immediately).
+        assert_eq!(
+            parse_retry_after(date, target + 100, cap),
+            Some(Duration::ZERO)
+        );
+        // Far-future date → clamped to the cap.
+        assert_eq!(parse_retry_after(date, target - 3600, cap), Some(cap));
+    }
+
+    #[test]
+    fn retry_after_garbage_is_none() {
+        let cap = Duration::from_secs(60);
+        assert_eq!(parse_retry_after("soon", 0, cap), None);
+        assert_eq!(parse_retry_after("", 0, cap), None);
+        assert_eq!(parse_retry_after("-5", 0, cap), None);
+        assert_eq!(parse_retry_after("Wed, 21 Oct 2015", 0, cap), None);
+        // Missing the trailing "GMT" token.
+        assert_eq!(parse_retry_after("Wed, 21 Oct 2015 07:28:00", 0, cap), None);
+        // Unknown month.
+        assert_eq!(
+            parse_retry_after("Wed, 21 Foo 2015 07:28:00 GMT", 0, cap),
+            None
+        );
+    }
+
+    #[test]
+    fn imf_fixdate_epoch_and_leap_years() {
+        assert_eq!(parse_imf_fixdate("Thu, 01 Jan 1970 00:00:00 GMT"), Some(0));
+        assert_eq!(
+            parse_imf_fixdate("Thu, 01 Jan 1970 00:01:40 GMT"),
+            Some(100)
+        );
+        // 2000-03-01 (day after the leap day of a century leap year)
+        // == 951868800 (verified against `date -u`).
+        assert_eq!(
+            parse_imf_fixdate("Wed, 01 Mar 2000 00:00:00 GMT"),
+            Some(951_868_800)
+        );
+    }
+
+    #[test]
+    fn backoff_grows_exponentially_with_bounded_jitter() {
+        for attempt in 1..=5u32 {
+            let base = 100u64 << (attempt - 1);
+            let d = backoff_with_jitter(attempt).as_millis() as u64;
+            assert!(
+                d >= base && d < base + base / 2 + 1,
+                "attempt {attempt}: {d}ms outside [{base}, {})",
+                base + base / 2 + 1
+            );
+        }
     }
 }
