@@ -49,29 +49,9 @@ impl Algorithm for FillSinks {
     }
 }
 
-/// D8 neighbor offsets: (row_offset, col_offset)
-const D8_OFFSETS: [(isize, isize); 8] = [
-    (-1, -1),
-    (-1, 0),
-    (-1, 1),
-    (0, -1),
-    (0, 1),
-    (1, -1),
-    (1, 0),
-    (1, 1),
-];
-
-/// D8 distances: cardinal = cell_size, diagonal = cell_size * sqrt(2)
-const D8_DISTANCES: [f64; 8] = [
-    std::f64::consts::SQRT_2,
-    1.0,
-    std::f64::consts::SQRT_2,
-    1.0,
-    1.0,
-    std::f64::consts::SQRT_2,
-    1.0,
-    std::f64::consts::SQRT_2,
-];
+// Row-major scan order (not D8-code order): tie-breaking in the fill
+// depends on the historical neighbor visit order. See `d8` module docs.
+use super::d8::{SCAN_DISTANCE as D8_DISTANCES, SCAN_OFFSETS as D8_OFFSETS};
 
 /// Fill depressions in a DEM using the Planchon-Darboux (2001) algorithm.
 ///

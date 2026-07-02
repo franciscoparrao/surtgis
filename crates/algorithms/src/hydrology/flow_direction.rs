@@ -16,30 +16,7 @@ use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Algorithm, Error, Result};
 
-/// D8 neighbor offsets: (row_offset, col_offset)
-/// Indexed to match the direction encoding (1=E, 2=NE, ..., 8=SE)
-const D8_OFFSETS: [(isize, isize); 8] = [
-    (0, 1),   // 1: E
-    (-1, 1),  // 2: NE
-    (-1, 0),  // 3: N
-    (-1, -1), // 4: NW
-    (0, -1),  // 5: W
-    (1, -1),  // 6: SW
-    (1, 0),   // 7: S
-    (1, 1),   // 8: SE
-];
-
-/// Distance factors for each D8 direction
-const D8_DIST: [f64; 8] = [
-    1.0,
-    std::f64::consts::SQRT_2,
-    1.0,
-    std::f64::consts::SQRT_2,
-    1.0,
-    std::f64::consts::SQRT_2,
-    1.0,
-    std::f64::consts::SQRT_2,
-];
+use super::d8::{D8_DISTANCE as D8_DIST, D8_OFFSETS};
 
 /// Flow direction algorithm (D8)
 #[derive(Debug, Clone, Default)]

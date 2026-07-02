@@ -15,28 +15,7 @@ use ndarray::Array2;
 use surtgis_core::Result;
 use surtgis_core::raster::Raster;
 
-/// D8 neighbor offsets
-const D8_OFFSETS: [(isize, isize); 8] = [
-    (0, 1),
-    (-1, 1),
-    (-1, 0),
-    (-1, -1),
-    (0, -1),
-    (1, -1),
-    (1, 0),
-    (1, 1),
-];
-
-const D8_DIST: [f64; 8] = [
-    1.0,
-    std::f64::consts::SQRT_2,
-    1.0,
-    std::f64::consts::SQRT_2,
-    1.0,
-    std::f64::consts::SQRT_2,
-    1.0,
-    std::f64::consts::SQRT_2,
-];
+use super::d8::{D8_DISTANCE as D8_DIST, D8_OFFSETS};
 
 const CONTOUR_FRACTION: [f64; 8] = [0.5, 0.354, 0.5, 0.354, 0.5, 0.354, 0.5, 0.354];
 

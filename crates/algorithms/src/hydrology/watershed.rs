@@ -10,25 +10,9 @@ use std::collections::VecDeque;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Algorithm, Error, Result};
 
-/// D8 neighbor offsets matching flow direction encoding (1=E, 2=NE, ..., 8=SE)
-const D8_OFFSETS: [(isize, isize); 8] = [
-    (0, 1),   // 1: E
-    (-1, 1),  // 2: NE
-    (-1, 0),  // 3: N
-    (-1, -1), // 4: NW
-    (0, -1),  // 5: W
-    (1, -1),  // 6: SW
-    (1, 0),   // 7: S
-    (1, 1),   // 8: SE
-];
+use super::d8::D8_OFFSETS;
 
-/// Get the opposite direction index for D8
-fn opposite_dir(dir: u8) -> u8 {
-    if dir == 0 {
-        return 0;
-    }
-    ((dir - 1 + 4) % 8) + 1
-}
+use super::d8::opposite as opposite_dir;
 
 /// Parameters for watershed delineation
 #[derive(Debug, Clone, Default)]

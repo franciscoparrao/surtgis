@@ -30,17 +30,7 @@ impl Default for TfgaParams {
     }
 }
 
-/// 8 neighbors in clockwise order starting from East
-const OFFSETS: [(isize, isize); 8] = [
-    (0, 1),
-    (-1, 1),
-    (-1, 0),
-    (-1, -1),
-    (0, -1),
-    (1, -1),
-    (1, 0),
-    (1, 1),
-];
+use super::d8::D8_OFFSETS as OFFSETS;
 
 /// Compute TFGA (Facet-to-Facet) flow accumulation.
 ///

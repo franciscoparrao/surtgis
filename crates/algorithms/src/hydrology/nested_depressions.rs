@@ -130,16 +130,8 @@ impl UnionFind {
     }
 }
 
-const NEIGHBORS: [(isize, isize); 8] = [
-    (-1, -1),
-    (-1, 0),
-    (-1, 1),
-    (0, -1),
-    (0, 1),
-    (1, -1),
-    (1, 0),
-    (1, 1),
-];
+// Row-major scan order (not D8-code order). See `d8` module docs.
+use super::d8::SCAN_OFFSETS as NEIGHBORS;
 
 /// Delineate nested depressions using level-set union-find.
 ///

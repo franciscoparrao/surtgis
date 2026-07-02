@@ -20,45 +20,7 @@ use std::collections::VecDeque;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
-/// D8 offsets: E, NE, N, NW, W, SW, S, SE (matching flow_direction encoding 1-8)
-const D8_OFFSETS: [(isize, isize); 8] = [
-    (0, 1),   // 1: E
-    (-1, 1),  // 2: NE
-    (-1, 0),  // 3: N
-    (-1, -1), // 4: NW
-    (0, -1),  // 5: W
-    (1, -1),  // 6: SW
-    (1, 0),   // 7: S
-    (1, 1),   // 8: SE
-];
-
-/// Distance for each D8 direction (1.0 for cardinal, sqrt(2) for diagonal)
-const D8_DIST: [f64; 8] = [
-    1.0,
-    std::f64::consts::SQRT_2,
-    1.0,
-    std::f64::consts::SQRT_2,
-    1.0,
-    std::f64::consts::SQRT_2,
-    1.0,
-    std::f64::consts::SQRT_2,
-];
-
-/// Opposite direction: if a neighbor flows in direction d toward us,
-/// d's opposite tells us which neighbor that is.
-fn opposite_dir(d: u8) -> u8 {
-    match d {
-        1 => 5,
-        2 => 6,
-        3 => 7,
-        4 => 8,
-        5 => 1,
-        6 => 2,
-        7 => 3,
-        8 => 4,
-        _ => 0,
-    }
-}
+use crate::hydrology::d8::{D8_DISTANCE as D8_DIST, D8_OFFSETS};
 
 /// Compute maximum branch length (longest upstream flow path).
 ///
