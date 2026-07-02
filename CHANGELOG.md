@@ -9,6 +9,14 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.16.4] - 2026-07-02
+
+Correctness release: Sprint 1 of the July 2026 engine audit. Every fix below
+targets the same bug class — incorrect results returned as success.
+
+> ⚠️ **Hillshades produced by SurtGIS ≤ 0.16.3 have inverted North–South
+> lighting.** Regenerate any figure or derived product that used them.
+
 ### Fixed
 
 - **Hillshade illumination was mirrored North–South** (`hillshade`,
