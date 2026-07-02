@@ -34,8 +34,49 @@ call them out under a `Breaking` heading when they happen.
   `aspect` previously did not divide by cell size at all (implicit square
   assumption). Square-cell outputs are unchanged.
 
+### Added
+
+- **Multi-raster alignment validation** (`surtgis_core::raster::validate`):
+  new `check_aligned` / `check_same_shape` helpers (shape + geotransform
+  with relative tolerance + CRS compared only when both sides expose an
+  EPSG code, avoiding the EPSG-vs-WKT false-mismatch footgun). Wired into
+  every multi-raster entry point: the 15+ spectral indices, `composite`
+  (whose pixel-wise fast path previously combined same-shape rasters with
+  shifted origins silently), `mad`/`ir_mad`, pansharpening, `spi`/`sti`/
+  `twi`. New structured error variants `Error::ShapeMismatch` and
+  `Error::Misaligned`.
+- **Canonical D8 module** (`hydrology::d8`): single source of truth for
+  the D8 offset tables, distances, `encode`/`decode`, `opposite` and
+  `downstream` — 19 files previously redefined these with three different
+  conventions. The direction encoding written to rasters is unchanged.
+  The row-major scan order used by fill/breach tie-breaking is now a
+  separate, documented table (`SCAN_OFFSETS`). New integration test pins
+  the fill → flow-direction → accumulation pipeline contract.
+- `CRS::is_geographic()` heuristic (EPSG 4000–4999 block, `GEOGCS`/
+  `GEOGCRS` WKT, `+proj=longlat`).
+
+### Fixed
+
+- **Streaming `normal-vector-deviation` and `spherical-std-dev` ignored
+  the cell size** (gradients divided by 8 instead of 8·cellsize): for any
+  DEM with cells ≠ 1 unit the streaming outputs were wrong. Found while
+  unifying batch/streaming kernels; both now share one kernel with the
+  batch (correct) semantics.
+- `CRS::identifier()` no longer panics on WKT with multi-byte characters.
+
 ### Changed
 
+- **Batch and streaming now share one kernel per algorithm** in the 11
+  window algorithms (tpi, tri, dev, diff-from-mean, percent-elev-range,
+  circular-variance, convergence, normal-vector-deviation,
+  spherical-std-dev, vrm, northness/eastness) — previously each
+  `process_chunk` re-implemented its batch kernel verbatim (the N–S
+  mirrored hillshade lived in both copies for that reason). A new
+  `streaming_batch_parity` test suite demands exact equality across strip
+  seams and NaN holes.
+- **`process_chunk` is now parallel** in those 11 algorithms: the
+  streaming path (the recommended mode for large DEMs) was the only
+  sequential one.
 - **Hillshade is now transcendental-free per cell.** The classic
   slope/aspect formulation (atan, cos, sin, atan2, cos per cell) collapses
   algebraically to one sqrt and one division —
