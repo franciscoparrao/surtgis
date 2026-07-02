@@ -61,6 +61,15 @@ jobs:
           cp -r docs/book/book/. web/dist/book/
 
       # --- API reference (rustdoc), deployed as /api/ within the same site ---
+      # The workspace doc build pulls surtgis-cloud, whose enabled features drag
+      # in gdal-sys / hdf5-metno-sys / netcdf / eccodes — all of which need their
+      # system libraries present at build time (same set the CI check job installs).
+      - name: Install native geo libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgdal-dev libhdf5-dev libnetcdf-dev libeccodes-dev pkg-config
+
       - name: Build API reference (cargo doc)
         run: |
           cargo doc --no-deps --workspace \
