@@ -9,6 +9,32 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.16.3] - 2026-07-01
+
+### Fixed
+
+- **`rasterize` now preserves the reference CRS.** The command built the mask
+  with the reference geotransform but never copied its CRS, so the output
+  GeoTIFF was written without one and downstream tools (rasterio/GDAL/QGIS) read
+  it as `LOCAL_CS[metre]` — mislabelling geographic (degree) grids as metres and
+  breaking alignment, area, and reprojection. `handle_rasterize` now inherits
+  `--reference`'s CRS onto the result (as `clip` already did); the GeoTIFF writer
+  already encoded geographic CRS via `ModelTypeGeographic` GeoKeys. Reported by a
+  glacier-mapping study rasterizing the IPG 2022 inventory onto EPSG:4326
+  Sentinel-2 tiles.
+
+### Changed
+
+- **`rasterize` fill is now a scanline algorithm** instead of a per-cell
+  point-in-polygon test over each polygon's bounding box. For north-up
+  transforms it intersects each row's pixel-centre latitude with every ring edge
+  (exterior and holes) and fills the columns between even-odd crossing pairs —
+  the same centre-based half-open rule GDAL/`rasterio` use, so real geographic
+  polygons rasterize identically (0-px discrepancy). Complexity drops from
+  `O(bbox_cells · vertices)` to `O(edges · rows + filled_cells)`; the reporting
+  study measured ~1000× on a 6912² grid. Rotated transforms fall back to the
+  exact per-cell test.
+
 ## [0.16.2] - 2026-06-29
 
 ### Added
