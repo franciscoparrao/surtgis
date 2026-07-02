@@ -98,7 +98,9 @@ mod tests {
 
     #[test]
     fn test_read_nonexistent_shapefile() {
-        let result = read_shapefile(Path::new("nonexistent_surtgis_test.shp"));
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nonexistent.shp");
+        let result = read_shapefile(&missing);
         assert!(result.is_err());
     }
 

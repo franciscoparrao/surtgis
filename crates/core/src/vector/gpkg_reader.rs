@@ -417,7 +417,13 @@ mod tests {
 
     #[test]
     fn test_read_nonexistent_gpkg() {
-        let result = read_gpkg(Path::new("nonexistent_surtgis_test.gpkg"), None);
+        // Path inside a nonexistent directory: sqlite creates a missing DB
+        // file when opened, so the parent must not exist for the open to
+        // fail. A bare relative name would litter the crate dir with an
+        // empty .gpkg (and get bundled into the published crate).
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope").join("nonexistent.gpkg");
+        let result = read_gpkg(&missing, None);
         assert!(result.is_err());
     }
 
