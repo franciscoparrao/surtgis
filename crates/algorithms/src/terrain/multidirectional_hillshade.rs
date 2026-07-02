@@ -12,7 +12,6 @@
 
 use crate::maybe_rayon::*;
 use ndarray::Array2;
-use std::f64::consts::PI;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -67,91 +66,100 @@ pub fn multidirectional_hillshade(
         .map(|i| (360.0 - (i as f64 * 60.0) + 90.0).to_radians())
         .collect();
 
-    let output_data: Vec<f64> = (0..rows)
-        .into_par_iter()
-        .flat_map(|row| {
-            let mut row_data = vec![f64::NAN; cols];
+    // Per-azimuth constants; everything per-cell is algebraic (see
+    // hillshade() for the derivation). Per azimuth and cell, with
+    // x = dz_dx, y = dz_dy, g² = x² + y²:
+    //
+    //   shade  = (cosθz + sinθz·(y·sin az − x·cos az)) / √(1+g²)
+    //   weight = 1 + cos²(az − aspect + π/2) = 1 + sin²(az − aspect)
+    //          = 1 + (x·sin az + y·cos az)² / g²
+    //
+    // Flat cells (g² = 0): every azimuth shades to cosθz, so any equal
+    // weighting yields the same blend — matching the old aspect=0 branch.
+    let az_sin_cos: Vec<(f64, f64)> = azimuths_rad.iter().map(|az| az.sin_cos()).collect();
+    let normalized = params.normalized;
 
-            for (col, row_data_col) in row_data.iter_mut().enumerate() {
-                let e = unsafe { dem.get_unchecked(row, col) };
-                if e.is_nan() || nodata.is_some_and(|nd| (e - nd).abs() < f64::EPSILON) {
-                    continue;
-                }
+    let data = dem
+        .data()
+        .as_slice()
+        .ok_or_else(|| Error::Other("raster data must be contiguous".into()))?;
 
-                if row == 0 || row == rows - 1 || col == 0 || col == cols - 1 {
-                    continue;
-                }
+    let output_data = par_map_rows(rows, cols, |row, out_row| {
+        if row == 0 || row == rows - 1 {
+            return; // edge rows stay NaN
+        }
+        let top = &data[(row - 1) * cols..row * cols];
+        let mid = &data[row * cols..(row + 1) * cols];
+        let bot = &data[(row + 1) * cols..(row + 2) * cols];
 
-                let a = unsafe { dem.get_unchecked(row - 1, col - 1) };
-                let b = unsafe { dem.get_unchecked(row - 1, col) };
-                let c = unsafe { dem.get_unchecked(row - 1, col + 1) };
-                let d = unsafe { dem.get_unchecked(row, col - 1) };
-                let f = unsafe { dem.get_unchecked(row, col + 1) };
-                let g = unsafe { dem.get_unchecked(row + 1, col - 1) };
-                let h = unsafe { dem.get_unchecked(row + 1, col) };
-                let i = unsafe { dem.get_unchecked(row + 1, col + 1) };
-
-                if [a, b, c, d, f, g, h, i].iter().any(|v| v.is_nan()) {
-                    continue;
-                }
-
-                // Horn's method gradients
-                let dz_dx = ((c + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_cs;
-                let dz_dy = ((g + 2.0 * h + i) - (a + 2.0 * b + c)) / eight_cs;
-
-                let slope_rad = (dz_dx * dz_dx + dz_dy * dz_dy).sqrt().atan();
-                let cos_slope = slope_rad.cos();
-                let sin_slope = slope_rad.sin();
-
-                let aspect_rad = if dz_dx.abs() < 1e-10 && dz_dy.abs() < 1e-10 {
-                    0.0
-                } else {
-                    // Downslope in (east, north): dz_dy is south-minus-north,
-                    // already the northward component (see hillshade()).
-                    let asp = dz_dy.atan2(-dz_dx);
-                    if asp < 0.0 { 2.0 * PI + asp } else { asp }
-                };
-
-                // Compute weighted blend of hillshade from each azimuth
-                let mut weighted_sum = 0.0;
-                let mut weight_total = 0.0;
-
-                for az in &azimuths_rad {
-                    let shade =
-                        cos_zenith * cos_slope + sin_zenith * sin_slope * (az - aspect_rad).cos();
-                    let shade = shade.max(0.0);
-
-                    // Weight: highest when azimuth is perpendicular to aspect
-                    // w = 1 + cos²(azimuth - aspect + π/2)
-                    let angle_diff = az - aspect_rad + PI / 2.0;
-                    let w = 1.0 + angle_diff.cos().powi(2);
-
-                    weighted_sum += shade * w;
-                    weight_total += w;
-                }
-
-                let shade_val = if weight_total > 0.0 {
-                    (weighted_sum / weight_total).min(1.0)
-                } else {
-                    0.0
-                };
-
-                *row_data_col = if params.normalized {
-                    shade_val
-                } else {
-                    (shade_val * 255.0).round()
-                };
+        for col in 1..cols - 1 {
+            let e = mid[col];
+            if e.is_nan() || nodata.is_some_and(|nd| (e - nd).abs() < f64::EPSILON) {
+                continue; // stays NaN
             }
 
-            row_data
-        })
-        .collect();
+            let (a, b, c) = (top[col - 1], top[col], top[col + 1]);
+            let (d, f) = (mid[col - 1], mid[col + 1]);
+            let (g, h, i) = (bot[col - 1], bot[col], bot[col + 1]);
+
+            if a.is_nan()
+                || b.is_nan()
+                || c.is_nan()
+                || d.is_nan()
+                || f.is_nan()
+                || g.is_nan()
+                || h.is_nan()
+                || i.is_nan()
+            {
+                continue; // stays NaN
+            }
+
+            // Horn's method gradients
+            let dz_dx = ((c + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_cs;
+            let dz_dy = ((g + 2.0 * h + i) - (a + 2.0 * b + c)) / eight_cs;
+
+            let g2 = dz_dx * dz_dx + dz_dy * dz_dy;
+            let inv_len = 1.0 / (1.0 + g2).sqrt();
+            let flat = g2 < 1e-20;
+
+            let mut weighted_sum = 0.0;
+            let mut weight_total = 0.0;
+
+            for &(sin_az, cos_az) in &az_sin_cos {
+                let shade = ((cos_zenith + sin_zenith * (dz_dy * sin_az - dz_dx * cos_az))
+                    * inv_len)
+                    .max(0.0);
+
+                // Weight: highest when azimuth is perpendicular to aspect
+                let w = if flat {
+                    1.0
+                } else {
+                    let cross = dz_dx * sin_az + dz_dy * cos_az;
+                    1.0 + (cross * cross) / g2
+                };
+
+                weighted_sum += shade * w;
+                weight_total += w;
+            }
+
+            let shade_val = if weight_total > 0.0 {
+                (weighted_sum / weight_total).min(1.0)
+            } else {
+                0.0
+            };
+
+            out_row[col] = if normalized {
+                shade_val
+            } else {
+                (shade_val * 255.0).round()
+            };
+        }
+    });
 
     let mut output = dem.with_same_meta::<f64>(rows, cols);
     // NaN, not 0.0: a shade of 0 is a valid value (full shadow).
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() = Array2::from_shape_vec((rows, cols), output_data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() = output_data;
 
     Ok(output)
 }
@@ -211,6 +219,7 @@ impl surtgis_core::WindowAlgorithm for MultiHillshadeStreaming {
         let azimuths_rad: Vec<f64> = (0..6)
             .map(|i| (360.0 - (i as f64 * 60.0) + 90.0).to_radians())
             .collect();
+        let az_sin_cos: Vec<(f64, f64)> = azimuths_rad.iter().map(|az| az.sin_cos()).collect();
 
         for r in 0..out_rows {
             let ir = r + radius; // input row corresponding to output row r
@@ -251,31 +260,26 @@ impl surtgis_core::WindowAlgorithm for MultiHillshadeStreaming {
                 let dz_dx = ((cv + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_cs;
                 let dz_dy = ((g + 2.0 * h + i) - (a + 2.0 * b + cv)) / eight_cs;
 
-                let slope_rad = (dz_dx * dz_dx + dz_dy * dz_dy).sqrt().atan();
-                let cos_slope = slope_rad.cos();
-                let sin_slope = slope_rad.sin();
+                // Algebraic form — see multidirectional_hillshade().
+                let g2 = dz_dx * dz_dx + dz_dy * dz_dy;
+                let inv_len = 1.0 / (1.0 + g2).sqrt();
+                let flat = g2 < 1e-20;
 
-                let aspect_rad = if dz_dx.abs() < 1e-10 && dz_dy.abs() < 1e-10 {
-                    0.0
-                } else {
-                    // Downslope in (east, north): dz_dy is south-minus-north,
-                    // already the northward component (see hillshade()).
-                    let asp = dz_dy.atan2(-dz_dx);
-                    if asp < 0.0 { 2.0 * PI + asp } else { asp }
-                };
-
-                // Compute weighted blend of hillshade from each azimuth
                 let mut weighted_sum = 0.0;
                 let mut weight_total = 0.0;
 
-                for az in &azimuths_rad {
-                    let shade =
-                        cos_zenith * cos_slope + sin_zenith * sin_slope * (az - aspect_rad).cos();
-                    let shade = shade.max(0.0);
+                for &(sin_az, cos_az) in &az_sin_cos {
+                    let shade = ((cos_zenith + sin_zenith * (dz_dy * sin_az - dz_dx * cos_az))
+                        * inv_len)
+                        .max(0.0);
 
                     // Weight: highest when azimuth is perpendicular to aspect
-                    let angle_diff = az - aspect_rad + PI / 2.0;
-                    let w = 1.0 + angle_diff.cos().powi(2);
+                    let w = if flat {
+                        1.0
+                    } else {
+                        let cross = dz_dx * sin_az + dz_dy * cos_az;
+                        1.0 + (cross * cross) / g2
+                    };
 
                     weighted_sum += shade * w;
                     weight_total += w;
@@ -311,6 +315,73 @@ mod tests {
             }
         }
         dem
+    }
+
+    /// The algebraic kernel (shade and weight both trig-free) must match
+    /// the classic Mark (1992) formulation: shade = cosθz·cos s +
+    /// sinθz·sin s·cos(az − aspect), w = 1 + cos²(az − aspect + π/2).
+    #[test]
+    fn test_algebraic_matches_trig_formulation() {
+        use std::f64::consts::PI;
+        let n = 30;
+        let mut dem = Raster::new(n, n);
+        dem.set_transform(GeoTransform::new(0.0, n as f64, 1.0, -1.0));
+        for r in 0..n {
+            for c in 0..n {
+                let z = (r as f64 * 0.41).sin() * 30.0
+                    + (c as f64 * 0.29).cos() * 20.0
+                    + r as f64 * 0.9;
+                dem.set(r, c, z).unwrap();
+            }
+        }
+
+        let result = multidirectional_hillshade(
+            &dem,
+            MultiHillshadeParams {
+                normalized: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let zenith_rad = (90.0f64 - 45.0).to_radians();
+        let azimuths_rad: Vec<f64> = (0..6)
+            .map(|i| (360.0 - (i as f64 * 60.0) + 90.0).to_radians())
+            .collect();
+        let data = dem.data();
+        for r in 1..n - 1 {
+            for c in 1..n - 1 {
+                let dz_dx =
+                    ((data[[r - 1, c + 1]] + 2.0 * data[[r, c + 1]] + data[[r + 1, c + 1]])
+                        - (data[[r - 1, c - 1]] + 2.0 * data[[r, c - 1]] + data[[r + 1, c - 1]]))
+                        / 8.0;
+                let dz_dy =
+                    ((data[[r + 1, c - 1]] + 2.0 * data[[r + 1, c]] + data[[r + 1, c + 1]])
+                        - (data[[r - 1, c - 1]] + 2.0 * data[[r - 1, c]] + data[[r - 1, c + 1]]))
+                        / 8.0;
+                let slope_rad = (dz_dx * dz_dx + dz_dy * dz_dy).sqrt().atan();
+                let aspect_rad = dz_dy.atan2(-dz_dx);
+                let (mut ws, mut wt) = (0.0, 0.0);
+                for az in &azimuths_rad {
+                    let shade = (zenith_rad.cos() * slope_rad.cos()
+                        + zenith_rad.sin() * slope_rad.sin() * (az - aspect_rad).cos())
+                    .max(0.0);
+                    let w = 1.0 + (az - aspect_rad + PI / 2.0).cos().powi(2);
+                    ws += shade * w;
+                    wt += w;
+                }
+                let expected = (ws / wt).min(1.0);
+                let got = result.get(r, c).unwrap();
+                assert!(
+                    (got - expected).abs() < 1e-12,
+                    "at ({},{}): algebraic {} vs trig {}",
+                    r,
+                    c,
+                    got,
+                    expected
+                );
+            }
+        }
     }
 
     #[test]

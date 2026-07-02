@@ -9,6 +9,31 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+### Changed
+
+- **Hillshade is now transcendental-free per cell.** The classic
+  slope/aspect formulation (atan, cos, sin, atan2, cos per cell) collapses
+  algebraically to one sqrt and one division —
+  `shade = (cosθz + sinθz·(dz_dy·sin az − dz_dx·cos az)) / √(1+|∇z|²)` —
+  the same formulation gdaldem uses. Applies to `hillshade`,
+  `multi-hillshade` (weights included: `w = 1 + (x·sin az + y·cos az)²/|∇z|²`)
+  and both streaming variants. Numerical equivalence with the trigonometric
+  form is pinned by tests to 1e-12.
+- **`slope` percent output no longer computes `tan(atan(g))`** — it is `g`
+  by identity; degrees/radians keep the single `atan`.
+- **New `par_map_rows` row harness** (`maybe_rayon`): writes rows directly
+  into the final `Array2` via `par_chunks_mut` instead of the
+  `flat_map(|row| vec![...]).collect()` pattern (one allocation per row plus
+  a fold/reduce merge). `slope`, `aspect`, `hillshade` and
+  `multi-hillshade` migrated; their 3×3 inner loops now read through three
+  row slices instead of per-access 2-D indexing (stride arithmetic + bounds
+  checks), which also unlocks autovectorization.
+- **Release profile: `lto = "fat"`** (was `thin`) for cross-crate inlining
+  between core and algorithms.
+- **Release binaries: new `x86_64-unknown-linux-gnu-v3` artifact** built
+  with `-C target-cpu=x86-64-v3` (AVX2+FMA, CPUs ≥ ~2015). The baseline
+  x86-64 artifact remains fully portable.
+
 ## [0.16.4] - 2026-07-02
 
 Correctness release: Sprint 1 of the July 2026 engine audit. Every fix below

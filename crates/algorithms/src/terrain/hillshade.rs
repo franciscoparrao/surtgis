@@ -5,7 +5,6 @@
 
 use crate::maybe_rayon::*;
 use ndarray::Array2;
-use std::f64::consts::PI;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Algorithm, Error, Result};
 
@@ -76,92 +75,85 @@ pub fn hillshade(dem: &Raster<f64>, params: HillshadeParams) -> Result<Raster<f6
     let zenith_rad = (90.0 - params.altitude).to_radians();
     let cos_zenith = zenith_rad.cos();
     let sin_zenith = zenith_rad.sin();
+    let (sin_az, cos_az) = azimuth_rad.sin_cos();
 
     let eight_cell_size = 8.0 * cell_size;
+    let normalized = params.normalized;
 
-    let data = dem.data();
+    let data = dem
+        .data()
+        .as_slice()
+        .ok_or_else(|| Error::Other("raster data must be contiguous".into()))?;
 
-    // Process rows in parallel
-    let output_data: Vec<f64> = (0..rows)
-        .into_par_iter()
-        .flat_map(|row| {
-            let mut row_data = vec![f64::NAN; cols];
+    // The classic formulation computes atan, cos, sin, atan2 and cos per
+    // cell. All of it collapses algebraically. With x = dz_dx, y = dz_dy,
+    // g = sqrt(x² + y²):
+    //
+    //   slope  = atan(g)          →  cos s = 1/√(1+g²),  sin s = g/√(1+g²)
+    //   aspect = atan2(y, −x)     →  cos aspect = −x/g,  sin aspect = y/g
+    //   cos(az − aspect) = cos az·cos aspect + sin az·sin aspect
+    //                    = (−x·cos az + y·sin az) / g
+    //
+    //   shade = cosθz·cos s + sinθz·sin s·cos(az − aspect)
+    //         = (cosθz + sinθz·(y·sin az − x·cos az)) / √(1 + x² + y²)
+    //
+    // Zero transcendental calls per cell (one sqrt + one division), and the
+    // flat case (g = 0) needs no special branch: the formula reduces to
+    // cosθz on its own. This matches gdaldem's formulation.
+    let output_data = par_map_rows(rows, cols, |row, out_row| {
+        if row == 0 || row == rows - 1 {
+            return; // edge rows stay NaN
+        }
+        // Three row slices: the borrow-checked equivalent of data[[r±1, c±1]]
+        // without per-access stride arithmetic and bounds checks.
+        let top = &data[(row - 1) * cols..row * cols];
+        let mid = &data[row * cols..(row + 1) * cols];
+        let bot = &data[(row + 1) * cols..(row + 2) * cols];
 
-            for (col, row_data_col) in row_data.iter_mut().enumerate() {
-                // Skip edges first
-                if row == 0 || row == rows - 1 || col == 0 || col == cols - 1 {
-                    *row_data_col = f64::NAN;
-                    continue;
-                }
-
-                // Get center value
-                let e = data[[row, col]];
-                if e.is_nan() || (nodata.is_some() && (e - nodata.unwrap()).abs() < f64::EPSILON) {
-                    *row_data_col = f64::NAN;
-                    continue;
-                }
-
-                // Get 3x3 neighborhood
-                let a = data[[row - 1, col - 1]];
-                let b = data[[row - 1, col]];
-                let c = data[[row - 1, col + 1]];
-                let d = data[[row, col - 1]];
-                let f = data[[row, col + 1]];
-                let g = data[[row + 1, col - 1]];
-                let h = data[[row + 1, col]];
-                let i = data[[row + 1, col + 1]];
-
-                // Check for nodata
-                if [a, b, c, d, f, g, h, i].iter().any(|v| v.is_nan()) {
-                    *row_data_col = f64::NAN;
-                    continue;
-                }
-
-                // Horn's method for gradients
-                let dz_dx = ((c + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_cell_size;
-                let dz_dy = ((g + 2.0 * h + i) - (a + 2.0 * b + c)) / eight_cell_size;
-
-                // Calculate slope and aspect
-                let slope_rad = (dz_dx * dz_dx + dz_dy * dz_dy).sqrt().atan();
-
-                let aspect_rad = if dz_dx.abs() < 1e-10 && dz_dy.abs() < 1e-10 {
-                    0.0 // Flat
-                } else {
-                    // Downslope direction in the (east, north) frame is
-                    // (-dz_dx, +dz_dy): dz_dy is computed south-minus-north,
-                    // so it is already the northward component of downslope.
-                    let aspect = dz_dy.atan2(-dz_dx);
-                    if aspect < 0.0 {
-                        2.0 * PI + aspect
-                    } else {
-                        aspect
-                    }
-                };
-
-                // Hillshade formula
-                // shade = cos(zenith) * cos(slope) + sin(zenith) * sin(slope) * cos(azimuth - aspect)
-                let shade = cos_zenith * slope_rad.cos()
-                    + sin_zenith * slope_rad.sin() * (azimuth_rad - aspect_rad).cos();
-
-                // Clamp to [0, 1]
-                let shade_clamped = shade.clamp(0.0, 1.0);
-
-                *row_data_col = if params.normalized {
-                    shade_clamped
-                } else {
-                    (shade_clamped * 255.0).round()
-                };
+        for col in 1..cols - 1 {
+            // Get center value
+            let e = mid[col];
+            if e.is_nan() || nodata.is_some_and(|nd| (e - nd).abs() < f64::EPSILON) {
+                continue; // stays NaN
             }
 
-            row_data
-        })
-        .collect();
+            // 3x3 neighborhood
+            let (a, b, c) = (top[col - 1], top[col], top[col + 1]);
+            let (d, f) = (mid[col - 1], mid[col + 1]);
+            let (g, h, i) = (bot[col - 1], bot[col], bot[col + 1]);
+
+            if a.is_nan()
+                || b.is_nan()
+                || c.is_nan()
+                || d.is_nan()
+                || f.is_nan()
+                || g.is_nan()
+                || h.is_nan()
+                || i.is_nan()
+            {
+                continue; // stays NaN
+            }
+
+            // Horn's method for gradients
+            let dz_dx = ((c + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_cell_size;
+            let dz_dy = ((g + 2.0 * h + i) - (a + 2.0 * b + c)) / eight_cell_size;
+
+            let num = cos_zenith + sin_zenith * (dz_dy * sin_az - dz_dx * cos_az);
+            let shade = num / (1.0 + dz_dx * dz_dx + dz_dy * dz_dy).sqrt();
+
+            let shade_clamped = shade.clamp(0.0, 1.0);
+            out_row[col] = if normalized {
+                shade_clamped
+            } else {
+                (shade_clamped * 255.0).round()
+            };
+        }
+    });
 
     let mut output = dem.with_same_meta::<f64>(rows, cols);
     // NaN, not 0.0: a shade of 0 is a valid value (full shadow).
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() = Array2::from_shape_vec((rows, cols), output_data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() = output_data;
 
     Ok(output)
 }
@@ -214,6 +206,7 @@ impl surtgis_core::WindowAlgorithm for HillshadeStreaming {
         let zenith_rad = (90.0 - self.altitude).to_radians();
         let cos_zenith = zenith_rad.cos();
         let sin_zenith = zenith_rad.sin();
+        let (sin_az, cos_az) = azimuth_rad.sin_cos();
 
         let cell_size = cell_size_x * self.z_factor;
         let eight_cs = 8.0 * cell_size;
@@ -258,21 +251,9 @@ impl surtgis_core::WindowAlgorithm for HillshadeStreaming {
                 let dz_dx = ((cv + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_cs;
                 let dz_dy = ((g + 2.0 * h + i) - (a + 2.0 * b + cv)) / eight_cs;
 
-                // Calculate slope and aspect
-                let slope_rad = (dz_dx * dz_dx + dz_dy * dz_dy).sqrt().atan();
-
-                let aspect_rad = if dz_dx.abs() < 1e-10 && dz_dy.abs() < 1e-10 {
-                    0.0 // Flat
-                } else {
-                    // Downslope in (east, north): dz_dy is south-minus-north,
-                    // already the northward component (see hillshade()).
-                    let asp = dz_dy.atan2(-dz_dx);
-                    if asp < 0.0 { 2.0 * PI + asp } else { asp }
-                };
-
-                // Hillshade formula
-                let shade = cos_zenith * slope_rad.cos()
-                    + sin_zenith * slope_rad.sin() * (azimuth_rad - aspect_rad).cos();
+                // Algebraic form — see hillshade() for the derivation.
+                let num = cos_zenith + sin_zenith * (dz_dy * sin_az - dz_dx * cos_az);
+                let shade = num / (1.0 + dz_dx * dz_dx + dz_dy * dz_dy).sqrt();
 
                 output[[r, c]] = (shade.clamp(0.0, 1.0) * 255.0).round();
             }
@@ -396,6 +377,69 @@ mod tests {
             "Expected ~180 for flat surface, got {}",
             val
         );
+    }
+
+    /// The algebraic kernel must be numerically equivalent to the classic
+    /// trigonometric formulation (slope/aspect + cos(az − aspect)) — same
+    /// math, reassociated. Verified over an irregular synthetic surface.
+    #[test]
+    fn test_algebraic_matches_trig_formulation() {
+        let n = 40;
+        let mut dem = Raster::new(n, n);
+        dem.set_transform(surtgis_core::GeoTransform::new(0.0, n as f64, 1.0, -1.0));
+        for r in 0..n {
+            for c in 0..n {
+                // Irregular surface exercising all aspect quadrants
+                let z = (r as f64 * 0.37).sin() * 40.0
+                    + (c as f64 * 0.23).cos() * 25.0
+                    + r as f64 * 1.5
+                    - c as f64 * 0.8;
+                dem.set(r, c, z).unwrap();
+            }
+        }
+
+        for az in [0.0, 90.0, 135.0, 315.0] {
+            let params = HillshadeParams {
+                azimuth: az,
+                normalized: true,
+                ..Default::default()
+            };
+            let result = hillshade(&dem, params).unwrap();
+
+            // Reference: classic trig formulation
+            let azimuth_rad = (360.0 - az + 90.0).to_radians();
+            let zenith_rad = (90.0f64 - 45.0).to_radians();
+            let data = dem.data();
+            for r in 1..n - 1 {
+                for c in 1..n - 1 {
+                    let dz_dx = ((data[[r - 1, c + 1]]
+                        + 2.0 * data[[r, c + 1]]
+                        + data[[r + 1, c + 1]])
+                        - (data[[r - 1, c - 1]] + 2.0 * data[[r, c - 1]] + data[[r + 1, c - 1]]))
+                        / 8.0;
+                    let dz_dy = ((data[[r + 1, c - 1]]
+                        + 2.0 * data[[r + 1, c]]
+                        + data[[r + 1, c + 1]])
+                        - (data[[r - 1, c - 1]] + 2.0 * data[[r - 1, c]] + data[[r - 1, c + 1]]))
+                        / 8.0;
+                    let slope_rad = (dz_dx * dz_dx + dz_dy * dz_dy).sqrt().atan();
+                    let aspect_rad = dz_dy.atan2(-dz_dx);
+                    let expected = (zenith_rad.cos() * slope_rad.cos()
+                        + zenith_rad.sin() * slope_rad.sin() * (azimuth_rad - aspect_rad).cos())
+                    .clamp(0.0, 1.0);
+                    let got = result.get(r, c).unwrap();
+                    assert!(
+                        (got - expected).abs() < 1e-12,
+                        "az={} at ({},{}): algebraic {} vs trig {}",
+                        az,
+                        r,
+                        c,
+                        got,
+                        expected
+                    );
+                }
+            }
+        }
     }
 
     #[test]
