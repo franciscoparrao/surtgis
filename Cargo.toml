@@ -17,6 +17,8 @@ members = [
 [workspace.package]
 version = "0.16.4"
 edition = "2024"
+# MSRV: edition 2024 + let-chains require 1.88. Verified by the `msrv` CI job.
+rust-version = "1.88"
 authors = ["Francisco Parra"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/franciscoparrao/surtgis"
