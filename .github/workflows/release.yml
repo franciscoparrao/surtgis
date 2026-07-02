@@ -42,6 +42,14 @@ jobs:
             target: x86_64-unknown-linux-gnu
             archive: tar.gz
             binary: surtgis
+          # x86-64-v3 (AVX2+FMA, ~2015+ CPUs): wider SIMD for all f64
+          # kernels. The baseline artifact above stays maximally portable.
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+            binary: surtgis
+            rustflags: "-C target-cpu=x86-64-v3"
+            suffix: "-v3"
           - os: macos-latest
             target: aarch64-apple-darwin
             archive: tar.gz
@@ -64,7 +72,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}-release
+          key: ${{ matrix.target }}${{ matrix.suffix || '' }}-release
 
       - name: Build release binary
         # Conservative feature set for the precompiled binary: covers the
@@ -73,6 +81,8 @@ jobs:
         # libraries (libnetcdf, HDF5) that vary across platforms. Users who
         # want those can still `cargo install surtgis --all-features`.
         run: cargo build --release -p surtgis --bin surtgis --target ${{ matrix.target }} --no-default-features --features cloud,zarr,projections
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags || '' }}
 
       - name: Compute version name
         id: version
@@ -80,7 +90,7 @@ jobs:
         run: |
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "archive_base=surtgis-${TAG}-${{ matrix.target }}" >> "$GITHUB_OUTPUT"
+          echo "archive_base=surtgis-${TAG}-${{ matrix.target }}${{ matrix.suffix || '' }}" >> "$GITHUB_OUTPUT"
 
       - name: Package (tar.gz)
         if: matrix.archive == 'tar.gz'

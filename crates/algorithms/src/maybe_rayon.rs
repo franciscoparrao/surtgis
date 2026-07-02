@@ -62,3 +62,26 @@ mod sequential {
 
 #[cfg(not(feature = "parallel"))]
 pub use sequential::*;
+
+/// Parallel row-major map into a freshly NaN-initialised `Array2<f64>`.
+///
+/// The canonical harness for per-row raster kernels: allocates the output
+/// once, hands each kernel invocation a `(row, &mut [f64])` pair backed by
+/// the final buffer, and runs rows in parallel (or sequentially without the
+/// `parallel` feature). Rows the kernel leaves untouched stay `NaN`.
+///
+/// This replaces the `flat_map(|row| vec![...]).collect()` pattern, which
+/// allocates a fresh `Vec` per row and — because `flat_map` is not an
+/// indexed parallel iterator — pays an extra fold/reduce merge copy.
+pub fn par_map_rows<F>(rows: usize, cols: usize, kernel: F) -> ndarray::Array2<f64>
+where
+    F: Fn(usize, &mut [f64]) + Sync + Send,
+{
+    let mut out = ndarray::Array2::from_elem((rows, cols), f64::NAN);
+    out.as_slice_mut()
+        .expect("freshly created Array2 is contiguous")
+        .par_chunks_mut(cols)
+        .enumerate()
+        .for_each(|(row, out_row)| kernel(row, out_row));
+    out
+}

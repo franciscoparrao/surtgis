@@ -66,41 +66,45 @@ pub fn aspect(dem: &Raster<f64>, output_format: AspectOutput) -> Result<Raster<f
     // Threshold for considering a surface flat
     const FLAT_THRESHOLD: f64 = 1e-10;
 
-    let data = dem.data();
+    let data = dem
+        .data()
+        .as_slice()
+        .ok_or_else(|| Error::Other("raster data must be contiguous".into()))?;
 
-    // Process rows in parallel
-    let output_data: Vec<f64> = (0..rows)
-        .into_par_iter()
-        .flat_map(|row| {
-            let mut row_data = vec![-1.0; cols];
+    let output_data = par_map_rows(rows, cols, |row, out_row| {
+        // Aspect's sentinel is -1.0 (flat/nodata), not NaN
+        out_row.fill(-1.0);
+        if row == 0 || row == rows - 1 {
+            return;
+        }
+        let top = &data[(row - 1) * cols..row * cols];
+        let mid = &data[row * cols..(row + 1) * cols];
+        let bot = &data[(row + 1) * cols..(row + 2) * cols];
 
-            for (col, row_data_col) in row_data.iter_mut().enumerate() {
-                // Skip edges first
-                if row == 0 || row == rows - 1 || col == 0 || col == cols - 1 {
-                    *row_data_col = -1.0;
-                    continue;
-                }
-
+        for col in 1..cols - 1 {
+            let row_data_col = &mut out_row[col];
+            {
                 // Get center value
-                let e = data[[row, col]];
-                if e.is_nan() || (nodata.is_some() && (e - nodata.unwrap()).abs() < f64::EPSILON) {
-                    *row_data_col = -1.0;
+                let e = mid[col];
+                if e.is_nan() || nodata.is_some_and(|nd| (e - nd).abs() < f64::EPSILON) {
                     continue;
                 }
 
-                // Get 3x3 neighborhood
-                let a = data[[row - 1, col - 1]];
-                let b = data[[row - 1, col]];
-                let c = data[[row - 1, col + 1]];
-                let d = data[[row, col - 1]];
-                let f = data[[row, col + 1]];
-                let g = data[[row + 1, col - 1]];
-                let h = data[[row + 1, col]];
-                let i = data[[row + 1, col + 1]];
+                // 3x3 neighborhood
+                let (a, b, c) = (top[col - 1], top[col], top[col + 1]);
+                let (d, f) = (mid[col - 1], mid[col + 1]);
+                let (g, h, i) = (bot[col - 1], bot[col], bot[col + 1]);
 
                 // Check for nodata in neighborhood
-                if [a, b, c, d, f, g, h, i].iter().any(|v| v.is_nan()) {
-                    *row_data_col = -1.0;
+                if a.is_nan()
+                    || b.is_nan()
+                    || c.is_nan()
+                    || d.is_nan()
+                    || f.is_nan()
+                    || g.is_nan()
+                    || h.is_nan()
+                    || i.is_nan()
+                {
                     continue;
                 }
 
@@ -158,15 +162,12 @@ pub fn aspect(dem: &Raster<f64>, output_format: AspectOutput) -> Result<Raster<f
                     }
                 };
             }
-
-            row_data
-        })
-        .collect();
+        }
+    });
 
     let mut output = dem.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(-1.0));
-    *output.data_mut() = Array2::from_shape_vec((rows, cols), output_data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() = output_data;
 
     Ok(output)
 }

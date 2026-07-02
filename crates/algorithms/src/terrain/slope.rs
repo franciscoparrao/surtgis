@@ -89,62 +89,62 @@ pub fn slope(dem: &Raster<f64>, params: SlopeParams) -> Result<Raster<f64>> {
     // Pre-compute constants
     let eight_cell_size = 8.0 * cell_size;
 
-    // Process rows in parallel
-    let data = dem.data();
-    let output_data: Vec<f64> = (0..rows)
-        .into_par_iter()
-        .flat_map(|row| {
-            let mut row_data = vec![f64::NAN; cols];
+    let units = params.units;
+    let data = dem
+        .data()
+        .as_slice()
+        .ok_or_else(|| Error::Other("raster data must be contiguous".into()))?;
 
-            for (col, row_data_col) in row_data.iter_mut().enumerate() {
-                // Skip edges (need full 3x3 neighborhood)
-                if row == 0 || row == rows - 1 || col == 0 || col == cols - 1 {
-                    continue;
-                }
+    let output_data = par_map_rows(rows, cols, |row, out_row| {
+        if row == 0 || row == rows - 1 {
+            return; // edge rows stay NaN
+        }
+        let top = &data[(row - 1) * cols..row * cols];
+        let mid = &data[row * cols..(row + 1) * cols];
+        let bot = &data[(row + 1) * cols..(row + 2) * cols];
 
-                // Get center value
-                let e = data[[row, col]];
-                if e.is_nan() || (nodata.is_some() && (e - nodata.unwrap()).abs() < f64::EPSILON) {
-                    continue;
-                }
-
-                // Get 3x3 neighborhood
-                let a = data[[row - 1, col - 1]];
-                let b = data[[row - 1, col]];
-                let c = data[[row - 1, col + 1]];
-                let d = data[[row, col - 1]];
-                let f = data[[row, col + 1]];
-                let g = data[[row + 1, col - 1]];
-                let h = data[[row + 1, col]];
-                let i = data[[row + 1, col + 1]];
-
-                // Check for nodata in neighborhood
-                if [a, b, c, d, f, g, h, i].iter().any(|v| v.is_nan()) {
-                    *row_data_col = f64::NAN;
-                    continue;
-                }
-
-                // Horn's method
-                let dz_dx = ((c + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_cell_size;
-                let dz_dy = ((g + 2.0 * h + i) - (a + 2.0 * b + c)) / eight_cell_size;
-
-                let slope_rad = (dz_dx * dz_dx + dz_dy * dz_dy).sqrt().atan();
-
-                *row_data_col = match params.units {
-                    SlopeUnits::Degrees => slope_rad.to_degrees(),
-                    SlopeUnits::Percent => slope_rad.tan() * 100.0,
-                    SlopeUnits::Radians => slope_rad,
-                };
+        for col in 1..cols - 1 {
+            // Get center value
+            let e = mid[col];
+            if e.is_nan() || nodata.is_some_and(|nd| (e - nd).abs() < f64::EPSILON) {
+                continue; // stays NaN
             }
 
-            row_data
-        })
-        .collect();
+            // 3x3 neighborhood
+            let (a, b, c) = (top[col - 1], top[col], top[col + 1]);
+            let (d, f) = (mid[col - 1], mid[col + 1]);
+            let (g, h, i) = (bot[col - 1], bot[col], bot[col + 1]);
+
+            if a.is_nan()
+                || b.is_nan()
+                || c.is_nan()
+                || d.is_nan()
+                || f.is_nan()
+                || g.is_nan()
+                || h.is_nan()
+                || i.is_nan()
+            {
+                continue; // stays NaN
+            }
+
+            // Horn's method
+            let dz_dx = ((c + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_cell_size;
+            let dz_dy = ((g + 2.0 * h + i) - (a + 2.0 * b + c)) / eight_cell_size;
+
+            let grad = (dz_dx * dz_dx + dz_dy * dz_dy).sqrt();
+
+            out_row[col] = match units {
+                SlopeUnits::Degrees => grad.atan().to_degrees(),
+                // tan(atan(g)) = g — no need for either call
+                SlopeUnits::Percent => grad * 100.0,
+                SlopeUnits::Radians => grad.atan(),
+            };
+        }
+    });
 
     let mut output = dem.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() = Array2::from_shape_vec((rows, cols), output_data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() = output_data;
 
     Ok(output)
 }
