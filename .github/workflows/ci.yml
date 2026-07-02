@@ -161,9 +161,16 @@ jobs:
           python-version: "3.12"
       - uses: Swatinem/rust-cache@v2
       - name: Install maturin
-        run: pip install maturin
+        run: pip install maturin numpy pytest
       - name: Build Python package
         run: maturin build --manifest-path crates/python/Cargo.toml --release
+      # The wheel is imported and exercised before it can ever reach PyPI —
+      # previously CI only built it, so a broken signature or a
+      # GIL-holding regression would ship silently.
+      - name: Install wheel and run pytest
+        run: |
+          pip install target/wheels/surtgis-*.whl
+          pytest crates/python/tests/ -v
 
   fmt:
     name: Format
