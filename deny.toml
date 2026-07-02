@@ -8,10 +8,29 @@
 [graph]
 all-features = false
 no-default-features = false
+# The GUI is publish = false and drags a desktop stack (egui/winit/zbus
+# accessibility) whose advisories are irrelevant to the published library
+# crates and unfixable from here (pinned by upstream semver).
+exclude = ["surtgis-gui"]
 
 [advisories]
 version = 2
 yanked = "warn"
+ignore = [
+    # unmaintained (no vulnerability): transitive, no drop-in replacement.
+    { id = "RUSTSEC-2025-0119", reason = "number_prefix via indicatif (CLI progress bars); cosmetic dep" },
+    { id = "RUSTSEC-2024-0436", reason = "paste proc-macro via zarrs; compile-time only" },
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser via the GUI font stack (publish = false)" },
+    # quick-xml 0.38 pinned by zbus_xml (GUI accessibility, publish = false);
+    # DoS-class issues in an XML path the library crates never execute.
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml via GUI zbus stack only" },
+    { id = "RUSTSEC-2026-0195", reason = "quick-xml via GUI zbus stack only" },
+    # pyo3 < 0.24.1 / < 0.29: PyString::from_object overflow + PyCFunction
+    # Sync bound. REAL — tracked follow-up: bump pyo3+numpy after the
+    # Sprint 4 allow_threads migration lands (same file, avoid conflict).
+    { id = "RUSTSEC-2025-0020", reason = "pyo3 bump to >=0.24.1 is the tracked follow-up" },
+    { id = "RUSTSEC-2026-0177", reason = "pyo3 bump is the tracked follow-up" },
+]
 
 [licenses]
 version = 2
