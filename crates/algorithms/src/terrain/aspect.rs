@@ -63,6 +63,12 @@ pub fn aspect(dem: &Raster<f64>, output_format: AspectOutput) -> Result<Raster<f
     let (rows, cols) = dem.shape();
     let nodata = dem.nodata();
 
+    // dx and dy must scale the two gradient components separately: with
+    // square cells this cancels inside atan2 (identical output), but for
+    // rectangular cells — and geographic grids, where dx shrinks with
+    // latitude — skipping the division distorts the direction.
+    let cell_sizes = super::spheroidal_grid::CellSizes::for_dem(dem);
+
     // Threshold for considering a surface flat
     const FLAT_THRESHOLD: f64 = 1e-10;
 
@@ -80,6 +86,9 @@ pub fn aspect(dem: &Raster<f64>, output_format: AspectOutput) -> Result<Raster<f
         let top = &data[(row - 1) * cols..row * cols];
         let mid = &data[row * cols..(row + 1) * cols];
         let bot = &data[(row + 1) * cols..(row + 2) * cols];
+
+        let (dx, dy) = cell_sizes.at_row(row);
+        let (eight_dx, eight_dy) = (8.0 * dx, 8.0 * dy);
 
         for col in 1..cols - 1 {
             let row_data_col = &mut out_row[col];
@@ -109,8 +118,8 @@ pub fn aspect(dem: &Raster<f64>, output_format: AspectOutput) -> Result<Raster<f
                 }
 
                 // Horn's method for gradients
-                let dz_dx = (c + 2.0 * f + i) - (a + 2.0 * d + g);
-                let dz_dy = (g + 2.0 * h + i) - (a + 2.0 * b + c);
+                let dz_dx = ((c + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_dx;
+                let dz_dy = ((g + 2.0 * h + i) - (a + 2.0 * b + c)) / eight_dy;
 
                 // Check for flat area
                 if dz_dx.abs() < FLAT_THRESHOLD && dz_dy.abs() < FLAT_THRESHOLD {
@@ -202,12 +211,17 @@ impl surtgis_core::WindowAlgorithm for AspectStreaming {
         input: &Array2<f64>,
         output: &mut Array2<f64>,
         nodata: Option<f64>,
-        _cell_size_x: f64,
-        _cell_size_y: f64,
+        cell_size_x: f64,
+        cell_size_y: f64,
     ) {
         let (in_rows, cols) = input.dim();
         let out_rows = output.nrows();
         let radius = 1;
+
+        // dx/dy scale each gradient component (no-op inside atan2 for
+        // square cells; required for rectangular ones).
+        let eight_dx = 8.0 * cell_size_x;
+        let eight_dy = 8.0 * cell_size_y.abs();
 
         const FLAT_THRESHOLD: f64 = 1e-10;
 
@@ -248,8 +262,8 @@ impl surtgis_core::WindowAlgorithm for AspectStreaming {
                 }
 
                 // Horn's method for gradients
-                let dz_dx = (cv + 2.0 * f + i) - (a + 2.0 * d + g);
-                let dz_dy = (g + 2.0 * h + i) - (a + 2.0 * b + cv);
+                let dz_dx = ((cv + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_dx;
+                let dz_dy = ((g + 2.0 * h + i) - (a + 2.0 * b + cv)) / eight_dy;
 
                 // Check for flat area
                 if dz_dx.abs() < FLAT_THRESHOLD && dz_dy.abs() < FLAT_THRESHOLD {

@@ -9,6 +9,31 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+### Breaking
+
+- **`z_factor` now follows the GDAL/ArcGIS convention** in `slope`,
+  `hillshade`, `multi-hillshade` and `curvature` (batch and streaming): it
+  scales the **elevations** (`z' = z_factor · z`). The previous semantics
+  scaled the *cell size* — the reciprocal — so a user coming from GDAL who
+  passed `0.00000898` got slopes inflated by ~10¹⁰. Code that used the
+  default `1.0` is unaffected. The legacy `z_factor = 111320` hack for
+  lat/lon DEMs must be removed: geographic rasters are now handled
+  automatically (below). For curvature the old scheme was additionally
+  wrong for second derivatives (the cell size enters squared); elevations
+  are now scaled exactly.
+- **Geographic rasters get automatic per-row metric cell sizes** in
+  `slope`, `aspect`, `hillshade` and `multi-hillshade`. When the raster's
+  CRS is geographic (EPSG 4000–4999, `GEOGCS`/`GEOGCRS` WKT, or
+  `+proj=longlat`), the gradient uses spheroidal per-row `dx`/`dy`
+  (`terrain::spheroidal_grid::cell_dimensions`) — at 53°S one degree of
+  longitude is ~40% shorter than at the equator, so the flat-earth
+  computation was up to ~30% off in the E–W component. Rasters without a
+  CRS keep the raw units (we cannot assume degrees).
+- **Rectangular cells (dx ≠ dy) are now honoured** by the same four
+  algorithms: each gradient component divides by its own cell size.
+  `aspect` previously did not divide by cell size at all (implicit square
+  assumption). Square-cell outputs are unchanged.
+
 ### Changed
 
 - **Hillshade is now transcendental-free per cell.** The classic

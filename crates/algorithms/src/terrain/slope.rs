@@ -25,8 +25,12 @@ pub enum SlopeUnits {
 pub struct SlopeParams {
     /// Output units
     pub units: SlopeUnits,
-    /// Z-factor for unit conversion (default 1.0)
-    /// Use ~111320 for lat/lon DEMs with meters elevation
+    /// Vertical exaggeration applied to elevations before the gradient
+    /// (GDAL/ArcGIS convention: `z' = z_factor * z`). Default 1.0.
+    ///
+    /// Rasters with a geographic CRS get automatic per-row metric cell
+    /// sizes — do NOT use the legacy `111320` cell-size hack, which relied
+    /// on the pre-0.17 reciprocal semantics.
     pub z_factor: f64,
 }
 
@@ -83,11 +87,13 @@ impl Algorithm for Slope {
 /// Raster with slope values in the specified units
 pub fn slope(dem: &Raster<f64>, params: SlopeParams) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
-    let cell_size = dem.cell_size() * params.z_factor;
     let nodata = dem.nodata();
 
-    // Pre-compute constants
-    let eight_cell_size = 8.0 * cell_size;
+    // GDAL/ArcGIS semantics: z_factor scales the ELEVATIONS (the gradient
+    // numerator), not the cell size. Geographic rasters (CRS in degrees)
+    // get automatic per-row metric cell sizes — no z_factor hack needed.
+    let zf = params.z_factor;
+    let cell_sizes = super::spheroidal_grid::CellSizes::for_dem(dem);
 
     let units = params.units;
     let data = dem
@@ -102,6 +108,9 @@ pub fn slope(dem: &Raster<f64>, params: SlopeParams) -> Result<Raster<f64>> {
         let top = &data[(row - 1) * cols..row * cols];
         let mid = &data[row * cols..(row + 1) * cols];
         let bot = &data[(row + 1) * cols..(row + 2) * cols];
+
+        let (dx, dy) = cell_sizes.at_row(row);
+        let (eight_dx, eight_dy) = (8.0 * dx, 8.0 * dy);
 
         for col in 1..cols - 1 {
             // Get center value
@@ -127,9 +136,9 @@ pub fn slope(dem: &Raster<f64>, params: SlopeParams) -> Result<Raster<f64>> {
                 continue; // stays NaN
             }
 
-            // Horn's method
-            let dz_dx = ((c + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_cell_size;
-            let dz_dy = ((g + 2.0 * h + i) - (a + 2.0 * b + c)) / eight_cell_size;
+            // Horn's method (z_factor scales z, per GDAL convention)
+            let dz_dx = zf * ((c + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_dx;
+            let dz_dy = zf * ((g + 2.0 * h + i) - (a + 2.0 * b + c)) / eight_dy;
 
             let grad = (dz_dx * dz_dx + dz_dy * dz_dy).sqrt();
 
@@ -183,15 +192,16 @@ impl surtgis_core::WindowAlgorithm for SlopeStreaming {
         output: &mut Array2<f64>,
         nodata: Option<f64>,
         cell_size_x: f64,
-        _cell_size_y: f64,
+        cell_size_y: f64,
     ) {
         let (in_rows, cols) = input.dim();
         let out_rows = output.nrows();
         let radius = 1;
 
-        // For slope, we use cell_size_x (assuming square cells) with z_factor
-        let cell_size = cell_size_x * self.z_factor;
-        let eight_cs = 8.0 * cell_size;
+        // z_factor scales z (GDAL convention); dx and dy used separately.
+        let zf = self.z_factor;
+        let eight_dx = 8.0 * cell_size_x;
+        let eight_dy = 8.0 * cell_size_y.abs();
 
         for r in 0..out_rows {
             let ir = r + radius; // input row corresponding to output row r
@@ -229,8 +239,8 @@ impl surtgis_core::WindowAlgorithm for SlopeStreaming {
                     continue;
                 }
 
-                let dz_dx = ((cv + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_cs;
-                let dz_dy = ((g + 2.0 * h + i) - (a + 2.0 * b + cv)) / eight_cs;
+                let dz_dx = zf * ((cv + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_dx;
+                let dz_dy = zf * ((g + 2.0 * h + i) - (a + 2.0 * b + cv)) / eight_dy;
                 let slope_rad = (dz_dx * dz_dx + dz_dy * dz_dy).sqrt().atan();
 
                 output[[r, c]] = match self.units {
@@ -258,6 +268,117 @@ mod tests {
             }
         }
         dem
+    }
+
+    /// z_factor now follows the GDAL/ArcGIS convention: it scales the
+    /// elevations (z\' = zf*z), so slope(zf=2) on gradient g == atan(2g).
+    /// The pre-0.17 semantics scaled the CELL SIZE (the reciprocal).
+    #[test]
+    fn test_z_factor_gdal_semantics() {
+        let n = 12;
+        let mut dem = Raster::new(n, n);
+        dem.set_transform(surtgis_core::GeoTransform::new(
+            0.0,
+            n as f64 * 10.0,
+            10.0,
+            -10.0,
+        ));
+        for r in 0..n {
+            for c in 0..n {
+                dem.set(r, c, c as f64 * 5.0).unwrap(); // dz/dx = 0.5
+            }
+        }
+        let s1 = slope(
+            &dem,
+            SlopeParams {
+                z_factor: 2.0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let expected = (2.0f64 * 0.5).atan().to_degrees(); // 45°
+        let got = s1.get(n / 2, n / 2).unwrap();
+        assert!(
+            (got - expected).abs() < 1e-9,
+            "zf=2 on 0.5 gradient must be atan(1.0)=45°, got {}",
+            got
+        );
+    }
+
+    /// Rasters with a geographic CRS get automatic per-row metric cell
+    /// sizes: a pure E-W gradient in degrees at 45°S must produce the
+    /// slope computed with dx = one_degree_lon(45°) meters, and the same
+    /// DEM WITHOUT a CRS must keep the raw (degree-unit) computation.
+    #[test]
+    fn test_geographic_auto_correction() {
+        use super::super::spheroidal_grid::{SpheroidalParams, cell_dimensions};
+
+        let n = 10;
+        let px = 0.001; // ~100 m at the equator
+        let lat0 = -45.0;
+        let mut dem = Raster::new(n, n);
+        dem.set_transform(surtgis_core::GeoTransform::new(-71.0, lat0, px, -px));
+        for r in 0..n {
+            for c in 0..n {
+                dem.set(r, c, c as f64 * 20.0).unwrap(); // 20 m per column
+            }
+        }
+
+        // Without CRS: degrees treated as linear units (documented behavior)
+        let raw = slope(&dem, SlopeParams::default()).unwrap();
+        let raw_val = raw.get(n / 2, n / 2).unwrap();
+        assert!(raw_val > 89.0, "without CRS, dz=20 over dx=0.001 is ~90°");
+
+        // With geographic CRS: per-row metric dx
+        dem.set_crs(Some(surtgis_core::crs::CRS::from_epsg(4326)));
+        let geo = slope(&dem, SlopeParams::default()).unwrap();
+        let row = n / 2;
+        let lat = lat0 + (row as f64 + 0.5) * (-px);
+        let dims = cell_dimensions(lat, px, px, &SpheroidalParams::default());
+        let expected = (20.0f64 / dims.dx).atan().to_degrees();
+        let got = geo.get(row, n / 2).unwrap();
+        assert!(
+            (got - expected).abs() < 1e-6,
+            "geographic slope at 45°S: expected {} got {}",
+            expected,
+            got
+        );
+        // Sanity: ~20 m over ~79 m => ~14°, nothing like the raw 90°
+        assert!(
+            got > 10.0 && got < 20.0,
+            "plausible metric slope, got {}",
+            got
+        );
+    }
+
+    /// Rectangular (dx != dy) cells: each gradient component uses its own
+    /// cell size instead of silently assuming squares.
+    #[test]
+    fn test_rectangular_cells() {
+        let n = 10;
+        let mut dem = Raster::new(n, n);
+        // dx = 10, dy = 20
+        dem.set_transform(surtgis_core::GeoTransform::new(
+            0.0,
+            n as f64 * 20.0,
+            10.0,
+            -20.0,
+        ));
+        for r in 0..n {
+            for c in 0..n {
+                dem.set(r, c, r as f64 * 10.0).unwrap(); // dz/row = 10
+            }
+        }
+        let s1 = slope(&dem, SlopeParams::default()).unwrap();
+        // N-S gradient: 10 m per 20 m cell = 0.5 => atan(0.5)
+        let expected = 0.5f64.atan().to_degrees();
+        let got = s1.get(n / 2, n / 2).unwrap();
+        assert!(
+            (got - expected).abs() < 1e-9,
+            "dy=20 must divide the N-S gradient: expected {} got {}",
+            expected,
+            got
+        );
     }
 
     #[test]

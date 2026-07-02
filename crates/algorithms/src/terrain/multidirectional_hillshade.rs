@@ -20,7 +20,12 @@ use surtgis_core::{Error, Result};
 pub struct MultiHillshadeParams {
     /// Sun altitude in degrees above horizon (0-90)
     pub altitude: f64,
-    /// Z-factor for vertical exaggeration
+    /// Vertical exaggeration applied to elevations before the gradient
+    /// (GDAL/ArcGIS convention: `z' = z_factor * z`). Default 1.0.
+    ///
+    /// Rasters with a geographic CRS get automatic per-row metric cell
+    /// sizes — do NOT use the legacy `111320` cell-size hack, which relied
+    /// on the pre-0.17 reciprocal semantics.
     pub z_factor: f64,
     /// Output range: false = 0-255, true = 0.0-1.0
     pub normalized: bool,
@@ -53,13 +58,16 @@ pub fn multidirectional_hillshade(
     params: MultiHillshadeParams,
 ) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
-    let cell_size = dem.cell_size() * params.z_factor;
     let nodata = dem.nodata();
+
+    // GDAL/ArcGIS semantics: z_factor scales the elevations. Geographic
+    // rasters get automatic per-row metric cell sizes.
+    let zf = params.z_factor;
+    let cell_sizes = super::spheroidal_grid::CellSizes::for_dem(dem);
 
     let zenith_rad = (90.0 - params.altitude).to_radians();
     let cos_zenith = zenith_rad.cos();
     let sin_zenith = zenith_rad.sin();
-    let eight_cs = 8.0 * cell_size;
 
     // 6 equally-spaced azimuths converted to the mathematical convention
     let azimuths_rad: Vec<f64> = (0..6)
@@ -92,6 +100,9 @@ pub fn multidirectional_hillshade(
         let mid = &data[row * cols..(row + 1) * cols];
         let bot = &data[(row + 1) * cols..(row + 2) * cols];
 
+        let (dx, dy) = cell_sizes.at_row(row);
+        let (eight_dx, eight_dy) = (8.0 * dx, 8.0 * dy);
+
         for col in 1..cols - 1 {
             let e = mid[col];
             if e.is_nan() || nodata.is_some_and(|nd| (e - nd).abs() < f64::EPSILON) {
@@ -114,9 +125,9 @@ pub fn multidirectional_hillshade(
                 continue; // stays NaN
             }
 
-            // Horn's method gradients
-            let dz_dx = ((c + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_cs;
-            let dz_dy = ((g + 2.0 * h + i) - (a + 2.0 * b + c)) / eight_cs;
+            // Horn's method (z_factor scales z, per GDAL convention)
+            let dz_dx = zf * ((c + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_dx;
+            let dz_dy = zf * ((g + 2.0 * h + i) - (a + 2.0 * b + c)) / eight_dy;
 
             let g2 = dz_dx * dz_dx + dz_dy * dz_dy;
             let inv_len = 1.0 / (1.0 + g2).sqrt();
@@ -202,14 +213,16 @@ impl surtgis_core::WindowAlgorithm for MultiHillshadeStreaming {
         output: &mut Array2<f64>,
         nodata: Option<f64>,
         cell_size_x: f64,
-        _cell_size_y: f64,
+        cell_size_y: f64,
     ) {
         let (in_rows, cols) = input.dim();
         let out_rows = output.nrows();
         let radius = 1;
 
-        let cell_size = cell_size_x * self.z_factor;
-        let eight_cs = 8.0 * cell_size;
+        // z_factor scales z (GDAL convention); dx and dy used separately.
+        let zf = self.z_factor;
+        let eight_dx = 8.0 * cell_size_x;
+        let eight_dy = 8.0 * cell_size_y.abs();
 
         let zenith_rad = (90.0 - self.altitude).to_radians();
         let cos_zenith = zenith_rad.cos();
@@ -256,9 +269,9 @@ impl surtgis_core::WindowAlgorithm for MultiHillshadeStreaming {
                     continue;
                 }
 
-                // Horn's method gradients
-                let dz_dx = ((cv + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_cs;
-                let dz_dy = ((g + 2.0 * h + i) - (a + 2.0 * b + cv)) / eight_cs;
+                // Horn's method (z_factor scales z, per GDAL convention)
+                let dz_dx = zf * ((cv + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_dx;
+                let dz_dy = zf * ((g + 2.0 * h + i) - (a + 2.0 * b + cv)) / eight_dy;
 
                 // Algebraic form — see multidirectional_hillshade().
                 let g2 = dz_dx * dz_dx + dz_dy * dz_dy;

@@ -15,7 +15,12 @@ pub struct HillshadeParams {
     pub azimuth: f64,
     /// Sun altitude in degrees above horizon (0-90)
     pub altitude: f64,
-    /// Z-factor for vertical exaggeration
+    /// Vertical exaggeration applied to elevations before the gradient
+    /// (GDAL/ArcGIS convention: `z' = z_factor * z`). Default 1.0.
+    ///
+    /// Rasters with a geographic CRS get automatic per-row metric cell
+    /// sizes — do NOT use the legacy `111320` cell-size hack, which relied
+    /// on the pre-0.17 reciprocal semantics.
     pub z_factor: f64,
     /// Output range: false = 0-255, true = 0.0-1.0
     pub normalized: bool,
@@ -67,8 +72,12 @@ impl Algorithm for Hillshade {
 /// Raster with hillshade values (0-255 or 0.0-1.0)
 pub fn hillshade(dem: &Raster<f64>, params: HillshadeParams) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
-    let cell_size = dem.cell_size() * params.z_factor;
     let nodata = dem.nodata();
+
+    // GDAL/ArcGIS semantics: z_factor scales the elevations. Geographic
+    // rasters get automatic per-row metric cell sizes.
+    let zf = params.z_factor;
+    let cell_sizes = super::spheroidal_grid::CellSizes::for_dem(dem);
 
     // Pre-compute illumination angles in radians
     let azimuth_rad = (360.0 - params.azimuth + 90.0).to_radians();
@@ -77,7 +86,6 @@ pub fn hillshade(dem: &Raster<f64>, params: HillshadeParams) -> Result<Raster<f6
     let sin_zenith = zenith_rad.sin();
     let (sin_az, cos_az) = azimuth_rad.sin_cos();
 
-    let eight_cell_size = 8.0 * cell_size;
     let normalized = params.normalized;
 
     let data = dem
@@ -110,6 +118,9 @@ pub fn hillshade(dem: &Raster<f64>, params: HillshadeParams) -> Result<Raster<f6
         let mid = &data[row * cols..(row + 1) * cols];
         let bot = &data[(row + 1) * cols..(row + 2) * cols];
 
+        let (dx, dy) = cell_sizes.at_row(row);
+        let (eight_dx, eight_dy) = (8.0 * dx, 8.0 * dy);
+
         for col in 1..cols - 1 {
             // Get center value
             let e = mid[col];
@@ -134,9 +145,9 @@ pub fn hillshade(dem: &Raster<f64>, params: HillshadeParams) -> Result<Raster<f6
                 continue; // stays NaN
             }
 
-            // Horn's method for gradients
-            let dz_dx = ((c + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_cell_size;
-            let dz_dy = ((g + 2.0 * h + i) - (a + 2.0 * b + c)) / eight_cell_size;
+            // Horn's method (z_factor scales z, per GDAL convention)
+            let dz_dx = zf * ((c + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_dx;
+            let dz_dy = zf * ((g + 2.0 * h + i) - (a + 2.0 * b + c)) / eight_dy;
 
             let num = cos_zenith + sin_zenith * (dz_dy * sin_az - dz_dx * cos_az);
             let shade = num / (1.0 + dz_dx * dz_dx + dz_dy * dz_dy).sqrt();
@@ -170,7 +181,7 @@ pub struct HillshadeStreaming {
     pub azimuth: f64,
     /// Sun altitude in degrees above horizon (0-90)
     pub altitude: f64,
-    /// Z-factor for vertical exaggeration
+    /// Vertical exaggeration: `z' = z_factor * z` (GDAL convention).
     pub z_factor: f64,
 }
 
@@ -195,7 +206,7 @@ impl surtgis_core::WindowAlgorithm for HillshadeStreaming {
         output: &mut Array2<f64>,
         nodata: Option<f64>,
         cell_size_x: f64,
-        _cell_size_y: f64,
+        cell_size_y: f64,
     ) {
         let (in_rows, cols) = input.dim();
         let out_rows = output.nrows();
@@ -208,8 +219,10 @@ impl surtgis_core::WindowAlgorithm for HillshadeStreaming {
         let sin_zenith = zenith_rad.sin();
         let (sin_az, cos_az) = azimuth_rad.sin_cos();
 
-        let cell_size = cell_size_x * self.z_factor;
-        let eight_cs = 8.0 * cell_size;
+        // z_factor scales z (GDAL convention); dx and dy used separately.
+        let zf = self.z_factor;
+        let eight_dx = 8.0 * cell_size_x;
+        let eight_dy = 8.0 * cell_size_y.abs();
 
         for r in 0..out_rows {
             let ir = r + radius; // input row corresponding to output row r
@@ -247,9 +260,9 @@ impl surtgis_core::WindowAlgorithm for HillshadeStreaming {
                     continue;
                 }
 
-                // Horn's method for gradients
-                let dz_dx = ((cv + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_cs;
-                let dz_dy = ((g + 2.0 * h + i) - (a + 2.0 * b + cv)) / eight_cs;
+                // Horn's method (z_factor scales z, per GDAL convention)
+                let dz_dx = zf * ((cv + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_dx;
+                let dz_dy = zf * ((g + 2.0 * h + i) - (a + 2.0 * b + cv)) / eight_dy;
 
                 // Algebraic form — see hillshade() for the derivation.
                 let num = cos_zenith + sin_zenith * (dz_dy * sin_az - dz_dx * cos_az);

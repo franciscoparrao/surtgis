@@ -73,7 +73,12 @@ pub struct CurvatureParams {
     pub method: DerivativeMethod,
     /// Full vs simplified curvature formulas
     pub formula: CurvatureFormula,
-    /// Z-factor for unit conversion (default 1.0)
+    /// Vertical exaggeration applied to elevations before the gradient
+    /// (GDAL/ArcGIS convention: `z' = z_factor * z`). Default 1.0.
+    ///
+    /// Rasters with a geographic CRS get automatic per-row metric cell
+    /// sizes — do NOT use the legacy `111320` cell-size hack, which relied
+    /// on the pre-0.17 reciprocal semantics.
     pub z_factor: f64,
 }
 
@@ -127,7 +132,13 @@ impl Algorithm for Curvature {
 /// Raster with curvature values (1/m by default)
 pub fn curvature(dem: &Raster<f64>, params: CurvatureParams) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
-    let cs = dem.cell_size() * params.z_factor;
+    // z_factor scales the ELEVATIONS (GDAL convention). All five partial
+    // derivatives (p, q, r, s, t) are linear in z, so scaling them by
+    // z_factor after computation is exactly z' = zf*z. Folding zf into the
+    // cell size (the old scheme) is wrong for second derivatives, where
+    // the cell size enters squared.
+    let zf = params.z_factor;
+    let cs = dem.cell_size();
     let nodata = dem.nodata();
     let cs2 = cs * cs;
     let method = params.method;
@@ -189,6 +200,9 @@ pub fn curvature(dem: &Raster<f64>, params: CurvatureParams) -> Result<Raster<f6
                         (p, q, r, s, t)
                     }
                 };
+
+                // GDAL-convention z_factor: z' = zf·z (all derivatives linear in z)
+                let (p, q, r, s, t) = (zf * p, zf * q, zf * r, zf * s, zf * t);
 
                 let p2 = p * p;
                 let q2 = q * q;
@@ -294,7 +308,9 @@ impl surtgis_core::WindowAlgorithm for CurvatureStreaming {
         let out_rows = output.nrows();
         let radius = 1;
 
-        let cs = cell_size_x * self.z_factor;
+        // z_factor scales z (GDAL convention) — see curvature().
+        let zf = self.z_factor;
+        let cs = cell_size_x;
         let cs2 = cs * cs;
         let method = self.method;
         let formula = self.formula;
@@ -359,6 +375,9 @@ impl surtgis_core::WindowAlgorithm for CurvatureStreaming {
                         (p, q, r_d, s, t)
                     }
                 };
+
+                // GDAL-convention z_factor: z' = zf·z (derivatives linear in z)
+                let (p, q, r_d, s, t) = (zf * p, zf * q, zf * r_d, zf * s, zf * t);
 
                 let p2 = p * p;
                 let q2 = q * q;
