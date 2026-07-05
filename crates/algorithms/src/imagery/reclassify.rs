@@ -68,7 +68,6 @@ impl Default for ReclassifyParams {
 /// ```
 pub fn reclassify(raster: &Raster<f64>, params: ReclassifyParams) -> Result<Raster<f64>> {
     let (rows, cols) = raster.shape();
-    let nodata = raster.nodata();
     let classes = &params.classes;
     let default = params.default_value;
 
@@ -79,12 +78,7 @@ pub fn reclassify(raster: &Raster<f64>, params: ReclassifyParams) -> Result<Rast
             for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let val = unsafe { raster.get_unchecked(row, col) };
 
-                if val.is_nan() {
-                    continue;
-                }
-                if let Some(nd) = nodata
-                    && (val - nd).abs() < f64::EPSILON
-                {
+                if raster.is_nodata(val) {
                     continue;
                 }
 

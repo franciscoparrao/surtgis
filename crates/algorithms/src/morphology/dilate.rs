@@ -111,8 +111,13 @@ fn is_nodata_val(value: f64, nodata: Option<f64>) -> bool {
     if value.is_nan() {
         return true;
     }
+    // Exact-bit comparison, matching `RasterElement::is_nodata` in
+    // crates/core/src/raster/element.rs: the nodata sentinel is written
+    // verbatim on I/O, so equality (not tolerance) is correct — a
+    // tolerance-based match corrupts small valid values near the
+    // sentinel (e.g. NDVI ~ 0 with nodata = 0.0).
     match nodata {
-        Some(nd) => (value - nd).abs() < f64::EPSILON,
+        Some(nd) => value == nd,
         None => false,
     }
 }

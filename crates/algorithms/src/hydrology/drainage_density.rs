@@ -51,7 +51,6 @@ pub fn drainage_density(
     let (rows, cols) = stream_network.shape();
     let r = params.radius as isize;
     let cell_size = params.cell_size;
-    let nodata = stream_network.nodata();
 
     if params.radius == 0 {
         return Err(Error::Other("Drainage density radius must be >= 1".into()));
@@ -83,8 +82,7 @@ pub fn drainage_density(
                         }
                         let val = unsafe { stream_network.get_unchecked(nr as usize, nc as usize) };
 
-                        if val.is_nan() || nodata.is_some_and(|nd| (val - nd).abs() < f64::EPSILON)
-                        {
+                        if stream_network.is_nodata(val) {
                             continue;
                         }
 

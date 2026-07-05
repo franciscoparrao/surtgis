@@ -47,7 +47,6 @@ use super::d8::D8_OFFSETS as OFFSETS;
 /// `Raster<f64>` with flow accumulation (contributing area in cell counts)
 pub fn flow_accumulation_tfga(dem: &Raster<f64>, params: TfgaParams) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
-    let nodata = dem.nodata();
     let cell_size = dem.cell_size();
     let n = rows * cols;
 
@@ -56,7 +55,7 @@ pub fn flow_accumulation_tfga(dem: &Raster<f64>, params: TfgaParams) -> Result<R
     for row in 0..rows {
         for col in 0..cols {
             let z = unsafe { dem.get_unchecked(row, col) };
-            let is_nd = z.is_nan() || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
+            let is_nd = dem.is_nodata(z);
             if !is_nd {
                 cells.push((row, col, z));
             }
@@ -69,7 +68,7 @@ pub fn flow_accumulation_tfga(dem: &Raster<f64>, params: TfgaParams) -> Result<R
     for row in 0..rows {
         for col in 0..cols {
             let z = unsafe { dem.get_unchecked(row, col) };
-            let is_nd = z.is_nan() || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
+            let is_nd = dem.is_nodata(z);
             if is_nd {
                 acc[(row, col)] = 0.0;
             }
@@ -101,12 +100,7 @@ pub fn flow_accumulation_tfga(dem: &Raster<f64>, params: TfgaParams) -> Result<R
                 continue;
             }
             let z = unsafe { dem.get_unchecked(nr as usize, nc as usize) };
-            if !z.is_nan() {
-                if let Some(nd) = nodata
-                    && (z - nd).abs() < f64::EPSILON
-                {
-                    continue;
-                }
+            if !dem.is_nodata(z) {
                 nz[i] = z;
             }
         }
@@ -230,7 +224,7 @@ pub fn flow_accumulation_tfga(dem: &Raster<f64>, params: TfgaParams) -> Result<R
     for row in 0..rows {
         for col in 0..cols {
             let z = unsafe { dem.get_unchecked(row, col) };
-            let is_nd = z.is_nan() || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
+            let is_nd = dem.is_nodata(z);
             if !is_nd {
                 acc[(row, col)] = (acc[(row, col)] - 1.0).max(0.0);
             }
