@@ -55,6 +55,42 @@ pub struct ZonalResult {
     pub range: f64,
     /// Median value of the zone.
     pub median: f64,
+    /// Most frequent value in the zone (mode). NaN if the zone is empty.
+    pub majority: f64,
+    /// Least frequent value in the zone (anti-mode). NaN if the zone is empty.
+    pub minority: f64,
+    /// Number of distinct values in the zone.
+    pub variety: usize,
+}
+
+/// Compute the mode (majority), anti-mode (minority), and cardinality (variety)
+/// of a set of values by grouping on exact bit-pattern equality.
+///
+/// Values are treated as categorical class codes (e.g. integer class values
+/// stored as `f64`), so grouping uses `to_bits()` rather than a float
+/// tolerance comparison — this avoids NaN/partial-ordering pitfalls and
+/// matches how the rest of the zone raster represents discrete classes.
+/// `values` must not contain NaN (callers already filter NaN as nodata).
+fn categorical_stats(values: &[f64]) -> (f64, f64, usize) {
+    let mut freq: HashMap<u64, (f64, usize)> = HashMap::new();
+    for &v in values {
+        let entry = freq.entry(v.to_bits()).or_insert((v, 0));
+        entry.1 += 1;
+    }
+
+    let majority = freq
+        .values()
+        .max_by_key(|(_, count)| *count)
+        .map(|(v, _)| *v)
+        .unwrap_or(f64::NAN);
+    let minority = freq
+        .values()
+        .min_by_key(|(_, count)| *count)
+        .map(|(v, _)| *v)
+        .unwrap_or(f64::NAN);
+    let variety = freq.len();
+
+    (majority, minority, variety)
 }
 
 /// Compute zonal statistics
@@ -125,6 +161,8 @@ pub fn zonal_statistics(
             vals[count / 2]
         };
 
+        let (majority, minority, variety) = categorical_stats(&vals);
+
         results.insert(
             zone_id,
             ZonalResult {
@@ -137,6 +175,9 @@ pub fn zonal_statistics(
                 max,
                 range,
                 median,
+                majority,
+                minority,
+                variety,
             },
         );
     }
@@ -178,11 +219,9 @@ pub fn zonal_statistics_raster(
                     ZonalStatistic::Sum => zr.sum,
                     ZonalStatistic::Count => zr.count as f64,
                     ZonalStatistic::Median => zr.median,
-                    ZonalStatistic::Majority
-                    | ZonalStatistic::Minority
-                    | ZonalStatistic::Variety => {
-                        zr.mean // Fallback for categorical stats on continuous data
-                    }
+                    ZonalStatistic::Majority => zr.majority,
+                    ZonalStatistic::Minority => zr.minority,
+                    ZonalStatistic::Variety => zr.variety as f64,
                 };
                 output.set(row, col, val).unwrap();
             } else {
@@ -288,5 +327,53 @@ mod tests {
         let result = zonal_statistics_raster(&values, &zones, ZonalStatistic::Mean).unwrap();
         assert!((result.get(0, 0).unwrap() - 10.0).abs() < 1e-10);
         assert!((result.get(3, 3).unwrap() - 20.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_categorical_stats_majority_minority_variety() {
+        // [1,1,1,2,2,3] -> majority=1 (count 3), minority=3 (count 1), variety=3
+        let vals = vec![1.0, 1.0, 1.0, 2.0, 2.0, 3.0];
+        let (majority, minority, variety) = categorical_stats(&vals);
+        assert_eq!(majority, 1.0);
+        assert_eq!(minority, 3.0);
+        assert_eq!(variety, 3);
+    }
+
+    #[test]
+    fn test_zonal_majority_minority_variety_not_mean() {
+        // CR-4 regression: Majority/Minority/Variety used to silently fall back
+        // to the zone mean. A class raster with values [1,1,1,2,2,3] has
+        // mean=1.6666..., but majority/minority/variety must be categorical.
+        let mut values = Raster::new(2, 3);
+        values.set_transform(GeoTransform::new(0.0, 2.0, 1.0, -1.0));
+        let mut zones: Raster<i32> = Raster::filled(2, 3, 1);
+        zones.set_transform(GeoTransform::new(0.0, 2.0, 1.0, -1.0));
+
+        let class_vals = [1.0, 1.0, 1.0, 2.0, 2.0, 3.0];
+        let mut idx = 0;
+        for row in 0..2 {
+            for col in 0..3 {
+                values.set(row, col, class_vals[idx]).unwrap();
+                idx += 1;
+            }
+        }
+
+        let results = zonal_statistics(&values, &zones).unwrap();
+        let z1 = results.get(&1).unwrap();
+        assert!((z1.mean - 1.6666666666666667).abs() < 1e-10);
+        assert_eq!(z1.majority, 1.0);
+        assert_eq!(z1.minority, 3.0);
+        assert_eq!(z1.variety, 3);
+
+        let majority_raster =
+            zonal_statistics_raster(&values, &zones, ZonalStatistic::Majority).unwrap();
+        let minority_raster =
+            zonal_statistics_raster(&values, &zones, ZonalStatistic::Minority).unwrap();
+        let variety_raster =
+            zonal_statistics_raster(&values, &zones, ZonalStatistic::Variety).unwrap();
+
+        assert_eq!(majority_raster.get(0, 0).unwrap(), 1.0);
+        assert_eq!(minority_raster.get(0, 0).unwrap(), 3.0);
+        assert_eq!(variety_raster.get(0, 0).unwrap(), 3.0);
     }
 }

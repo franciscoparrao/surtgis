@@ -63,6 +63,7 @@ pub fn global_morans_i(raster: &Raster<f64>) -> Result<MoransIResult> {
     // Deviations from mean
     let deviations: Vec<f64> = values.iter().map(|(_, _, v)| v - mean).collect();
     let sum_sq = deviations.iter().map(|d| d * d).sum::<f64>();
+    let sum_quartic = deviations.iter().map(|d| d * d * d * d).sum::<f64>();
 
     if sum_sq.abs() < f64::EPSILON {
         return Ok(MoransIResult {
@@ -142,12 +143,25 @@ pub fn global_morans_i(raster: &Raster<f64>) -> Result<MoransIResult> {
     let nn = n;
     let nn1 = nn - 1.0;
 
-    // Simplified variance
-    let var_i = (nn * ((nn * nn - 3.0 * nn + 3.0) * s1 - nn * s2_part + 3.0 * s0 * s0)
-        - (nn * nn - nn) * s1
-        + 2.0 * nn * s2_part
-        - 6.0 * s0 * s0)
-        / ((nn - 1.0) * (nn - 2.0) * (nn - 3.0) * s0 * s0);
+    // Sample excess-kurtosis coefficient b2 = m4 / m2^2 (Cliff & Ord 1981),
+    // used to weight the second bracket of the randomization variance below.
+    let m2 = sum_sq / nn;
+    let m4 = sum_quartic / nn;
+    let b2 = if m2.abs() > f64::EPSILON {
+        m4 / (m2 * m2)
+    } else {
+        0.0
+    };
+
+    // Randomization-assumption variance of Moran's I (Cliff & Ord 1981):
+    //   Var(I) = [A - b2*B] / [(n-1)(n-2)(n-3) S0^2] - E[I]^2
+    // where A and B are the usual S1/S2/S0 combinations. The previous
+    // implementation hardcoded b2=1 (only correct for a normal/mesokurtic
+    // distribution) and omitted the trailing -E[I]^2 term.
+    let a_term = nn * ((nn * nn - 3.0 * nn + 3.0) * s1 - nn * s2_part + 3.0 * s0 * s0);
+    let b_term = b2 * ((nn * nn - nn) * s1 - 2.0 * nn * s2_part + 6.0 * s0 * s0);
+    let var_i = (a_term - b_term) / ((nn - 1.0) * (nn - 2.0) * (nn - 3.0) * s0 * s0)
+        - expected_i * expected_i;
 
     let var_i_safe = if var_i > 0.0 {
         var_i
@@ -320,6 +334,40 @@ mod tests {
         r.set_transform(GeoTransform::new(0.0, 10.0, 1.0, -1.0));
         let result = global_morans_i(&r).unwrap();
         assert!((result.i).abs() < 1e-10, "Uniform should have I≈0");
+    }
+
+    #[test]
+    fn test_morans_i_variance_kurtosis_correction() {
+        // A-6 regression: a strongly leptokurtic (high-kurtosis, b2≈6.5)
+        // 5x5 grid — mostly 1.0 with three outlier cells at 8.0. Reference
+        // values computed independently in Python replicating this exact
+        // algorithm (queen 8-neighbor grid, same S1/S2/S0 formulas):
+        //   b2 ≈ 6.4697
+        //   z-score BEFORE fix (b2 hardcoded to 1, missing -E[I]^2): ≈ -1.0908
+        //   z-score AFTER fix (real b2, -E[I]^2 subtracted):          ≈ -1.3417
+        let mut r = Raster::filled(5, 5, 1.0_f64);
+        r.set_transform(GeoTransform::new(0.0, 5.0, 1.0, -1.0));
+        r.set(1, 1, 8.0).unwrap();
+        r.set(3, 3, 8.0).unwrap();
+        r.set(0, 4, 8.0).unwrap();
+
+        let result = global_morans_i(&r).unwrap();
+
+        assert!(
+            (result.z_score - (-1.3416804082411606)).abs() < 1e-6,
+            "corrected z-score should be ~-1.3417, got {}",
+            result.z_score
+        );
+        assert!(
+            (result.z_score - (-1.0907959544391925)).abs() > 0.1,
+            "z-score should differ meaningfully from the pre-fix (b2=1, no -E[I]^2) value of ~-1.0908, got {}",
+            result.z_score
+        );
+        assert!(
+            (result.p_value - 0.17969964209992817).abs() < 1e-6,
+            "corrected p-value should be ~0.17970, got {}",
+            result.p_value
+        );
     }
 
     #[test]
