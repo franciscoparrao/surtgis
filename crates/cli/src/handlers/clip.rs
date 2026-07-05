@@ -127,6 +127,7 @@ pub fn handle_rasterize(
         rows,
         cols,
         attribute.as_deref(),
+        ref_raster.crs(),
     )
     .context("Failed to rasterize")?;
     // Inherit the reference CRS so the mask stays georeferenced. Without this

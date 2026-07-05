@@ -33,6 +33,7 @@ use parquet::record::Field;
 use parquet::schema::types::Type as SchemaType;
 
 use super::{AttributeValue, Feature, FeatureCollection};
+use crate::crs::CRS;
 use crate::error::{Error, Result};
 
 /// A typed attribute column of a [`PointTable`].
@@ -540,9 +541,15 @@ pub fn write_geoparquet<P: AsRef<Path>>(
 }
 
 /// Read a GeoParquet point file as a [`FeatureCollection`].
+///
+/// The GeoParquet `geo` metadata's `crs` field is written as `null` by this
+/// crate's own writer (see module docs), so the CRS is recovered from the
+/// `surtgis:epsg` key-value metadata instead. Files from other GeoParquet
+/// writers that don't set that key yield `crs: None` — honestly unknown
+/// rather than assumed.
 pub fn read_geoparquet<P: AsRef<Path>>(path: P) -> Result<FeatureCollection> {
     let table = read_geoparquet_points(path)?;
-    let mut fc = FeatureCollection::new();
+    let mut fc = FeatureCollection::with_crs(table.epsg.map(CRS::from_epsg));
     for i in 0..table.len() {
         let mut feature = Feature::new(geo::Geometry::Point(geo::Point::new(
             table.x[i], table.y[i],
@@ -674,6 +681,7 @@ mod tests {
 
         let back = read_geoparquet(&path).unwrap();
         assert_eq!(back.len(), 5);
+        assert_eq!(back.crs().and_then(|c| c.epsg()), Some(4326));
         let f2 = &back.features[2];
         let Some(geo::Geometry::Point(p)) = &f2.geometry else {
             panic!("expected point");
@@ -687,6 +695,21 @@ mod tests {
             f2.get_property("peso"),
             Some(AttributeValue::Float(v)) if *v == 1.0
         ));
+    }
+
+    #[test]
+    fn feature_collection_without_epsg_yields_none_crs() {
+        let mut fc = FeatureCollection::new();
+        fc.push(Feature::new(geo::Geometry::Point(geo::Point::new(
+            1.0, 2.0,
+        ))));
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("no_epsg.parquet");
+        write_geoparquet(&fc, None, &path).unwrap();
+
+        let back = read_geoparquet(&path).unwrap();
+        assert!(back.crs().is_none());
     }
 
     #[test]
