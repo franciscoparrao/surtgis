@@ -3,10 +3,10 @@
 //! Common remote sensing indices computed from multispectral imagery.
 //! All indices operate on single-band rasters (one band per raster).
 
-use crate::maybe_rayon::*;
+use crate::maybe_rayon::par_map_rows;
 use ndarray::Array2;
+use surtgis_core::Result;
 use surtgis_core::raster::Raster;
-use surtgis_core::{Error, Result};
 
 /// Enumeration of supported spectral indices
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,30 +56,25 @@ pub fn normalized_difference(band_a: &Raster<f64>, band_b: &Raster<f64>) -> Resu
     let nodata_a = band_a.nodata();
     let nodata_b = band_b.nodata();
 
-    let data: Vec<f64> = (0..rows)
-        .into_par_iter()
-        .flat_map(|row| {
-            let mut row_data = vec![f64::NAN; cols];
-            for (col, row_data_col) in row_data.iter_mut().enumerate() {
-                let a = unsafe { band_a.get_unchecked(row, col) };
-                let b = unsafe { band_b.get_unchecked(row, col) };
+    let data = par_map_rows(rows, cols, |row, out_row| {
+        for (col, out_val) in out_row.iter_mut().enumerate() {
+            let a = unsafe { band_a.get_unchecked(row, col) };
+            let b = unsafe { band_b.get_unchecked(row, col) };
 
-                if is_nodata_f64(a, nodata_a) || is_nodata_f64(b, nodata_b) {
-                    continue;
-                }
-
-                let sum = a + b;
-                if sum.abs() < 1e-10 {
-                    continue; // Avoid division by zero
-                }
-
-                *row_data_col = (a - b) / sum;
+            if is_nodata_f64(a, nodata_a) || is_nodata_f64(b, nodata_b) {
+                continue;
             }
-            row_data
-        })
-        .collect();
 
-    build_output(band_a, rows, cols, data)
+            let sum = a + b;
+            if sum.abs() < 1e-10 {
+                continue; // Avoid division by zero
+            }
+
+            *out_val = (a - b) / sum;
+        }
+    });
+
+    build_output(band_a, data)
 }
 
 // ---------------------------------------------------------------------------
@@ -202,30 +197,25 @@ pub fn savi(nir: &Raster<f64>, red: &Raster<f64>, params: SaviParams) -> Result<
     let nodata_red = red.nodata();
     let l = params.l_factor;
 
-    let data: Vec<f64> = (0..rows)
-        .into_par_iter()
-        .flat_map(|row| {
-            let mut row_data = vec![f64::NAN; cols];
-            for (col, row_data_col) in row_data.iter_mut().enumerate() {
-                let n = unsafe { nir.get_unchecked(row, col) };
-                let r = unsafe { red.get_unchecked(row, col) };
+    let data = par_map_rows(rows, cols, |row, out_row| {
+        for (col, out_val) in out_row.iter_mut().enumerate() {
+            let n = unsafe { nir.get_unchecked(row, col) };
+            let r = unsafe { red.get_unchecked(row, col) };
 
-                if is_nodata_f64(n, nodata_nir) || is_nodata_f64(r, nodata_red) {
-                    continue;
-                }
-
-                let denom = n + r + l;
-                if denom.abs() < 1e-10 {
-                    continue;
-                }
-
-                *row_data_col = ((n - r) / denom) * (1.0 + l);
+            if is_nodata_f64(n, nodata_nir) || is_nodata_f64(r, nodata_red) {
+                continue;
             }
-            row_data
-        })
-        .collect();
 
-    build_output(nir, rows, cols, data)
+            let denom = n + r + l;
+            if denom.abs() < 1e-10 {
+                continue;
+            }
+
+            *out_val = ((n - r) / denom) * (1.0 + l);
+        }
+    });
+
+    build_output(nir, data)
 }
 
 // ---------------------------------------------------------------------------
@@ -297,34 +287,29 @@ pub fn evi(
     let nodata_red = red.nodata();
     let nodata_blue = blue.nodata();
 
-    let data: Vec<f64> = (0..rows)
-        .into_par_iter()
-        .flat_map(|row| {
-            let mut row_data = vec![f64::NAN; cols];
-            for (col, row_data_col) in row_data.iter_mut().enumerate() {
-                let n = unsafe { nir.get_unchecked(row, col) };
-                let r = unsafe { red.get_unchecked(row, col) };
-                let b = unsafe { blue.get_unchecked(row, col) };
+    let data = par_map_rows(rows, cols, |row, out_row| {
+        for (col, out_val) in out_row.iter_mut().enumerate() {
+            let n = unsafe { nir.get_unchecked(row, col) };
+            let r = unsafe { red.get_unchecked(row, col) };
+            let b = unsafe { blue.get_unchecked(row, col) };
 
-                if is_nodata_f64(n, nodata_nir)
-                    || is_nodata_f64(r, nodata_red)
-                    || is_nodata_f64(b, nodata_blue)
-                {
-                    continue;
-                }
-
-                let denom = n + params.c1 * r - params.c2 * b + params.l;
-                if denom.abs() < 1e-10 {
-                    continue;
-                }
-
-                *row_data_col = params.g * (n - r) / denom;
+            if is_nodata_f64(n, nodata_nir)
+                || is_nodata_f64(r, nodata_red)
+                || is_nodata_f64(b, nodata_blue)
+            {
+                continue;
             }
-            row_data
-        })
-        .collect();
 
-    build_output(nir, rows, cols, data)
+            let denom = n + params.c1 * r - params.c2 * b + params.l;
+            if denom.abs() < 1e-10 {
+                continue;
+            }
+
+            *out_val = params.g * (n - r) / denom;
+        }
+    });
+
+    build_output(nir, data)
 }
 
 // ---------------------------------------------------------------------------
@@ -358,39 +343,34 @@ pub fn bsi(
     let nd_nir = nir.nodata();
     let nd_blue = blue.nodata();
 
-    let data: Vec<f64> = (0..rows)
-        .into_par_iter()
-        .flat_map(|row| {
-            let mut row_data = vec![f64::NAN; cols];
-            for (col, row_data_col) in row_data.iter_mut().enumerate() {
-                let sw = unsafe { swir.get_unchecked(row, col) };
-                let r = unsafe { red.get_unchecked(row, col) };
-                let n = unsafe { nir.get_unchecked(row, col) };
-                let b = unsafe { blue.get_unchecked(row, col) };
+    let data = par_map_rows(rows, cols, |row, out_row| {
+        for (col, out_val) in out_row.iter_mut().enumerate() {
+            let sw = unsafe { swir.get_unchecked(row, col) };
+            let r = unsafe { red.get_unchecked(row, col) };
+            let n = unsafe { nir.get_unchecked(row, col) };
+            let b = unsafe { blue.get_unchecked(row, col) };
 
-                if is_nodata_f64(sw, nd_swir)
-                    || is_nodata_f64(r, nd_red)
-                    || is_nodata_f64(n, nd_nir)
-                    || is_nodata_f64(b, nd_blue)
-                {
-                    continue;
-                }
-
-                let a_val = sw + r;
-                let b_val = n + b;
-                let denom = a_val + b_val;
-
-                if denom.abs() < 1e-10 {
-                    continue;
-                }
-
-                *row_data_col = (a_val - b_val) / denom;
+            if is_nodata_f64(sw, nd_swir)
+                || is_nodata_f64(r, nd_red)
+                || is_nodata_f64(n, nd_nir)
+                || is_nodata_f64(b, nd_blue)
+            {
+                continue;
             }
-            row_data
-        })
-        .collect();
 
-    build_output(swir, rows, cols, data)
+            let a_val = sw + r;
+            let b_val = n + b;
+            let denom = a_val + b_val;
+
+            if denom.abs() < 1e-10 {
+                continue;
+            }
+
+            *out_val = (a_val - b_val) / denom;
+        }
+    });
+
+    build_output(swir, data)
 }
 
 // ---------------------------------------------------------------------------
@@ -468,29 +448,24 @@ pub fn reci(nir: &Raster<f64>, red_edge: &Raster<f64>) -> Result<Raster<f64>> {
     let nodata_nir = nir.nodata();
     let nodata_re = red_edge.nodata();
 
-    let data: Vec<f64> = (0..rows)
-        .into_par_iter()
-        .flat_map(|row| {
-            let mut row_data = vec![f64::NAN; cols];
-            for (col, row_data_col) in row_data.iter_mut().enumerate() {
-                let n = unsafe { nir.get_unchecked(row, col) };
-                let re = unsafe { red_edge.get_unchecked(row, col) };
+    let data = par_map_rows(rows, cols, |row, out_row| {
+        for (col, out_val) in out_row.iter_mut().enumerate() {
+            let n = unsafe { nir.get_unchecked(row, col) };
+            let re = unsafe { red_edge.get_unchecked(row, col) };
 
-                if is_nodata_f64(n, nodata_nir) || is_nodata_f64(re, nodata_re) {
-                    continue;
-                }
-
-                if re.abs() < 1e-10 {
-                    continue; // Avoid division by zero
-                }
-
-                *row_data_col = (n / re) - 1.0;
+            if is_nodata_f64(n, nodata_nir) || is_nodata_f64(re, nodata_re) {
+                continue;
             }
-            row_data
-        })
-        .collect();
 
-    build_output(nir, rows, cols, data)
+            if re.abs() < 1e-10 {
+                continue; // Avoid division by zero
+            }
+
+            *out_val = (n / re) - 1.0;
+        }
+    });
+
+    build_output(nir, data)
 }
 
 // ---------------------------------------------------------------------------
@@ -567,32 +542,27 @@ pub fn msavi(nir: &Raster<f64>, red: &Raster<f64>) -> Result<Raster<f64>> {
     let nodata_nir = nir.nodata();
     let nodata_red = red.nodata();
 
-    let data: Vec<f64> = (0..rows)
-        .into_par_iter()
-        .flat_map(|row| {
-            let mut row_data = vec![f64::NAN; cols];
-            for (col, row_data_col) in row_data.iter_mut().enumerate() {
-                let n = unsafe { nir.get_unchecked(row, col) };
-                let r = unsafe { red.get_unchecked(row, col) };
+    let data = par_map_rows(rows, cols, |row, out_row| {
+        for (col, out_val) in out_row.iter_mut().enumerate() {
+            let n = unsafe { nir.get_unchecked(row, col) };
+            let r = unsafe { red.get_unchecked(row, col) };
 
-                if is_nodata_f64(n, nodata_nir) || is_nodata_f64(r, nodata_red) {
-                    continue;
-                }
-
-                let term = 2.0 * n + 1.0;
-                let discriminant = term * term - 8.0 * (n - r);
-
-                if discriminant < 0.0 {
-                    continue; // Should not happen with valid reflectance but guard anyway
-                }
-
-                *row_data_col = (term - discriminant.sqrt()) / 2.0;
+            if is_nodata_f64(n, nodata_nir) || is_nodata_f64(r, nodata_red) {
+                continue;
             }
-            row_data
-        })
-        .collect();
 
-    build_output(nir, rows, cols, data)
+            let term = 2.0 * n + 1.0;
+            let discriminant = term * term - 8.0 * (n - r);
+
+            if discriminant < 0.0 {
+                continue; // Should not happen with valid reflectance but guard anyway
+            }
+
+            *out_val = (term - discriminant.sqrt()) / 2.0;
+        }
+    });
+
+    build_output(nir, data)
 }
 
 // ---------------------------------------------------------------------------
@@ -616,30 +586,25 @@ pub fn evi2(nir: &Raster<f64>, red: &Raster<f64>) -> Result<Raster<f64>> {
     let nodata_nir = nir.nodata();
     let nodata_red = red.nodata();
 
-    let data: Vec<f64> = (0..rows)
-        .into_par_iter()
-        .flat_map(|row| {
-            let mut row_data = vec![f64::NAN; cols];
-            for (col, row_data_col) in row_data.iter_mut().enumerate() {
-                let n = unsafe { nir.get_unchecked(row, col) };
-                let r = unsafe { red.get_unchecked(row, col) };
+    let data = par_map_rows(rows, cols, |row, out_row| {
+        for (col, out_val) in out_row.iter_mut().enumerate() {
+            let n = unsafe { nir.get_unchecked(row, col) };
+            let r = unsafe { red.get_unchecked(row, col) };
 
-                if is_nodata_f64(n, nodata_nir) || is_nodata_f64(r, nodata_red) {
-                    continue;
-                }
-
-                let denom = n + 2.4 * r + 1.0;
-                if denom.abs() < 1e-10 {
-                    continue;
-                }
-
-                *row_data_col = 2.5 * (n - r) / denom;
+            if is_nodata_f64(n, nodata_nir) || is_nodata_f64(r, nodata_red) {
+                continue;
             }
-            row_data
-        })
-        .collect();
 
-    build_output(nir, rows, cols, data)
+            let denom = n + 2.4 * r + 1.0;
+            if denom.abs() < 1e-10 {
+                continue;
+            }
+
+            *out_val = 2.5 * (n - r) / denom;
+        }
+    });
+
+    build_output(nir, data)
 }
 
 // ---------------------------------------------------------------------------
@@ -651,7 +616,7 @@ fn is_nodata_f64(value: f64, nodata: Option<f64>) -> bool {
         return true;
     }
     match nodata {
-        Some(nd) => (value - nd).abs() < f64::EPSILON,
+        Some(nd) => value == nd,
         None => false,
     }
 }
@@ -663,16 +628,11 @@ fn check_dimensions(a: &Raster<f64>, b: &Raster<f64>) -> Result<()> {
     surtgis_core::raster::check_aligned(&[a, b])
 }
 
-fn build_output(
-    template: &Raster<f64>,
-    rows: usize,
-    cols: usize,
-    data: Vec<f64>,
-) -> Result<Raster<f64>> {
+fn build_output(template: &Raster<f64>, data: Array2<f64>) -> Result<Raster<f64>> {
+    let (rows, cols) = data.dim();
     let mut output = template.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() =
-        Array2::from_shape_vec((rows, cols), data).map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() = data;
     Ok(output)
 }
 

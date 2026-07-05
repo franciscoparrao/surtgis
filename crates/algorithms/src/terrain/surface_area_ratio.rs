@@ -14,8 +14,7 @@
 //! Jenness, J.S. (2004). Calculating landscape surface area from digital
 //! elevation models. *Wildlife Society Bulletin*, 32(3), 829–839.
 
-use crate::maybe_rayon::*;
-use ndarray::Array2;
+use crate::maybe_rayon::par_map_rows;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -117,79 +116,70 @@ pub fn surface_area_ratio(dem: &Raster<f64>, params: SarParams) -> Result<Raster
     // cardinal triangles plus 4 * (0.5 * cell_w * cell_h) for diagonal.
     // Correct 2D area: sum of 8 triangles projected onto XY plane.
 
-    let output_data: Vec<f64> = (0..rows)
-        .into_par_iter()
-        .flat_map(|row| {
-            let mut row_data = vec![f64::NAN; cols];
-
-            for col in 0..cols {
-                // Skip boundary cells
-                if row == 0 || row >= rows - 1 || col == 0 || col >= cols - 1 {
-                    continue;
-                }
-
-                let z_center = unsafe { dem.get_unchecked(row, col) };
-                if z_center.is_nan()
-                    || nodata.is_some_and(|nd| (z_center - nd).abs() < f64::EPSILON)
-                {
-                    continue;
-                }
-
-                let x_center = 0.0;
-                let y_center = 0.0;
-
-                let mut total_3d_area = 0.0;
-                let mut total_2d_area = 0.0;
-                let mut valid = true;
-
-                for i in 0..8 {
-                    let j = (i + 1) % 8;
-                    let (dr1, dc1) = NEIGHBORS[i];
-                    let (dr2, dc2) = NEIGHBORS[j];
-
-                    let nr1 = (row as isize + dr1) as usize;
-                    let nc1 = (col as isize + dc1) as usize;
-                    let nr2 = (row as isize + dr2) as usize;
-                    let nc2 = (col as isize + dc2) as usize;
-
-                    let z1 = unsafe { dem.get_unchecked(nr1, nc1) };
-                    let z2 = unsafe { dem.get_unchecked(nr2, nc2) };
-
-                    if z1.is_nan()
-                        || z2.is_nan()
-                        || nodata.is_some_and(|nd| (z1 - nd).abs() < f64::EPSILON)
-                        || nodata.is_some_and(|nd| (z2 - nd).abs() < f64::EPSILON)
-                    {
-                        valid = false;
-                        break;
-                    }
-
-                    let x1 = dc1 as f64 * cell_w;
-                    let y1 = -(dr1 as f64) * cell_h; // row increases downward
-                    let x2 = dc2 as f64 * cell_w;
-                    let y2 = -(dr2 as f64) * cell_h;
-
-                    // 3D triangle area
-                    total_3d_area +=
-                        triangle_area_3d(x_center, y_center, z_center, x1, y1, z1, x2, y2, z2);
-
-                    // 2D triangle area (z=0)
-                    total_2d_area +=
-                        triangle_area_3d(x_center, y_center, 0.0, x1, y1, 0.0, x2, y2, 0.0);
-                }
-
-                if valid && total_2d_area > 1e-20 {
-                    row_data[col] = total_3d_area / total_2d_area;
-                }
+    let output_data = par_map_rows(rows, cols, |row, out_row| {
+        for col in 0..cols {
+            // Skip boundary cells
+            if row == 0 || row >= rows - 1 || col == 0 || col >= cols - 1 {
+                continue;
             }
-            row_data
-        })
-        .collect();
+
+            let z_center = unsafe { dem.get_unchecked(row, col) };
+            if z_center.is_nan() || nodata.is_some_and(|nd| z_center == nd) {
+                continue;
+            }
+
+            let x_center = 0.0;
+            let y_center = 0.0;
+
+            let mut total_3d_area = 0.0;
+            let mut total_2d_area = 0.0;
+            let mut valid = true;
+
+            for i in 0..8 {
+                let j = (i + 1) % 8;
+                let (dr1, dc1) = NEIGHBORS[i];
+                let (dr2, dc2) = NEIGHBORS[j];
+
+                let nr1 = (row as isize + dr1) as usize;
+                let nc1 = (col as isize + dc1) as usize;
+                let nr2 = (row as isize + dr2) as usize;
+                let nc2 = (col as isize + dc2) as usize;
+
+                let z1 = unsafe { dem.get_unchecked(nr1, nc1) };
+                let z2 = unsafe { dem.get_unchecked(nr2, nc2) };
+
+                if z1.is_nan()
+                    || z2.is_nan()
+                    || nodata.is_some_and(|nd| z1 == nd)
+                    || nodata.is_some_and(|nd| z2 == nd)
+                {
+                    valid = false;
+                    break;
+                }
+
+                let x1 = dc1 as f64 * cell_w;
+                let y1 = -(dr1 as f64) * cell_h; // row increases downward
+                let x2 = dc2 as f64 * cell_w;
+                let y2 = -(dr2 as f64) * cell_h;
+
+                // 3D triangle area
+                total_3d_area +=
+                    triangle_area_3d(x_center, y_center, z_center, x1, y1, z1, x2, y2, z2);
+
+                // 2D triangle area (z=0)
+                total_2d_area +=
+                    triangle_area_3d(x_center, y_center, 0.0, x1, y1, 0.0, x2, y2, 0.0);
+            }
+
+            if valid && total_2d_area > 1e-20 {
+                out_row[col] = total_3d_area / total_2d_area;
+            }
+        }
+    });
 
     let mut output = dem.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() = Array2::from_shape_vec((rows, cols), output_data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() = output_data;
 
     Ok(output)
 }

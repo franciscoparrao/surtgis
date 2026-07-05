@@ -12,8 +12,8 @@
 
 use crate::maybe_rayon::*;
 use ndarray::Array2;
+use surtgis_core::Result;
 use surtgis_core::raster::Raster;
-use surtgis_core::{Error, Result};
 
 use super::aspect::{AspectOutput, aspect};
 
@@ -33,26 +33,20 @@ pub fn northness(dem: &Raster<f64>) -> Result<Raster<f64>> {
     let (rows, cols) = aspect_raster.shape();
     let aspect_data = aspect_raster.data();
 
-    let data: Vec<f64> = (0..rows)
-        .into_par_iter()
-        .flat_map(|row| {
-            let mut row_data = vec![f64::NAN; cols];
-            for (col, row_data_col) in row_data.iter_mut().enumerate() {
-                let a = aspect_data[[row, col]];
-                // aspect returns -1.0 for flat/nodata cells
-                if a < 0.0 || a.is_nan() {
-                    continue;
-                }
-                *row_data_col = a.cos();
+    let data = par_map_rows(rows, cols, |row, out_row| {
+        for (col, out_val) in out_row.iter_mut().enumerate() {
+            let a = aspect_data[[row, col]];
+            // aspect returns -1.0 for flat/nodata cells
+            if a < 0.0 || a.is_nan() {
+                continue;
             }
-            row_data
-        })
-        .collect();
+            *out_val = a.cos();
+        }
+    });
 
     let mut output = dem.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() =
-        Array2::from_shape_vec((rows, cols), data).map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() = data;
     Ok(output)
 }
 
@@ -72,25 +66,19 @@ pub fn eastness(dem: &Raster<f64>) -> Result<Raster<f64>> {
     let (rows, cols) = aspect_raster.shape();
     let aspect_data = aspect_raster.data();
 
-    let data: Vec<f64> = (0..rows)
-        .into_par_iter()
-        .flat_map(|row| {
-            let mut row_data = vec![f64::NAN; cols];
-            for (col, row_data_col) in row_data.iter_mut().enumerate() {
-                let a = aspect_data[[row, col]];
-                if a < 0.0 || a.is_nan() {
-                    continue;
-                }
-                *row_data_col = a.sin();
+    let data = par_map_rows(rows, cols, |row, out_row| {
+        for (col, out_val) in out_row.iter_mut().enumerate() {
+            let a = aspect_data[[row, col]];
+            if a < 0.0 || a.is_nan() {
+                continue;
             }
-            row_data
-        })
-        .collect();
+            *out_val = a.sin();
+        }
+    });
 
     let mut output = dem.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() =
-        Array2::from_shape_vec((rows, cols), data).map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() = data;
     Ok(output)
 }
 
@@ -106,32 +94,37 @@ pub fn northness_eastness(dem: &Raster<f64>) -> Result<(Raster<f64>, Raster<f64>
     let (rows, cols) = aspect_raster.shape();
     let aspect_data = aspect_raster.data();
 
-    let pairs: Vec<(f64, f64)> = (0..rows)
-        .into_par_iter()
-        .flat_map(|row| {
-            let mut row_data = vec![(f64::NAN, f64::NAN); cols];
-            for (col, row_data_col) in row_data.iter_mut().enumerate() {
-                let a = aspect_data[[row, col]];
-                if a < 0.0 || a.is_nan() {
-                    continue;
-                }
-                *row_data_col = (a.cos(), a.sin());
+    // Two independent passes over the precomputed aspect raster (one per
+    // trig component) rather than one pass emitting `(cos, sin)` pairs —
+    // `par_map_rows` preallocates a single `Array2` output, so a tuple
+    // output isn't a fit. Aspect itself (the expensive part) is still
+    // computed only once, above.
+    let north_data = par_map_rows(rows, cols, |row, out_row| {
+        for (col, out_val) in out_row.iter_mut().enumerate() {
+            let a = aspect_data[[row, col]];
+            if a < 0.0 || a.is_nan() {
+                continue;
             }
-            row_data
-        })
-        .collect();
-
-    let (north_data, east_data): (Vec<f64>, Vec<f64>) = pairs.into_iter().unzip();
+            *out_val = a.cos();
+        }
+    });
+    let east_data = par_map_rows(rows, cols, |row, out_row| {
+        for (col, out_val) in out_row.iter_mut().enumerate() {
+            let a = aspect_data[[row, col]];
+            if a < 0.0 || a.is_nan() {
+                continue;
+            }
+            *out_val = a.sin();
+        }
+    });
 
     let mut north = dem.with_same_meta::<f64>(rows, cols);
     north.set_nodata(Some(f64::NAN));
-    *north.data_mut() = Array2::from_shape_vec((rows, cols), north_data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *north.data_mut() = north_data;
 
     let mut east = dem.with_same_meta::<f64>(rows, cols);
     east.set_nodata(Some(f64::NAN));
-    *east.data_mut() =
-        Array2::from_shape_vec((rows, cols), east_data).map_err(|e| Error::Other(e.to_string()))?;
+    *east.data_mut() = east_data;
 
     Ok((north, east))
 }
@@ -153,7 +146,7 @@ fn aspect_rad_kernel(data: &Array2<f64>, row: usize, col: usize, nodata: Option<
     const FLAT_THRESHOLD: f64 = 1e-10;
 
     let e = data[[row, col]];
-    if e.is_nan() || nodata.is_some_and(|nd| (e - nd).abs() < f64::EPSILON) {
+    if e.is_nan() || nodata.is_some_and(|nd| e == nd) {
         return f64::NAN;
     }
 
