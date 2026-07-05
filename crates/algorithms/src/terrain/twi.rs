@@ -7,8 +7,8 @@
 //! High TWI values indicate areas prone to saturation.
 
 use crate::maybe_rayon::*;
-use surtgis_core::raster::Raster;
 use surtgis_core::Result;
+use surtgis_core::raster::Raster;
 
 /// Compute Topographic Wetness Index
 ///

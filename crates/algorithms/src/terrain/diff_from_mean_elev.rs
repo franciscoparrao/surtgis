@@ -15,8 +15,8 @@
 
 use crate::maybe_rayon::*;
 use ndarray::Array2;
-use surtgis_core::raster::Raster;
 use surtgis_core::Result;
+use surtgis_core::raster::Raster;
 
 /// Parameters for difference from mean elevation.
 #[derive(Debug, Clone)]
