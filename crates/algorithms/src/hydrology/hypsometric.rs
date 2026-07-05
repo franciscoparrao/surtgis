@@ -44,8 +44,6 @@ pub fn hypsometric_integral(
         });
     }
 
-    let nodata_dem = dem.nodata();
-
     // Accumulate min, max, sum, count per watershed in a single pass
     struct WatershedStats {
         min: f64,
@@ -64,7 +62,7 @@ pub fn hypsometric_integral(
             }
 
             let z = unsafe { dem.get_unchecked(row, col) };
-            if z.is_nan() || nodata_dem.is_some_and(|nd| (z - nd).abs() < f64::EPSILON) {
+            if dem.is_nodata(z) {
                 continue;
             }
 

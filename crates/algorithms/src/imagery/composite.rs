@@ -48,7 +48,6 @@ pub fn median_composite(rasters: &[&Raster<f64>]) -> Result<Raster<f64>> {
 fn median_composite_aligned(rasters: &[&Raster<f64>]) -> Result<Raster<f64>> {
     let (rows, cols) = rasters[0].shape();
     let n = rasters.len();
-    let nodata = rasters[0].nodata();
     let arrays: Vec<&Array2<f64>> = rasters.iter().map(|r| r.data()).collect();
 
     let mut output = Array2::<f64>::from_elem((rows, cols), f64::NAN);
@@ -67,10 +66,8 @@ fn median_composite_aligned(rasters: &[&Raster<f64>]) -> Result<Raster<f64>> {
                     if !v.is_finite() {
                         continue;
                     }
-                    if let Some(nd) = nodata {
-                        if nd.is_finite() && (v - nd).abs() < 1e-10 {
-                            continue;
-                        }
+                    if rasters[0].is_nodata(v) {
+                        continue;
                     }
                     values.push(v);
                 }

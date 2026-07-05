@@ -99,7 +99,6 @@ impl Ord for BreachCell {
 /// A new raster with depressions breached (and optionally filled)
 pub fn breach_depressions(dem: &Raster<f64>, params: BreachParams) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
-    let nodata = dem.nodata();
 
     // Copy DEM to output
     let mut output = Array2::<f64>::from_elem((rows, cols), f64::NAN);
@@ -115,7 +114,7 @@ pub fn breach_depressions(dem: &Raster<f64>, params: BreachParams) -> Result<Ras
     for row in 1..rows - 1 {
         for col in 1..cols - 1 {
             let z = output[(row, col)];
-            if z.is_nan() || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON) {
+            if dem.is_nodata(z) {
                 continue;
             }
 
@@ -212,7 +211,7 @@ pub fn breach_depressions(dem: &Raster<f64>, params: BreachParams) -> Result<Ras
                 }
 
                 let nz = output[(nr, nc)];
-                if nz.is_nan() || nodata.is_some_and(|nd| (nz - nd).abs() < f64::EPSILON) {
+                if dem.is_nodata(nz) {
                     continue;
                 }
 
@@ -280,8 +279,7 @@ pub fn breach_depressions(dem: &Raster<f64>, params: BreachParams) -> Result<Ras
         for row in 0..rows {
             for col in 0..cols {
                 let val = output[(row, col)];
-                let is_nd =
-                    val.is_nan() || nodata.is_some_and(|nd| (val - nd).abs() < f64::EPSILON);
+                let is_nd = dem.is_nodata(val);
 
                 if is_nd {
                     pf_visited[(row, col)] = true;

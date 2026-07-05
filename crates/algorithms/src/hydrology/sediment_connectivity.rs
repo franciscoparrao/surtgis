@@ -43,6 +43,50 @@ use super::d8::{D8_DISTANCE as D8_DIST, D8_OFFSETS};
 /// Minimum slope gradient to avoid division by zero in D_dn computation
 const MIN_SLOPE: f64 = 0.005;
 
+/// Validate that `other` shares shape, geotransform and EPSG-comparable
+/// CRS with `reference`, even though the two rasters may have different
+/// element types (e.g. a `Raster<u8>` flow-direction grid alongside the
+/// `Raster<f64>` slope/flow-accumulation rasters).
+///
+/// `surtgis_core::raster::check_aligned` cannot be called directly across
+/// mixed element types because it is generic over a single `T` for the
+/// whole slice; this mirrors its shape + geotransform + CRS contract for
+/// the one input that doesn't fit that slice.
+fn check_shape_transform_crs<T, U>(
+    reference: &Raster<T>,
+    other: &Raster<U>,
+    context: &str,
+) -> Result<()>
+where
+    T: surtgis_core::raster::RasterCell,
+    U: surtgis_core::raster::RasterCell,
+{
+    if reference.shape() != other.shape() {
+        return Err(Error::ShapeMismatch {
+            expected: reference.shape(),
+            got: other.shape(),
+            context: context.to_string(),
+        });
+    }
+    if reference.transform() != other.transform() {
+        return Err(Error::Misaligned {
+            reason: format!(
+                "geotransform mismatch: {context} is not aligned with the slope raster"
+            ),
+        });
+    }
+    if let (Some(a), Some(b)) = (
+        reference.crs().and_then(|c| c.epsg()),
+        other.crs().and_then(|c| c.epsg()),
+    ) && a != b
+    {
+        return Err(Error::Misaligned {
+            reason: format!("CRS mismatch: {context} is EPSG:{b} but the slope raster is EPSG:{a}"),
+        });
+    }
+    Ok(())
+}
+
 /// Compute Sediment Connectivity Index (IC).
 ///
 /// IC = log10(D_up / D_dn)
@@ -65,39 +109,17 @@ pub fn sediment_connectivity(
 ) -> Result<Raster<f64>> {
     let (rows, cols) = slope.shape();
 
-    // Check dimension consistency
-    let (fa_r, fa_c) = flow_acc.shape();
-    let (fd_r, fd_c) = flow_dir.shape();
-    if rows != fa_r || cols != fa_c {
-        return Err(Error::SizeMismatch {
-            er: rows,
-            ec: cols,
-            ar: fa_r,
-            ac: fa_c,
-        });
-    }
-    if rows != fd_r || cols != fd_c {
-        return Err(Error::SizeMismatch {
-            er: rows,
-            ec: cols,
-            ar: fd_r,
-            ac: fd_c,
-        });
-    }
+    // Multi-raster entry point: slope, flow_acc and (if present) weight
+    // share element type f64 and go through the shared check_aligned
+    // helper directly; flow_dir is a Raster<u8> and needs the mixed-type
+    // equivalent above.
+    let mut f64_inputs = vec![slope, flow_acc];
     if let Some(w) = weight {
-        let (wr, wc) = w.shape();
-        if rows != wr || cols != wc {
-            return Err(Error::SizeMismatch {
-                er: rows,
-                ec: cols,
-                ar: wr,
-                ac: wc,
-            });
-        }
+        f64_inputs.push(w);
     }
+    surtgis_core::raster::check_aligned(&f64_inputs)?;
+    check_shape_transform_crs(slope, flow_dir, "flow_dir")?;
 
-    let nodata_slp = slope.nodata();
-    let nodata_acc = flow_acc.nodata();
     let threshold = params.stream_threshold;
 
     let gt = slope.transform();
@@ -138,7 +160,7 @@ pub fn sediment_connectivity(
             }
 
             let s = unsafe { slope.get_unchecked(start_row, start_col) };
-            if s.is_nan() || nodata_slp.is_some_and(|nd| (s - nd).abs() < f64::EPSILON) {
+            if slope.is_nodata(s) {
                 continue;
             }
 
@@ -225,11 +247,7 @@ pub fn sediment_connectivity(
             let s = unsafe { slope.get_unchecked(row, col) };
             let acc = unsafe { flow_acc.get_unchecked(row, col) };
 
-            if s.is_nan()
-                || acc.is_nan()
-                || nodata_slp.is_some_and(|nd| (s - nd).abs() < f64::EPSILON)
-                || nodata_acc.is_some_and(|nd| (acc - nd).abs() < f64::EPSILON)
-            {
+            if slope.is_nodata(s) || flow_acc.is_nodata(acc) {
                 continue;
             }
 

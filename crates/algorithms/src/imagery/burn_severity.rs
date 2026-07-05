@@ -112,7 +112,6 @@ pub fn dnbr(
 /// Raster with severity class values (1-6), NaN for nodata
 pub fn burn_severity_classify(dnbr_raster: &Raster<f64>) -> Result<Raster<f64>> {
     let (rows, cols) = dnbr_raster.shape();
-    let nodata = dnbr_raster.nodata();
 
     let output_data: Vec<f64> = (0..rows)
         .into_par_iter()
@@ -121,7 +120,7 @@ pub fn burn_severity_classify(dnbr_raster: &Raster<f64>) -> Result<Raster<f64>> 
             for col in 0..cols {
                 let val = unsafe { dnbr_raster.get_unchecked(row, col) };
 
-                if val.is_nan() || nodata.is_some_and(|nd| (val - nd).abs() < f64::EPSILON) {
+                if dnbr_raster.is_nodata(val) {
                     continue;
                 }
 

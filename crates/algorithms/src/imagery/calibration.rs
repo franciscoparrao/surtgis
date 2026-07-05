@@ -189,13 +189,11 @@ fn is_nodata(val: f64, nodata: Option<f64>) -> bool {
     if val.is_nan() {
         return true;
     }
-    if let Some(nd) = nodata
-        && !nd.is_nan()
-        && (val - nd).abs() < f64::EPSILON
-    {
-        return true;
-    }
-    false
+    // Exact-bit comparison, matching `RasterElement::is_nodata` in
+    // crates/core/src/raster/element.rs: a tolerance-based match would
+    // corrupt small valid values near the sentinel (e.g. reflectance
+    // ~ 0 with nodata = 0.0) and miss large sentinels off by 1 ULP.
+    matches!(nodata, Some(nd) if val == nd)
 }
 
 fn map_per_pixel<F>(raster: &Raster<f64>, nodata: Option<f64>, f: F) -> Result<Raster<f64>>

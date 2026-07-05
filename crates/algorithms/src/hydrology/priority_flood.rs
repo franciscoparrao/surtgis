@@ -118,14 +118,13 @@ impl Algorithm for PriorityFlood {
 /// A new raster with all depressions filled
 pub fn priority_flood(dem: &Raster<f64>, params: PriorityFloodParams) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
-    let nodata = dem.nodata();
     let epsilon = params.epsilon;
 
     let mut output = Array2::<f64>::from_elem((rows, cols), f64::NAN);
     let mut visited = Array2::<bool>::from_elem((rows, cols), false);
     let mut heap = BinaryHeap::new();
 
-    let is_nodata = |v: f64| v.is_nan() || nodata.is_some_and(|nd| (v - nd).abs() < f64::EPSILON);
+    let is_nodata = |v: f64| dem.is_nodata(v);
 
     // Step 1: Seed the priority queue with border cells AND valid cells
     // adjacent to nodata. Nodata acts as a drainage outlet (elevation −∞),
@@ -185,8 +184,7 @@ pub fn priority_flood(dem: &Raster<f64>, params: PriorityFloodParams) -> Result<
             let neighbor_elev = unsafe { dem.get_unchecked(nr, nc) };
 
             // Check nodata
-            let is_nd = neighbor_elev.is_nan()
-                || nodata.is_some_and(|nd| (neighbor_elev - nd).abs() < f64::EPSILON);
+            let is_nd = dem.is_nodata(neighbor_elev);
 
             if is_nd {
                 output[(nr, nc)] = neighbor_elev;

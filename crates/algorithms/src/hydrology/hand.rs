@@ -17,6 +17,48 @@ use surtgis_core::{Error, Result};
 
 use super::d8::D8_OFFSETS;
 
+/// Validate that `other` shares shape, geotransform and EPSG-comparable
+/// CRS with `reference`, even though the two rasters may have different
+/// element types (e.g. a `Raster<u8>` flow-direction grid alongside the
+/// `Raster<f64>` DEM).
+///
+/// `surtgis_core::raster::check_aligned` cannot be called directly across
+/// mixed element types because it is generic over a single `T` for the
+/// whole slice; this mirrors its shape + geotransform + CRS contract for
+/// the one input that doesn't fit that slice.
+fn check_shape_transform_crs<T, U>(
+    reference: &Raster<T>,
+    other: &Raster<U>,
+    context: &str,
+) -> Result<()>
+where
+    T: surtgis_core::raster::RasterCell,
+    U: surtgis_core::raster::RasterCell,
+{
+    if reference.shape() != other.shape() {
+        return Err(Error::ShapeMismatch {
+            expected: reference.shape(),
+            got: other.shape(),
+            context: context.to_string(),
+        });
+    }
+    if reference.transform() != other.transform() {
+        return Err(Error::Misaligned {
+            reason: format!("geotransform mismatch: {context} is not aligned with the DEM"),
+        });
+    }
+    if let (Some(a), Some(b)) = (
+        reference.crs().and_then(|c| c.epsg()),
+        other.crs().and_then(|c| c.epsg()),
+    ) && a != b
+    {
+        return Err(Error::Misaligned {
+            reason: format!("CRS mismatch: {context} is EPSG:{b} but the DEM is EPSG:{a}"),
+        });
+    }
+    Ok(())
+}
+
 /// Parameters for HAND computation
 #[derive(Debug, Clone)]
 pub struct HandParams {
@@ -56,27 +98,12 @@ pub fn hand(
     params: HandParams,
 ) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
-    let (fd_rows, fd_cols) = flow_dir.shape();
-    let (fa_rows, fa_cols) = flow_acc.shape();
 
-    if rows != fd_rows || cols != fd_cols {
-        return Err(Error::SizeMismatch {
-            er: rows,
-            ec: cols,
-            ar: fd_rows,
-            ac: fd_cols,
-        });
-    }
-    if rows != fa_rows || cols != fa_cols {
-        return Err(Error::SizeMismatch {
-            er: rows,
-            ec: cols,
-            ar: fa_rows,
-            ac: fa_cols,
-        });
-    }
-
-    let nodata = dem.nodata();
+    // Multi-raster entry point: dem and flow_acc share element type f64
+    // and can go through the shared check_aligned helper directly;
+    // flow_dir is a Raster<u8> and needs the mixed-type equivalent above.
+    surtgis_core::raster::check_aligned(&[dem, flow_acc])?;
+    check_shape_transform_crs(dem, flow_dir, "flow_dir")?;
     let threshold = params.stream_threshold;
     let total = rows * cols;
 
@@ -116,7 +143,7 @@ pub fn hand(
             }
 
             let z = unsafe { dem.get_unchecked(start_row, start_col) };
-            if z.is_nan() || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON) {
+            if dem.is_nodata(z) {
                 continue; // Nodata
             }
 

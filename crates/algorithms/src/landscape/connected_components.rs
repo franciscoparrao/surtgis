@@ -34,7 +34,6 @@ pub fn label_patches(
     }
 
     let data = classification.data();
-    let nodata = classification.nodata();
 
     // Union-Find data structure
     let mut parent: Vec<i32> = Vec::with_capacity(rows * cols / 4);
@@ -61,13 +60,8 @@ pub fn label_patches(
             let val = data[[r, c]];
 
             // Skip nodata
-            if val.is_nan() {
+            if classification.is_nodata(val) {
                 continue;
-            }
-            if let Some(nd) = nodata {
-                if nd.is_finite() && (val - nd).abs() < 1e-10 {
-                    continue;
-                }
             }
 
             let class_val = val.round() as i64;

@@ -58,7 +58,6 @@ pub fn flow_accumulation_mfd_adaptive(
     params: AdaptiveMfdParams,
 ) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
-    let nodata = dem.nodata();
     let cell_size = dem.cell_size();
     let total = rows * cols;
 
@@ -67,7 +66,7 @@ pub fn flow_accumulation_mfd_adaptive(
     for row in 0..rows {
         for col in 0..cols {
             let z = unsafe { dem.get_unchecked(row, col) };
-            let is_nd = z.is_nan() || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
+            let is_nd = dem.is_nodata(z);
             if !is_nd {
                 cells.push((row, col, z));
             }
@@ -80,7 +79,7 @@ pub fn flow_accumulation_mfd_adaptive(
     for row in 0..rows {
         for col in 0..cols {
             let z = unsafe { dem.get_unchecked(row, col) };
-            let is_nd = z.is_nan() || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
+            let is_nd = dem.is_nodata(z);
             if is_nd {
                 accumulation[(row, col)] = 0.0;
             }
@@ -103,12 +102,7 @@ pub fn flow_accumulation_mfd_adaptive(
             }
 
             let nz = unsafe { dem.get_unchecked(nr as usize, nc as usize) };
-            if nz.is_nan() {
-                continue;
-            }
-            if let Some(nd) = nodata
-                && (nz - nd).abs() < f64::EPSILON
-            {
+            if dem.is_nodata(nz) {
                 continue;
             }
 
@@ -162,7 +156,7 @@ pub fn flow_accumulation_mfd_adaptive(
     for row in 0..rows {
         for col in 0..cols {
             let z = unsafe { dem.get_unchecked(row, col) };
-            let is_nd = z.is_nan() || nodata.is_some_and(|nd| (z - nd).abs() < f64::EPSILON);
+            let is_nd = dem.is_nodata(z);
             if !is_nd {
                 accumulation[(row, col)] = (accumulation[(row, col)] - 1.0).max(0.0);
             }
