@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use crate::crs::CRS;
 use crate::error::{Error, Result};
 use geo_types::{Coord, Geometry, LineString, Point, Polygon};
 
@@ -72,6 +73,18 @@ pub fn read_gpkg(path: &Path, layer: Option<&str>) -> Result<FeatureCollection> 
             ))
         })?;
 
+    // Resolve the table's CRS via gpkg_geometry_columns.srs_id ->
+    // gpkg_spatial_ref_sys, so vector data in a GeoPackage doesn't silently
+    // lose its CRS the way it used to (see `read_gpkg_crs`).
+    let srs_id: Option<i64> = conn
+        .query_row(
+            "SELECT srs_id FROM gpkg_geometry_columns WHERE table_name = ?1",
+            [&table_name],
+            |row| row.get(0),
+        )
+        .ok();
+    let crs = srs_id.and_then(|id| read_gpkg_crs(&conn, id));
+
     // Get all column names (excluding geometry) via PRAGMA
     let pragma_query = format!("PRAGMA table_info(\"{}\")", table_name);
     let mut col_stmt = conn
@@ -98,7 +111,7 @@ pub fn read_gpkg(path: &Path, layer: Option<&str>) -> Result<FeatureCollection> 
         .query([])
         .map_err(|e| Error::Other(format!("Query failed: {}", e)))?;
 
-    let mut features = FeatureCollection::new();
+    let mut features = FeatureCollection::with_crs(crs);
 
     while let Some(row) = result_rows
         .next()
@@ -143,6 +156,44 @@ pub fn read_gpkg(path: &Path, layer: Option<&str>) -> Result<FeatureCollection> 
     }
 
     Ok(features)
+}
+
+/// Resolve a GeoPackage `srs_id` to a [`CRS`] via `gpkg_spatial_ref_sys`.
+///
+/// GeoPackage reserves `srs_id` 0 ("undefined geographic") and -1
+/// ("undefined cartesian") per the OGC spec — both mean "no real CRS",
+/// so they map to `None` rather than being misread as EPSG codes. For a
+/// real `srs_id`, prefer `organization`/`organization_coordsys_id` when the
+/// organization is EPSG (the overwhelming common case); otherwise fall back
+/// to the `definition` WKT column. Returns `None` (not a guess) if the
+/// `gpkg_spatial_ref_sys` table/row is missing or gives nothing usable.
+fn read_gpkg_crs(conn: &rusqlite::Connection, srs_id: i64) -> Option<CRS> {
+    if srs_id <= 0 {
+        return None;
+    }
+    let row = conn
+        .query_row(
+            "SELECT organization, organization_coordsys_id, definition \
+             FROM gpkg_spatial_ref_sys WHERE srs_id = ?1",
+            [srs_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .ok()?;
+    let (organization, organization_coordsys_id, definition) = row;
+    if organization.eq_ignore_ascii_case("EPSG") && organization_coordsys_id > 0 {
+        Some(CRS::from_epsg(organization_coordsys_id as u32))
+    } else if !definition.trim().is_empty() && !definition.trim().eq_ignore_ascii_case("undefined")
+    {
+        Some(CRS::from_wkt(definition))
+    } else {
+        None
+    }
 }
 
 /// List all feature table names in a GeoPackage.
@@ -563,11 +614,22 @@ mod tests {
                 z TINYINT NOT NULL,
                 m TINYINT NOT NULL
             );
+            CREATE TABLE gpkg_spatial_ref_sys (
+                srs_name TEXT NOT NULL,
+                srs_id INTEGER NOT NULL PRIMARY KEY,
+                organization TEXT NOT NULL,
+                organization_coordsys_id INTEGER NOT NULL,
+                definition TEXT NOT NULL,
+                description TEXT
+            );
             INSERT INTO gpkg_contents VALUES (
                 'test_layer', 'features', 'test', '', '', 0, 0, 10, 10, 4326
             );
             INSERT INTO gpkg_geometry_columns VALUES (
                 'test_layer', 'geom', 'POLYGON', 4326, 0, 0
+            );
+            INSERT INTO gpkg_spatial_ref_sys VALUES (
+                'WGS 84', 4326, 'EPSG', 4326, 'GEOGCS[\"WGS 84\"]', ''
             );
             CREATE TABLE test_layer (
                 fid INTEGER PRIMARY KEY,
@@ -618,11 +680,57 @@ mod tests {
             other => panic!("Expected Float 42.5, got {:?}", other),
         }
 
+        // CRS resolved via gpkg_geometry_columns.srs_id -> gpkg_spatial_ref_sys.
+        assert_eq!(fc.crs().and_then(|c| c.epsg()), Some(4326));
+
         // Test list_gpkg_layers
         let layers = list_gpkg_layers(&gpkg_path).unwrap();
         assert_eq!(layers, vec!["test_layer"]);
 
         // Cleanup
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_gpkg_missing_spatial_ref_sys_table_yields_none_crs() {
+        // Same schema as `test_gpkg_roundtrip` but WITHOUT gpkg_spatial_ref_sys:
+        // the CRS lookup must fail closed to `None`, not panic or guess.
+        let dir = std::env::temp_dir().join("surtgis_gpkg_no_srs_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let gpkg_path = dir.join("no_srs.gpkg");
+        let _ = std::fs::remove_file(&gpkg_path);
+
+        let conn = rusqlite::Connection::open(&gpkg_path).unwrap();
+        conn.execute_batch(
+            "
+            CREATE TABLE gpkg_contents (
+                table_name TEXT NOT NULL PRIMARY KEY,
+                data_type TEXT NOT NULL,
+                identifier TEXT,
+                description TEXT DEFAULT '',
+                last_change TEXT,
+                min_x DOUBLE, min_y DOUBLE, max_x DOUBLE, max_y DOUBLE,
+                srs_id INTEGER
+            );
+            CREATE TABLE gpkg_geometry_columns (
+                table_name TEXT NOT NULL,
+                column_name TEXT NOT NULL,
+                geometry_type_name TEXT NOT NULL,
+                srs_id INTEGER NOT NULL,
+                z TINYINT NOT NULL,
+                m TINYINT NOT NULL
+            );
+            INSERT INTO gpkg_contents VALUES ('t', 'features', 't', '', '', 0, 0, 1, 1, 4326);
+            INSERT INTO gpkg_geometry_columns VALUES ('t', 'geom', 'POINT', 4326, 0, 0);
+            CREATE TABLE t (fid INTEGER PRIMARY KEY, geom BLOB);
+        ",
+        )
+        .unwrap();
+        drop(conn);
+
+        let fc = read_gpkg(&gpkg_path, None).unwrap();
+        assert!(fc.crs().is_none());
+
         std::fs::remove_dir_all(&dir).ok();
     }
 

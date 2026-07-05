@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use crate::crs::CRS;
 use crate::error::{Error, Result};
 use geo_types::Geometry;
 
@@ -37,7 +38,7 @@ pub fn read_shapefile(path: &Path) -> Result<FeatureCollection> {
     let mut reader = shapefile::Reader::from_path(path)
         .map_err(|e| Error::Other(format!("Cannot open shapefile '{}': {}", path.display(), e)))?;
 
-    let mut features = FeatureCollection::new();
+    let mut features = FeatureCollection::with_crs(read_prj_sidecar(path));
 
     for result in reader.iter_shapes_and_records() {
         let (shape, record) =
@@ -61,6 +62,27 @@ pub fn read_shapefile(path: &Path) -> Result<FeatureCollection> {
     }
 
     Ok(features)
+}
+
+/// Read the `.prj` sidecar file next to a shapefile, if present.
+///
+/// The `.prj` file holds the CRS as ESRI WKT. There is no standard,
+/// dependency-free way to resolve arbitrary ESRI WKT to an EPSG code, so it
+/// is kept as opaque WKT via [`CRS::from_wkt`] — still enough for
+/// [`super::rasterize::rasterize_polygons`] to detect an outright CRS
+/// mismatch when the reference raster's CRS is *also* WKT-only and the
+/// strings disagree, though the common useful case is EPSG vs EPSG.
+/// Returns `None` (unknown), not a guess, when the sidecar is missing,
+/// unreadable, or empty.
+fn read_prj_sidecar(shp_path: &Path) -> Option<CRS> {
+    let prj_path = shp_path.with_extension("prj");
+    let content = std::fs::read_to_string(prj_path).ok()?;
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(CRS::from_wkt(trimmed.to_string()))
+    }
 }
 
 /// Convert a dbase `Record` into our `AttributeValue` map.
@@ -146,7 +168,48 @@ mod tests {
             other => panic!("Expected String 'Basin1', got {:?}", other),
         }
 
+        // No .prj sidecar written above: CRS must be honestly unknown.
+        assert!(fc.crs().is_none());
+
         // Cleanup
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_read_shapefile_populates_crs_from_prj_sidecar() {
+        use shapefile::dbase::TableWriterBuilder;
+        use shapefile::{Point, PolygonRing, Writer};
+
+        let dir = std::env::temp_dir().join("surtgis_shp_prj_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let shp_path = dir.join("test_prj.shp");
+
+        let polygon = shapefile::Polygon::with_rings(vec![PolygonRing::Outer(vec![
+            Point::new(0.0, 0.0),
+            Point::new(1.0, 0.0),
+            Point::new(1.0, 1.0),
+            Point::new(0.0, 1.0),
+            Point::new(0.0, 0.0),
+        ])]);
+        let table_builder = TableWriterBuilder::new();
+        let mut writer = Writer::from_path(&shp_path, table_builder).unwrap();
+        writer
+            .write_shape_and_record(&polygon, &shapefile::dbase::Record::default())
+            .unwrap();
+        drop(writer);
+
+        // Write a minimal ESRI WKT .prj sidecar next to the .shp
+        let prj_path = shp_path.with_extension("prj");
+        std::fs::write(
+            &prj_path,
+            r#"PROJCS["WGS_1984_UTM_Zone_19S",GEOGCS["GCS_WGS_1984"]]"#,
+        )
+        .unwrap();
+
+        let fc = read_shapefile(&shp_path).unwrap();
+        let crs = fc.crs().expect("CRS should be populated from .prj sidecar");
+        assert!(crs.wkt().unwrap().contains("UTM_Zone_19S"));
+
         std::fs::remove_dir_all(&dir).ok();
     }
 

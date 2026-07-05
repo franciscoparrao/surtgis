@@ -5,6 +5,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
+use crate::crs::CRS;
 use crate::error::{Error, Result};
 use geo_types::{
     Coord, Geometry, LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon,
@@ -23,16 +24,22 @@ pub fn parse_geojson(json: &str) -> Result<FeatureCollection> {
     let root: Value =
         serde_json::from_str(json).map_err(|e| Error::Other(format!("Invalid JSON: {e}")))?;
 
+    let crs = parse_geojson_crs(&root);
+
     let root_type = root
         .get("type")
         .and_then(|v| v.as_str())
         .unwrap_or_default();
 
     match root_type {
-        "FeatureCollection" => parse_feature_collection(&root),
+        "FeatureCollection" => {
+            let mut fc = parse_feature_collection(&root)?;
+            fc.crs = crs;
+            Ok(fc)
+        }
         "Feature" => {
             let feature = parse_feature(&root)?;
-            let mut fc = FeatureCollection::new();
+            let mut fc = FeatureCollection::with_crs(crs);
             fc.push(feature);
             Ok(fc)
         }
@@ -40,13 +47,54 @@ pub fn parse_geojson(json: &str) -> Result<FeatureCollection> {
         "Point" | "Polygon" | "MultiPolygon" | "LineString" | "MultiLineString" | "MultiPoint"
         | "GeometryCollection" => {
             let geom = parse_geometry(&root)?;
-            let mut fc = FeatureCollection::new();
+            let mut fc = FeatureCollection::with_crs(crs);
             fc.push(Feature::new(geom));
             Ok(fc)
         }
         _ => Err(Error::Other(format!(
             "Unsupported GeoJSON type: '{root_type}'"
         ))),
+    }
+}
+
+/// Determine the CRS of a GeoJSON document.
+///
+/// RFC 7946 mandates WGS84 (`CRS84`) longitude/latitude coordinates and
+/// forbids the legacy `crs` member, but plenty of real-world exports
+/// (older QGIS/ArcGIS/OGR, and this crate's own fluvial handlers when
+/// `--keep-crs` is set) still emit it to record a projected source CRS.
+/// When present, honor it; otherwise fall back to the RFC 7946 default —
+/// that is spec-mandated, not a guess. A `crs` member whose name we can't
+/// parse into an EPSG code yields `None` ("unknown") rather than assuming
+/// WGS84 anyway.
+fn parse_geojson_crs(root: &Value) -> Option<CRS> {
+    match root.get("crs") {
+        // No explicit crs member: RFC 7946 mandates WGS84 lon/lat.
+        None | Some(Value::Null) => Some(CRS::wgs84()),
+        Some(crs_val) => {
+            let name = crs_val
+                .get("properties")
+                .and_then(|p| p.get("name"))
+                .and_then(|n| n.as_str());
+            match name {
+                Some(n) if n.contains("CRS84") => Some(CRS::wgs84()),
+                Some(n) => parse_epsg_from_crs_name(n).map(CRS::from_epsg),
+                None => None,
+            }
+        }
+    }
+}
+
+/// Extract an EPSG code from a legacy GeoJSON `crs` name string, e.g.
+/// `"urn:ogc:def:crs:EPSG::32719"` or `"EPSG:4326"`.
+fn parse_epsg_from_crs_name(name: &str) -> Option<u32> {
+    let idx = name.to_ascii_uppercase().rfind("EPSG")?;
+    let rest = &name[idx + 4..];
+    let digits: String = rest.chars().filter(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        None
+    } else {
+        digits.parse().ok()
     }
 }
 
@@ -275,6 +323,57 @@ mod tests {
             }
         ]
     }"#;
+
+    #[test]
+    fn test_crs_defaults_to_wgs84_without_crs_member() {
+        let fc = parse_geojson(SAMPLE_GEOJSON).unwrap();
+        assert_eq!(fc.crs().and_then(|c| c.epsg()), Some(4326));
+    }
+
+    #[test]
+    fn test_crs_legacy_member_epsg_urn() {
+        let json = r#"{
+            "type": "FeatureCollection",
+            "crs": {
+                "type": "name",
+                "properties": { "name": "urn:ogc:def:crs:EPSG::32719" }
+            },
+            "features": [
+                {
+                    "type": "Feature",
+                    "geometry": { "type": "Point", "coordinates": [350000.0, 6300000.0] },
+                    "properties": {}
+                }
+            ]
+        }"#;
+        let fc = parse_geojson(json).unwrap();
+        assert_eq!(fc.crs().and_then(|c| c.epsg()), Some(32719));
+    }
+
+    #[test]
+    fn test_crs_legacy_member_crs84() {
+        let json = r#"{
+            "type": "FeatureCollection",
+            "crs": {
+                "type": "name",
+                "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" }
+            },
+            "features": []
+        }"#;
+        let fc = parse_geojson(json).unwrap();
+        assert_eq!(fc.crs().and_then(|c| c.epsg()), Some(4326));
+    }
+
+    #[test]
+    fn test_crs_unparseable_member_is_none() {
+        let json = r#"{
+            "type": "FeatureCollection",
+            "crs": { "type": "name", "properties": { "name": "some-custom-thing" } },
+            "features": []
+        }"#;
+        let fc = parse_geojson(json).unwrap();
+        assert!(fc.crs().is_none());
+    }
 
     #[test]
     fn test_parse_feature_collection() {
