@@ -35,7 +35,6 @@ impl Default for RelativeAspectParams {
 /// Compute relative aspect.
 pub fn relative_aspect(dem: &Raster<f64>, params: RelativeAspectParams) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
-    let nodata = dem.nodata();
 
     // Compute local aspect (degrees, 0-360)
     let local_aspect = aspect(dem, AspectOutput::Degrees)?;
@@ -59,7 +58,7 @@ pub fn relative_aspect(dem: &Raster<f64>, params: RelativeAspectParams) -> Resul
 
             for col in 0..cols {
                 let elev = unsafe { dem.get_unchecked(row, col) };
-                if elev.is_nan() || nodata.is_some_and(|nd| (elev - nd).abs() < f64::EPSILON) {
+                if dem.is_nodata(elev) {
                     continue;
                 }
 

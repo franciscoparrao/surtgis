@@ -87,7 +87,6 @@ pub fn pennock(dem: &Raster<f64>, params: PennockParams) -> Result<Raster<f64>> 
         },
     )?;
 
-    let nodata = dem.nodata();
     let st = params.slope_threshold;
     let pct = params.profile_curv_threshold;
     let plct = params.plan_curv_threshold;
@@ -99,7 +98,7 @@ pub fn pennock(dem: &Raster<f64>, params: PennockParams) -> Result<Raster<f64>> 
 
             for col in 0..cols {
                 let elev = unsafe { dem.get_unchecked(row, col) };
-                if elev.is_nan() || nodata.is_some_and(|nd| (elev - nd).abs() < f64::EPSILON) {
+                if dem.is_nodata(elev) {
                     continue;
                 }
 

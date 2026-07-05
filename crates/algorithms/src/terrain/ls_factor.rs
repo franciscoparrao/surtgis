@@ -72,8 +72,6 @@ pub fn ls_factor(
         });
     }
 
-    let nodata_acc = flow_acc.nodata();
-    let nodata_slp = slope_rad.nodata();
     let cell_size = params.cell_size;
     let m = params.m_exponent;
     let n = params.n_exponent;
@@ -87,11 +85,7 @@ pub fn ls_factor(
                 let slp = unsafe { slope_rad.get_unchecked(row, col) };
 
                 // Skip nodata
-                if acc.is_nan()
-                    || slp.is_nan()
-                    || nodata_acc.is_some_and(|nd| (acc - nd).abs() < f64::EPSILON)
-                    || nodata_slp.is_some_and(|nd| (slp - nd).abs() < f64::EPSILON)
-                {
+                if flow_acc.is_nodata(acc) || slope_rad.is_nodata(slp) {
                     continue;
                 }
 

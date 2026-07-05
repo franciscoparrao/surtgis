@@ -28,14 +28,13 @@ use crate::hydrology::{PriorityFloodParams, priority_flood};
 /// valleys have positive depth values.
 pub fn valley_depth(dem: &Raster<f64>) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
-    let nodata = dem.nodata();
 
     // Step 1: Find maximum elevation (ignoring nodata)
     let mut max_elev = f64::NEG_INFINITY;
     for row in 0..rows {
         for col in 0..cols {
             let val = unsafe { dem.get_unchecked(row, col) };
-            if val.is_nan() || nodata.is_some_and(|nd| (val - nd).abs() < f64::EPSILON) {
+            if dem.is_nodata(val) {
                 continue;
             }
             if val > max_elev {
@@ -53,7 +52,7 @@ pub fn valley_depth(dem: &Raster<f64>) -> Result<Raster<f64>> {
     for row in 0..rows {
         for col in 0..cols {
             let val = unsafe { dem.get_unchecked(row, col) };
-            if val.is_nan() || nodata.is_some_and(|nd| (val - nd).abs() < f64::EPSILON) {
+            if dem.is_nodata(val) {
                 continue;
             }
             inverted_data[(row, col)] = max_elev - val;
