@@ -66,6 +66,50 @@ impl Algorithm for Slope {
     }
 }
 
+/// Per-cell Horn (1981) slope kernel shared by the batch (`slope`) and
+/// streaming (`SlopeStreaming::process_row`) paths.
+///
+/// `a..i` is the validated (non-NaN) 3×3 neighborhood:
+/// ```text
+/// a b c
+/// d · f
+/// g h i
+/// ```
+/// (the center value itself isn't needed — only the 8 neighbors enter
+/// Horn's gradient formula). `eight_dx`/`eight_dy` are `8 * cell_size` for
+/// each axis, already resolved for the current row (constant for
+/// projected rasters, or per-row latitude-corrected for geographic ones
+/// via `process_chunk_geo`/`CellSizes::at_row`). Returns slope in `units`.
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn slope_kernel(
+    a: f64,
+    b: f64,
+    c: f64,
+    d: f64,
+    f: f64,
+    g: f64,
+    h: f64,
+    i: f64,
+    eight_dx: f64,
+    eight_dy: f64,
+    zf: f64,
+    units: SlopeUnits,
+) -> f64 {
+    // Horn's method (z_factor scales z, per GDAL convention)
+    let dz_dx = zf * ((c + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_dx;
+    let dz_dy = zf * ((g + 2.0 * h + i) - (a + 2.0 * b + c)) / eight_dy;
+
+    let grad = (dz_dx * dz_dx + dz_dy * dz_dy).sqrt();
+
+    match units {
+        SlopeUnits::Degrees => grad.atan().to_degrees(),
+        // tan(atan(g)) = g — no need for either call
+        SlopeUnits::Percent => grad * 100.0,
+        SlopeUnits::Radians => grad.atan(),
+    }
+}
+
 /// Calculate slope from a DEM
 ///
 /// Uses Horn's (1981) method with a 3x3 neighborhood:
@@ -115,7 +159,7 @@ pub fn slope(dem: &Raster<f64>, params: SlopeParams) -> Result<Raster<f64>> {
         for col in 1..cols - 1 {
             // Get center value
             let e = mid[col];
-            if e.is_nan() || nodata.is_some_and(|nd| (e - nd).abs() < f64::EPSILON) {
+            if e.is_nan() || nodata.is_some_and(|nd| e == nd) {
                 continue; // stays NaN
             }
 
@@ -136,18 +180,7 @@ pub fn slope(dem: &Raster<f64>, params: SlopeParams) -> Result<Raster<f64>> {
                 continue; // stays NaN
             }
 
-            // Horn's method (z_factor scales z, per GDAL convention)
-            let dz_dx = zf * ((c + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_dx;
-            let dz_dy = zf * ((g + 2.0 * h + i) - (a + 2.0 * b + c)) / eight_dy;
-
-            let grad = (dz_dx * dz_dx + dz_dy * dz_dy).sqrt();
-
-            out_row[col] = match units {
-                SlopeUnits::Degrees => grad.atan().to_degrees(),
-                // tan(atan(g)) = g — no need for either call
-                SlopeUnits::Percent => grad * 100.0,
-                SlopeUnits::Radians => grad.atan(),
-            };
+            out_row[col] = slope_kernel(a, b, c, d, f, g, h, i, eight_dx, eight_dy, zf, units);
         }
     });
 
@@ -219,7 +252,7 @@ impl SlopeStreaming {
             }
 
             let e = input[[ir, c]];
-            if e.is_nan() || nodata.map_or(false, |nd| (e - nd).abs() < f64::EPSILON) {
+            if e.is_nan() || nodata.is_some_and(|nd| e == nd) {
                 output[[r, c]] = f64::NAN;
                 continue;
             }
@@ -238,15 +271,8 @@ impl SlopeStreaming {
                 continue;
             }
 
-            let dz_dx = zf * ((cv + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_dx;
-            let dz_dy = zf * ((g + 2.0 * h + i) - (a + 2.0 * b + cv)) / eight_dy;
-            let slope_rad = (dz_dx * dz_dx + dz_dy * dz_dy).sqrt().atan();
-
-            output[[r, c]] = match self.units {
-                SlopeUnits::Degrees => slope_rad.to_degrees(),
-                SlopeUnits::Percent => slope_rad.tan() * 100.0,
-                SlopeUnits::Radians => slope_rad,
-            };
+            output[[r, c]] =
+                slope_kernel(a, b, cv, d, f, g, h, i, eight_dx, eight_dy, zf, self.units);
         }
     }
 }

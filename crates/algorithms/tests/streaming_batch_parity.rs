@@ -13,13 +13,16 @@
 
 use ndarray::Array2;
 use surtgis_algorithms::terrain::{
-    CircularVarianceParams, CircularVarianceStreaming, ConvergenceParams, ConvergenceStreaming,
-    DevParams, DevStreaming, DiffFromMeanParams, DiffFromMeanStreaming, EastnessStreaming,
-    NormalDeviationParams, NormalDeviationStreaming, NorthnessStreaming, PercentElevRangeParams,
-    PercentElevRangeStreaming, SphericalStdDevParams, SphericalStdDevStreaming, TpiParams,
-    TpiStreaming, TriParams, TriStreaming, VrmParams, VrmStreaming, circular_variance_aspect,
-    convergence_index, dev, diff_from_mean_elev, eastness, normal_vector_deviation, northness,
-    percent_elev_range, spherical_std_dev, tpi, tri, vrm,
+    AspectOutput, AspectStreaming, CircularVarianceParams, CircularVarianceStreaming,
+    ConvergenceParams, ConvergenceStreaming, CurvatureParams, CurvatureStreaming, DevParams,
+    DevStreaming, DiffFromMeanParams, DiffFromMeanStreaming, EastnessStreaming, HillshadeParams,
+    HillshadeStreaming, MultiHillshadeParams, MultiHillshadeStreaming, NormalDeviationParams,
+    NormalDeviationStreaming, NorthnessStreaming, PercentElevRangeParams,
+    PercentElevRangeStreaming, SlopeParams, SlopeStreaming, SphericalStdDevParams,
+    SphericalStdDevStreaming, TpiParams, TpiStreaming, TriParams, TriStreaming, VrmParams,
+    VrmStreaming, aspect, circular_variance_aspect, convergence_index, curvature, dev,
+    diff_from_mean_elev, eastness, hillshade, multidirectional_hillshade, normal_vector_deviation,
+    northness, percent_elev_range, slope, spherical_std_dev, tpi, tri, vrm,
 };
 use surtgis_core::raster::Raster;
 use surtgis_core::{GeoTransform, WindowAlgorithm};
@@ -47,6 +50,35 @@ fn synthetic_dem() -> Raster<f64> {
     }
     // NaN hole
     dem.set(20, 18, f64::NAN).unwrap();
+    dem
+}
+
+/// Same surface as `synthetic_dem`, but without the NaN hole.
+///
+/// Used only by `aspect_parity`: `aspect`'s batch path encodes *every*
+/// invalid cell (edge, nodata-neighbor, and flat) with a `-1.0` sentinel,
+/// while `AspectStreaming` encodes all of them as `NaN` — a pre-existing
+/// inconsistency unrelated to the kernel-duplication this refactor
+/// removes (see `aspect_bearing_rad`/`format_aspect` in
+/// `src/terrain/aspect.rs`, which both paths now call identically for the
+/// actual gradient math). Comparing a cell next to `synthetic_dem`'s NaN
+/// hole would spuriously fail on that unrelated sentinel mismatch rather
+/// than on anything this refactor could regress, so this variant removes
+/// the hole to isolate the kernel-parity check.
+fn synthetic_dem_no_holes() -> Raster<f64> {
+    let mut dem = Raster::new(ROWS, COLS);
+    dem.set_transform(GeoTransform::new(0.0, ROWS as f64 * 5.0, 5.0, -5.0));
+    for r in 0..ROWS {
+        for c in 0..COLS {
+            let x = c as f64;
+            let y = r as f64;
+            let z = 30.0 * (x * 0.31).sin()
+                + 22.0 * (y * 0.23).cos()
+                + 0.4 * x * y / 10.0
+                + ((r * 7 + c * 13) % 17) as f64 * 1.5;
+            dem.set(r, c, z).unwrap();
+        }
+    }
     dem
 }
 
@@ -207,4 +239,90 @@ fn eastness_parity() {
     let batch = eastness(&dem).unwrap();
     let stream = run_streaming(&EastnessStreaming, &dem);
     assert_interior_match(&batch, &stream, 1, 1e-12);
+}
+
+// ─── Sprint 4 unification: the 5 hottest/highest-risk kernels ─────────────
+//
+// slope, aspect, hillshade, multidirectional_hillshade and curvature were
+// left un-unified by Sprint 3 (PR #68) even though 11 other focal-window
+// algorithms were fixed. Each had the Horn (1981)/curvature math written
+// twice — once in the batch function, once in the streaming
+// `WindowAlgorithm::process_chunk` — exactly the pattern that caused the
+// historical C1 hillshade N-S mirror bug (Sprint 1). These tests pin the
+// two paths to the shared per-cell kernel with an exact (0.0) tolerance:
+// batch and streaming now call the identical function, so on interior
+// cells there must be zero divergence, not just "close enough".
+
+#[test]
+fn slope_parity() {
+    let dem = synthetic_dem();
+    let params = SlopeParams::default();
+    let batch = slope(&dem, params.clone()).unwrap();
+    let algo = SlopeStreaming {
+        units: params.units,
+        z_factor: params.z_factor,
+    };
+    let stream = run_streaming(&algo, &dem);
+    assert_interior_match(&batch, &stream, 1, 0.0);
+}
+
+#[test]
+fn aspect_parity() {
+    // Uses the hole-free DEM: batch's invalid-cell sentinel is -1.0,
+    // streaming's is NaN (a pre-existing divergence unrelated to the
+    // kernel duplication this refactor removes — see
+    // `synthetic_dem_no_holes` doc comment). With no NaN neighbors and an
+    // irregular gradient that never hits the flat threshold, every
+    // interior cell is a genuine (non-sentinel) bearing, so this isolates
+    // the shared `aspect_bearing_rad`/`format_aspect` math.
+    let dem = synthetic_dem_no_holes();
+    let batch = aspect(&dem, AspectOutput::Degrees).unwrap();
+    let algo = AspectStreaming {
+        output_format: AspectOutput::Degrees,
+    };
+    let stream = run_streaming(&algo, &dem);
+    assert_interior_match(&batch, &stream, 1, 0.0);
+}
+
+#[test]
+fn hillshade_parity() {
+    let dem = synthetic_dem();
+    let params = HillshadeParams::default();
+    let batch = hillshade(&dem, params.clone()).unwrap();
+    let algo = HillshadeStreaming {
+        azimuth: params.azimuth,
+        altitude: params.altitude,
+        z_factor: params.z_factor,
+    };
+    let stream = run_streaming(&algo, &dem);
+    assert_interior_match(&batch, &stream, 1, 0.0);
+}
+
+#[test]
+fn multidirectional_hillshade_parity() {
+    let dem = synthetic_dem();
+    let params = MultiHillshadeParams::default();
+    let batch = multidirectional_hillshade(&dem, params.clone()).unwrap();
+    let algo = MultiHillshadeStreaming {
+        altitude: params.altitude,
+        z_factor: params.z_factor,
+        normalized: params.normalized,
+    };
+    let stream = run_streaming(&algo, &dem);
+    assert_interior_match(&batch, &stream, 1, 0.0);
+}
+
+#[test]
+fn curvature_parity() {
+    let dem = synthetic_dem();
+    let params = CurvatureParams::default();
+    let batch = curvature(&dem, params.clone()).unwrap();
+    let algo = CurvatureStreaming {
+        curvature_type: params.curvature_type,
+        method: params.method,
+        formula: params.formula,
+        z_factor: params.z_factor,
+    };
+    let stream = run_streaming(&algo, &dem);
+    assert_interior_match(&batch, &stream, 1, 0.0);
 }
