@@ -41,7 +41,6 @@ use surtgis_core::{Error, Result};
 pub fn shape_index(dem: &Raster<f64>) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
     let cs = dem.cell_size();
-    let nodata = dem.nodata();
     let cs2 = cs * cs;
 
     let output_data: Vec<f64> = (0..rows)
@@ -51,7 +50,7 @@ pub fn shape_index(dem: &Raster<f64>) -> Result<Raster<f64>> {
 
             for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let z5 = unsafe { dem.get_unchecked(row, col) };
-                if z5.is_nan() || nodata.is_some_and(|nd| (z5 - nd).abs() < f64::EPSILON) {
+                if dem.is_nodata(z5) {
                     continue;
                 }
 
@@ -121,7 +120,6 @@ pub fn shape_index(dem: &Raster<f64>) -> Result<Raster<f64>> {
 pub fn curvedness(dem: &Raster<f64>) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
     let cs = dem.cell_size();
-    let nodata = dem.nodata();
     let cs2 = cs * cs;
 
     let output_data: Vec<f64> = (0..rows)
@@ -131,7 +129,7 @@ pub fn curvedness(dem: &Raster<f64>) -> Result<Raster<f64>> {
 
             for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let z5 = unsafe { dem.get_unchecked(row, col) };
-                if z5.is_nan() || nodata.is_some_and(|nd| (z5 - nd).abs() < f64::EPSILON) {
+                if dem.is_nodata(z5) {
                     continue;
                 }
 

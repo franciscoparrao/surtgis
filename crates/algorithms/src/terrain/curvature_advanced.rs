@@ -78,7 +78,6 @@ pub fn advanced_curvatures(
 ) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
     let cs = dem.cell_size();
-    let nodata = dem.nodata();
     let cs2 = cs * cs;
     let cs6 = 6.0 * cs;
     let cs2_3 = 3.0 * cs2;
@@ -91,7 +90,7 @@ pub fn advanced_curvatures(
 
             for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let z5 = unsafe { dem.get_unchecked(row, col) };
-                if z5.is_nan() || nodata.is_some_and(|nd| (z5 - nd).abs() < f64::EPSILON) {
+                if dem.is_nodata(z5) {
                     continue;
                 }
                 if row == 0 || row == rows - 1 || col == 0 || col == cols - 1 {
@@ -143,7 +142,6 @@ pub fn advanced_curvatures(
 pub fn all_curvatures(dem: &Raster<f64>) -> Result<AllCurvatures> {
     let (rows, cols) = dem.shape();
     let cs = dem.cell_size();
-    let nodata = dem.nodata();
     let cs2 = cs * cs;
     let cs6 = 6.0 * cs;
     let cs2_3 = 3.0 * cs2;
@@ -157,7 +155,7 @@ pub fn all_curvatures(dem: &Raster<f64>) -> Result<AllCurvatures> {
 
             for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let z5 = unsafe { dem.get_unchecked(row, col) };
-                if z5.is_nan() || nodata.is_some_and(|nd| (z5 - nd).abs() < f64::EPSILON) {
+                if dem.is_nodata(z5) {
                     continue;
                 }
                 if row == 0 || row == rows - 1 || col == 0 || col == cols - 1 {

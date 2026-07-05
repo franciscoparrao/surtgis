@@ -44,18 +44,16 @@ pub fn edge_density(dem: &Raster<f64>, params: EdgeDensityParams) -> Result<Rast
 
     // Step 1: compute Sobel edge magnitudes
     let edges = sobel_edge(dem)?;
-    let edge_nodata = edges.nodata();
 
     // Step 2: focal proportion of edge pixels
     let output_data: Vec<f64> = (0..rows)
         .into_par_iter()
         .flat_map(|row| {
             let mut row_data = vec![f64::NAN; cols];
-            let nodata = dem.nodata();
 
             for (col, out) in row_data.iter_mut().enumerate() {
                 let center = unsafe { dem.get_unchecked(row, col) };
-                if center.is_nan() || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON) {
+                if dem.is_nodata(center) {
                     continue;
                 }
 
@@ -73,9 +71,7 @@ pub fn edge_density(dem: &Raster<f64>, params: EdgeDensityParams) -> Result<Rast
                         let nr = (ri + dr) as usize;
                         let nc = (ci + dc) as usize;
                         let ev = unsafe { edges.get_unchecked(nr, nc) };
-                        if ev.is_nan()
-                            || edge_nodata.is_some_and(|nd| (ev - nd).abs() < f64::EPSILON)
-                        {
+                        if edges.is_nodata(ev) {
                             continue;
                         }
                         total += 1;

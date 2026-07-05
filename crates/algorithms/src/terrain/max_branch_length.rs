@@ -27,7 +27,6 @@ use crate::hydrology::d8::{D8_DISTANCE as D8_DIST, D8_OFFSETS};
 /// Returns distances in cell units (cardinal = 1, diagonal = sqrt(2)).
 pub fn max_branch_length(dem: &Raster<f64>) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
-    let nodata = dem.nodata();
 
     // Step 1: fill depressions
     let filled = priority_flood(dem, PriorityFloodParams { epsilon: 1e-5 })?;
@@ -61,7 +60,7 @@ pub fn max_branch_length(dem: &Raster<f64>) -> Result<Raster<f64>> {
     for r in 0..rows {
         for c in 0..cols {
             let v = unsafe { dem.get_unchecked(r, c) };
-            if v.is_nan() || nodata.is_some_and(|nd| (v - nd).abs() < f64::EPSILON) {
+            if dem.is_nodata(v) {
                 continue;
             }
             if in_degree[idx(r, c)] == 0 {
@@ -106,7 +105,7 @@ pub fn max_branch_length(dem: &Raster<f64>) -> Result<Raster<f64>> {
     for r in 0..rows {
         for c in 0..cols {
             let v = unsafe { dem.get_unchecked(r, c) };
-            if v.is_nan() || nodata.is_some_and(|nd| (v - nd).abs() < f64::EPSILON) {
+            if dem.is_nodata(v) {
                 continue;
             }
             output_data[idx(r, c)] = max_branch[idx(r, c)];

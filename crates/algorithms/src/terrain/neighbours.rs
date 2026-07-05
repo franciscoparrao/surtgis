@@ -34,7 +34,6 @@ pub struct NeighbourStatsResult {
 /// Compute all 5 neighbour elevation statistics in one pass.
 pub fn neighbour_stats(dem: &Raster<f64>) -> Result<NeighbourStatsResult> {
     let (rows, cols) = dem.shape();
-    let nodata = dem.nodata();
 
     // Each row produces 5 values per pixel
     let output_data: Vec<[f64; 5]> = (0..rows)
@@ -44,7 +43,7 @@ pub fn neighbour_stats(dem: &Raster<f64>) -> Result<NeighbourStatsResult> {
 
             for (col, out) in row_data.iter_mut().enumerate() {
                 let center = unsafe { dem.get_unchecked(row, col) };
-                if center.is_nan() || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON) {
+                if dem.is_nodata(center) {
                     continue;
                 }
 
@@ -68,7 +67,7 @@ pub fn neighbour_stats(dem: &Raster<f64>) -> Result<NeighbourStatsResult> {
                         let nr = (row as isize + dr) as usize;
                         let nc = (col as isize + dc) as usize;
                         let nv = unsafe { dem.get_unchecked(nr, nc) };
-                        if nv.is_nan() || nodata.is_some_and(|nd| (nv - nd).abs() < f64::EPSILON) {
+                        if dem.is_nodata(nv) {
                             continue;
                         }
 

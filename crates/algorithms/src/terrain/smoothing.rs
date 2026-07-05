@@ -434,7 +434,6 @@ pub fn iterative_mean_smoothing(
     }
 
     let (rows, cols) = dem.shape();
-    let nodata = dem.nodata();
     let m = params.weight_exponent;
 
     // Distance weights for 3×3 neighborhood
@@ -472,12 +471,7 @@ pub fn iterative_mean_smoothing(
 
                 for col in 0..cols {
                     let z0 = prev[(row, col)];
-                    if z0.is_nan() {
-                        continue;
-                    }
-                    if let Some(nd) = nodata
-                        && (z0 - nd).abs() < f64::EPSILON
-                    {
+                    if dem.is_nodata(z0) {
                         continue;
                     }
 
@@ -495,12 +489,7 @@ pub fn iterative_mean_smoothing(
                         let nc = (col as isize + dc) as usize;
                         let z = prev[(nr, nc)];
 
-                        if z.is_nan() {
-                            continue;
-                        }
-                        if let Some(nd) = nodata
-                            && (z - nd).abs() < f64::EPSILON
-                        {
+                        if dem.is_nodata(z) {
                             continue;
                         }
 

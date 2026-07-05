@@ -23,7 +23,6 @@ use surtgis_core::{Error, Result};
 /// hydrologically filled DEM and the original DEM. Non-sink cells = 0.
 pub fn elev_above_pit(dem: &Raster<f64>) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
-    let nodata = dem.nodata();
 
     // Fill depressions using priority-flood with small epsilon for flat resolution
     let filled = priority_flood(dem, PriorityFloodParams { epsilon: 1e-5 })?;
@@ -36,10 +35,10 @@ pub fn elev_above_pit(dem: &Raster<f64>) -> Result<Raster<f64>> {
             for col in 0..cols {
                 let orig = unsafe { dem.get_unchecked(row, col) };
                 let fill = unsafe { filled.get_unchecked(row, col) };
-                if orig.is_nan() || fill.is_nan() {
+                if fill.is_nan() {
                     continue;
                 }
-                if nodata.is_some_and(|nd| (orig - nd).abs() < f64::EPSILON) {
+                if dem.is_nodata(orig) {
                     continue;
                 }
                 row_data[col] = fill - orig;

@@ -19,7 +19,6 @@ use surtgis_core::{Error, Result};
 /// ranging from 0 (lowest) to 1 (highest).
 pub fn elev_relative_to_min_max(dem: &Raster<f64>) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
-    let nodata = dem.nodata();
 
     // Pass 1: global min/max
     let mut global_min = f64::INFINITY;
@@ -27,7 +26,7 @@ pub fn elev_relative_to_min_max(dem: &Raster<f64>) -> Result<Raster<f64>> {
     for row in 0..rows {
         for col in 0..cols {
             let v = unsafe { dem.get_unchecked(row, col) };
-            if v.is_nan() || nodata.is_some_and(|nd| (v - nd).abs() < f64::EPSILON) {
+            if dem.is_nodata(v) {
                 continue;
             }
             if v < global_min {
@@ -48,7 +47,7 @@ pub fn elev_relative_to_min_max(dem: &Raster<f64>) -> Result<Raster<f64>> {
             let mut row_data = vec![f64::NAN; cols];
             for col in 0..cols {
                 let v = unsafe { dem.get_unchecked(row, col) };
-                if v.is_nan() || nodata.is_some_and(|nd| (v - nd).abs() < f64::EPSILON) {
+                if dem.is_nodata(v) {
                     continue;
                 }
                 if range < f64::EPSILON {

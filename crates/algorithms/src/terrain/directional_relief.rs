@@ -41,7 +41,6 @@ pub fn directional_relief(
 ) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
     let radius = params.radius;
-    let nodata = dem.nodata();
 
     // Determine azimuths to evaluate
     let azimuths: Vec<f64> = if params.azimuth == 0.0 {
@@ -58,7 +57,7 @@ pub fn directional_relief(
 
             for (col, out) in row_data.iter_mut().enumerate() {
                 let center = unsafe { dem.get_unchecked(row, col) };
-                if center.is_nan() || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON) {
+                if dem.is_nodata(center) {
                     continue;
                 }
 
@@ -90,8 +89,7 @@ pub fn directional_relief(
                             }
 
                             let v = unsafe { dem.get_unchecked(nr as usize, nc as usize) };
-                            if v.is_nan() || nodata.is_some_and(|nd| (v - nd).abs() < f64::EPSILON)
-                            {
+                            if dem.is_nodata(v) {
                                 continue;
                             }
 

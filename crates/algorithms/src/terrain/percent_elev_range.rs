@@ -60,7 +60,7 @@ fn percent_elev_range_kernel(
             let nc = (col as isize + dc) as usize;
             // SAFETY: the caller guarantees the full window is in bounds.
             let nv = unsafe { *data.uget((nr, nc)) };
-            if !nv.is_nan() && nodata.is_none_or(|nd| (nv - nd).abs() >= f64::EPSILON) {
+            if !nv.is_nan() && nodata.is_none_or(|nd| nv != nd) {
                 if nv < local_min {
                     local_min = nv;
                 }
@@ -96,7 +96,7 @@ pub fn percent_elev_range(
 
             for (col, out) in row_data.iter_mut().enumerate() {
                 let center = unsafe { dem.get_unchecked(row, col) };
-                if center.is_nan() || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON) {
+                if dem.is_nodata(center) {
                     continue;
                 }
 
@@ -172,9 +172,7 @@ impl surtgis_core::WindowAlgorithm for PercentElevRangeStreaming {
                     }
 
                     let center = input[[ir, c]];
-                    if center.is_nan()
-                        || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON)
-                    {
+                    if center.is_nan() || nodata.is_some_and(|nd| center == nd) {
                         *out_v = f64::NAN;
                         continue;
                     }

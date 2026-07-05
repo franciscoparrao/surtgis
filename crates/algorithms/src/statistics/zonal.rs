@@ -63,6 +63,44 @@ pub struct ZonalResult {
     pub variety: usize,
 }
 
+/// Check that the value and zone rasters share the same geotransform and
+/// (lenient, EPSG-only) CRS.
+///
+/// `zonal_statistics` combines a `Raster<f64>` (values) with a `Raster<i32>`
+/// (zones), so the shared-type `surtgis_core::raster::check_aligned` helper
+/// cannot be used directly (it requires a homogeneous `&[&Raster<T>]`
+/// slice). This mirrors its tolerance and CRS-lenience semantics for the
+/// two-type case. Shape is checked separately by the caller via
+/// `Error::SizeMismatch`.
+fn check_geo_alignment(values: &Raster<f64>, zones: &Raster<i32>) -> Result<()> {
+    const REL_TOL: f64 = 1e-9;
+    let gt_v = values.transform().to_gdal();
+    let gt_z = zones.transform().to_gdal();
+    for (a, b) in gt_v.iter().zip(gt_z.iter()) {
+        let tol = REL_TOL * a.abs().max(b.abs()).max(1.0);
+        if (a - b).abs() > tol {
+            return Err(Error::Misaligned {
+                reason: format!(
+                    "geotransform mismatch: values raster has {gt_v:?} but zones \
+                     raster has {gt_z:?} (GDAL coefficient order)"
+                ),
+            });
+        }
+    }
+
+    if let (Some(a), Some(b)) = (
+        values.crs().and_then(|c| c.epsg()),
+        zones.crs().and_then(|c| c.epsg()),
+    ) && a != b
+    {
+        return Err(Error::Misaligned {
+            reason: format!("CRS mismatch: values raster is EPSG:{a} but zones raster is EPSG:{b}"),
+        });
+    }
+
+    Ok(())
+}
+
 /// Compute the mode (majority), anti-mode (minority), and cardinality (variety)
 /// of a set of values by grouping on exact bit-pattern equality.
 ///
@@ -119,6 +157,8 @@ pub fn zonal_statistics(
             ac: cols_z,
         });
     }
+
+    check_geo_alignment(values, zones)?;
 
     // Collect values per zone
     let mut zone_values: HashMap<i32, Vec<f64>> = HashMap::new();
