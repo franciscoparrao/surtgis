@@ -69,6 +69,7 @@ Commands:
   directional-relief            Directional relief (elevation range along azimuth)
   downslope-index               Downslope index (distance to reach elevation drop, Hjerdt 2004)
   max-branch-length             Maximum upstream branch length (longest D8 flow path)
+  excess-topography             Excess topography above a threshold hillslope angle (Blöthe et al. 2015)
   help                          Print this message or the help of the given subcommand(s)
 
 Options:
@@ -94,7 +95,7 @@ Options:
   -u, --units <UNITS>            Output units: degrees, percent, radians [default: degrees]
   -v, --verbose                  Verbose output
       --compress                 Compress output GeoTIFFs (deflate)
-  -z, --z-factor <Z_FACTOR>      Z-factor for unit conversion [default: 1.0]
+  -z, --z-factor <Z_FACTOR>      Vertical exaggeration: z' = z_factor * z (GDAL convention) [default: 1.0]
       --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
       --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
   -h, --help                     Print help
@@ -137,7 +138,7 @@ Options:
       --compress                 Compress output GeoTIFFs (deflate)
   -l, --altitude <ALTITUDE>      Sun altitude in degrees above horizon [default: 45]
       --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-  -z, --z-factor <Z_FACTOR>      Z-factor for vertical exaggeration [default: 1.0]
+  -z, --z-factor <Z_FACTOR>      Vertical exaggeration: z' = z_factor * z (GDAL convention) [default: 1.0]
       --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
   -h, --help                     Print help
 ```
@@ -161,7 +162,7 @@ Options:
       --compress
           Compress output GeoTIFFs (deflate)
   -z, --z-factor <Z_FACTOR>
-          Z-factor for unit conversion [default: 1.0]
+          Vertical exaggeration: z' = z_factor * z (GDAL convention) [default: 1.0]
       --streaming
           Force streaming mode for large rasters (auto-detected if >500MB)
       --max-memory <MAX_MEMORY>
@@ -1028,7 +1029,7 @@ Options:
       --compress                 Compress output GeoTIFFs (deflate)
   -l, --altitude <ALTITUDE>      Sun altitude in degrees [default: 45]
       --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-  -z, --z-factor <Z_FACTOR>      Z-factor [default: 1.0]
+  -z, --z-factor <Z_FACTOR>      Vertical exaggeration: z' = z_factor * z (GDAL convention) [default: 1.0]
       --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
   -h, --help                     Print help
 ```
@@ -1318,5 +1319,33 @@ Options:
       --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
       --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
   -h, --help                     Print help
+```
+
+## `terrain excess-topography` {#excess-topography}
+
+```text
+Excess topography above a threshold hillslope angle (Blöthe et al. 2015)
+
+Usage: surtgis terrain excess-topography [OPTIONS] <INPUT> <OUTPUT>
+
+Arguments:
+  <INPUT>   Input DEM file
+  <OUTPUT>  Output excess topography raster (z − slope-limited surface)
+
+Options:
+  -t, --threshold <THRESHOLD>
+          Threshold hillslope angle in degrees (0 < θ < 90) [default: 30.0]
+  -v, --verbose
+          Verbose output
+      --compress
+          Compress output GeoTIFFs (deflate)
+      --max-iterations <MAX_ITERATIONS>
+          Maximum fast-sweeping rounds [default: 200]
+      --streaming
+          Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>
+          Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+  -h, --help
+          Print help
 ```
 

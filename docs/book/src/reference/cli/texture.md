@@ -11,6 +11,8 @@ Usage: surtgis texture [OPTIONS] <COMMAND>
 
 Commands:
   glcm       GLCM texture (Haralick): energy, contrast, homogeneity, correlation, entropy
+  glcm-all   GLCM all 6 textures in a single pass (one output file per feature)
+  lbp        Local Binary Patterns (Ojala 2002)
   sobel      Sobel edge detection (gradient magnitude)
   laplacian  Laplacian edge detection (second derivative)
   help       Print this message or the help of the given subcommand(s)
@@ -40,6 +42,47 @@ Options:
       --compress                 Compress output GeoTIFFs (deflate)
   -r, --radius <RADIUS>          Window radius [default: 3]
       --levels <LEVELS>          Quantization levels [default: 32]
+      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+  -h, --help                     Print help
+```
+
+## `texture glcm-all` {#glcm-all}
+
+```text
+GLCM all 6 textures in a single pass (one output file per feature)
+
+Usage: surtgis texture glcm-all [OPTIONS] <INPUT> <OUTPUT_DIR>
+
+Arguments:
+  <INPUT>       Input raster
+  <OUTPUT_DIR>  Output directory (one .tif per feature is written here)
+
+Options:
+  -r, --radius <RADIUS>          Window radius [default: 3]
+  -v, --verbose                  Verbose output
+      --compress                 Compress output GeoTIFFs (deflate)
+      --levels <LEVELS>          Quantization levels [default: 32]
+      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+  -h, --help                     Print help
+```
+
+## `texture lbp` {#lbp}
+
+```text
+Local Binary Patterns (Ojala 2002)
+
+Usage: surtgis texture lbp [OPTIONS] <INPUT> <OUTPUT>
+
+Arguments:
+  <INPUT>   Input raster
+  <OUTPUT>  Output LBP raster
+
+Options:
+  -v, --verbose                  Verbose output
+      --variant <VARIANT>        Variant: standard (0..255 raw code) or riu2 (rotation-invariant uniform) [default: standard]
+      --compress                 Compress output GeoTIFFs (deflate)
       --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
       --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
   -h, --help                     Print help

@@ -32,6 +32,16 @@ Commands:
   median-composite  Per-pixel median composite across multiple rasters
   dnbr              dNBR: differenced Normalized Burn Ratio (pre/post fire)
   cloud-mask        Cloud mask using Sentinel-2 SCL band
+  calibrate         Radiometric calibration: DN → TOA reflectance, surface reflectance, DOS1
+  pansharpen        Pansharpening: fuse high-res pan with low-res multispectral
+  stack             Stack 1/3/4 single-band rasters into a single multi-band GeoTIFF
+  change-detection  Bitemporal change detection: MAD / IR-MAD (Nielsen 1998, 2007)
+  color-balance     Inter-tile colour balancing: histogram or moment matching
+  mosaic-feather    Distance-weighted feather-blend mosaic of aligned rasters
+  sar-db            SAR: convert linear-power backscatter (σ⁰) to decibels (10·log₁₀)
+  sar-water-index   SAR: dual-pol water index (VV − VH)/(VV + VH)
+  sar-water-mask    SAR: threshold backscatter/index into a binary water mask
+  sar-lee           SAR: Lee adaptive speckle filter (Lee 1980), linear-power input
   help              Print this message or the help of the given subcommand(s)
 
 Options:
@@ -515,5 +525,208 @@ Options:
       --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
       --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
   -h, --help                     Print help
+```
+
+## `imagery calibrate` {#calibrate}
+
+```text
+Radiometric calibration: DN → TOA reflectance, surface reflectance, DOS1
+
+Usage: surtgis imagery calibrate [OPTIONS] <COMMAND>
+
+Commands:
+  landsat-toa    Landsat 8/9 Collection 2 Level-1: DN → TOA reflectance
+  landsat-sr-c2  Landsat Collection 2 Level-2: DN → surface reflectance (fixed 2.75e-5/-0.2)
+  s2             Sentinel-2: DN → reflectance (works for L1C TOA and L2A BOA)
+  dos1           DOS1 dark-object subtraction (per band)
+  help           Print this message or the help of the given subcommand(s)
+
+Options:
+  -v, --verbose                  Verbose output
+      --compress                 Compress output GeoTIFFs (deflate)
+      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+  -h, --help                     Print help
+```
+
+## `imagery pansharpen` {#pansharpen}
+
+```text
+Pansharpening: fuse high-res pan with low-res multispectral
+
+Usage: surtgis imagery pansharpen [OPTIONS] <COMMAND>
+
+Commands:
+  brovey        Brovey transform (Gillespie 1987) — simplest, fastest
+  pca           PCA pansharpening (Chavez 1991) — works for any band count
+  gram-schmidt  Gram-Schmidt pansharpening (Laben & Brower 2000; patent expired 2018)
+  help          Print this message or the help of the given subcommand(s)
+
+Options:
+  -v, --verbose                  Verbose output
+      --compress                 Compress output GeoTIFFs (deflate)
+      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+  -h, --help                     Print help
+```
+
+## `imagery stack` {#stack}
+
+```text
+Stack 1/3/4 single-band rasters into a single multi-band GeoTIFF
+
+Usage: surtgis imagery stack [OPTIONS] --band <BANDS> <OUTPUT>
+
+Arguments:
+  <OUTPUT>  Output multi-band GeoTIFF
+
+Options:
+      --band <BANDS>             One or more input single-band rasters (repeatable). Order determines band order in the output — pass R, G, B for an RGB stack
+  -v, --verbose                  Verbose output
+      --compress                 Compress output GeoTIFFs (deflate)
+      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+  -h, --help                     Print help
+```
+
+## `imagery change-detection` {#change-detection}
+
+```text
+Bitemporal change detection: MAD / IR-MAD (Nielsen 1998, 2007)
+
+Usage: surtgis imagery change-detection [OPTIONS] <COMMAND>
+
+Commands:
+  mad     One-shot MAD: canonical correlation analysis between two timestamps
+  ir-mad  IR-MAD: iteratively reweighted MAD with chi-square weights
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -v, --verbose                  Verbose output
+      --compress                 Compress output GeoTIFFs (deflate)
+      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+  -h, --help                     Print help
+```
+
+## `imagery color-balance` {#color-balance}
+
+```text
+Inter-tile colour balancing: histogram or moment matching
+
+Usage: surtgis imagery color-balance [OPTIONS] <COMMAND>
+
+Commands:
+  histogram  Histogram (empirical CDF) matching — full distribution alignment
+  moments    Linear moment (mean, stddev) matching
+  help       Print this message or the help of the given subcommand(s)
+
+Options:
+  -v, --verbose                  Verbose output
+      --compress                 Compress output GeoTIFFs (deflate)
+      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+  -h, --help                     Print help
+```
+
+## `imagery mosaic-feather` {#mosaic-feather}
+
+```text
+Distance-weighted feather-blend mosaic of aligned rasters
+
+Usage: surtgis imagery mosaic-feather [OPTIONS] --input <INPUTS> <OUTPUT>
+
+Arguments:
+  <OUTPUT>  Output blended raster
+
+Options:
+      --input <INPUTS>           Input rasters (repeatable)
+  -v, --verbose                  Verbose output
+      --compress                 Compress output GeoTIFFs (deflate)
+      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+  -h, --help                     Print help
+```
+
+## `imagery sar-db` {#sar-db}
+
+```text
+SAR: convert linear-power backscatter (σ⁰) to decibels (10·log₁₀)
+
+Usage: surtgis imagery sar-db [OPTIONS] <INPUT> <OUTPUT>
+
+Arguments:
+  <INPUT>   Input linear-power backscatter raster
+  <OUTPUT>  Output dB raster
+
+Options:
+  -v, --verbose                  Verbose output
+      --compress                 Compress output GeoTIFFs (deflate)
+      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+  -h, --help                     Print help
+```
+
+## `imagery sar-water-index` {#sar-water-index}
+
+```text
+SAR: dual-pol water index (VV − VH)/(VV + VH)
+
+Usage: surtgis imagery sar-water-index [OPTIONS] --co-pol <CO_POL> --cross-pol <CROSS_POL> <OUTPUT>
+
+Arguments:
+  <OUTPUT>  Output index raster
+
+Options:
+      --co-pol <CO_POL>          Co-pol band (e.g. VV), linear power
+  -v, --verbose                  Verbose output
+      --compress                 Compress output GeoTIFFs (deflate)
+      --cross-pol <CROSS_POL>    Cross-pol band (e.g. VH), linear power
+      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+  -h, --help                     Print help
+```
+
+## `imagery sar-water-mask` {#sar-water-mask}
+
+```text
+SAR: threshold backscatter/index into a binary water mask
+
+Usage: surtgis imagery sar-water-mask [OPTIONS] --threshold <THRESHOLD> <INPUT> <OUTPUT>
+
+Arguments:
+  <INPUT>   Input backscatter (e.g. VV in dB) or water index
+  <OUTPUT>  Output u8 water mask (1=water, 0=land, 255=nodata)
+
+Options:
+      --threshold <THRESHOLD>    Decision threshold
+  -v, --verbose                  Verbose output
+      --compress                 Compress output GeoTIFFs (deflate)
+      --water-above              Water is ABOVE the threshold (use for a water index). Default: water is below the threshold (use for backscatter)
+      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+  -h, --help                     Print help
+```
+
+## `imagery sar-lee` {#sar-lee}
+
+```text
+SAR: Lee adaptive speckle filter (Lee 1980), linear-power input
+
+Usage: surtgis imagery sar-lee [OPTIONS] <INPUT> <OUTPUT>
+
+Arguments:
+  <INPUT>   Input backscatter (linear power)
+  <OUTPUT>  Output filtered raster
+
+Options:
+  -v, --verbose                    Verbose output
+      --window-size <WINDOW_SIZE>  Odd window side length [default: 7]
+      --compress                   Compress output GeoTIFFs (deflate)
+      --looks <LOOKS>              Equivalent number of looks (ENL); 1.0 for single-look [default: 1.0]
+      --refined                    Use the edge-aligned refined Lee (1981) instead of the classic Lee
+      --streaming                  Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>    Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+  -h, --help                       Print help
 ```
 
