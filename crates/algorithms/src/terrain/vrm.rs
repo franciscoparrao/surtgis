@@ -140,50 +140,42 @@ pub fn vrm(dem: &Raster<f64>, params: VrmParams) -> Result<Raster<f64>> {
     }
 
     // Step 2: Compute VRM using neighborhood averaging of normal vectors
-    let output_data: Vec<f64> = (0..rows)
-        .into_par_iter()
-        .flat_map(|row| {
-            let mut row_data = vec![f64::NAN; cols];
+    let output_data = par_map_rows(rows, cols, |row, out_row| {
+        // Need border of r+1 (r for neighborhood + 1 for normal computation)
+        if row < r + 1 || row >= rows - r - 1 {
+            return;
+        }
 
-            // Need border of r+1 (r for neighborhood + 1 for normal computation)
-            if row < r + 1 || row >= rows - r - 1 {
-                return row_data;
-            }
+        #[allow(clippy::needless_range_loop)]
+        for col in (r + 1)..(cols - r - 1) {
+            let mut sum_x = 0.0;
+            let mut sum_y = 0.0;
+            let mut sum_z = 0.0;
+            let mut count = 0_usize;
 
-            #[allow(clippy::needless_range_loop)]
-            for col in (r + 1)..(cols - r - 1) {
-                let mut sum_x = 0.0;
-                let mut sum_y = 0.0;
-                let mut sum_z = 0.0;
-                let mut count = 0_usize;
-
-                for nr in row.saturating_sub(r)..=(row + r).min(rows - 1) {
-                    for nc in col.saturating_sub(r)..=(col + r).min(cols - 1) {
-                        let vx = nx[[nr, nc]];
-                        if !vx.is_nan() {
-                            sum_x += vx;
-                            sum_y += ny[[nr, nc]];
-                            sum_z += nz[[nr, nc]];
-                            count += 1;
-                        }
+            for nr in row.saturating_sub(r)..=(row + r).min(rows - 1) {
+                for nc in col.saturating_sub(r)..=(col + r).min(cols - 1) {
+                    let vx = nx[[nr, nc]];
+                    if !vx.is_nan() {
+                        sum_x += vx;
+                        sum_y += ny[[nr, nc]];
+                        sum_z += nz[[nr, nc]];
+                        count += 1;
                     }
                 }
-
-                if count > 0 {
-                    let resultant = (sum_x * sum_x + sum_y * sum_y + sum_z * sum_z).sqrt();
-                    row_data[col] = 1.0 - resultant / count as f64;
-                }
             }
 
-            row_data
-        })
-        .collect();
+            if count > 0 {
+                let resultant = (sum_x * sum_x + sum_y * sum_y + sum_z * sum_z).sqrt();
+                out_row[col] = 1.0 - resultant / count as f64;
+            }
+        }
+    });
 
     let mut output = Raster::new(rows, cols);
     output.set_transform(*dem.transform());
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() = Array2::from_shape_vec((rows, cols), output_data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() = output_data;
 
     Ok(output)
 }

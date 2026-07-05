@@ -80,7 +80,7 @@ fn tpi_kernel(data: &Array2<f64>, row: usize, col: usize, r: isize, nodata: Opti
             let nc = (col as isize + dc) as usize;
             // SAFETY: the caller guarantees the full window is in bounds.
             let nv = unsafe { *data.uget((nr, nc)) };
-            if !nv.is_nan() && nodata.is_none_or(|nd| (nv - nd).abs() >= f64::EPSILON) {
+            if !nv.is_nan() && nodata.is_none_or(|nd| nv != nd) {
                 sum += nv;
                 count += 1;
             }
@@ -108,35 +108,27 @@ pub fn tpi(dem: &Raster<f64>, params: TpiParams) -> Result<Raster<f64>> {
     let nodata = dem.nodata();
     let data = dem.data();
 
-    let output_data: Vec<f64> = (0..rows)
-        .into_par_iter()
-        .flat_map(|row| {
-            let mut row_data = vec![f64::NAN; cols];
-
-            for (col, row_data_col) in row_data.iter_mut().enumerate() {
-                let center = unsafe { dem.get_unchecked(row, col) };
-                if center.is_nan() || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON) {
-                    continue;
-                }
-
-                // Skip cells where the neighborhood extends outside the raster
-                let ri = row as isize;
-                let ci = col as isize;
-                if ri < r || ri >= rows as isize - r || ci < r || ci >= cols as isize - r {
-                    continue;
-                }
-
-                *row_data_col = tpi_kernel(data, row, col, r, nodata);
+    let output_data = par_map_rows(rows, cols, |row, out_row| {
+        for (col, row_data_col) in out_row.iter_mut().enumerate() {
+            let center = unsafe { dem.get_unchecked(row, col) };
+            if center.is_nan() || nodata.is_some_and(|nd| center == nd) {
+                continue;
             }
 
-            row_data
-        })
-        .collect();
+            // Skip cells where the neighborhood extends outside the raster
+            let ri = row as isize;
+            let ci = col as isize;
+            if ri < r || ri >= rows as isize - r || ci < r || ci >= cols as isize - r {
+                continue;
+            }
+
+            *row_data_col = tpi_kernel(data, row, col, r, nodata);
+        }
+    });
 
     let mut output = dem.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() = Array2::from_shape_vec((rows, cols), output_data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() = output_data;
 
     Ok(output)
 }
@@ -197,9 +189,7 @@ impl surtgis_core::WindowAlgorithm for TpiStreaming {
                     }
 
                     let center = input[[ir, c]];
-                    if center.is_nan()
-                        || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON)
-                    {
+                    if center.is_nan() || nodata.is_some_and(|nd| center == nd) {
                         *out_v = f64::NAN;
                         continue;
                     }
