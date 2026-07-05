@@ -3,7 +3,10 @@
 //! Clip geometries by a rectangular extent using Cohen-Sutherland
 //! for lines and Sutherland-Hodgman for polygons.
 
-use geo::{Coord, Geometry, LineString, Polygon};
+use geo::{
+    Coord, Geometry, GeometryCollection, LineString, MultiLineString, MultiPoint, MultiPolygon,
+    Polygon,
+};
 
 /// A clipping rectangle
 #[derive(Debug, Clone, Copy)]
@@ -147,56 +150,175 @@ pub fn clip_by_rect(geom: &Geometry<f64>, rect: ClipRect) -> Option<Geometry<f64
             }
         }
 
-        Geometry::Polygon(poly) => {
-            // Sutherland-Hodgman: clip against each edge
-            let mut vertices: Vec<Coord<f64>> = poly.exterior().0.to_vec();
-
-            // Remove closing vertex for algorithm
-            if vertices.len() > 1 && vertices.first() == vertices.last() {
-                vertices.pop();
-            }
-
-            for edge in [Edge::Left, Edge::Right, Edge::Bottom, Edge::Top] {
-                vertices = clip_polygon_edge(&vertices, edge, &rect);
-                if vertices.is_empty() {
-                    return None;
-                }
-            }
-
-            // Close the ring
-            if !vertices.is_empty() {
-                vertices.push(vertices[0]);
-            }
-
-            Some(Geometry::Polygon(Polygon::new(
-                LineString::new(vertices),
-                vec![], // Interior rings not clipped for simplicity
-            )))
-        }
+        Geometry::Polygon(poly) => clip_polygon(poly, &rect).map(Geometry::Polygon),
 
         Geometry::LineString(ls) => {
-            // Clip each segment
-            let mut clipped_coords: Vec<Coord<f64>> = Vec::new();
-
-            for window in ls.0.windows(2) {
-                let (p0, p1) = (window[0], window[1]);
-                if let Some((c0, c1)) = clip_segment(p0, p1, &rect) {
-                    if clipped_coords.last() != Some(&c0) {
-                        clipped_coords.push(c0);
-                    }
-                    clipped_coords.push(c1);
-                }
-            }
-
-            if clipped_coords.len() >= 2 {
-                Some(Geometry::LineString(LineString::new(clipped_coords)))
-            } else {
-                None
+            let pieces = clip_linestring_pieces(ls, &rect);
+            match pieces.len() {
+                0 => None,
+                1 => Some(Geometry::LineString(LineString::new(
+                    pieces.into_iter().next().unwrap(),
+                ))),
+                _ => Some(Geometry::MultiLineString(MultiLineString::new(
+                    pieces.into_iter().map(LineString::new).collect(),
+                ))),
             }
         }
 
+        // CR-5: Multi* variants used to pass through unclipped (`other.clone()`).
+        // The `shapefile` crate converts every ESRI Polygon into a geo::MultiPolygon,
+        // so this was the dominant real-world case, not an edge case.
+        Geometry::MultiPolygon(mp) => {
+            let polys: Vec<Polygon<f64>> =
+                mp.0.iter()
+                    .filter_map(|poly| clip_polygon(poly, &rect))
+                    .collect();
+
+            match polys.len() {
+                0 => None,
+                1 => Some(Geometry::Polygon(polys.into_iter().next().unwrap())),
+                _ => Some(Geometry::MultiPolygon(MultiPolygon::new(polys))),
+            }
+        }
+
+        Geometry::MultiLineString(mls) => {
+            let lines: Vec<LineString<f64>> = mls
+                .0
+                .iter()
+                .flat_map(|ls| clip_linestring_pieces(ls, &rect))
+                .map(LineString::new)
+                .collect();
+
+            match lines.len() {
+                0 => None,
+                1 => Some(Geometry::LineString(lines.into_iter().next().unwrap())),
+                _ => Some(Geometry::MultiLineString(MultiLineString::new(lines))),
+            }
+        }
+
+        Geometry::MultiPoint(mp) => {
+            let points: Vec<_> =
+                mp.0.iter()
+                    .filter(|p| rect.contains(p.x(), p.y()))
+                    .cloned()
+                    .collect();
+
+            match points.len() {
+                0 => None,
+                1 => Some(Geometry::Point(points.into_iter().next().unwrap())),
+                _ => Some(Geometry::MultiPoint(MultiPoint::new(points))),
+            }
+        }
+
+        Geometry::GeometryCollection(gc) => {
+            let geoms: Vec<Geometry<f64>> =
+                gc.0.iter().filter_map(|g| clip_by_rect(g, rect)).collect();
+
+            if geoms.is_empty() {
+                None
+            } else {
+                Some(Geometry::GeometryCollection(GeometryCollection::from(
+                    geoms,
+                )))
+            }
+        }
+
+        // Line, Rect, Triangle: not covered by this audit, keep prior behaviour.
         other => Some(other.clone()),
     }
+}
+
+/// Clip a single polygon (exterior + interior rings) against `rect` using
+/// Sutherland-Hodgman. Returns `None` if the exterior ring is fully clipped away.
+///
+/// CR-6: interior rings (holes) used to be dropped unconditionally, which
+/// silently overestimated the area of any polygon with holes after clipping.
+fn clip_polygon(poly: &Polygon<f64>, rect: &ClipRect) -> Option<Polygon<f64>> {
+    let mut exterior: Vec<Coord<f64>> = poly.exterior().0.to_vec();
+    if exterior.len() > 1 && exterior.first() == exterior.last() {
+        exterior.pop();
+    }
+
+    for edge in [Edge::Left, Edge::Right, Edge::Bottom, Edge::Top] {
+        exterior = clip_polygon_edge(&exterior, edge, rect);
+        if exterior.is_empty() {
+            return None;
+        }
+    }
+    exterior.push(exterior[0]);
+
+    let mut interiors = Vec::new();
+    for interior in poly.interiors() {
+        let mut ring: Vec<Coord<f64>> = interior.0.to_vec();
+        if ring.len() > 1 && ring.first() == ring.last() {
+            ring.pop();
+        }
+
+        let mut clipped = ring;
+        for edge in [Edge::Left, Edge::Right, Edge::Bottom, Edge::Top] {
+            clipped = clip_polygon_edge(&clipped, edge, rect);
+            if clipped.is_empty() {
+                break;
+            }
+        }
+
+        // A degenerate ring (< 3 vertices) can't bound an area; drop it.
+        if clipped.len() >= 3 {
+            clipped.push(clipped[0]);
+            interiors.push(LineString::new(clipped));
+        }
+    }
+
+    Some(Polygon::new(LineString::new(exterior), interiors))
+}
+
+/// Clip a line string against `rect`, returning each contiguous clipped
+/// segment as a separate vertex list.
+///
+/// CR-9: a line that exits and re-enters the clip window used to be
+/// concatenated into a single `LineString`, creating a false bridge segment
+/// straight across the interior of the window. Discontinuous pieces are now
+/// kept separate so the caller can emit a `MultiLineString`.
+fn clip_linestring_pieces(ls: &LineString<f64>, rect: &ClipRect) -> Vec<Vec<Coord<f64>>> {
+    let mut pieces: Vec<Vec<Coord<f64>>> = Vec::new();
+    let mut current: Vec<Coord<f64>> = Vec::new();
+
+    for window in ls.0.windows(2) {
+        let (p0, p1) = (window[0], window[1]);
+        match clip_segment(p0, p1, rect) {
+            Some((c0, c1)) => {
+                match current.last() {
+                    Some(last) if *last == c0 => {}
+                    Some(_) => {
+                        // Discontinuity: the new segment doesn't start where the
+                        // previous one ended, so close off the current piece.
+                        if current.len() >= 2 {
+                            pieces.push(std::mem::take(&mut current));
+                        } else {
+                            current.clear();
+                        }
+                        current.push(c0);
+                    }
+                    None => current.push(c0),
+                }
+                current.push(c1);
+            }
+            None => {
+                // Segment fully outside the window: breaks the current piece.
+                if current.len() >= 2 {
+                    pieces.push(std::mem::take(&mut current));
+                } else {
+                    current.clear();
+                }
+            }
+        }
+    }
+
+    if current.len() >= 2 {
+        pieces.push(current);
+    }
+
+    pieces
 }
 
 /// Cohen-Sutherland region codes

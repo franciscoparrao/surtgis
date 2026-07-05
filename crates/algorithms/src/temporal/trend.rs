@@ -23,7 +23,9 @@ pub struct LinearTrendResult {
 
 /// Result of Mann-Kendall trend test.
 pub struct MannKendallResult {
-    /// Kendall's tau (-1 to 1)
+    /// Kendall's tau-b (-1 to 1), corrected for tied values (Kendall, 1945/1975).
+    /// Unlike tau-a (`S / n(n-1)/2`), tau-b normalizes by the tie-adjusted
+    /// denominator so it can still reach ±1 when the series contains ties.
     pub tau: Raster<f64>,
     /// p-value (two-sided)
     pub p_value: Raster<f64>,
@@ -202,6 +204,7 @@ pub fn mann_kendall(rasters: &[&Raster<f64>]) -> Result<MannKendallResult> {
         .enumerate()
         .for_each(|(row, (((tau_row, pval_row), trend_row), sens_row))| {
             let mut vals = Vec::with_capacity(n);
+            let mut finite_vals = Vec::with_capacity(n);
 
             for col in 0..cols {
                 vals.clear();
@@ -211,7 +214,9 @@ pub fn mann_kendall(rasters: &[&Raster<f64>]) -> Result<MannKendallResult> {
                 }
 
                 // Need at least 3 non-NaN values for a meaningful test
-                let valid_count = vals.iter().filter(|v| v.is_finite()).count();
+                finite_vals.clear();
+                finite_vals.extend(vals.iter().copied().filter(|v| v.is_finite()));
+                let valid_count = finite_vals.len();
                 if valid_count < 3 {
                     continue;
                 }
@@ -249,15 +254,49 @@ pub fn mann_kendall(rasters: &[&Raster<f64>]) -> Result<MannKendallResult> {
                     };
                 }
 
-                // Kendall's tau
-                let n_pairs = valid_count * (valid_count - 1) / 2;
-                if n_pairs > 0 {
-                    tau_row[col] = s as f64 / n_pairs as f64;
+                // Tie groups (size >= 2) among the finite values, needed for both
+                // the tau-b denominator and the Mann-Kendall variance correction
+                // (Kendall, 1975).
+                finite_vals.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                let mut tie_group_sizes: Vec<usize> = Vec::new();
+                let mut gi = 0;
+                while gi < finite_vals.len() {
+                    let mut gj = gi + 1;
+                    while gj < finite_vals.len() && finite_vals[gj] == finite_vals[gi] {
+                        gj += 1;
+                    }
+                    if gj - gi >= 2 {
+                        tie_group_sizes.push(gj - gi);
+                    }
+                    gi = gj;
                 }
 
-                // Variance of S (normal approximation for p-value)
                 let vn = valid_count as f64;
-                let var_s = vn * (vn - 1.0) * (2.0 * vn + 5.0) / 18.0;
+
+                // Kendall's tau-b: S / sqrt((n0 - n1) * (n0 - n2)), n2=0 (single series).
+                let n0 = vn * (vn - 1.0) / 2.0;
+                let n1: f64 = tie_group_sizes
+                    .iter()
+                    .map(|&tp| {
+                        let t = tp as f64;
+                        t * (t - 1.0) / 2.0
+                    })
+                    .sum();
+                let tau_b_denom_sq = (n0 - n1) * n0;
+                if tau_b_denom_sq > 0.0 {
+                    tau_row[col] = s as f64 / tau_b_denom_sq.sqrt();
+                }
+
+                // Variance of S with tie correction (normal approximation for p-value):
+                // var_s = [n(n-1)(2n+5) - sum_tp(tp(tp-1)(2tp+5))] / 18
+                let tie_correction: f64 = tie_group_sizes
+                    .iter()
+                    .map(|&tp| {
+                        let t = tp as f64;
+                        t * (t - 1.0) * (2.0 * t + 5.0)
+                    })
+                    .sum();
+                let var_s = (vn * (vn - 1.0) * (2.0 * vn + 5.0) - tie_correction) / 18.0;
                 if var_s > 0.0 {
                     let z = if s > 0 {
                         (s as f64 - 1.0) / var_s.sqrt()
@@ -544,6 +583,56 @@ mod tests {
         assert!(
             (result.trend.data()[[0, 0]] - (-1.0)).abs() < 1e-10,
             "decreasing"
+        );
+    }
+
+    #[test]
+    fn test_mann_kendall_ties_correction() {
+        // A-4/A-5 regression: series with several tied groups.
+        // n=10, S=27, tie groups of sizes [2,3,2,2] (values 2,3,1,5 repeat).
+        //
+        // Reference values computed independently in Python (scipy.stats +
+        // manual Kendall 1975 formula):
+        //   var_s uncorrected = 125.0        -> p ≈ 0.020045 (the pre-fix bug)
+        //   var_s corrected   = 118.333...   -> p ≈ 0.016843 (correct)
+        //   tau-a = S / n0 = 27/45 = 0.6
+        //   tau-b = S / sqrt((n0-n1)*n0) = 0.6445033866354896 (matches scipy.stats.kendalltau)
+        let values = [1.0, 2.0, 2.0, 2.0, 3.0, 3.0, 4.0, 1.0, 5.0, 5.0];
+        let rasters: Vec<Raster<f64>> = values.iter().map(|&v| make_raster(vec![v])).collect();
+        let refs: Vec<&Raster<f64>> = rasters.iter().collect();
+
+        let result = mann_kendall(&refs).unwrap();
+
+        let tau = result.tau.data()[[0, 0]];
+        let p = result.p_value.data()[[0, 0]];
+
+        assert!(
+            (tau - 0.6445033866354896).abs() < 1e-9,
+            "tau-b should be ~0.6445 (not tau-a's 0.6), got {}",
+            tau
+        );
+        assert!(
+            (p - 0.016842845195262482).abs() < 1e-6,
+            "tie-corrected p-value should be ~0.016843 (not the uncorrected ~0.020045), got {}",
+            p
+        );
+    }
+
+    #[test]
+    fn test_mann_kendall_tau_b_equals_tau_a_without_ties() {
+        // Without ties, tau-b reduces to tau-a: S / (n(n-1)/2).
+        // Reference computed in Python: S=25, n0=45, tau_a=0.5555555555555556.
+        let values = [3.0, 1.0, 4.0, 9.0, 5.0, 2.0, 6.0, 8.0, 7.0, 10.0];
+        let rasters: Vec<Raster<f64>> = values.iter().map(|&v| make_raster(vec![v])).collect();
+        let refs: Vec<&Raster<f64>> = rasters.iter().collect();
+
+        let result = mann_kendall(&refs).unwrap();
+        let tau = result.tau.data()[[0, 0]];
+
+        assert!(
+            (tau - 0.5555555555555556).abs() < 1e-9,
+            "no ties: tau-b should equal tau-a = 25/45, got {}",
+            tau
         );
     }
 

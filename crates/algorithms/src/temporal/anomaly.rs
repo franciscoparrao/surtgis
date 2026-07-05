@@ -11,7 +11,8 @@ use surtgis_core::{Error, Result};
 /// Method for computing anomaly values.
 #[derive(Debug, Clone, Copy)]
 pub enum AnomalyMethod {
-    /// Z-score: (value - mean) / std
+    /// Z-score: (value - mean) / std, where std is the reference period's
+    /// sample standard deviation (Bessel-corrected, divides by n-1).
     ZScore,
     /// Absolute difference: value - mean
     Difference,
@@ -71,7 +72,7 @@ pub fn temporal_anomaly(
         }
     }
 
-    // Compute reference mean and std per pixel
+    // Compute reference mean and sample std (n-1, Bessel-corrected) per pixel.
     let n_ref = reference.len();
     let total = rows * cols;
     let mut ref_mean = vec![f64::NAN; total];

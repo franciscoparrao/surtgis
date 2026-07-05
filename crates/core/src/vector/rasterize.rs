@@ -4,6 +4,7 @@ use geo::BoundingRect;
 use geo::Contains;
 use geo_types::{Geometry, LineString, Point, Polygon};
 
+use crate::crs::CRS;
 use crate::error::{Error, Result};
 use crate::raster::{GeoTransform, Raster};
 
@@ -16,13 +17,36 @@ use super::{AttributeValue, FeatureCollection};
 /// - Otherwise: the feature's 1-based sequential index (1.0, 2.0, ...).
 ///
 /// Cells not inside any polygon remain NaN.
+///
+/// # CRS validation
+///
+/// `raster_crs` should be the CRS of the reference raster the output grid is
+/// built from (`rows`/`cols`/`transform`) — pass `reference.crs()`. When
+/// both `features.crs()` and `raster_crs` are known and disagree (per
+/// [`CRS::is_equivalent`]), this returns [`Error::Other`] instead of
+/// silently rasterizing in the wrong place (e.g. a WGS84 vector over a UTM
+/// raster, which previously produced an empty or garbage result with no
+/// error). If either CRS is unknown (`None`), no validation is performed —
+/// callers with untrustworthy CRS metadata should reproject explicitly
+/// rather than rely on this check.
 pub fn rasterize_polygons(
     features: &FeatureCollection,
     transform: &GeoTransform,
     rows: usize,
     cols: usize,
     attribute: Option<&str>,
+    raster_crs: Option<&CRS>,
 ) -> Result<Raster<f64>> {
+    if let (Some(vector_crs), Some(raster_crs)) = (features.crs(), raster_crs) {
+        if !vector_crs.is_equivalent(raster_crs) {
+            return Err(Error::Other(format!(
+                "vector CRS ({}) does not match raster CRS ({}); reproject the vector data before rasterizing",
+                vector_crs.identifier(),
+                raster_crs.identifier()
+            )));
+        }
+    }
+
     let mut output = Raster::filled(rows, cols, f64::NAN);
     output.set_transform(*transform);
 
@@ -349,7 +373,7 @@ mod tests {
         let mut fc = FeatureCollection::new();
         fc.push(Feature::new(Geometry::Polygon(poly)));
 
-        let result = rasterize_polygons(&fc, &transform, 10, 10, None).unwrap();
+        let result = rasterize_polygons(&fc, &transform, 10, 10, None, None).unwrap();
 
         let mut count_ones = 0;
         let mut count_nan = 0;
@@ -368,6 +392,82 @@ mod tests {
     }
 
     #[test]
+    fn test_rasterize_matching_crs_ok() {
+        // Vector and reference raster agree on CRS (EPSG:32719): rasterizing
+        // must behave exactly as without CRS metadata at all.
+        let transform = GeoTransform::new(0.0, 10.0, 1.0, -1.0);
+        let poly = rect_polygon(2.0, 3.0, 8.0, 7.0);
+
+        let mut fc = FeatureCollection::with_crs(Some(crate::crs::CRS::from_epsg(32719)));
+        fc.push(Feature::new(Geometry::Polygon(poly)));
+
+        let result = rasterize_polygons(
+            &fc,
+            &transform,
+            10,
+            10,
+            None,
+            Some(&crate::crs::CRS::from_epsg(32719)),
+        )
+        .unwrap();
+
+        let mut count_ones = 0;
+        for r in 0..10 {
+            for c in 0..10 {
+                if result.get(r, c).unwrap() == 1.0 {
+                    count_ones += 1;
+                }
+            }
+        }
+        assert_eq!(count_ones, 24);
+    }
+
+    #[test]
+    fn test_rasterize_mismatched_crs_errors() {
+        // Closes A-13: a WGS84 vector rasterized against a UTM reference
+        // raster must fail loudly instead of silently returning an
+        // empty/garbage grid.
+        let transform = GeoTransform::new(0.0, 10.0, 1.0, -1.0);
+        let poly = rect_polygon(2.0, 3.0, 8.0, 7.0);
+
+        let mut fc = FeatureCollection::with_crs(Some(crate::crs::CRS::wgs84()));
+        fc.push(Feature::new(Geometry::Polygon(poly)));
+
+        let raster_crs = crate::crs::CRS::from_epsg(32719);
+        let err = rasterize_polygons(&fc, &transform, 10, 10, None, Some(&raster_crs))
+            .expect_err("mismatched CRS must error, not silently rasterize");
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains("4326"),
+            "message should name the vector CRS: {msg}"
+        );
+        assert!(
+            msg.contains("32719"),
+            "message should name the raster CRS: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_rasterize_unknown_crs_skips_validation() {
+        // Either side unknown (`None`) must not fail the check — same
+        // lenient semantics as `raster::validate::check_same_crs`.
+        let transform = GeoTransform::new(0.0, 10.0, 1.0, -1.0);
+        let poly = rect_polygon(2.0, 3.0, 8.0, 7.0);
+
+        let mut fc_no_crs = FeatureCollection::new();
+        fc_no_crs.push(Feature::new(Geometry::Polygon(poly.clone())));
+        let raster_crs = crate::crs::CRS::from_epsg(32719);
+        assert!(
+            rasterize_polygons(&fc_no_crs, &transform, 10, 10, None, Some(&raster_crs)).is_ok()
+        );
+
+        let mut fc_with_crs = FeatureCollection::with_crs(Some(crate::crs::CRS::wgs84()));
+        fc_with_crs.push(Feature::new(Geometry::Polygon(poly)));
+        assert!(rasterize_polygons(&fc_with_crs, &transform, 10, 10, None, None).is_ok());
+    }
+
+    #[test]
     fn test_rasterize_with_attribute() {
         let transform = GeoTransform::new(0.0, 5.0, 1.0, -1.0);
         let poly = rect_polygon(1.0, 1.0, 4.0, 4.0);
@@ -378,7 +478,7 @@ mod tests {
         let mut fc = FeatureCollection::new();
         fc.push(feat);
 
-        let result = rasterize_polygons(&fc, &transform, 5, 5, Some("class")).unwrap();
+        let result = rasterize_polygons(&fc, &transform, 5, 5, Some("class"), None).unwrap();
 
         // Check that rasterized cells have value 42.0
         let mut found_42 = false;

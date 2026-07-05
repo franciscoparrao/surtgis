@@ -181,6 +181,76 @@ impl Default for SlopeStreaming {
     }
 }
 
+impl SlopeStreaming {
+    /// Process a single output row given its already-resolved cell sizes
+    /// (`eight_dx`/`eight_dy`). Shared by the constant-cell-size path
+    /// (`process_chunk`) and the per-row geographic-correction path
+    /// (`process_chunk_geo`), which differ only in how those two values
+    /// are derived.
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn process_row(
+        &self,
+        input: &Array2<f64>,
+        output: &mut Array2<f64>,
+        nodata: Option<f64>,
+        r: usize,
+        ir: usize,
+        in_rows: usize,
+        cols: usize,
+        eight_dx: f64,
+        eight_dy: f64,
+    ) {
+        if ir == 0 || ir >= in_rows - 1 {
+            // Edge row — fill with NaN
+            for c in 0..cols {
+                output[[r, c]] = f64::NAN;
+            }
+            return;
+        }
+
+        // z_factor scales z (GDAL convention); dx and dy used separately.
+        let zf = self.z_factor;
+
+        for c in 0..cols {
+            if c == 0 || c >= cols - 1 {
+                output[[r, c]] = f64::NAN;
+                continue;
+            }
+
+            let e = input[[ir, c]];
+            if e.is_nan() || nodata.map_or(false, |nd| (e - nd).abs() < f64::EPSILON) {
+                output[[r, c]] = f64::NAN;
+                continue;
+            }
+
+            let a = input[[ir - 1, c - 1]];
+            let b = input[[ir - 1, c]];
+            let cv = input[[ir - 1, c + 1]];
+            let d = input[[ir, c - 1]];
+            let f = input[[ir, c + 1]];
+            let g = input[[ir + 1, c - 1]];
+            let h = input[[ir + 1, c]];
+            let i = input[[ir + 1, c + 1]];
+
+            if [a, b, cv, d, f, g, h, i].iter().any(|v| v.is_nan()) {
+                output[[r, c]] = f64::NAN;
+                continue;
+            }
+
+            let dz_dx = zf * ((cv + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_dx;
+            let dz_dy = zf * ((g + 2.0 * h + i) - (a + 2.0 * b + cv)) / eight_dy;
+            let slope_rad = (dz_dx * dz_dx + dz_dy * dz_dy).sqrt().atan();
+
+            output[[r, c]] = match self.units {
+                SlopeUnits::Degrees => slope_rad.to_degrees(),
+                SlopeUnits::Percent => slope_rad.tan() * 100.0,
+                SlopeUnits::Radians => slope_rad,
+            };
+        }
+    }
+}
+
 impl surtgis_core::WindowAlgorithm for SlopeStreaming {
     fn kernel_radius(&self) -> usize {
         1 // 3×3 kernel
@@ -198,57 +268,60 @@ impl surtgis_core::WindowAlgorithm for SlopeStreaming {
         let out_rows = output.nrows();
         let radius = 1;
 
-        // z_factor scales z (GDAL convention); dx and dy used separately.
-        let zf = self.z_factor;
         let eight_dx = 8.0 * cell_size_x;
         let eight_dy = 8.0 * cell_size_y.abs();
 
         for r in 0..out_rows {
             let ir = r + radius; // input row corresponding to output row r
-            if ir == 0 || ir >= in_rows - 1 {
-                // Edge row — fill with NaN
-                for c in 0..cols {
-                    output[[r, c]] = f64::NAN;
-                }
-                continue;
-            }
+            self.process_row(
+                input, output, nodata, r, ir, in_rows, cols, eight_dx, eight_dy,
+            );
+        }
+    }
 
-            for c in 0..cols {
-                if c == 0 || c >= cols - 1 {
-                    output[[r, c]] = f64::NAN;
-                    continue;
-                }
+    /// REG-1 fix: on geographic (lon/lat) rasters, the batch path
+    /// (`slope()`) applies a per-row latitude-dependent metric cell size
+    /// via `CellSizes::for_dem`/`at_row` (see `spheroidal_grid.rs`).
+    /// Before this override, the streaming path silently used the raw
+    /// degree spacing as if it were meters — same DEM, correct slope in
+    /// batch mode, silently wrong slope in streaming (i.e. via the CLI,
+    /// which auto-selects streaming for large files). This mirrors the
+    /// batch correction using `geo_ctx` (built by `StripProcessor` from
+    /// the raster's CRS/GeoTransform) to recover each row's absolute
+    /// latitude and re-derive metric `(dx, dy)` for it.
+    fn process_chunk_geo(
+        &self,
+        input: &Array2<f64>,
+        output: &mut Array2<f64>,
+        nodata: Option<f64>,
+        cell_size_x: f64,
+        cell_size_y: f64,
+        geo_ctx: Option<surtgis_core::GeoRowContext>,
+    ) {
+        let Some(ctx) = geo_ctx else {
+            // Not geographic: fall back to the constant-cell-size path.
+            return self.process_chunk(input, output, nodata, cell_size_x, cell_size_y);
+        };
 
-                let e = input[[ir, c]];
-                if e.is_nan() || nodata.map_or(false, |nd| (e - nd).abs() < f64::EPSILON) {
-                    output[[r, c]] = f64::NAN;
-                    continue;
-                }
+        let (in_rows, cols) = input.dim();
+        let out_rows = output.nrows();
+        let radius = 1;
 
-                let a = input[[ir - 1, c - 1]];
-                let b = input[[ir - 1, c]];
-                let cv = input[[ir - 1, c + 1]];
-                let d = input[[ir, c - 1]];
-                let f = input[[ir, c + 1]];
-                let g = input[[ir + 1, c - 1]];
-                let h = input[[ir + 1, c]];
-                let i = input[[ir + 1, c + 1]];
-
-                if [a, b, cv, d, f, g, h, i].iter().any(|v| v.is_nan()) {
-                    output[[r, c]] = f64::NAN;
-                    continue;
-                }
-
-                let dz_dx = zf * ((cv + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_dx;
-                let dz_dy = zf * ((g + 2.0 * h + i) - (a + 2.0 * b + cv)) / eight_dy;
-                let slope_rad = (dz_dx * dz_dx + dz_dy * dz_dy).sqrt().atan();
-
-                output[[r, c]] = match self.units {
-                    SlopeUnits::Degrees => slope_rad.to_degrees(),
-                    SlopeUnits::Percent => slope_rad.tan() * 100.0,
-                    SlopeUnits::Radians => slope_rad,
-                };
-            }
+        for r in 0..out_rows {
+            let ir = r + radius;
+            let abs_row = ctx.row_offset + r;
+            let lat = ctx.origin_y + (abs_row as f64 + 0.5) * ctx.pixel_height;
+            let dims = super::spheroidal_grid::cell_dimensions(
+                lat,
+                cell_size_x,
+                cell_size_y,
+                &super::spheroidal_grid::SpheroidalParams::default(),
+            );
+            let eight_dx = 8.0 * dims.dx;
+            let eight_dy = 8.0 * dims.dy;
+            self.process_row(
+                input, output, nodata, r, ir, in_rows, cols, eight_dx, eight_dy,
+            );
         }
     }
 }

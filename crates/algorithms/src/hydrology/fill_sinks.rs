@@ -17,12 +17,18 @@ use surtgis_core::{Algorithm, Error, Result};
 pub struct FillSinksParams {
     /// Minimum slope to enforce between cells (prevents flat areas)
     /// Set to 0.0 to allow flat areas after filling.
+    ///
+    /// D7 fix: the old default (0.01, i.e. 1%) was far more aggressive
+    /// than SAGA/WhiteboxTools and inconsistent with this crate's own
+    /// `priority_flood::PriorityFloodParams` (`epsilon: 1e-5`). The
+    /// default now matches `priority_flood`'s epsilon exactly for
+    /// cross-algorithm consistency.
     pub min_slope: f64,
 }
 
 impl Default for FillSinksParams {
     fn default() -> Self {
-        Self { min_slope: 0.01 }
+        Self { min_slope: 1e-5 }
     }
 }
 

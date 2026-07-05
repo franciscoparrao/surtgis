@@ -23,24 +23,29 @@
 //!    from a downstream node `i`:
 //!
 //!    ```text
-//!    χ(u) = χ(i) + Δx · (A₀ / A(u))^θref
+//!    χ(u) = χ(i) + Δx · (f(i) + f(u)) / 2,  f(x) = (A₀ / A(x))^θref
 //!    ```
 //!
 //!    where Δx is the channel-following distance from `i` to `u`
 //!    (= cell_size_m for cardinal D8 step, = cell_size_m · √2 for
-//!    diagonal), and A(u) is the upstream drainage area at `u` in m².
+//!    diagonal), and A(x) is the drainage area at `x` in m² (including
+//!    the cell's own contributing area, i.e. `(flow_acc + 1) · cell_size²`
+//!    — `flow_acc` counts upstream cells only, so a headwater has
+//!    `flow_acc = 0` but a nonzero drainage area of one cell).
 //!
 //! 4. Non-stream cells and cells unreachable from any outlet remain
 //!    NaN in the output raster.
 //!
 //! ## Numerical scheme
 //!
-//! The integration is a Riemann sum with the integrand evaluated at the
-//! upstream end of each segment (`A(u)` not `A_avg`). This matches the
-//! convention used by TopoToolbox 2 and pyTopoToolbox. The alternative
-//! trapezoidal scheme is marginally more accurate at confluences but
-//! complicates the recursion at the cost of bit-for-bit parity with the
-//! reference implementations.
+//! The integration uses the trapezoidal rule: the integrand `f(A) =
+//! (A₀/A)^θref` is evaluated at both ends of each segment (`f(i)` and
+//! `f(u)`) and averaged. This matches the `cumtrapz` convention used by
+//! TopoToolbox 2 and pyTopoToolbox. It is *not* bit-for-bit identical to
+//! those reference implementations — differences in flow-routing,
+//! smoothing, and floating-point summation order remain — but the
+//! integration scheme itself is the same trapezoidal rule, unlike a
+//! one-sided Riemann sum.
 
 use std::collections::VecDeque;
 
@@ -207,6 +212,18 @@ pub fn chi_transform(
         let (ir, ic) = graph.stream_cells[i];
         let chi_i = chi_data[(ir, ic)];
 
+        // Integrand at i: f(i) = (A0 / A(i))^theta. A(i) includes the
+        // cell's own contributing area — flow_acc counts upstream cells
+        // only (a headwater has flow_acc = 0), so drainage area is
+        // (flow_acc + 1) cells, not flow_acc cells.
+        let a_i_cells = flow_acc.get(ir, ic).unwrap_or(f64::NAN);
+        let a_i_m2 = (a_i_cells + 1.0) * cell_area_m2;
+        let f_i = if a_i_m2.is_finite() && a_i_m2 > 0.0 {
+            Some((params.a_0_m2 / a_i_m2).powf(params.theta_ref))
+        } else {
+            None
+        };
+
         // If the current node already failed to receive a finite χ
         // (because an upstream cascade hit NoData drainage area), every
         // node above it inherits NaN. Continue the walk so we still
@@ -219,17 +236,21 @@ pub fn chi_transform(
             let dc = (uc as isize - ic as isize).abs();
             let dx = if dr + dc == 2 { cell_diag } else { cell };
 
-            // A(u) read in cell counts → convert to m² with cell_size².
+            // A(u) read in cell counts → convert to m² with cell_size(),
+            // including the cell's own contributing area (see above).
             let a_u_cells = flow_acc.get(ur, uc).unwrap_or(f64::NAN);
-            let a_u_m2 = a_u_cells * cell_area_m2;
+            let a_u_m2 = (a_u_cells + 1.0) * cell_area_m2;
 
-            // The χ recurrence. Any NaN / non-positive area propagates as
-            // NaN downstream consumers can detect. Same applies if the
-            // current node failed earlier.
-            let chi_u = if chi_i.is_finite() && a_u_m2 > 0.0 && a_u_m2.is_finite() {
-                chi_i + dx * (params.a_0_m2 / a_u_m2).powf(params.theta_ref)
-            } else {
-                f64::NAN
+            // The χ recurrence, trapezoidal rule: average the integrand
+            // at both ends of the segment. Any NaN / non-positive area
+            // propagates as NaN downstream consumers can detect. Same
+            // applies if the current node failed earlier.
+            let chi_u = match (chi_i.is_finite(), f_i, a_u_m2.is_finite() && a_u_m2 > 0.0) {
+                (true, Some(f_i), true) => {
+                    let f_u = (params.a_0_m2 / a_u_m2).powf(params.theta_ref);
+                    chi_i + dx * (f_i + f_u) / 2.0
+                }
+                _ => f64::NAN,
             };
             chi_data[(ur, uc)] = chi_u;
             queue.push_back(u);
@@ -277,9 +298,12 @@ mod tests {
         // Flow_dir 1 = East. All cells point east; the easternmost flows
         // out of the raster (boundary outlet).
         let flow_dir = raster_u8(vec![vec![1u8; n]]);
-        // Drainage area in cell counts: increases west→east (the
-        // headwater is leftmost with A=1, the outlet rightmost with A=n).
-        let acc_vals: Vec<f64> = (1..=n as i32).map(|i| i as f64).collect();
+        // flow_acc as produced by flow_accumulation(): counts *upstream*
+        // cells only, so the headwater (leftmost) has flow_acc = 0 and
+        // the outlet (rightmost) has flow_acc = n - 1. The physical
+        // drainage area (flow_acc + 1 cells) still increases west→east
+        // from 1 to n.
+        let acc_vals: Vec<f64> = (0..n as i32).map(|i| i as f64).collect();
         let flow_acc = raster_f64(vec![acc_vals]);
 
         let params = ChiParams {
@@ -327,7 +351,8 @@ mod tests {
         let n = 10;
         let stream = raster_u8(vec![vec![1u8; n]]);
         let flow_dir = raster_u8(vec![vec![1u8; n]]);
-        let acc_vals: Vec<f64> = (1..=n as i32).map(|i| i as f64).collect();
+        // flow_acc convention: headwater = 0 (see previous test).
+        let acc_vals: Vec<f64> = (0..n as i32).map(|i| i as f64).collect();
         let flow_acc = raster_f64(vec![acc_vals]);
 
         let params = ChiParams {
@@ -376,21 +401,27 @@ mod tests {
 
     /// Diagonal step in D8 must contribute Δx = cell_size · √2, not
     /// cell_size. We construct a 3-cell channel that steps once
-    /// diagonally; the χ increment over that step must use √2.
+    /// diagonally; the χ increment over that step must use √2 and the
+    /// trapezoidal rule (average of the integrand at both segment ends).
     #[test]
     fn diagonal_step_uses_sqrt2_distance() {
-        // Stream layout:
-        //   . . 1     headwater (0,2), A=1
-        //   . 1 .     middle    (1,1), A=2 — flow_dir(0,2) = SW = 6
-        //   1 . .     outlet    (2,0), A=3 — flow_dir(1,1) = SW = 6
+        // Stream layout (physical drainage area including each cell
+        // itself):
+        //   . . 1     headwater (0,2), A=1 cell
+        //   . 1 .     middle    (1,1), A=2 cells — flow_dir(0,2) = SW = 6
+        //   1 . .     outlet    (2,0), A=3 cells — flow_dir(1,1) = SW = 6
+        //
+        // flow_acc, as produced by flow_accumulation(), counts *upstream*
+        // cells only (headwater = 0), so it is one less than the
+        // physical drainage area in cells at each node.
         let stream = raster_u8(vec![vec![0, 0, 1], vec![0, 1, 0], vec![1, 0, 0]]);
         // (2,0): pit/flat (outlet flows out of raster — code 6 = SW exits
         // bottom-left corner). (1,1): code 6 (SW). (0,2): code 6 (SW).
         let flow_dir = raster_u8(vec![vec![0, 0, 6], vec![0, 6, 0], vec![6, 0, 0]]);
         let flow_acc = raster_f64(vec![
-            vec![0.0, 0.0, 1.0],
-            vec![0.0, 2.0, 0.0],
-            vec![3.0, 0.0, 0.0],
+            vec![0.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0],
+            vec![2.0, 0.0, 0.0],
         ]);
 
         let cell = 30.0;
@@ -405,14 +436,16 @@ mod tests {
         let chi = chi_transform(&stream, &flow_dir, &flow_acc, params).unwrap();
 
         let cell_area_m2 = cell * cell;
-        // Expected χ at (1,1): Δx (diagonal) · (a0 / A_mid_m2)^θ.
-        // A_mid_cells = 2 → m² = 2 * cell² = 1800
-        let expected_chi_mid =
-            cell * std::f64::consts::SQRT_2 * (a0 / (2.0 * cell_area_m2)).powf(theta);
-        // Expected χ at (0,2): χ_mid + Δx · (a0 / A_head_m2)^θ.
-        // A_head_cells = 1 → m² = 1 * cell² = 900
-        let expected_chi_head =
-            expected_chi_mid + cell * std::f64::consts::SQRT_2 * (a0 / cell_area_m2).powf(theta);
+        let dx = cell * std::f64::consts::SQRT_2;
+        // f(x) = (a0 / A(x))^theta, with A(x) = (flow_acc + 1) * cell².
+        let f = |acc_cells: f64| (a0 / ((acc_cells + 1.0) * cell_area_m2)).powf(theta);
+        let f_outlet = f(2.0); // A_outlet = 3 cells
+        let f_mid = f(1.0); // A_mid = 2 cells
+        let f_head = f(0.0); // A_head = 1 cell
+
+        // Trapezoidal rule: χ(u) = χ(i) + Δx · (f(i) + f(u)) / 2.
+        let expected_chi_mid = 0.0 + dx * (f_outlet + f_mid) / 2.0;
+        let expected_chi_head = expected_chi_mid + dx * (f_mid + f_head) / 2.0;
 
         let chi_mid = chi.get(1, 1).unwrap();
         let chi_head = chi.get(0, 2).unwrap();

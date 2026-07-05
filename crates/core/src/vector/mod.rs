@@ -22,6 +22,8 @@ use geo_types::Geometry;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::crs::CRS;
+
 pub use geojson_reader::{parse_geojson, read_geojson};
 pub use rasterize::{clip_raster, clip_raster_by_polygon, rasterize_polygons};
 
@@ -96,14 +98,45 @@ impl Feature {
 pub struct FeatureCollection {
     /// The features, in insertion order.
     pub features: Vec<Feature>,
+    /// Coordinate reference system of the collection's geometries, if known.
+    ///
+    /// Populated by format-specific readers from whatever CRS information
+    /// their source format carries cheaply (GeoJSON RFC 7946 default /
+    /// legacy `crs` member, Shapefile `.prj` sidecar, GeoPackage
+    /// `gpkg_spatial_ref_sys`, GeoParquet `surtgis:epsg` metadata).
+    ///
+    /// `None` means "unknown" — readers deliberately leave it `None` rather
+    /// than guess when the source format gives no cheap, reliable answer.
+    /// Consumers (e.g. [`rasterize::rasterize_polygons`]) must treat `None`
+    /// as "no validation possible", not as "assume a default CRS".
+    pub crs: Option<CRS>,
 }
 
 impl FeatureCollection {
-    /// Create an empty collection.
+    /// Create an empty collection with no known CRS.
     pub fn new() -> Self {
         Self {
             features: Vec::new(),
+            crs: None,
         }
+    }
+
+    /// Create an empty collection with a known (or explicitly unknown) CRS.
+    pub fn with_crs(crs: Option<CRS>) -> Self {
+        Self {
+            features: Vec::new(),
+            crs,
+        }
+    }
+
+    /// Get the collection's CRS, if known.
+    pub fn crs(&self) -> Option<&CRS> {
+        self.crs.as_ref()
+    }
+
+    /// Set the collection's CRS.
+    pub fn set_crs(&mut self, crs: Option<CRS>) {
+        self.crs = crs;
     }
 
     /// Append a feature.
