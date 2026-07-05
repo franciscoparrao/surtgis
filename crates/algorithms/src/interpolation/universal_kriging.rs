@@ -640,9 +640,7 @@ mod tests {
         let cond_absolute = pivot_ratio_condition_estimate(m, &mat_absolute);
         let cond_centered = pivot_ratio_condition_estimate(m, &mat_centered);
 
-        println!(
-            "UK condition proxy: absolute={cond_absolute:.3e}, centered={cond_centered:.3e}"
-        );
+        println!("UK condition proxy: absolute={cond_absolute:.3e}, centered={cond_centered:.3e}");
 
         assert!(
             cond_centered < 1e12,
@@ -667,11 +665,7 @@ mod tests {
 
         let params_utm = UniversalKrigingParams {
             drift_order: DriftOrder::Quadratic,
-            ..make_params(
-                10,
-                10,
-                (ox_utm, oy_utm, ox_utm + 100.0, oy_utm + 100.0),
-            )
+            ..make_params(10, 10, (ox_utm, oy_utm, ox_utm + 100.0, oy_utm + 100.0))
         };
         let result_utm = universal_kriging(&utm_points, &variogram, params_utm).unwrap();
         let utm_value = result_utm.estimate.get(5, 5).unwrap();

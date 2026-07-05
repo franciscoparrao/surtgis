@@ -438,8 +438,14 @@ mod tests {
             .expect_err("mismatched CRS must error, not silently rasterize");
 
         let msg = err.to_string();
-        assert!(msg.contains("4326"), "message should name the vector CRS: {msg}");
-        assert!(msg.contains("32719"), "message should name the raster CRS: {msg}");
+        assert!(
+            msg.contains("4326"),
+            "message should name the vector CRS: {msg}"
+        );
+        assert!(
+            msg.contains("32719"),
+            "message should name the raster CRS: {msg}"
+        );
     }
 
     #[test]

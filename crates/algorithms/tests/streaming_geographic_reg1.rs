@@ -25,7 +25,7 @@ use surtgis_algorithms::terrain::{
     multidirectional_hillshade, slope,
 };
 use surtgis_core::crs::CRS;
-use surtgis_core::io::{read_geotiff, write_geotiff};
+use surtgis_core::io::{read_geotiff_from_buffer, write_geotiff_to_buffer};
 use surtgis_core::raster::Raster;
 use surtgis_core::{GeoTransform, StripProcessor, WindowAlgorithm};
 
@@ -51,17 +51,29 @@ fn geographic_dem() -> Raster<f64> {
 
 /// Round-trip `dem` through a real GeoTIFF file and process it with
 /// `StripProcessor`, returning the output raster.
+///
+/// Uses the native buffer-based I/O (`write_geotiff_to_buffer` /
+/// `read_geotiff_from_buffer`) rather than the feature-toggled
+/// `io::{read_geotiff, write_geotiff}` re-exports: with the `gdal` feature
+/// enabled (e.g. `--all-features`), those resolve to the GDAL-backed
+/// implementation, which writes tiled TIFFs that `StripProcessor` (a
+/// strip-only reader) cannot open — an unrelated, pre-existing limitation.
+/// This test is about REG-1's latitude correction, not GDAL/native TIFF
+/// interop, so it pins itself to the native strip-encoded path regardless
+/// of which features happen to be active.
 fn run_streaming<A: WindowAlgorithm>(dem: &Raster<f64>, algo: &A) -> Raster<f64> {
     let dir = tempfile::tempdir().unwrap();
     let in_path = dir.path().join("in.tif");
     let out_path = dir.path().join("out.tif");
-    write_geotiff(dem, &in_path, None).unwrap();
+    let in_bytes = write_geotiff_to_buffer(dem, None).unwrap();
+    std::fs::write(&in_path, in_bytes).unwrap();
 
     StripProcessor::new(CHUNK_ROWS)
         .process(&in_path, &out_path, algo, false)
         .unwrap();
 
-    read_geotiff::<f64, _>(&out_path, None).unwrap()
+    let out_bytes = std::fs::read(&out_path).unwrap();
+    read_geotiff_from_buffer::<f64>(&out_bytes, None).unwrap()
 }
 
 /// Compare batch vs streaming on interior cells (skip the 1-cell border,
