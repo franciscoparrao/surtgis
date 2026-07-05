@@ -4,8 +4,7 @@
 //! Values range from 0 (completely enclosed) to 1 (flat, open terrain).
 //! Based on horizon angle computation in multiple directions.
 
-use crate::maybe_rayon::*;
-use ndarray::Array2;
+use crate::maybe_rayon::par_map_rows;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -55,47 +54,39 @@ pub fn sky_view_factor(dem: &Raster<f64>, params: SvfParams) -> Result<Raster<f6
         })
         .collect();
 
-    let output_data: Vec<f64> = (0..rows)
-        .into_par_iter()
-        .flat_map(|row| {
-            let mut row_data = vec![f64::NAN; cols];
-
-            for (col, row_data_col) in row_data.iter_mut().enumerate() {
-                let z0 = unsafe { dem.get_unchecked(row, col) };
-                if z0.is_nan() {
-                    continue;
-                }
-
-                let mut sin_sq_sum = 0.0;
-
-                for &(dc_step, dr_step) in &dir_vectors {
-                    let max_angle = compute_horizon_angle(
-                        dem,
-                        row,
-                        col,
-                        z0,
-                        dr_step,
-                        dc_step,
-                        params.radius,
-                        cell_size,
-                        rows,
-                        cols,
-                    );
-                    let sin_angle = max_angle.sin();
-                    sin_sq_sum += sin_angle * sin_angle;
-                }
-
-                *row_data_col = 1.0 - sin_sq_sum / n_dirs as f64;
+    let output_data = par_map_rows(rows, cols, |row, out_row| {
+        for (col, row_data_col) in out_row.iter_mut().enumerate() {
+            let z0 = unsafe { dem.get_unchecked(row, col) };
+            if z0.is_nan() {
+                continue;
             }
 
-            row_data
-        })
-        .collect();
+            let mut sin_sq_sum = 0.0;
+
+            for &(dc_step, dr_step) in &dir_vectors {
+                let max_angle = compute_horizon_angle(
+                    dem,
+                    row,
+                    col,
+                    z0,
+                    dr_step,
+                    dc_step,
+                    params.radius,
+                    cell_size,
+                    rows,
+                    cols,
+                );
+                let sin_angle = max_angle.sin();
+                sin_sq_sum += sin_angle * sin_angle;
+            }
+
+            *row_data_col = 1.0 - sin_sq_sum / n_dirs as f64;
+        }
+    });
 
     let mut output = dem.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() = Array2::from_shape_vec((rows, cols), output_data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() = output_data;
 
     Ok(output)
 }
@@ -213,63 +204,54 @@ pub fn sky_view_factor_fast(dem: &Raster<f64>, params: SvfParams) -> Result<Rast
     let rows_i = rows as i32;
     let cols_i = cols as i32;
 
-    let output_data: Vec<f64> = (0..rows)
-        .into_par_iter()
-        .flat_map(|row| {
-            let mut row_data = vec![f64::NAN; cols];
-
-            for (col, out) in row_data.iter_mut().enumerate() {
-                let z0 = unsafe { dem.get_unchecked(row, col) };
-                if z0.is_nan() {
-                    continue;
-                }
-
-                let row_i = row as i32;
-                let col_i = col as i32;
-                let mut sin_sq_sum = 0.0f64;
-
-                for d in 0..n_dirs {
-                    let offsets =
-                        unsafe { step_offsets.get_unchecked(d * radius..(d + 1) * radius) };
-                    let mut max_tan = 0.0f64;
-
-                    for (k_minus_1, &(dr_i, dc_i)) in offsets.iter().enumerate() {
-                        let nr = row_i + dr_i;
-                        let nc = col_i + dc_i;
-                        if nr < 0 || nc < 0 || nr >= rows_i || nc >= cols_i {
-                            break;
-                        }
-                        let z = unsafe { dem.get_unchecked(nr as usize, nc as usize) };
-                        if z.is_nan() {
-                            // Original SVF semantics: nodata along a ray ends
-                            // the search in that direction.
-                            break;
-                        }
-                        let dz = z - z0;
-                        if dz > 0.0 {
-                            let t = dz * unsafe { *inv_dist.get_unchecked(k_minus_1) };
-                            if t > max_tan {
-                                max_tan = t;
-                            }
-                        }
-                    }
-
-                    // sin²(atan(t)) = t² / (1 + t²) — skip both atan and sin.
-                    let t2 = max_tan * max_tan;
-                    sin_sq_sum += t2 / (1.0 + t2);
-                }
-
-                *out = 1.0 - sin_sq_sum * inv_n;
+    let output_data = par_map_rows(rows, cols, |row, out_row| {
+        for (col, out) in out_row.iter_mut().enumerate() {
+            let z0 = unsafe { dem.get_unchecked(row, col) };
+            if z0.is_nan() {
+                continue;
             }
 
-            row_data
-        })
-        .collect();
+            let row_i = row as i32;
+            let col_i = col as i32;
+            let mut sin_sq_sum = 0.0f64;
+
+            for d in 0..n_dirs {
+                let offsets = unsafe { step_offsets.get_unchecked(d * radius..(d + 1) * radius) };
+                let mut max_tan = 0.0f64;
+
+                for (k_minus_1, &(dr_i, dc_i)) in offsets.iter().enumerate() {
+                    let nr = row_i + dr_i;
+                    let nc = col_i + dc_i;
+                    if nr < 0 || nc < 0 || nr >= rows_i || nc >= cols_i {
+                        break;
+                    }
+                    let z = unsafe { dem.get_unchecked(nr as usize, nc as usize) };
+                    if z.is_nan() {
+                        // Original SVF semantics: nodata along a ray ends
+                        // the search in that direction.
+                        break;
+                    }
+                    let dz = z - z0;
+                    if dz > 0.0 {
+                        let t = dz * unsafe { *inv_dist.get_unchecked(k_minus_1) };
+                        if t > max_tan {
+                            max_tan = t;
+                        }
+                    }
+                }
+
+                // sin²(atan(t)) = t² / (1 + t²) — skip both atan and sin.
+                let t2 = max_tan * max_tan;
+                sin_sq_sum += t2 / (1.0 + t2);
+            }
+
+            *out = 1.0 - sin_sq_sum * inv_n;
+        }
+    });
 
     let mut output = dem.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() = Array2::from_shape_vec((rows, cols), output_data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() = output_data;
 
     Ok(output)
 }

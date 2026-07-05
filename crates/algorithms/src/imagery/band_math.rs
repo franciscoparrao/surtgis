@@ -3,10 +3,9 @@
 //! Raster algebra operations: apply mathematical functions to one or
 //! two rasters element-wise.
 
-use crate::maybe_rayon::*;
-use ndarray::Array2;
+use crate::maybe_rayon::par_map_rows;
+use surtgis_core::Result;
 use surtgis_core::raster::Raster;
-use surtgis_core::{Error, Result};
 
 /// Binary operations for band math
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,39 +42,35 @@ where
     let (rows, cols) = raster.shape();
     let nodata = raster.nodata();
 
-    let data: Vec<f64> = (0..rows)
-        .into_par_iter()
-        .flat_map(|row| {
-            let mut row_data = vec![f64::NAN; cols];
-            for (col, row_data_col) in row_data.iter_mut().enumerate() {
-                let val = unsafe { raster.get_unchecked(row, col) };
+    let output_data = par_map_rows(rows, cols, |row, out_row| {
+        for (col, out_val) in out_row.iter_mut().enumerate() {
+            let val = unsafe { raster.get_unchecked(row, col) };
 
-                if val.is_nan() {
-                    continue;
-                }
-                if let Some(nd) = nodata
-                    && (val - nd).abs() < f64::EPSILON
-                {
-                    continue;
-                }
-
-                *row_data_col = f(val);
+            if val.is_nan() {
+                continue;
             }
-            row_data
-        })
-        .collect();
+            if let Some(nd) = nodata
+                && val == nd
+            {
+                continue;
+            }
+
+            *out_val = f(val);
+        }
+    });
 
     let mut output = raster.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() =
-        Array2::from_shape_vec((rows, cols), data).map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() = output_data;
 
     Ok(output)
 }
 
 /// Apply a binary operation between two rasters element-wise.
 ///
-/// Both rasters must have the same dimensions. Nodata in either input
+/// Both rasters must live on the same georeferenced grid (shape,
+/// geotransform and EPSG-comparable CRS — see
+/// [`surtgis_core::raster::check_aligned`]). Nodata in either input
 /// produces nodata in the output.
 ///
 /// # Arguments
@@ -83,65 +78,52 @@ where
 /// * `b` - Second raster
 /// * `op` - Operation to apply
 pub fn band_math_binary(a: &Raster<f64>, b: &Raster<f64>, op: BandMathOp) -> Result<Raster<f64>> {
-    if a.shape() != b.shape() {
-        return Err(Error::SizeMismatch {
-            er: a.rows(),
-            ec: a.cols(),
-            ar: b.rows(),
-            ac: b.cols(),
-        });
-    }
+    surtgis_core::raster::check_aligned(&[a, b])?;
 
     let (rows, cols) = a.shape();
     let nodata_a = a.nodata();
     let nodata_b = b.nodata();
 
-    let data: Vec<f64> = (0..rows)
-        .into_par_iter()
-        .flat_map(|row| {
-            let mut row_data = vec![f64::NAN; cols];
-            for (col, row_data_col) in row_data.iter_mut().enumerate() {
-                let va = unsafe { a.get_unchecked(row, col) };
-                let vb = unsafe { b.get_unchecked(row, col) };
+    let output_data = par_map_rows(rows, cols, |row, out_row| {
+        for (col, out_val) in out_row.iter_mut().enumerate() {
+            let va = unsafe { a.get_unchecked(row, col) };
+            let vb = unsafe { b.get_unchecked(row, col) };
 
-                if va.is_nan() || vb.is_nan() {
-                    continue;
-                }
-                if let Some(nd) = nodata_a
-                    && (va - nd).abs() < f64::EPSILON
-                {
-                    continue;
-                }
-                if let Some(nd) = nodata_b
-                    && (vb - nd).abs() < f64::EPSILON
-                {
-                    continue;
-                }
-
-                *row_data_col = match op {
-                    BandMathOp::Add => va + vb,
-                    BandMathOp::Subtract => va - vb,
-                    BandMathOp::Multiply => va * vb,
-                    BandMathOp::Divide => {
-                        if vb.abs() < 1e-10 {
-                            f64::NAN
-                        } else {
-                            va / vb
-                        }
-                    }
-                    BandMathOp::Power => va.powf(vb),
-                    BandMathOp::Min => va.min(vb),
-                    BandMathOp::Max => va.max(vb),
-                };
+            if va.is_nan() || vb.is_nan() {
+                continue;
             }
-            row_data
-        })
-        .collect();
+            if let Some(nd) = nodata_a
+                && va == nd
+            {
+                continue;
+            }
+            if let Some(nd) = nodata_b
+                && vb == nd
+            {
+                continue;
+            }
+
+            *out_val = match op {
+                BandMathOp::Add => va + vb,
+                BandMathOp::Subtract => va - vb,
+                BandMathOp::Multiply => va * vb,
+                BandMathOp::Divide => {
+                    if vb.abs() < 1e-10 {
+                        f64::NAN
+                    } else {
+                        va / vb
+                    }
+                }
+                BandMathOp::Power => va.powf(vb),
+                BandMathOp::Min => va.min(vb),
+                BandMathOp::Max => va.max(vb),
+            };
+        }
+    });
 
     let mut output = a.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() =
-        Array2::from_shape_vec((rows, cols), data).map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() = output_data;
 
     Ok(output)
 }
