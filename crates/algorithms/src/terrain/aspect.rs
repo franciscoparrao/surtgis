@@ -201,6 +201,107 @@ impl Default for AspectStreaming {
     }
 }
 
+impl AspectStreaming {
+    /// Process a single output row given its already-resolved cell sizes
+    /// (`eight_dx`/`eight_dy`). Shared by the constant-cell-size path
+    /// (`process_chunk`) and the per-row geographic-correction path
+    /// (`process_chunk_geo`).
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn process_row(
+        &self,
+        input: &Array2<f64>,
+        output: &mut Array2<f64>,
+        nodata: Option<f64>,
+        r: usize,
+        ir: usize,
+        in_rows: usize,
+        cols: usize,
+        eight_dx: f64,
+        eight_dy: f64,
+    ) {
+        const FLAT_THRESHOLD: f64 = 1e-10;
+
+        if ir == 0 || ir >= in_rows - 1 {
+            // Edge row — fill with NaN
+            for c in 0..cols {
+                output[[r, c]] = f64::NAN;
+            }
+            return;
+        }
+
+        for c in 0..cols {
+            if c == 0 || c >= cols - 1 {
+                output[[r, c]] = f64::NAN;
+                continue;
+            }
+
+            let e = input[[ir, c]];
+            if e.is_nan() || nodata.map_or(false, |nd| (e - nd).abs() < f64::EPSILON) {
+                output[[r, c]] = f64::NAN;
+                continue;
+            }
+
+            let a = input[[ir - 1, c - 1]];
+            let b = input[[ir - 1, c]];
+            let cv = input[[ir - 1, c + 1]];
+            let d = input[[ir, c - 1]];
+            let f = input[[ir, c + 1]];
+            let g = input[[ir + 1, c - 1]];
+            let h = input[[ir + 1, c]];
+            let i = input[[ir + 1, c + 1]];
+
+            if [a, b, cv, d, f, g, h, i].iter().any(|v| v.is_nan()) {
+                output[[r, c]] = f64::NAN;
+                continue;
+            }
+
+            // Horn's method for gradients
+            let dz_dx = ((cv + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_dx;
+            let dz_dy = ((g + 2.0 * h + i) - (a + 2.0 * b + cv)) / eight_dy;
+
+            // Check for flat area
+            if dz_dx.abs() < FLAT_THRESHOLD && dz_dy.abs() < FLAT_THRESHOLD {
+                output[[r, c]] = f64::NAN;
+                continue;
+            }
+
+            // Compass bearing (0=North, clockwise)
+            let aspect_north = (-dz_dx).atan2(dz_dy);
+            let aspect_north = if aspect_north < 0.0 {
+                aspect_north + 2.0 * PI
+            } else {
+                aspect_north
+            };
+
+            output[[r, c]] = match self.output_format {
+                AspectOutput::Degrees => aspect_north.to_degrees(),
+                AspectOutput::Radians => aspect_north,
+                AspectOutput::Compass => {
+                    let deg = aspect_north.to_degrees();
+                    if !(22.5..337.5).contains(&deg) {
+                        1.0 // N
+                    } else if deg < 67.5 {
+                        2.0 // NE
+                    } else if deg < 112.5 {
+                        3.0 // E
+                    } else if deg < 157.5 {
+                        4.0 // SE
+                    } else if deg < 202.5 {
+                        5.0 // S
+                    } else if deg < 247.5 {
+                        6.0 // SW
+                    } else if deg < 292.5 {
+                        7.0 // W
+                    } else {
+                        8.0 // NW
+                    }
+                }
+            };
+        }
+    }
+}
+
 impl surtgis_core::WindowAlgorithm for AspectStreaming {
     fn kernel_radius(&self) -> usize {
         1 // 3×3 kernel
@@ -223,87 +324,49 @@ impl surtgis_core::WindowAlgorithm for AspectStreaming {
         let eight_dx = 8.0 * cell_size_x;
         let eight_dy = 8.0 * cell_size_y.abs();
 
-        const FLAT_THRESHOLD: f64 = 1e-10;
-
         for r in 0..out_rows {
             let ir = r + radius; // input row corresponding to output row r
-            if ir == 0 || ir >= in_rows - 1 {
-                // Edge row — fill with NaN
-                for c in 0..cols {
-                    output[[r, c]] = f64::NAN;
-                }
-                continue;
-            }
+            self.process_row(
+                input, output, nodata, r, ir, in_rows, cols, eight_dx, eight_dy,
+            );
+        }
+    }
 
-            for c in 0..cols {
-                if c == 0 || c >= cols - 1 {
-                    output[[r, c]] = f64::NAN;
-                    continue;
-                }
+    /// REG-1 fix: see `SlopeStreaming::process_chunk_geo` — same mechanism,
+    /// applied here so aspect direction (not just magnitude) is correct on
+    /// geographic CRSs when the CLI streams a large DEM.
+    fn process_chunk_geo(
+        &self,
+        input: &Array2<f64>,
+        output: &mut Array2<f64>,
+        nodata: Option<f64>,
+        cell_size_x: f64,
+        cell_size_y: f64,
+        geo_ctx: Option<surtgis_core::GeoRowContext>,
+    ) {
+        let Some(ctx) = geo_ctx else {
+            return self.process_chunk(input, output, nodata, cell_size_x, cell_size_y);
+        };
 
-                let e = input[[ir, c]];
-                if e.is_nan() || nodata.map_or(false, |nd| (e - nd).abs() < f64::EPSILON) {
-                    output[[r, c]] = f64::NAN;
-                    continue;
-                }
+        let (in_rows, cols) = input.dim();
+        let out_rows = output.nrows();
+        let radius = 1;
 
-                let a = input[[ir - 1, c - 1]];
-                let b = input[[ir - 1, c]];
-                let cv = input[[ir - 1, c + 1]];
-                let d = input[[ir, c - 1]];
-                let f = input[[ir, c + 1]];
-                let g = input[[ir + 1, c - 1]];
-                let h = input[[ir + 1, c]];
-                let i = input[[ir + 1, c + 1]];
-
-                if [a, b, cv, d, f, g, h, i].iter().any(|v| v.is_nan()) {
-                    output[[r, c]] = f64::NAN;
-                    continue;
-                }
-
-                // Horn's method for gradients
-                let dz_dx = ((cv + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_dx;
-                let dz_dy = ((g + 2.0 * h + i) - (a + 2.0 * b + cv)) / eight_dy;
-
-                // Check for flat area
-                if dz_dx.abs() < FLAT_THRESHOLD && dz_dy.abs() < FLAT_THRESHOLD {
-                    output[[r, c]] = f64::NAN;
-                    continue;
-                }
-
-                // Compass bearing (0=North, clockwise)
-                let aspect_north = (-dz_dx).atan2(dz_dy);
-                let aspect_north = if aspect_north < 0.0 {
-                    aspect_north + 2.0 * PI
-                } else {
-                    aspect_north
-                };
-
-                output[[r, c]] = match self.output_format {
-                    AspectOutput::Degrees => aspect_north.to_degrees(),
-                    AspectOutput::Radians => aspect_north,
-                    AspectOutput::Compass => {
-                        let deg = aspect_north.to_degrees();
-                        if !(22.5..337.5).contains(&deg) {
-                            1.0 // N
-                        } else if deg < 67.5 {
-                            2.0 // NE
-                        } else if deg < 112.5 {
-                            3.0 // E
-                        } else if deg < 157.5 {
-                            4.0 // SE
-                        } else if deg < 202.5 {
-                            5.0 // S
-                        } else if deg < 247.5 {
-                            6.0 // SW
-                        } else if deg < 292.5 {
-                            7.0 // W
-                        } else {
-                            8.0 // NW
-                        }
-                    }
-                };
-            }
+        for r in 0..out_rows {
+            let ir = r + radius;
+            let abs_row = ctx.row_offset + r;
+            let lat = ctx.origin_y + (abs_row as f64 + 0.5) * ctx.pixel_height;
+            let dims = super::spheroidal_grid::cell_dimensions(
+                lat,
+                cell_size_x,
+                cell_size_y,
+                &super::spheroidal_grid::SpheroidalParams::default(),
+            );
+            let eight_dx = 8.0 * dims.dx;
+            let eight_dy = 8.0 * dims.dy;
+            self.process_row(
+                input, output, nodata, r, ir, in_rows, cols, eight_dx, eight_dy,
+            );
         }
     }
 }
