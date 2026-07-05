@@ -77,12 +77,19 @@ pub fn geomorphons(dem: &Raster<f64>, params: GeomorphonParams) -> Result<Raster
     let cell_size = dem.cell_size();
     let threshold_rad = params.flatness_threshold.to_radians();
 
-    let output_data: Vec<u8> = (0..rows)
-        .into_par_iter()
-        .flat_map(|row| {
-            let mut row_data = vec![0u8; cols];
-
-            for (col, row_data_col) in row_data.iter_mut().enumerate() {
+    // `par_map_rows` (crate::maybe_rayon) is hard-coded to `Array2<f64>`, but
+    // this algorithm's output is `u8` landform codes, so it can't be reused
+    // directly. This mirrors that helper's mechanism (preallocate once, hand
+    // each thread a `&mut [u8]` row via `par_chunks_mut`) instead of the
+    // slower `flat_map(|row| vec![...]).collect()` pattern.
+    let mut output_data = Array2::from_elem((rows, cols), 0u8);
+    output_data
+        .as_slice_mut()
+        .expect("freshly created Array2 is contiguous")
+        .par_chunks_mut(cols)
+        .enumerate()
+        .for_each(|(row, out_row)| {
+            for (col, row_data_col) in out_row.iter_mut().enumerate() {
                 let z0 = unsafe { dem.get_unchecked(row, col) };
                 if z0.is_nan() {
                     continue;
@@ -141,15 +148,11 @@ pub fn geomorphons(dem: &Raster<f64>, params: GeomorphonParams) -> Result<Raster
 
                 *row_data_col = classify_pattern(&pattern);
             }
-
-            row_data
-        })
-        .collect();
+        });
 
     let mut output = dem.with_same_meta::<u8>(rows, cols);
     output.set_nodata(Some(0));
-    *output.data_mut() = Array2::from_shape_vec((rows, cols), output_data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() = output_data;
 
     Ok(output)
 }
