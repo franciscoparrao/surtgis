@@ -19,13 +19,23 @@
 //! Cressie, N. (1993). Statistics for Spatial Data. Wiley.
 //! Florinsky, I.V. (2025). Digital Terrain Analysis, §3.3.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use crate::maybe_rayon::*;
 use ndarray::Array2;
 use surtgis_core::raster::{GeoTransform, Raster};
 use surtgis_core::{Error, Result};
 
 use super::SamplePoint;
+use super::dedupe_points;
 use super::variogram::FittedVariogram;
+
+/// Coordinate tolerance (CRS units) used to merge near-duplicate sample
+/// points before building the kriging system. See [`dedupe_points`] and
+/// A-8 in the correctness audit: duplicate coordinates make the kriging
+/// matrix singular, which previously caused an undocumented, silent
+/// fallback to IDW for the affected cells.
+const DEDUP_TOLERANCE: f64 = 1e-6;
 
 /// Parameters for Ordinary Kriging interpolation
 #[derive(Debug, Clone)]
@@ -65,6 +75,15 @@ pub struct KrigingResult {
     pub estimate: Raster<f64>,
     /// Kriging variance (estimation uncertainty). `None` if not requested.
     pub variance: Option<Raster<f64>>,
+    /// Number of output cells where the kriging system was singular
+    /// (after duplicate-coordinate merging) and the estimate silently
+    /// fell back to an inverse-distance-weighted (IDW) value instead.
+    /// Zero for well-posed inputs. See A-8 in the correctness audit —
+    /// duplicate sample coordinates are the most common cause and are
+    /// now handled by merging them before the system is built
+    /// ([`dedupe_points`]), so a nonzero count here indicates some
+    /// *other* degeneracy (e.g. collinear/near-collinear neighbor sets).
+    pub n_fallback_cells: usize,
 }
 
 /// Perform Ordinary Kriging interpolation from scattered points to a raster grid.
@@ -85,6 +104,12 @@ pub fn ordinary_kriging(
     variogram: &FittedVariogram,
     params: OrdinaryKrigingParams,
 ) -> Result<KrigingResult> {
+    // Merge near-duplicate sample coordinates (A-8): duplicate locations
+    // make the kriging matrix singular. Chilès & Delfiner (2012) §3.6.1
+    // recommend averaging duplicate observations before kriging.
+    let points = dedupe_points(points, DEDUP_TOLERANCE);
+    let points = points.as_slice();
+
     let n = points.len();
     if n < 2 {
         return Err(Error::Algorithm(
@@ -98,6 +123,7 @@ pub fn ordinary_kriging(
     let max_pts = params.max_points.min(n);
     let max_radius_sq = params.max_radius.map(|r| r * r);
     let compute_var = params.compute_variance;
+    let fallback_count = AtomicUsize::new(0);
 
     // Pre-compute all pairwise distances for the sample points
     // (used to select neighbors and build the kriging matrix)
@@ -197,7 +223,12 @@ pub fn ordinary_kriging(
                         *row_data_col = (estimate, variance);
                     }
                     Err(_) => {
-                        // Singular system — fall back to IDW-like behavior
+                        // Singular system (should be rare now that
+                        // duplicate coordinates are merged up front) —
+                        // fall back to IDW-like behavior, but record it
+                        // so callers can detect degraded cells via
+                        // `KrigingResult::n_fallback_cells`.
+                        fallback_count.fetch_add(1, Ordering::Relaxed);
                         let mut sum_w = 0.0;
                         let mut sum_wz = 0.0;
                         for (idx, dist) in neighbors {
@@ -236,7 +267,20 @@ pub fn ordinary_kriging(
         None
     };
 
-    Ok(KrigingResult { estimate, variance })
+    let n_fallback_cells = fallback_count.load(Ordering::Relaxed);
+    if n_fallback_cells > 0 {
+        eprintln!(
+            "surtgis: ordinary_kriging: {n_fallback_cells} of {} cells had a singular \
+             kriging system and fell back to IDW; see KrigingResult::n_fallback_cells",
+            rows * cols
+        );
+    }
+
+    Ok(KrigingResult {
+        estimate,
+        variance,
+        n_fallback_cells,
+    })
 }
 
 /// Solve Ax = b using Gaussian elimination with partial pivoting.
@@ -514,6 +558,68 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_ok_duplicate_points_are_merged_not_singular_fallback() {
+        // Two samples at exactly the same coordinate historically made
+        // the kriging matrix singular, silently patched with an IDW
+        // estimate for the affected cell. After A-8, duplicates are
+        // averaged before the system is built, so there should be no
+        // fallback at all.
+        let points = vec![
+            SamplePoint::new(10.0, 10.0, 100.0),
+            SamplePoint::new(10.0, 10.0, 120.0), // exact duplicate coordinate
+            SamplePoint::new(90.0, 10.0, 200.0),
+            SamplePoint::new(10.0, 90.0, 300.0),
+            SamplePoint::new(90.0, 90.0, 400.0),
+            SamplePoint::new(50.0, 50.0, 250.0),
+        ];
+        let variogram = FittedVariogram {
+            model: super::super::variogram::VariogramModel::Spherical,
+            nugget: 0.0,
+            sill: 5000.0,
+            range: 80.0,
+            partial_sill: 5000.0,
+            rss: 0.0,
+        };
+        let params = make_params(10, 10, (0.0, 0.0, 100.0, 100.0));
+        let result = ordinary_kriging(&points, &variogram, params).unwrap();
+
+        assert_eq!(
+            result.n_fallback_cells, 0,
+            "duplicate coordinates should be merged, not trigger an IDW fallback"
+        );
+
+        let mut nan_count = 0;
+        for row in 0..10 {
+            for col in 0..10 {
+                if result.estimate.get(row, col).unwrap().is_nan() {
+                    nan_count += 1;
+                }
+            }
+        }
+        assert_eq!(nan_count, 0, "no NaN expected in interpolation domain");
+    }
+
+    #[test]
+    fn test_ok_all_duplicate_points_error_after_dedup() {
+        // Two points at the exact same location dedupe down to a single
+        // effective sample, below the 2-point minimum required by OK.
+        let points = vec![
+            SamplePoint::new(5.0, 5.0, 10.0),
+            SamplePoint::new(5.0, 5.0, 20.0),
+        ];
+        let variogram = FittedVariogram {
+            model: super::super::variogram::VariogramModel::Spherical,
+            nugget: 0.0,
+            sill: 10.0,
+            range: 50.0,
+            partial_sill: 10.0,
+            rss: 0.0,
+        };
+        let params = make_params(5, 5, (0.0, 0.0, 10.0, 10.0));
+        assert!(ordinary_kriging(&points, &variogram, params).is_err());
     }
 
     #[test]

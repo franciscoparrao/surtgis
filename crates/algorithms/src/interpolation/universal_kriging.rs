@@ -18,13 +18,21 @@
 //! Cressie, N. (1993). Statistics for Spatial Data. Wiley.
 //! Florinsky, I.V. (2025). Digital Terrain Analysis, §3.3.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use crate::maybe_rayon::*;
 use ndarray::Array2;
 use surtgis_core::raster::{GeoTransform, Raster};
 use surtgis_core::{Error, Result};
 
 use super::SamplePoint;
+use super::dedupe_points;
 use super::variogram::FittedVariogram;
+
+/// Coordinate tolerance (CRS units) used to merge near-duplicate sample
+/// points before building the UK system. See A-8 in the correctness
+/// audit and [`dedupe_points`].
+const DEDUP_TOLERANCE: f64 = 1e-6;
 
 /// Polynomial drift order for Universal Kriging
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -76,6 +84,11 @@ pub struct UniversalKrigingResult {
     pub estimate: Raster<f64>,
     /// Kriging variance (estimation uncertainty). `None` if not requested.
     pub variance: Option<Raster<f64>>,
+    /// Number of output cells where the UK system was singular (after
+    /// duplicate-coordinate merging and drift centering) and the
+    /// estimate silently fell back to an IDW value instead. Zero for
+    /// well-posed inputs. See A-8 in the correctness audit.
+    pub n_fallback_cells: usize,
 }
 
 /// Compute drift function values at a point.
@@ -114,6 +127,11 @@ pub fn universal_kriging(
     variogram: &FittedVariogram,
     params: UniversalKrigingParams,
 ) -> Result<UniversalKrigingResult> {
+    // Merge near-duplicate sample coordinates (A-8): duplicate locations
+    // make the UK matrix singular.
+    let points = dedupe_points(points, DEDUP_TOLERANCE);
+    let points = points.as_slice();
+
     let n = points.len();
     let p = n_drift(params.drift_order);
 
@@ -126,6 +144,16 @@ pub fn universal_kriging(
         )));
     }
 
+    // A-9: centre coordinates at the sample centroid before evaluating
+    // drift functions. With raw projected/UTM-scale coordinates
+    // (x ~ 4e5, y ~ 6.2e6) and a quadratic drift (x², xy, y² terms),
+    // the condition number of the UK system can reach ~1e28. Kriging is
+    // invariant to this translation — it is only a change of basis for
+    // the drift functions — so centering strictly improves numerical
+    // stability without changing the mathematical result.
+    let cx0 = points.iter().map(|pt| pt.x).sum::<f64>() / n as f64;
+    let cy0 = points.iter().map(|pt| pt.y).sum::<f64>() / n as f64;
+
     let rows = params.rows;
     let cols = params.cols;
     let transform = params.transform;
@@ -133,6 +161,7 @@ pub fn universal_kriging(
     let max_radius_sq = params.max_radius.map(|r| r * r);
     let compute_var = params.compute_variance;
     let drift_order = params.drift_order;
+    let fallback_count = AtomicUsize::new(0);
 
     let output: Vec<(f64, f64)> = (0..rows)
         .into_par_iter()
@@ -200,10 +229,13 @@ pub fn universal_kriging(
                     }
                 }
 
-                // Upper-right and lower-left: drift functions
+                // Upper-right and lower-left: drift functions.
+                // Evaluated in centroid-centered coordinates (A-9) to
+                // keep the system well-conditioned; the estimator is
+                // translation-invariant so this doesn't change results.
                 for i in 0..k {
                     let pt = &points[neighbors[i].0];
-                    let fvals = drift_values(pt.x, pt.y, drift_order);
+                    let fvals = drift_values(pt.x - cx0, pt.y - cy0, drift_order);
                     for (l, fv) in fvals.iter().enumerate() {
                         mat[i * m + k + l] = *fv; // upper-right
                         mat[(k + l) * m + i] = *fv; // lower-left
@@ -215,7 +247,7 @@ pub fn universal_kriging(
                 for i in 0..k {
                     rhs[i] = variogram.evaluate(neighbors[i].1);
                 }
-                let f0 = drift_values(x0, y0, drift_order);
+                let f0 = drift_values(x0 - cx0, y0 - cy0, drift_order);
                 for (l, fv) in f0.iter().enumerate() {
                     rhs[k + l] = *fv;
                 }
@@ -243,7 +275,9 @@ pub fn universal_kriging(
                         *row_data_col = (estimate, variance);
                     }
                     Err(_) => {
-                        // Fallback: IDW
+                        // Singular system — fall back to IDW-like
+                        // behavior, but record it (n_fallback_cells).
+                        fallback_count.fetch_add(1, Ordering::Relaxed);
                         let mut sum_w = 0.0;
                         let mut sum_wz = 0.0;
                         for (idx, dist) in neighbors {
@@ -281,7 +315,20 @@ pub fn universal_kriging(
         None
     };
 
-    Ok(UniversalKrigingResult { estimate, variance })
+    let n_fallback_cells = fallback_count.load(Ordering::Relaxed);
+    if n_fallback_cells > 0 {
+        eprintln!(
+            "surtgis: universal_kriging: {n_fallback_cells} of {} cells had a singular \
+             UK system and fell back to IDW; see UniversalKrigingResult::n_fallback_cells",
+            rows * cols
+        );
+    }
+
+    Ok(UniversalKrigingResult {
+        estimate,
+        variance,
+        n_fallback_cells,
+    })
 }
 
 /// Gaussian elimination with partial pivoting (same as OK solver)
@@ -482,6 +529,160 @@ mod tests {
             ..make_params(5, 5, (0.0, 0.0, 10.0, 10.0))
         };
         assert!(universal_kriging(&points, &variogram, params).is_err());
+    }
+
+    /// Build the raw (k+p)×(k+p) UK matrix for `pts`, evaluating drift
+    /// functions at `(pt.x - ox, pt.y - oy)`. Mirrors the matrix layout
+    /// built inside `universal_kriging` (minus the RHS), so it can be
+    /// used to probe conditioning under different coordinate origins.
+    fn build_uk_matrix(
+        pts: &[SamplePoint],
+        variogram: &FittedVariogram,
+        order: DriftOrder,
+        ox: f64,
+        oy: f64,
+    ) -> (usize, Vec<f64>) {
+        let k = pts.len();
+        let p = n_drift(order);
+        let m = k + p;
+        let mut mat = vec![0.0_f64; m * m];
+        for i in 0..k {
+            for j in 0..k {
+                if i != j {
+                    let dx = pts[i].x - pts[j].x;
+                    let dy = pts[i].y - pts[j].y;
+                    let h = (dx * dx + dy * dy).sqrt();
+                    mat[i * m + j] = variogram.evaluate(h);
+                }
+            }
+            let fvals = drift_values(pts[i].x - ox, pts[i].y - oy, order);
+            for (l, fv) in fvals.iter().enumerate() {
+                mat[i * m + k + l] = *fv;
+                mat[(k + l) * m + i] = *fv;
+            }
+        }
+        (m, mat)
+    }
+
+    /// Coarse condition-number proxy: ratio of the largest to smallest
+    /// |pivot| encountered during Gaussian elimination with partial
+    /// pivoting (same elimination strategy as `uk_solve`). Not the exact
+    /// SVD-based condition number, but it reliably exposes the dynamic
+    /// range blow-up caused by unscaled absolute coordinates in the
+    /// drift columns.
+    fn pivot_ratio_condition_estimate(n: usize, mat: &[f64]) -> f64 {
+        let mut a = mat.to_vec();
+        let mut max_pivot = 0.0_f64;
+        let mut min_pivot = f64::INFINITY;
+        for col in 0..n {
+            let mut max_val = a[col * n + col].abs();
+            let mut max_row = col;
+            for row in (col + 1)..n {
+                let val = a[row * n + col].abs();
+                if val > max_val {
+                    max_val = val;
+                    max_row = row;
+                }
+            }
+            if max_row != col {
+                for j in 0..n {
+                    a.swap(col * n + j, max_row * n + j);
+                }
+            }
+            let pivot = a[col * n + col].abs();
+            if pivot > 0.0 {
+                max_pivot = max_pivot.max(pivot);
+                min_pivot = min_pivot.min(pivot);
+            }
+            for row in (col + 1)..n {
+                if a[col * n + col].abs() < 1e-300 {
+                    continue;
+                }
+                let factor = a[row * n + col] / a[col * n + col];
+                for j in col..n {
+                    a[row * n + j] -= factor * a[col * n + j];
+                }
+            }
+        }
+        if min_pivot <= 0.0 || !min_pivot.is_finite() {
+            f64::INFINITY
+        } else {
+            max_pivot / min_pivot
+        }
+    }
+
+    #[test]
+    fn test_uk_drift_centering_improves_conditioning_and_matches_prediction() {
+        // Simulate real UTM-scale coordinates (x ~ 4e5, y ~ 6.2e6), the
+        // regime that triggers severe ill-conditioning with a quadratic
+        // drift evaluated at absolute coordinates (A-9, condition number
+        // verified ~3e28 in the correctness audit).
+        let local_points = generate_trended_points(30, 7);
+        let ox_utm = 400_000.0;
+        let oy_utm = 6_200_000.0;
+        let utm_points: Vec<SamplePoint> = local_points
+            .iter()
+            .map(|p| SamplePoint::new(p.x + ox_utm, p.y + oy_utm, p.value))
+            .collect();
+
+        let variogram = manual_variogram();
+
+        // Condition proxy: absolute coordinates (ox=oy=0, i.e. the old
+        // un-centered behavior) vs sample-centroid-centered coordinates
+        // (the new behavior).
+        let (m, mat_absolute) =
+            build_uk_matrix(&utm_points, &variogram, DriftOrder::Quadratic, 0.0, 0.0);
+        let cx0 = utm_points.iter().map(|p| p.x).sum::<f64>() / utm_points.len() as f64;
+        let cy0 = utm_points.iter().map(|p| p.y).sum::<f64>() / utm_points.len() as f64;
+        let (_, mat_centered) =
+            build_uk_matrix(&utm_points, &variogram, DriftOrder::Quadratic, cx0, cy0);
+
+        let cond_absolute = pivot_ratio_condition_estimate(m, &mat_absolute);
+        let cond_centered = pivot_ratio_condition_estimate(m, &mat_centered);
+
+        println!(
+            "UK condition proxy: absolute={cond_absolute:.3e}, centered={cond_centered:.3e}"
+        );
+
+        assert!(
+            cond_centered < 1e12,
+            "centered system should be well-conditioned, got {cond_centered:.3e}"
+        );
+        assert!(
+            cond_absolute > cond_centered * 1e6,
+            "absolute-coordinate system should be several orders of magnitude worse: \
+             absolute={cond_absolute:.3e}, centered={cond_centered:.3e}"
+        );
+
+        // Prediction should match (within relative tolerance) whether the
+        // caller supplies raw UTM-scale coordinates or locally-translated
+        // ones, because `universal_kriging` centers internally (A-9) —
+        // kriging is invariant to translation of the drift basis.
+        let params_local = UniversalKrigingParams {
+            drift_order: DriftOrder::Quadratic,
+            ..make_params(10, 10, (0.0, 0.0, 100.0, 100.0))
+        };
+        let result_local = universal_kriging(&local_points, &variogram, params_local).unwrap();
+        let local_value = result_local.estimate.get(5, 5).unwrap();
+
+        let params_utm = UniversalKrigingParams {
+            drift_order: DriftOrder::Quadratic,
+            ..make_params(
+                10,
+                10,
+                (ox_utm, oy_utm, ox_utm + 100.0, oy_utm + 100.0),
+            )
+        };
+        let result_utm = universal_kriging(&utm_points, &variogram, params_utm).unwrap();
+        let utm_value = result_utm.estimate.get(5, 5).unwrap();
+
+        assert!(!local_value.is_nan() && !utm_value.is_nan());
+        let rel_diff = (local_value - utm_value).abs() / local_value.abs().max(1.0);
+        assert!(
+            rel_diff < 1e-6,
+            "prediction should be translation-invariant: local={local_value:.6}, \
+             utm={utm_value:.6}, rel_diff={rel_diff:.3e}"
+        );
     }
 
     #[test]

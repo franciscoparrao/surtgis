@@ -17,9 +17,14 @@
 //! is what makes SLIC linear in the number of pixels.
 //!
 //! Per-band feature values are normalised to `[0, 1]` before
-//! clustering so that the conventional compactness range
-//! (`m ≈ 10` for "balanced", up to `40` for "very compact") works
-//! regardless of input units.
+//! clustering. Note this is *not* the CIELAB range (`~100`) that
+//! Achanta et al. (2012) calibrate `m ≈ 10` against: with `dc² ≤
+//! n_bands` (typically ≤ 3-4) in a `[0, 1]` feature space, `m = 10`
+//! makes the spatial term `(m / S)² · d_space²` dominate the
+//! spectral term almost everywhere, collapsing the result to a
+//! regular geometric grid that ignores band content. The default
+//! `compactness` here (`0.1`) is calibrated for this `[0, 1]` range
+//! instead — see [`SlicParams::compactness`].
 
 use ndarray::Array2;
 use surtgis_core::raster::Raster;
@@ -32,7 +37,18 @@ pub struct SlicParams {
     /// rounded to the nearest grid that fits the raster shape.
     pub n_segments: usize,
     /// Spatial-vs-spectral weight. Higher = more compact (geometric)
-    /// superpixels; lower = more spectrally homogeneous. Default 10.
+    /// superpixels; lower = more spectrally homogeneous.
+    ///
+    /// Default `0.1`. Achanta et al. (2012) calibrate `m ≈ 10` for
+    /// "balanced" against CIELAB color distance, whose range is
+    /// `~100`. Band features here are normalised to `[0, 1]`
+    /// (`dc² ≤ n_bands`, typically ≤ 3-4), a range roughly 100×
+    /// smaller — so a value of `m ≈ 10` in this space is 25-100×
+    /// too large: the spatial term `(m / S)² · d_space²` swamps the
+    /// spectral term and the output degenerates into a regular grid
+    /// that ignores band content. Scale `compactness` from published
+    /// CIELAB-calibrated values by roughly `1/100` (e.g. `m ≈ 10` →
+    /// `~0.1`, `m ≈ 40` "very compact" → `~0.4`).
     pub compactness: f64,
     /// Maximum k-means iterations. Default 10 matches the original
     /// paper — SLIC converges fast.
@@ -47,7 +63,7 @@ impl Default for SlicParams {
     fn default() -> Self {
         Self {
             n_segments: 100,
-            compactness: 10.0,
+            compactness: 0.1,
             max_iter: 10,
             enforce_connectivity: true,
         }
@@ -476,6 +492,72 @@ mod tests {
                 v
             );
         }
+    }
+
+    #[test]
+    fn slic_default_compactness_respects_color_boundary() {
+        // Regression test for CR-10: the pre-fix default (m=10.0,
+        // calibrated by Achanta et al. against CIELAB's ~100-wide
+        // range) completely dominates the spectral term once bands
+        // are normalised to [0, 1] here (dc² ≤ n_bands, typically
+        // ≤ 3-4), collapsing superpixels into a content-blind
+        // geometric grid. With the recalibrated default (m=0.1),
+        // superpixels must respect a strong, clear color boundary
+        // instead of ignoring it.
+        let rows = 20;
+        let cols = 20;
+        let transform = GeoTransform::new(0.0, rows as f64, 1.0, -1.0);
+
+        let mut band0 = Raster::new(rows, cols);
+        band0.set_transform(transform.clone());
+        let mut band1 = Raster::new(rows, cols);
+        band1.set_transform(transform.clone());
+        let mut band2 = Raster::new(rows, cols);
+        band2.set_transform(transform);
+
+        for row in 0..rows {
+            for col in 0..cols {
+                // Two clearly distinct "colors": left half ≈
+                // (0.1, 0.1, 0.1), right half ≈ (0.9, 0.9, 0.9), plus
+                // a small within-half spatial gradient so the image
+                // isn't perfectly flat (some spatial structure, as
+                // real imagery would have).
+                let base = if col < cols / 2 { 0.1 } else { 0.9 };
+                let wiggle = 0.02 * (row as f64 / rows as f64);
+                band0.set(row, col, base + wiggle).unwrap();
+                band1.set(row, col, base + wiggle).unwrap();
+                band2.set(row, col, base - wiggle).unwrap();
+            }
+        }
+
+        let result = slic(
+            &[&band0, &band1, &band2],
+            SlicParams {
+                n_segments: 16,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let mut left: std::collections::HashSet<i32> = std::collections::HashSet::new();
+        let mut right: std::collections::HashSet<i32> = std::collections::HashSet::new();
+        for row in 0..rows {
+            for col in 0..cols {
+                let v = result.get(row, col).unwrap();
+                if col < cols / 2 {
+                    left.insert(v);
+                } else {
+                    right.insert(v);
+                }
+            }
+        }
+        assert!(
+            left.is_disjoint(&right),
+            "with the recalibrated default compactness, superpixels leaked \
+             across a strong color boundary (left={:?}, right={:?})",
+            left,
+            right
+        );
     }
 
     #[test]

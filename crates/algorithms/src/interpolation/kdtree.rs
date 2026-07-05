@@ -264,17 +264,30 @@ impl KdTree {
 
         let diff = if node.split_dim == 0 { dx } else { dy };
 
-        // Always check both sides if the splitting plane is within radius
-        if let Some(left) = node.left
-            && (diff > 0.0 || diff * diff <= radius_sq)
-        {
-            self.radius_recursive(left, qx, qy, radius_sq, results);
+        // Standard kd-tree pruning (Friedman, Bentley & Finkel 1977):
+        // always descend into the subtree on the *same* side as the
+        // query first (near side), then descend into the *other*
+        // subtree (far side) only if the query's distance to the
+        // splitting plane is within `radius` — i.e. the far side could
+        // still contain points within range.
+        //
+        // `diff > 0.0` means the query lies on the "right" (larger
+        // coordinate) side of the splitting plane, so `right` is the
+        // near side and `left` is the far side; and vice versa.
+        let (near, far) = if diff > 0.0 {
+            (node.right, node.left)
+        } else {
+            (node.left, node.right)
+        };
+
+        if let Some(child) = near {
+            self.radius_recursive(child, qx, qy, radius_sq, results);
         }
 
-        if let Some(right) = node.right
-            && (diff < 0.0 || diff * diff <= radius_sq)
+        if diff * diff <= radius_sq
+            && let Some(child) = far
         {
-            self.radius_recursive(right, qx, qy, radius_sq, results);
+            self.radius_recursive(child, qx, qy, radius_sq, results);
         }
     }
 }
@@ -510,6 +523,67 @@ mod tests {
 
         let knn = tree.k_nearest(4.5, 0.0, 3);
         assert_eq!(knn.len(), 3);
+    }
+
+    #[test]
+    fn test_within_radius_matches_brute_force_300_points() {
+        // Regression test for CR-3: within_radius used to have the
+        // kd-tree pruning branches inverted (exploring the "far" side
+        // unconditionally and the "near" side only conditionally),
+        // which silently dropped points from the result. With 300
+        // random points and ~300 random queries, every single query
+        // must match a brute-force search exactly (same point set).
+        let mut rng: u64 = 0xC0FFEE_u64;
+        let mut next = || {
+            rng = rng
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (rng >> 33) as f64 / (1u64 << 31) as f64
+        };
+
+        let pts: Vec<SamplePoint> = (0..300)
+            .map(|i| {
+                let x = next() * 100.0;
+                let y = next() * 100.0;
+                SamplePoint::new(x, y, i as f64)
+            })
+            .collect();
+        let tree = KdTree::build(&pts);
+
+        let radius = 10.0;
+        let radius_sq = radius * radius;
+
+        let mut mismatches = 0;
+        let n_queries = 300;
+        for _ in 0..n_queries {
+            let qx = next() * 100.0;
+            let qy = next() * 100.0;
+
+            let mut tree_idx: Vec<usize> = tree
+                .within_radius(qx, qy, radius)
+                .into_iter()
+                .map(|r| r.index)
+                .collect();
+            tree_idx.sort_unstable();
+
+            let mut bf_idx: Vec<usize> = pts
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| p.dist_sq(qx, qy) <= radius_sq)
+                .map(|(i, _)| i)
+                .collect();
+            bf_idx.sort_unstable();
+
+            if tree_idx != bf_idx {
+                mismatches += 1;
+            }
+        }
+
+        assert_eq!(
+            mismatches, 0,
+            "within_radius mismatched brute force on {}/{} queries",
+            mismatches, n_queries
+        );
     }
 
     #[test]
