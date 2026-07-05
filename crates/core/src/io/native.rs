@@ -3,6 +3,7 @@
 //! Uses the `tiff` crate for basic TIFF I/O.
 //! For full GeoTIFF support (projections, advanced types), enable the `gdal` feature.
 
+use super::GeoTiffOptions;
 use crate::error::{Error, Result};
 use crate::raster::{GeoTransform, Raster, RasterElement};
 use std::fs::File;
@@ -13,21 +14,6 @@ use tiff::encoder::colortype::{ColorType, Gray32Float, RGB32Float, RGBA32Float};
 use tiff::encoder::compression::DeflateLevel;
 use tiff::encoder::{Compression, TiffEncoder};
 use tiff::tags::Tag;
-
-/// Options for writing GeoTIFF files
-#[derive(Debug, Clone)]
-pub struct GeoTiffOptions {
-    /// Compression (not fully supported in native mode)
-    pub compression: String,
-}
-
-impl Default for GeoTiffOptions {
-    fn default() -> Self {
-        Self {
-            compression: "NONE".to_string(),
-        }
-    }
-}
 
 /// Read a GeoTIFF file into a Raster
 ///

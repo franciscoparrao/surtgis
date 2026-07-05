@@ -42,7 +42,7 @@ Options:
       --compress                   Compress output GeoTIFFs (deflate)
       --datetime <DATETIME>        Datetime or range (e.g. "2024-06-01/2024-06-30")
       --streaming                  Force streaming mode for large rasters (auto-detected if >500MB)
-      --collections <COLLECTIONS>  Collections (comma-separated, e.g. "sentinel-2-l2a")
+      --collections <COLLECTIONS>  Collections (comma-separated, e.g. "sentinel-2-l2a") [aliases: --collection]
       --max-memory <MAX_MEMORY>    Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
       --limit <LIMIT>              Maximum items to return [default: 10]
   -h, --help                       Print help
@@ -63,7 +63,7 @@ Options:
   -v, --verbose                  Verbose output
       --bbox <BBOX>              Bounding box: west,south,east,north
       --compress                 Compress output GeoTIFFs (deflate)
-      --collection <COLLECTION>  Collection (e.g. "sentinel-2-l2a")
+      --collection <COLLECTION>  Collection (e.g. "sentinel-2-l2a") [aliases: --collections]
       --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
       --asset <ASSET>            Asset key to fetch (e.g. "red", "nir", "B04"). Auto-detects COG if omitted
       --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
@@ -88,12 +88,12 @@ Options:
   -v, --verbose                  Verbose output
       --bbox <BBOX>              Bounding box: west,south,east,north
       --compress                 Compress output GeoTIFFs (deflate)
-      --collection <COLLECTION>  Collection (e.g. "cop-dem-glo-30", "sentinel-2-l2a")
+      --collection <COLLECTION>  Collection (e.g. "cop-dem-glo-30", "sentinel-2-l2a") [aliases: --collections]
       --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
       --asset <ASSET>            Asset key to fetch (e.g. "data", "red", "B04"). Auto-detects COG if omitted
       --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
       --datetime <DATETIME>      Datetime or range
-      --max-items <MAX_ITEMS>    Maximum items to fetch and mosaic [default: 20]
+      --max-items <MAX_ITEMS>    Maximum items to fetch and mosaic (caps RAM/time on wide queries) [default: 20] [aliases: --max-scenes]
   -h, --help                     Print help
 ```
 

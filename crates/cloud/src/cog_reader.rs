@@ -137,6 +137,7 @@ impl CogReader {
         // 2. Parse TIFF header.
         let tiff_header = ifd::parse_header(&header_bytes)?;
         let byte_order = tiff_header.byte_order;
+        reject_big_endian(byte_order)?;
 
         // 3. Parse IFD chain.
         let mut ifds = Vec::new();
@@ -827,6 +828,29 @@ fn get_tag_u64_array(
     }
 }
 
+/// Reject big-endian (`MM`) TIFFs before any tile decoding is attempted.
+///
+/// The IFD/tag parser (`ifd.rs`) reads `byte_order` correctly for both
+/// orderings. But the tile decompression and predictor-undo paths
+/// (`decompress.rs`: `bytes_to_typed`, `cast_from_le`, the horizontal and
+/// floating-point predictor un-shufflers) hard-code little-endian sample
+/// layout regardless of what the header declares. Proceeding on a real
+/// big-endian TIFF would silently decode garbage pixel values instead of
+/// failing — the same "silent wrong data" failure mode `validate_tiled`
+/// guards against below. Full big-endian decode support is future work;
+/// for now, fail loudly and early instead.
+fn reject_big_endian(byte_order: TiffByteOrder) -> Result<()> {
+    if byte_order == TiffByteOrder::BigEndian {
+        return Err(CloudError::InvalidTiff {
+            reason: "big-endian TIFF byte order ('MM') is not yet supported by the tile \
+                      decoder (only little-endian 'II' COGs are supported); re-encode as \
+                      little-endian, e.g. via `gdal_translate`"
+                .into(),
+        });
+    }
+    Ok(())
+}
+
 /// Reject TIFFs the tile path cannot read.
 ///
 /// A TIFF without `TileOffsets` cannot be addressed by tile index. If it
@@ -905,5 +929,43 @@ mod strip_rejection_tests {
     fn tiled_tiff_passes() {
         let ifd_info = base_ifd(vec![8], vec![entry(ifd::tags::TILE_OFFSETS)]);
         assert!(validate_tiled(&ifd_info).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod byte_order_tests {
+    use super::*;
+
+    /// Regression: a big-endian ("MM") TIFF header must be rejected with a
+    /// clear, explicit error at open — not silently decoded as if it were
+    /// little-endian (which would produce garbage pixel values, since
+    /// `decompress.rs`'s sample/predictor code hard-codes little-endian).
+    #[test]
+    fn big_endian_header_is_rejected_with_clear_error() {
+        let err = reject_big_endian(TiffByteOrder::BigEndian).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.to_lowercase().contains("big-endian"),
+            "unhelpful error: {msg}"
+        );
+    }
+
+    #[test]
+    fn little_endian_header_passes() {
+        assert!(reject_big_endian(TiffByteOrder::LittleEndian).is_ok());
+    }
+
+    /// Parsing an actual big-endian-marked header ("MM") end-to-end through
+    /// `ifd::parse_header` and feeding the result into the same guard used
+    /// by `open()` confirms the check fires on real header bytes, not just
+    /// a hand-constructed enum value.
+    #[test]
+    fn real_big_endian_header_bytes_are_rejected() {
+        // "MM" + magic 42 (big-endian u16) + first IFD offset 8 (big-endian u32).
+        let header: [u8; 8] = [b'M', b'M', 0x00, 0x2A, 0x00, 0x00, 0x00, 0x08];
+        let parsed = ifd::parse_header(&header).unwrap();
+        assert_eq!(parsed.byte_order, TiffByteOrder::BigEndian);
+        let err = reject_big_endian(parsed.byte_order).unwrap_err();
+        assert!(format!("{err}").to_lowercase().contains("big-endian"));
     }
 }

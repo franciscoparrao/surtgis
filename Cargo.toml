@@ -16,6 +16,23 @@ members = [
 # The `fuzz/` crate is a cargo-fuzz harness; it must NOT be a workspace member
 # (it depends on the unstable `-Z sanitizer` build and its own nightly profile).
 exclude = ["fuzz"]
+# `cargo build`/`cargo test` without `-p` or `--workspace` only builds these
+# by default — everything except `gui` and `relief-3d`. Those two pull in a
+# full graphics stack (egui/eframe/wgpu) that normal engine development
+# doesn't need, and doubles compile time. CI explicitly passes `--workspace
+# --all-features` (see .github/workflows/*), which still builds everything,
+# `default-members` included or not.
+default-members = [
+    "crates/core",
+    "crates/algorithms",
+    "crates/parallel",
+    "crates/cli",
+    "crates/wasm",
+    "crates/python",
+    "crates/cloud",
+    "crates/colormap",
+    "crates/relief",
+]
 
 [workspace.package]
 version = "0.17.0"

@@ -3,24 +3,24 @@
 #[cfg(feature = "gdal")]
 mod gdal_io;
 mod native;
+mod options;
 pub mod strip_reader;
 pub mod strip_writer;
 
+// Single GeoTiffOptions struct shared by both backends (see options.rs) —
+// no longer feature-dependent, so the type is stable regardless of which
+// backend is compiled in.
+pub use options::GeoTiffOptions;
+
 #[cfg(feature = "gdal")]
-pub use gdal_io::{GeoTiffOptions, read_geotiff, write_geotiff};
+pub use gdal_io::{read_geotiff, write_geotiff};
 
 #[cfg(not(feature = "gdal"))]
-pub use native::{GeoTiffOptions, read_geotiff, write_geotiff};
+pub use native::{read_geotiff, write_geotiff};
 
 // Multi-band writer — only via the native backend for now
 // (1, 3, or 4 bands).
 pub use native::write_geotiff_multiband;
-
-// Native GeoTiffOptions under an unambiguous name. When the `gdal` feature is
-// on, `io::GeoTiffOptions` resolves to the GDAL variant, but the native-only
-// `write_geotiff_multiband` needs the native options type — which is otherwise
-// unnameable from outside the crate (the `native` module is private).
-pub use native::GeoTiffOptions as NativeGeoTiffOptions;
 
 // Multi-band reading — de-interleaves every band into its own raster
 // (native backend). The single-band `read_geotiff(path, Some(band))` also

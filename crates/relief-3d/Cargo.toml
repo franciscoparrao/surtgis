@@ -20,6 +20,15 @@ surtgis-relief = { version = "0.17", path = "../relief", default-features = fals
 surtgis-colormap = { version = "0.17", path = "../colormap", default-features = false }
 # wgpu webgl feature: WebGPU is preferred on browsers that have it
 # (Chrome stable, Edge); WebGL2 covers Firefox + Safari for now.
+#
+# Pinned to 23, one major behind the wgpu 27 that `eframe`/`egui-wgpu`
+# (via crates/gui) pulls in transitively — Cargo.lock carries both. Not
+# aligned: wgpu breaks its device/surface/pipeline API on most major
+# releases, and this crate has ~3800 lines across pipeline.rs, native.rs,
+# web.rs, headless.rs and lod.rs calling `wgpu::` directly, so a 23→27 bump
+# is a real migration, not a version-bump. `default-members` (workspace
+# Cargo.toml) already keeps this crate out of everyday builds, which was
+# judged the higher-value fix; revisit the wgpu bump as its own task.
 wgpu              = { version = "23", features = ["webgl"] }
 bytemuck          = { version = "1", features = ["derive"] }
 glam              = "0.29"

@@ -10,23 +10,27 @@ Hydrology algorithms
 Usage: surtgis hydrology [OPTIONS] <COMMAND>
 
 Commands:
-  fill-sinks             Fill sinks / depressions in DEM (Planchon-Darboux 2001)
-  flow-direction         D8 flow direction from DEM
-  flow-accumulation      Flow accumulation from flow direction raster
-  watershed              Watershed delineation from flow direction
-  priority-flood         Priority-Flood depression filling (Barnes 2014, optimal O(n log n))
-  breach                 Breach depressions (carve channels through barriers)
-  flow-direction-dinf    D-infinity flow direction (Tarboton 1997, continuous angles)
-  flow-accumulation-mfd  Multiple Flow Direction accumulation (Quinn et al. 1991)
-  twi                    Topographic Wetness Index (from DEM, full pipeline)
-  hand                   Height Above Nearest Drainage (from DEM, full pipeline)
-  stream-network         Stream network extraction (from DEM, full pipeline)
-  drainage-density       Drainage density: stream length per unit area
-  hypsometric-integral   Hypsometric integral per watershed
-  sediment-connectivity  Sediment Connectivity Index (Borselli 2008)
-  basin-morphometry      Basin morphometric parameters per watershed
-  all                    Compute full hydrology pipeline from DEM
-  help                   Print this message or the help of the given subcommand(s)
+  fill-sinks              Fill sinks / depressions in DEM (Planchon-Darboux 2001)
+  flow-direction          D8 flow direction from DEM
+  flow-accumulation       Flow accumulation from flow direction raster
+  watershed               Watershed delineation from flow direction
+  priority-flood          Priority-Flood depression filling (Barnes 2014, optimal O(n log n))
+  breach                  Breach depressions (carve channels through barriers)
+  flow-direction-dinf     D-infinity flow direction (Tarboton 1997, continuous angles)
+  flow-accumulation-dinf  D-infinity flow accumulation from a D-inf angle raster
+  flow-accumulation-mfd   Multiple Flow Direction accumulation (Quinn et al. 1991)
+  twi                     Topographic Wetness Index (from DEM, full pipeline)
+  hand                    Height Above Nearest Drainage (from DEM, full pipeline)
+  stream-network          Stream network extraction
+  drainage-density        Drainage density: stream length per unit area
+  hypsometric-integral    Hypsometric integral per watershed
+  sediment-connectivity   Sediment Connectivity Index (Borselli 2008)
+  basin-morphometry       Basin morphometric parameters per watershed
+  melton                  Melton ruggedness ratio per watershed (debris-flow / lahar screening)
+  energy-cone             Energy-cone lahar / mass-flow inundation (Malin & Sheridan 1982)
+  laharz                  LAHARZ lahar / debris-flow inundation (Iverson, Schilling & Vallance 1998)
+  all                     Compute full hydrology pipeline from DEM
+  help                    Print this message or the help of the given subcommand(s)
 
 Options:
   -v, --verbose                  Verbose output
@@ -175,6 +179,25 @@ Options:
   -h, --help                     Print help
 ```
 
+## `hydrology flow-accumulation-dinf` {#flow-accumulation-dinf}
+
+```text
+D-infinity flow accumulation from a D-inf angle raster
+
+Usage: surtgis hydrology flow-accumulation-dinf [OPTIONS] <INPUT> <OUTPUT>
+
+Arguments:
+  <INPUT>   Input D-inf angle raster (output of flow-direction-dinf)
+  <OUTPUT>  
+
+Options:
+  -v, --verbose                  Verbose output
+      --compress                 Compress output GeoTIFFs (deflate)
+      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+  -h, --help                     Print help
+```
+
 ## `hydrology flow-accumulation-mfd` {#flow-accumulation-mfd}
 
 ```text
@@ -207,6 +230,7 @@ Arguments:
   <OUTPUT>  
 
 Options:
+      --method <METHOD>          Flow routing method for the accumulation step [default: d8] [possible values: d8, dinf, mfd]
   -v, --verbose                  Verbose output
       --compress                 Compress output GeoTIFFs (deflate)
       --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
@@ -237,21 +261,42 @@ Options:
 ## `hydrology stream-network` {#stream-network}
 
 ```text
-Stream network extraction (from DEM, full pipeline)
+Stream network extraction.
+
+By default the input is treated as a DEM and the handler runs the full pipeline (priority_flood → flow_direction → flow_accumulation → threshold). When `--from-facc` is passed, the input is treated as a pre-computed flow_accumulation raster and only the threshold step runs — this is the path you want when composing with an externally computed flow direction / accumulation, e.g. for the fluvial module's chi/ksn workflow.
 
 Usage: surtgis hydrology stream-network [OPTIONS] <INPUT> <OUTPUT>
 
 Arguments:
-  <INPUT>   Input DEM file
-  <OUTPUT>  
+  <INPUT>
+          Input raster. DEM by default; flow_accumulation when `--from-facc`
+
+  <OUTPUT>
+          
 
 Options:
-      --threshold <THRESHOLD>    Contributing area threshold [default: 1000]
-  -v, --verbose                  Verbose output
-      --compress                 Compress output GeoTIFFs (deflate)
-      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
-  -h, --help                     Print help
+      --threshold <THRESHOLD>
+          Contributing area threshold (cell counts)
+          
+          [default: 1000]
+
+  -v, --verbose
+          Verbose output
+
+      --compress
+          Compress output GeoTIFFs (deflate)
+
+      --from-facc
+          Treat `input` as a pre-computed flow_accumulation raster and skip the DEM → fdir → facc recomputation. Use when you already have flow_dir/acc and want the resulting `stream-network` to be topologically consistent with them
+
+      --streaming
+          Force streaming mode for large rasters (auto-detected if >500MB)
+
+      --max-memory <MAX_MEMORY>
+          Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+
+  -h, --help
+          Print help (see a summary with '-h')
 ```
 
 ## `hydrology drainage-density` {#drainage-density}
@@ -331,6 +376,81 @@ Options:
       --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
       --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
   -h, --help                     Print help
+```
+
+## `hydrology melton` {#melton}
+
+```text
+Melton ruggedness ratio per watershed (debris-flow / lahar screening)
+
+Usage: surtgis hydrology melton [OPTIONS] --dem <DEM> <INPUT>
+
+Arguments:
+  <INPUT>  Watershed raster (i32 IDs)
+
+Options:
+      --dem <DEM>                DEM raster aligned with the watershed raster
+  -v, --verbose                  Verbose output
+      --cell-size <CELL_SIZE>    [default: 1.0]
+      --compress                 Compress output GeoTIFFs (deflate)
+      --output <OUTPUT>          Optional output raster mapping each basin to its Melton ratio
+      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+  -h, --help                     Print help
+```
+
+## `hydrology energy-cone` {#energy-cone}
+
+```text
+Energy-cone lahar / mass-flow inundation (Malin & Sheridan 1982)
+
+Usage: surtgis hydrology energy-cone [OPTIONS] --source <SOURCE> <INPUT> <OUTPUT>
+
+Arguments:
+  <INPUT>   Input DEM file
+  <OUTPUT>  Output energy-height-above-ground raster (>0 = reached)
+
+Options:
+      --source <SOURCE>
+          Source cell(s) as "row,col" (multiple separated by ';')
+  -v, --verbose
+          Verbose output
+      --compress
+          Compress output GeoTIFFs (deflate)
+      --cone-angle <CONE_ANGLE>
+          Energy-cone angle φ in degrees (H/L = tan φ); smaller = more mobile [default: 10.0]
+      --collapse-height <COLLAPSE_HEIGHT>
+          Collapse height added to the source elevation to set the apex [default: 0.0]
+      --streaming
+          Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>
+          Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+  -h, --help
+          Print help
+```
+
+## `hydrology laharz` {#laharz}
+
+```text
+LAHARZ lahar / debris-flow inundation (Iverson, Schilling & Vallance 1998)
+
+Usage: surtgis hydrology laharz [OPTIONS] --flow-dir <FLOW_DIR> --source <SOURCE> --volume <VOLUME> <INPUT> <OUTPUT>
+
+Arguments:
+  <INPUT>   Input DEM file
+  <OUTPUT>  Output inundation-depth raster (>0 = inundated)
+
+Options:
+      --flow-dir <FLOW_DIR>            D8 flow-direction raster (u8, from `hydrology flow-direction`)
+  -v, --verbose                        Verbose output
+      --compress                       Compress output GeoTIFFs (deflate)
+      --source <SOURCE>                Source cell(s) as "row,col" (multiple separated by ';'). Seed proximal CHANNEL cells, not the summit — a summit cell's D8 descent often runs down the wrong drainage. Sources route independently and the footprint is their union
+      --streaming                      Force streaming mode for large rasters (auto-detected if >500MB)
+      --volume <VOLUME>                Flow volume in m³ (applied to each source)
+      --flow-type <FLOW_TYPE>          Flow type preset: lahar | debris-flow | rock-avalanche [default: lahar]
+      --max-memory <MAX_MEMORY>        Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --spread-aspect <SPREAD_ASPECT>  Override the lateral-spread aspect ratio (width:depth). Omit to use the preset default; 0 = canonical fill-to-area-A (long thin ribbons)
+  -h, --help                           Print help
 ```
 
 ## `hydrology all` {#all}

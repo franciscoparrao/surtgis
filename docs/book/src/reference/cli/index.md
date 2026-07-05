@@ -21,7 +21,7 @@ CLI-surface change.
 - [`surtgis mosaic`](./mosaic.md) — Mosaic multiple rasters into one covering the union extent
 - [`surtgis cog`](./cog.md) — Read and process Cloud Optimized GeoTIFFs (COGs) via HTTP
 - [`surtgis stac`](./stac.md) — Search and fetch data from STAC catalogs (Planetary Computer, Earth Search)
-- [`surtgis pipeline`](./pipeline.md) — Pipeline: integrated workflows for specific use cases
+- [`surtgis pipeline`](./pipeline.md) — Pipeline: integrated workflows for specific use cases (cloud feature only)
 - [`surtgis vector`](./vector.md) — Vector geoprocessing: intersection, union, difference, dissolve, buffer
 - [`surtgis interpolation`](./interpolation.md) — Geostatistical interpolation: variogram, kriging, universal kriging, regression kriging
 - [`surtgis temporal`](./temporal.md) — Temporal analysis: trend, anomaly, phenology, statistics
