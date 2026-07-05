@@ -3,13 +3,28 @@
 //! TRI quantifies the heterogeneity of the terrain by measuring the total
 //! elevation change between a grid cell and its neighborhood.
 //!
-//! Riley et al. (1999) method:
+//! This crate implements the **normalized** (RMS) variant:
 //!   TRI = sqrt( sum( (z_neighbor - z_center)² ) / n )
 //!
 //! - High TRI → rough, rugged terrain
 //! - Low TRI → smooth, flat terrain
 //!
-//! Riley classification (approximate ranges for 30m DEMs):
+//! D1 fix: Riley et al. (1999)'s own published formula does **not** divide
+//! by `n` — it is `sqrt(sum((z_neighbor - z_center)²))` over the 8
+//! immediate neighbors (radius=1). The classification table below was
+//! derived for *that* unnormalized formula. This crate's normalized
+//! formula (÷n, n=8 at radius=1) produces values √8 ≈ 2.83× *smaller* than
+//! Riley's original for the same terrain, so **the table below does not
+//! apply directly to this implementation's output** — using it as-is will
+//! misclassify every DEM as smoother than it is. To reuse Riley's
+//! thresholds with this implementation's values, either divide each
+//! threshold by √8 ≈ 2.828 (valid only at radius=1, where n=8; a larger
+//! radius changes n and thus the scaling factor), or derive your own
+//! thresholds empirically for your data and radius.
+//!
+//! Riley's *original* classification (approximate ranges for 30m DEMs,
+//! computed with the **unnormalized** `sqrt(sum(...))` formula — NOT the
+//! formula implemented here):
 //!   0–80 m   : Level
 //!   81–116 m : Nearly level
 //!   117–161 m: Slightly rugged

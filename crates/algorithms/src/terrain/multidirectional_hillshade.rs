@@ -202,6 +202,108 @@ impl Default for MultiHillshadeStreaming {
     }
 }
 
+impl MultiHillshadeStreaming {
+    /// Process a single output row given its already-resolved cell sizes
+    /// (`eight_dx`/`eight_dy`) and pre-computed illumination geometry.
+    /// Shared by the constant-cell-size path (`process_chunk`) and the
+    /// per-row geographic-correction path (`process_chunk_geo`).
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    fn process_row(
+        &self,
+        input: &Array2<f64>,
+        output: &mut Array2<f64>,
+        nodata: Option<f64>,
+        r: usize,
+        ir: usize,
+        in_rows: usize,
+        cols: usize,
+        eight_dx: f64,
+        eight_dy: f64,
+        cos_zenith: f64,
+        sin_zenith: f64,
+        az_sin_cos: &[(f64, f64)],
+    ) {
+        if ir == 0 || ir >= in_rows - 1 {
+            for c in 0..cols {
+                output[[r, c]] = f64::NAN;
+            }
+            return;
+        }
+
+        // z_factor scales z (GDAL convention); dx and dy used separately.
+        let zf = self.z_factor;
+
+        for c in 0..cols {
+            if c == 0 || c >= cols - 1 {
+                output[[r, c]] = f64::NAN;
+                continue;
+            }
+
+            let e = input[[ir, c]];
+            if e.is_nan() || nodata.map_or(false, |nd| (e - nd).abs() < f64::EPSILON) {
+                output[[r, c]] = f64::NAN;
+                continue;
+            }
+
+            let a = input[[ir - 1, c - 1]];
+            let b = input[[ir - 1, c]];
+            let cv = input[[ir - 1, c + 1]];
+            let d = input[[ir, c - 1]];
+            let f = input[[ir, c + 1]];
+            let g = input[[ir + 1, c - 1]];
+            let h = input[[ir + 1, c]];
+            let i = input[[ir + 1, c + 1]];
+
+            if [a, b, cv, d, f, g, h, i].iter().any(|v| v.is_nan()) {
+                output[[r, c]] = f64::NAN;
+                continue;
+            }
+
+            // Horn's method (z_factor scales z, per GDAL convention)
+            let dz_dx = zf * ((cv + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_dx;
+            let dz_dy = zf * ((g + 2.0 * h + i) - (a + 2.0 * b + cv)) / eight_dy;
+
+            // Algebraic form — see multidirectional_hillshade().
+            let g2 = dz_dx * dz_dx + dz_dy * dz_dy;
+            let inv_len = 1.0 / (1.0 + g2).sqrt();
+            let flat = g2 < 1e-20;
+
+            let mut weighted_sum = 0.0;
+            let mut weight_total = 0.0;
+
+            for &(sin_az, cos_az) in az_sin_cos {
+                let shade = ((cos_zenith + sin_zenith * (dz_dy * sin_az - dz_dx * cos_az))
+                    * inv_len)
+                    .max(0.0);
+
+                // Weight: highest when azimuth is perpendicular to aspect
+                let w = if flat {
+                    1.0
+                } else {
+                    let cross = dz_dx * sin_az + dz_dy * cos_az;
+                    1.0 + (cross * cross) / g2
+                };
+
+                weighted_sum += shade * w;
+                weight_total += w;
+            }
+
+            let shade_val = if weight_total > 0.0 {
+                (weighted_sum / weight_total).min(1.0)
+            } else {
+                0.0
+            };
+
+            output[[r, c]] = if self.normalized {
+                shade_val
+            } else {
+                (shade_val * 255.0).round()
+            };
+        }
+    }
+}
+
 impl surtgis_core::WindowAlgorithm for MultiHillshadeStreaming {
     fn kernel_radius(&self) -> usize {
         1 // 3x3 Horn kernel
@@ -219,8 +321,6 @@ impl surtgis_core::WindowAlgorithm for MultiHillshadeStreaming {
         let out_rows = output.nrows();
         let radius = 1;
 
-        // z_factor scales z (GDAL convention); dx and dy used separately.
-        let zf = self.z_factor;
         let eight_dx = 8.0 * cell_size_x;
         let eight_dy = 8.0 * cell_size_y.abs();
 
@@ -236,80 +336,77 @@ impl surtgis_core::WindowAlgorithm for MultiHillshadeStreaming {
 
         for r in 0..out_rows {
             let ir = r + radius; // input row corresponding to output row r
-            if ir == 0 || ir >= in_rows - 1 {
-                for c in 0..cols {
-                    output[[r, c]] = f64::NAN;
-                }
-                continue;
-            }
+            self.process_row(
+                input,
+                output,
+                nodata,
+                r,
+                ir,
+                in_rows,
+                cols,
+                eight_dx,
+                eight_dy,
+                cos_zenith,
+                sin_zenith,
+                &az_sin_cos,
+            );
+        }
+    }
 
-            for c in 0..cols {
-                if c == 0 || c >= cols - 1 {
-                    output[[r, c]] = f64::NAN;
-                    continue;
-                }
+    /// REG-1 fix: see `SlopeStreaming::process_chunk_geo` — same mechanism,
+    /// applied to the 6-azimuth blend so the multidirectional hillshade is
+    /// no longer silently wrong on geographic CRSs in streaming mode.
+    fn process_chunk_geo(
+        &self,
+        input: &Array2<f64>,
+        output: &mut Array2<f64>,
+        nodata: Option<f64>,
+        cell_size_x: f64,
+        cell_size_y: f64,
+        geo_ctx: Option<surtgis_core::GeoRowContext>,
+    ) {
+        let Some(ctx) = geo_ctx else {
+            return self.process_chunk(input, output, nodata, cell_size_x, cell_size_y);
+        };
 
-                let e = input[[ir, c]];
-                if e.is_nan() || nodata.map_or(false, |nd| (e - nd).abs() < f64::EPSILON) {
-                    output[[r, c]] = f64::NAN;
-                    continue;
-                }
+        let (in_rows, cols) = input.dim();
+        let out_rows = output.nrows();
+        let radius = 1;
 
-                let a = input[[ir - 1, c - 1]];
-                let b = input[[ir - 1, c]];
-                let cv = input[[ir - 1, c + 1]];
-                let d = input[[ir, c - 1]];
-                let f = input[[ir, c + 1]];
-                let g = input[[ir + 1, c - 1]];
-                let h = input[[ir + 1, c]];
-                let i = input[[ir + 1, c + 1]];
+        let zenith_rad = (90.0 - self.altitude).to_radians();
+        let cos_zenith = zenith_rad.cos();
+        let sin_zenith = zenith_rad.sin();
+        let azimuths_rad: Vec<f64> = (0..6)
+            .map(|i| (360.0 - (i as f64 * 60.0) + 90.0).to_radians())
+            .collect();
+        let az_sin_cos: Vec<(f64, f64)> = azimuths_rad.iter().map(|az| az.sin_cos()).collect();
 
-                if [a, b, cv, d, f, g, h, i].iter().any(|v| v.is_nan()) {
-                    output[[r, c]] = f64::NAN;
-                    continue;
-                }
-
-                // Horn's method (z_factor scales z, per GDAL convention)
-                let dz_dx = zf * ((cv + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_dx;
-                let dz_dy = zf * ((g + 2.0 * h + i) - (a + 2.0 * b + cv)) / eight_dy;
-
-                // Algebraic form — see multidirectional_hillshade().
-                let g2 = dz_dx * dz_dx + dz_dy * dz_dy;
-                let inv_len = 1.0 / (1.0 + g2).sqrt();
-                let flat = g2 < 1e-20;
-
-                let mut weighted_sum = 0.0;
-                let mut weight_total = 0.0;
-
-                for &(sin_az, cos_az) in &az_sin_cos {
-                    let shade = ((cos_zenith + sin_zenith * (dz_dy * sin_az - dz_dx * cos_az))
-                        * inv_len)
-                        .max(0.0);
-
-                    // Weight: highest when azimuth is perpendicular to aspect
-                    let w = if flat {
-                        1.0
-                    } else {
-                        let cross = dz_dx * sin_az + dz_dy * cos_az;
-                        1.0 + (cross * cross) / g2
-                    };
-
-                    weighted_sum += shade * w;
-                    weight_total += w;
-                }
-
-                let shade_val = if weight_total > 0.0 {
-                    (weighted_sum / weight_total).min(1.0)
-                } else {
-                    0.0
-                };
-
-                output[[r, c]] = if self.normalized {
-                    shade_val
-                } else {
-                    (shade_val * 255.0).round()
-                };
-            }
+        for r in 0..out_rows {
+            let ir = r + radius;
+            let abs_row = ctx.row_offset + r;
+            let lat = ctx.origin_y + (abs_row as f64 + 0.5) * ctx.pixel_height;
+            let dims = super::spheroidal_grid::cell_dimensions(
+                lat,
+                cell_size_x,
+                cell_size_y,
+                &super::spheroidal_grid::SpheroidalParams::default(),
+            );
+            let eight_dx = 8.0 * dims.dx;
+            let eight_dy = 8.0 * dims.dy;
+            self.process_row(
+                input,
+                output,
+                nodata,
+                r,
+                ir,
+                in_rows,
+                cols,
+                eight_dx,
+                eight_dy,
+                cos_zenith,
+                sin_zenith,
+                &az_sin_cos,
+            );
         }
     }
 }

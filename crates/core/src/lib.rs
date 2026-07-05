@@ -42,7 +42,7 @@ pub use error::{Error, Result};
 pub use mosaic::{MosaicOptions, mosaic};
 pub use raster::{GeoTransform, Raster, RasterCell, RasterElement};
 pub use resample::{ResampleMethod, resample_to_grid};
-pub use streaming::{StripProcessor, WindowAlgorithm};
+pub use streaming::{GeoRowContext, StripProcessor, WindowAlgorithm};
 pub use tiling::{Tile, TileGrid};
 
 /// Prelude for convenient imports

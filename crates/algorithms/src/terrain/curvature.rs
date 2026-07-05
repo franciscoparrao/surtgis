@@ -121,8 +121,13 @@ impl Algorithm for Curvature {
 /// Supports Evans-Young (default) and Zevenbergen-Thorne derivative methods,
 /// and full (default) or simplified curvature formulas.
 ///
-/// Positive values indicate concave surfaces (profile: decelerating flow;
-/// plan: converging flow). Negative values indicate convex surfaces.
+/// Sign convention (matches ArcGIS/Esri, verified by `test_general_curvature_bowl`
+/// below: the bowl z = x² + y² yields -2.0, not +2.0): positive values
+/// indicate convex surfaces (e.g. a ridge crest); negative values indicate
+/// concave surfaces (e.g. a bowl or valley bottom). For profile curvature
+/// this means positive = decelerating downslope flow, negative =
+/// accelerating flow; for plan curvature, positive = diverging flow,
+/// negative = converging flow.
 ///
 /// # Arguments
 /// * `dem` - Input DEM raster
