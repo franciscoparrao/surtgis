@@ -13,7 +13,8 @@ use surtgis_core::{Error, Result};
 pub struct TemporalStats {
     /// Per-cell mean across the time stack.
     pub mean: Raster<f64>,
-    /// Per-cell population standard deviation across the time stack.
+    /// Per-cell sample standard deviation (Bessel-corrected, divides by n-1)
+    /// across the time stack. Requires at least 2 valid observations.
     pub std: Raster<f64>,
     /// Per-cell minimum across the time stack.
     pub min: Raster<f64>,
@@ -81,7 +82,10 @@ pub fn temporal_mean(rasters: &[&Raster<f64>]) -> Result<Raster<f64>> {
     Ok(result)
 }
 
-/// Per-pixel standard deviation across time.
+/// Per-pixel sample standard deviation across time (Bessel-corrected, n-1).
+///
+/// Requires at least 2 valid (finite) observations per pixel; pixels with
+/// fewer are left as NoData.
 pub fn temporal_std(rasters: &[&Raster<f64>]) -> Result<Raster<f64>> {
     let (rows, cols) = validate_stack(rasters)?;
     let mut out = Array2::<f64>::from_elem((rows, cols), f64::NAN);
