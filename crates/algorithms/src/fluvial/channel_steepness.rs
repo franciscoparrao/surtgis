@@ -213,8 +213,11 @@ pub fn channel_steepness(
         // also documents this.
         let s_local = ((z_i - z_d) / dx).max(0.0);
 
+        // flow_acc counts *upstream* cells only (a headwater has acc=0);
+        // the cell's own contributing area must be included, so the
+        // drainage area is (acc + 1) cells, not acc cells.
         let a_cells = flow_acc.get(ir, ic).unwrap_or(f64::NAN);
-        let a_m2 = a_cells * cell_area_m2;
+        let a_m2 = (a_cells + 1.0) * cell_area_m2;
         if !a_m2.is_finite() || a_m2 < params.min_drainage_area_m2 {
             continue;
         }
@@ -413,12 +416,10 @@ fn extract_segments(
         let mut values: Vec<f64> = Vec::with_capacity(cells.len());
         for &i in &cells {
             let (r, c) = graph.stream_cells[i];
-            // Cell centre (pixel_to_geo returns the upper-left corner;
-            // add half a pixel in each axis for the cell-centre point).
-            let (x0, y0) = stream.pixel_to_geo(c, r);
-            let gt = stream.transform();
-            let x = x0 + 0.5 * gt.pixel_width;
-            let y = y0 + 0.5 * gt.pixel_height;
+            // Cell centre — `pixel_to_geo` already returns the pixel
+            // centre (col + 0.5, row + 0.5 internally), so no further
+            // offset is applied here.
+            let (x, y) = stream.pixel_to_geo(c, r);
             coords.push((x, y));
             if ksn[i].is_finite() {
                 values.push(ksn[i]);
@@ -496,11 +497,12 @@ mod tests {
     /// Spec §7.2 headline test for ksn: two channels with the same
     /// drainage area but different slopes must give ksn_ratio ≈
     /// slope_ratio. We build two parallel 6-cell channels in the same
-    /// raster, each with constant A = 5000 cells (well above the 1 km²
-    /// threshold for a 30 m cell, which is ~1111 cells). Slope is
-    /// controlled by the DEM: channel A drops 1 m per cell, channel B
-    /// drops 3 m per cell. With smoothing window 60 m and cell 30 m,
-    /// each cell averages itself + 1 upstream + 1 downstream.
+    /// raster, each with constant flow_acc = 5000 (upstream cell count;
+    /// physical area = (flow_acc + 1) * cell² ≈ 4.5 km² for cell=30 m,
+    /// well above the 1 km² threshold). Slope is controlled by the DEM:
+    /// channel A drops 1 m per cell, channel B drops 3 m per cell. With
+    /// smoothing window 60 m and cell 30 m, each cell averages itself +
+    /// 1 upstream + 1 downstream.
     #[test]
     fn equal_area_different_slope_gives_ratio_ksn_equal_ratio_slope() {
         let cell = 30.0;
@@ -513,7 +515,7 @@ mod tests {
         ]);
         // flow_dir: east everywhere on the channels; non-channel cells 0.
         let flow_dir = raster_u8(vec![vec![1; n], vec![0; n], vec![1; n]]);
-        // Both channels: constant A = 5000 cells (≈ 4.5 km² for cell=30m).
+        // Both channels: constant flow_acc = 5000 (upstream cell count).
         let flow_acc = raster_f64(vec![vec![5000.0; n], vec![0.0; n], vec![5000.0; n]]);
         // DEM: channel A drops 1 m/cell, channel B drops 3 m/cell.
         let dem_a: Vec<f64> = (0..n).map(|c| (n - 1 - c) as f64 * 1.0).collect();
@@ -588,9 +590,11 @@ mod tests {
         let threshold_cells = 5.0; // 5 cells → ~4500 m²
         let stream = raster_u8(vec![vec![1, 1, 1, 1, 1]]);
         let flow_dir = raster_u8(vec![vec![1, 1, 1, 1, 1]]);
-        // Increasing A west→east: 1, 2, 3, 4, 5 cells. With threshold of
-        // 5 cells, only the rightmost cell qualifies.
-        let flow_acc = raster_f64(vec![vec![1.0, 2.0, 3.0, 4.0, 5.0]]);
+        // flow_acc (upstream cell count, per flow_accumulation()'s
+        // headwater=0 convention) increases west→east: 0, 1, 2, 3, 4.
+        // Physical area = (flow_acc + 1) cells = 1, 2, 3, 4, 5. With a
+        // threshold of 5 cells, only the rightmost cell qualifies.
+        let flow_acc = raster_f64(vec![vec![0.0, 1.0, 2.0, 3.0, 4.0]]);
         let dem = raster_f64(vec![vec![10.0, 8.0, 6.0, 4.0, 2.0]]);
 
         let params = KsnParams {
@@ -750,5 +754,48 @@ mod tests {
                 assert_eq!(s.ksn_ci.1, s.ksn_mean);
             }
         }
+    }
+
+    /// Regression test for the ½-pixel offset bug (CR-1): segment
+    /// coordinates must equal `pixel_to_geo` exactly, with no extra
+    /// half-cell added on top. `pixel_to_geo` already returns the pixel
+    /// *centre* (col + 0.5, row + 0.5 internally).
+    #[test]
+    fn segment_coord_matches_pixel_to_geo_exactly_no_extra_half_pixel() {
+        use surtgis_core::GeoTransform;
+
+        let n = 2;
+        let mut stream = raster_u8(vec![vec![1u8; n]]);
+        stream.set_transform(GeoTransform::new(0.0, 0.0, 10.0, -10.0));
+        let mut flow_dir = raster_u8(vec![vec![1u8, 0]]); // col0 → east (outlet at col1)
+        flow_dir.set_transform(GeoTransform::new(0.0, 0.0, 10.0, -10.0));
+        let mut flow_acc = raster_f64(vec![vec![5000.0; n]]);
+        flow_acc.set_transform(GeoTransform::new(0.0, 0.0, 10.0, -10.0));
+        let mut dem = raster_f64(vec![vec![5.0, 0.0]]);
+        dem.set_transform(GeoTransform::new(0.0, 0.0, 10.0, -10.0));
+
+        let params = KsnParams {
+            theta_ref: 0.45,
+            segment_length_m: 1.0,
+            cell_size_m: 10.0,
+            min_drainage_area_m2: 1.0e6,
+            bootstrap_n: 0,
+            seed: 42,
+        };
+        let result = channel_steepness(&stream, &flow_dir, &flow_acc, &dem, params, true).unwrap();
+        let segs = result.segments.expect("emit_segments=true");
+        let first_coord = segs[0].coordinates[0];
+
+        // Known coordinate: with origin (0,0) and pixel_size 10,
+        // pixel_to_geo(0, 0) must be (5.0, -5.0), not (10.0, -10.0).
+        let expected_00 = stream.pixel_to_geo(0, 0);
+        assert_eq!(expected_00, (5.0, -5.0));
+
+        // The outlet segment starts at the outlet cell (0, 1).
+        let expected = stream.pixel_to_geo(1, 0);
+        assert_eq!(
+            first_coord, expected,
+            "segment coordinate must match pixel_to_geo exactly"
+        );
     }
 }

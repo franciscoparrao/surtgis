@@ -304,16 +304,16 @@ struct ChiRow {
 pub fn write_chi_csv<W: Write>(chi: &Raster<f64>, w: W) -> Result<(), ExportError> {
     let mut wtr = csv::Writer::from_writer(w);
     let (rows, cols) = chi.shape();
-    let gt = chi.transform();
     for r in 0..rows {
         for c in 0..cols {
             let v = chi.get(r, c).unwrap_or(f64::NAN);
             if !v.is_finite() {
                 continue;
             }
-            let (x0, y0) = chi.pixel_to_geo(c, r);
-            let x = x0 + 0.5 * gt.pixel_width;
-            let y = y0 + 0.5 * gt.pixel_height;
+            // `pixel_to_geo` already returns the pixel centre
+            // (col + 0.5, row + 0.5 internally), so no further offset
+            // is applied here.
+            let (x, y) = chi.pixel_to_geo(c, r);
             wtr.serialize(ChiRow {
                 row: r,
                 col: c,
@@ -397,5 +397,39 @@ mod tests {
         assert_eq!(v[0]["outlet_x"], 10.0);
         assert_eq!(v[0]["nodes"][0]["chi"], 0.0);
         assert!(v[0]["nodes"][0]["ksn"].is_null());
+    }
+
+    /// Regression test for the ½-pixel offset bug (CR-1): the exported
+    /// χ CSV coordinate must equal `pixel_to_geo` exactly, with no
+    /// extra half-cell added on top. `pixel_to_geo` already returns the
+    /// pixel *centre* (col + 0.5, row + 0.5 internally).
+    #[test]
+    fn chi_csv_coord_matches_pixel_to_geo_exactly_no_extra_half_pixel() {
+        use ndarray::Array2;
+        use surtgis_core::GeoTransform;
+
+        let arr = Array2::from_shape_vec((1, 1), vec![0.5_f64]).unwrap();
+        let mut chi = Raster::from_array(arr);
+        chi.set_transform(GeoTransform::new(0.0, 0.0, 10.0, -10.0));
+
+        let mut buf: Vec<u8> = Vec::new();
+        write_chi_csv(&chi, &mut buf).unwrap();
+        let text = String::from_utf8(buf).unwrap();
+
+        // Known coordinate: with origin (0,0) and pixel_size 10,
+        // pixel_to_geo(0, 0) must be (5.0, -5.0), not (10.0, -10.0).
+        let expected = chi.pixel_to_geo(0, 0);
+        assert_eq!(expected, (5.0, -5.0));
+
+        let data_line = text.lines().nth(1).expect("one data row");
+        // CSV columns, in ChiRow field order: row,col,x,y,chi.
+        let cols: Vec<&str> = data_line.split(',').collect();
+        let x: f64 = cols[2].parse().unwrap();
+        let y: f64 = cols[3].parse().unwrap();
+        assert_eq!(
+            (x, y),
+            expected,
+            "chi CSV coordinate must match pixel_to_geo exactly"
+        );
     }
 }

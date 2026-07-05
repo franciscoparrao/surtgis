@@ -161,11 +161,9 @@ pub fn long_profile(
     let cell_area = params.cell_size_m * params.cell_size_m;
     let diag_factor = std::f64::consts::SQRT_2;
 
-    let gt = stream.transform();
-    let to_cell_centre = |r: usize, c: usize| -> (f64, f64) {
-        let (x0, y0) = stream.pixel_to_geo(c, r);
-        (x0 + 0.5 * gt.pixel_width, y0 + 0.5 * gt.pixel_height)
-    };
+    // `pixel_to_geo` already returns the pixel centre (col + 0.5,
+    // row + 0.5 internally), so no further offset is applied here.
+    let to_cell_centre = |r: usize, c: usize| -> (f64, f64) { stream.pixel_to_geo(c, r) };
 
     // Per-node access helpers.
     let value_at = |raster: &Raster<f64>, i: usize| -> f64 {
@@ -362,6 +360,39 @@ mod tests {
             "last node area {} too small to be tributary A's headwater",
             last.area_m2
         );
+    }
+
+    /// Regression test for the ½-pixel offset bug (CR-1): node
+    /// coordinates must equal `pixel_to_geo` exactly, with no extra
+    /// half-cell added on top. `pixel_to_geo` already returns the pixel
+    /// *centre* (col + 0.5, row + 0.5 internally).
+    #[test]
+    fn node_coord_matches_pixel_to_geo_exactly_no_extra_half_pixel() {
+        use surtgis_core::GeoTransform;
+
+        let mut stream = raster_u8(vec![vec![1, 1]]);
+        stream.set_transform(GeoTransform::new(0.0, 0.0, 10.0, -10.0));
+        let mut flow_dir = raster_u8(vec![vec![0, 5]]);
+        flow_dir.set_transform(GeoTransform::new(0.0, 0.0, 10.0, -10.0));
+        let mut flow_acc = raster_f64(vec![vec![2.0, 1.0]]);
+        flow_acc.set_transform(GeoTransform::new(0.0, 0.0, 10.0, -10.0));
+        let mut dem = raster_f64(vec![vec![0.0, 1.0]]);
+        dem.set_transform(GeoTransform::new(0.0, 0.0, 10.0, -10.0));
+
+        let params = LongProfileParams { cell_size_m: 10.0 };
+        let profiles =
+            long_profile(&stream, &flow_dir, &flow_acc, &dem, None, None, params).unwrap();
+        let outlet_node = profiles[0].nodes[0];
+
+        // Known coordinate: with origin (0,0) and pixel_size 10,
+        // pixel_to_geo(0, 0) must be (5.0, -5.0), not (10.0, -10.0).
+        let expected = stream.pixel_to_geo(0, 0);
+        assert_eq!(expected, (5.0, -5.0));
+        assert_eq!(
+            outlet_node.coord, expected,
+            "long_profile node coordinate must match pixel_to_geo exactly"
+        );
+        assert_eq!(profiles[0].outlet_coord, expected);
     }
 
     /// chi and ksn rasters propagate to the profile when supplied.

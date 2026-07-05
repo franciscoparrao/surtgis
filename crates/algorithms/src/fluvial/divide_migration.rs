@@ -328,9 +328,9 @@ fn local_relief(dem: &Raster<f64>, r: usize, c: usize, rows: usize, cols: usize)
 }
 
 fn cell_centre(raster: &Raster<i32>, r: usize, c: usize) -> (f64, f64) {
-    let gt = raster.transform();
-    let (x0, y0) = raster.pixel_to_geo(c, r);
-    (x0 + 0.5 * gt.pixel_width, y0 + 0.5 * gt.pixel_height)
+    // `pixel_to_geo` already returns the pixel centre (col + 0.5,
+    // row + 0.5 internally), so no further offset is applied here.
+    raster.pixel_to_geo(c, r)
 }
 
 /// Greedy nearest-neighbour polyline ordering. Starts at points[0],
@@ -579,6 +579,49 @@ mod tests {
         assert!(
             d.median_elev_diff.is_finite(),
             "elev_diff must remain finite"
+        );
+    }
+
+    /// Regression test for the ½-pixel offset bug (CR-1): divide
+    /// midpoint coordinates must be built from `pixel_to_geo` exactly,
+    /// with no extra half-cell added on top. `pixel_to_geo` already
+    /// returns the pixel *centre* (col + 0.5, row + 0.5 internally).
+    #[test]
+    fn divide_midpoint_matches_pixel_to_geo_exactly_no_extra_half_pixel() {
+        use surtgis_core::GeoTransform;
+
+        // Single row, two adjacent basins → exactly one divide pair
+        // between (0,0) and (0,1).
+        let mut basins = raster_i32(vec![vec![1, 2]]);
+        basins.set_transform(GeoTransform::new(0.0, 0.0, 10.0, -10.0));
+        let mut dem = raster_f64(vec![vec![0.0, 0.0]]);
+        dem.set_transform(GeoTransform::new(0.0, 0.0, 10.0, -10.0));
+        let mut flow_acc = raster_f64(vec![vec![1.0, 1.0]]);
+        flow_acc.set_transform(GeoTransform::new(0.0, 0.0, 10.0, -10.0));
+
+        let params = DivideMigrationParams {
+            cell_size_m: 10.0,
+            min_divide_length_m: 0.0,
+        };
+        let result = divide_migration(&basins, &dem, None, &flow_acc, params).expect("ok");
+        assert_eq!(result.len(), 1);
+
+        // Known coordinates: with origin (0,0) and pixel_size 10,
+        // pixel_to_geo(0,0) = (5.0, -5.0) and pixel_to_geo(1,0) =
+        // (15.0, -5.0). The divide midpoint must be their exact
+        // average, (10.0, -5.0) — not (15.0, -10.0), which is what the
+        // extra-half-pixel bug would have produced.
+        let cell_a = basins.pixel_to_geo(0, 0);
+        let cell_b = basins.pixel_to_geo(1, 0);
+        assert_eq!(cell_a, (5.0, -5.0));
+        assert_eq!(cell_b, (15.0, -5.0));
+        let expected_mid = ((cell_a.0 + cell_b.0) * 0.5, (cell_a.1 + cell_b.1) * 0.5);
+        assert_eq!(expected_mid, (10.0, -5.0));
+
+        let coord = result[0].coordinates[0];
+        assert_eq!(
+            coord, expected_mid,
+            "divide midpoint must match pixel_to_geo exactly"
         );
     }
 }
