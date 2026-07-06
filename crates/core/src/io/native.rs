@@ -6,6 +6,7 @@
 use super::GeoTiffOptions;
 use crate::error::{Error, Result};
 use crate::raster::{GeoTransform, Raster, RasterElement};
+use std::any::{Any, TypeId};
 use std::fs::File;
 use std::io::Cursor;
 use std::path::Path;
@@ -122,44 +123,29 @@ where
         .unwrap_or(1)
         .max(1);
 
+    // Read geo-tags before the pixel body: tag lookups are independent of
+    // `read_image()` (the decoder parsed the IFD at construction), and
+    // having `nodata` in hand lets the cast below fuse the nodata->NaN
+    // normalization into the same pass instead of a second full-buffer
+    // scan in `finish_raster`.
+    let transform = read_geotransform(&mut decoder).ok();
+    let crs = read_crs(&mut decoder);
+    let nodata = read_nodata(&mut decoder);
+
     // Read image data (pixel-interleaved for multi-band TIFFs)
     let result = decoder
         .read_image()
         .map_err(|e| Error::Other(format!("Cannot read image data: {}", e)))?;
 
     let data: Vec<T> = match result {
-        DecodingResult::F32(buf) => buf
-            .iter()
-            .map(|&v| num_traits::cast(v).unwrap_or(T::default_nodata()))
-            .collect(),
-        DecodingResult::F64(buf) => buf
-            .iter()
-            .map(|&v| num_traits::cast(v).unwrap_or(T::default_nodata()))
-            .collect(),
-        DecodingResult::U8(buf) => buf
-            .iter()
-            .map(|&v| num_traits::cast(v).unwrap_or(T::default_nodata()))
-            .collect(),
-        DecodingResult::U16(buf) => buf
-            .iter()
-            .map(|&v| num_traits::cast(v).unwrap_or(T::default_nodata()))
-            .collect(),
-        DecodingResult::U32(buf) => buf
-            .iter()
-            .map(|&v| num_traits::cast(v).unwrap_or(T::default_nodata()))
-            .collect(),
-        DecodingResult::I8(buf) => buf
-            .iter()
-            .map(|&v| num_traits::cast(v).unwrap_or(T::default_nodata()))
-            .collect(),
-        DecodingResult::I16(buf) => buf
-            .iter()
-            .map(|&v| num_traits::cast(v).unwrap_or(T::default_nodata()))
-            .collect(),
-        DecodingResult::I32(buf) => buf
-            .iter()
-            .map(|&v| num_traits::cast(v).unwrap_or(T::default_nodata()))
-            .collect(),
+        DecodingResult::F32(buf) => cast_and_normalize::<T, f32>(buf, nodata),
+        DecodingResult::F64(buf) => cast_and_normalize::<T, f64>(buf, nodata),
+        DecodingResult::U8(buf) => cast_and_normalize::<T, u8>(buf, nodata),
+        DecodingResult::U16(buf) => cast_and_normalize::<T, u16>(buf, nodata),
+        DecodingResult::U32(buf) => cast_and_normalize::<T, u32>(buf, nodata),
+        DecodingResult::I8(buf) => cast_and_normalize::<T, i8>(buf, nodata),
+        DecodingResult::I16(buf) => cast_and_normalize::<T, i16>(buf, nodata),
+        DecodingResult::I32(buf) => cast_and_normalize::<T, i32>(buf, nodata),
         _ => {
             return Err(Error::UnsupportedDataType(
                 "Unsupported TIFF pixel format".to_string(),
@@ -179,10 +165,79 @@ where
         rows,
         cols,
         spp,
-        transform: read_geotransform(&mut decoder).ok(),
-        crs: read_crs(&mut decoder),
-        nodata: read_nodata(&mut decoder),
+        transform,
+        crs,
+        nodata,
     })
+}
+
+/// If `T` is exactly `U` at the type level, reinterprets `v: Vec<U>` as
+/// `Vec<T>` at zero cost (a safe [`Any`] downcast — no `mem::transmute`).
+/// Returns the original `Vec<U>` back in `Err` when the types differ, so
+/// callers can fall through to the per-element cast.
+fn same_type_vec<T: 'static, U: 'static>(v: Vec<U>) -> std::result::Result<Vec<T>, Vec<U>> {
+    if TypeId::of::<T>() == TypeId::of::<U>() {
+        let boxed: Box<dyn Any> = Box::new(v);
+        match boxed.downcast::<Vec<T>>() {
+            Ok(same) => Ok(*same),
+            // TypeId matched so this can't actually happen, but recover
+            // the original buffer rather than unwrap-panicking on it.
+            Err(boxed) => Err(*boxed.downcast::<Vec<U>>().expect("TypeId checked above")),
+        }
+    } else {
+        Err(v)
+    }
+}
+
+/// Convert a decoded native-type sample buffer (`U`, one of the `tiff`
+/// crate's `DecodingResult` element types) into the raster's requested
+/// `T`, normalizing the GDAL_NODATA sentinel to `T`'s NaN convention
+/// along the way.
+///
+/// Two passes become (at most) one:
+/// - **Fast path** (`T == U`, e.g. reading a Float32 GeoTIFF into
+///   `Raster<f32>`): the identity "cast" is skipped entirely via
+///   [`same_type_vec`]; only a nodata normalization pass runs, and only
+///   when nodata metadata is actually present.
+/// - **Slow path** (`T != U`): the per-element `num_traits::cast` and the
+///   nodata->NaN check happen in the same `map`, instead of casting here
+///   and normalizing again in a second full-buffer pass in
+///   `finish_raster`.
+fn cast_and_normalize<T, U>(buf: Vec<U>, nodata: Option<f64>) -> Vec<T>
+where
+    T: RasterElement,
+    U: RasterElement,
+{
+    match same_type_vec::<T, U>(buf) {
+        Ok(mut same) => {
+            if T::is_float()
+                && let Some(nd_f64) = nodata
+                && let Some(nd) = num_traits::cast::<f64, T>(nd_f64)
+            {
+                for v in same.iter_mut() {
+                    if v.is_nodata(Some(nd)) {
+                        *v = T::default_nodata();
+                    }
+                }
+            }
+            same
+        }
+        Err(buf) => {
+            let nd_t: Option<T> = nodata.and_then(|nd| num_traits::cast::<f64, T>(nd));
+            buf.iter()
+                .map(|&v| {
+                    let casted: T = num_traits::cast(v).unwrap_or(T::default_nodata());
+                    if T::is_float()
+                        && let Some(nd) = nd_t
+                        && casted.is_nodata(Some(nd))
+                    {
+                        return T::default_nodata();
+                    }
+                    casted
+                })
+                .collect()
+        }
+    }
 }
 
 /// Build a single-band raster from owned data and the shared geo-metadata.
@@ -202,24 +257,22 @@ fn finish_raster<T: RasterElement>(
     if let Some(crs) = crs {
         raster.set_crs(Some(crs));
     }
-    // Cast GDAL_NODATA to T; for float types, normalize nodata to NaN so
-    // all algorithms (which check .is_nan()) handle them correctly.
+    // Cast GDAL_NODATA to T for the metadata sentinel. The pixel-level
+    // nodata->NaN normalization itself already happened in
+    // `cast_and_normalize` while `data` was being built (fused with the
+    // type cast, or as the sole pass on the no-cast-needed fast path) —
+    // this only sets the raster's `nodata` field to match, it does not
+    // re-scan the buffer.
     if let Some(nodata_f64) = nodata
         && let Some(nd) = num_traits::cast::<f64, T>(nodata_f64)
     {
         if T::is_float() {
-            let nan_val = T::default_nodata();
-            for val in raster.data_mut().iter_mut() {
-                if val.is_nodata(Some(nd)) {
-                    *val = nan_val;
-                }
-            }
-            // Pixels were rewritten to NaN, so the metadata must say NaN
-            // too. Keeping the original sentinel here would make a
-            // subsequent write emit GDAL_NODATA = <sentinel> over NaN
+            // Pixels were already normalized to NaN, so the metadata must
+            // say NaN too. Keeping the original sentinel here would make
+            // a subsequent write emit GDAL_NODATA = <sentinel> over NaN
             // pixels — external tools (GDAL/QGIS) would then treat the
             // NaNs as valid data.
-            raster.set_nodata(Some(nan_val));
+            raster.set_nodata(Some(T::default_nodata()));
         } else {
             raster.set_nodata(Some(nd));
         }
