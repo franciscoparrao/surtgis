@@ -30,6 +30,12 @@ pub use native::{read_geotiff_bands, read_geotiff_bands_from_buffer};
 // Buffer-based I/O (always available, no filesystem dependency)
 pub use native::{read_geotiff_from_buffer, write_geotiff_to_buffer};
 
+// Dtype-preserving reads — return `AnyRaster` instead of forcing a cast
+// to a caller-chosen `T` (e.g. `f64`). Native backend only: it is the
+// one that has to distinguish the TIFF's native sample type in the
+// first place (the `gdal` backend still goes through `read_geotiff`).
+pub use native::{read_geotiff_any, read_geotiff_any_from_buffer};
+
 // Streaming I/O
 pub use strip_reader::StripReader;
 pub use strip_writer::{StripWriterConfig, write_geotiff_streaming};

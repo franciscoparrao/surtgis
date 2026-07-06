@@ -5,7 +5,7 @@
 
 use super::GeoTiffOptions;
 use crate::error::{Error, Result};
-use crate::raster::{GeoTransform, Raster, RasterElement};
+use crate::raster::{AnyRaster, GeoTransform, Raster, RasterElement};
 use std::any::{Any, TypeId};
 use std::fs::File;
 use std::io::Cursor;
@@ -40,6 +40,37 @@ where
 {
     let cursor = Cursor::new(data);
     decode_geotiff(cursor, band, Some(data.len() as u64))
+}
+
+/// Read a GeoTIFF file into an [`AnyRaster`], preserving its native
+/// pixel type instead of forcing a cast to a caller-chosen `T`.
+///
+/// Where `read_geotiff::<T, _>` always returns `Raster<T>` — typically
+/// `T = f64` when the caller doesn't know the file's type ahead of
+/// time, which quadruples the memory footprint of a `u16` DEM for
+/// callers that only need to inspect or pass the data through — this
+/// lets the TIFF's own sample format pick the variant. Use
+/// [`AnyRaster::to_f64`] to opt back into the old always-`f64`
+/// behavior once you need to hand the raster to code that is
+/// concretely `Raster<f64>`-typed (e.g. `algorithms`).
+///
+/// A native TIFF sample type without an exact `AnyRaster` variant
+/// (`i8`, `u64`, `i64`, half-precision `f16`) is widened losslessly
+/// rather than failing the read — see [`decode_geotiff_any`] for the
+/// mapping.
+pub fn read_geotiff_any<P: AsRef<Path>>(path: P, band: Option<usize>) -> Result<AnyRaster> {
+    let file = File::open(path.as_ref())?;
+    let len = file.metadata().ok().map(|m| m.len());
+    decode_geotiff_any(file, band, len)
+}
+
+/// Read a GeoTIFF from an in-memory buffer into an [`AnyRaster`].
+///
+/// Same as [`read_geotiff_any`] but for buffers (WASM / network
+/// fetches) — see there for the dtype-preservation rationale.
+pub fn read_geotiff_any_from_buffer(data: &[u8], band: Option<usize>) -> Result<AnyRaster> {
+    let cursor = Cursor::new(data);
+    decode_geotiff_any(cursor, band, Some(data.len() as u64))
 }
 
 /// Read every band of a (multi-band) GeoTIFF as separate rasters.
@@ -81,10 +112,33 @@ struct DecodedImage<T> {
     nodata: Option<f64>,
 }
 
-/// Internal: decode a GeoTIFF (all bands, interleaved) plus its geo-tags.
-fn decode_image<T, R>(reader: R, source_len: Option<u64>) -> Result<DecodedImage<T>>
+/// Raw decode result before any cast to a caller-chosen element type:
+/// the TIFF's native sample buffer (whichever `DecodingResult` variant
+/// the file actually stores) plus the shared geo-metadata.
+///
+/// Factored out of `decode_image` so it can be shared by two different
+/// consumers: `decode_image` (casts every native type down to a single
+/// fixed `T`) and `decode_geotiff_any` (dispatches to the matching
+/// [`AnyRaster`] variant instead of casting at all).
+struct RawDecoded {
+    result: DecodingResult,
+    rows: usize,
+    cols: usize,
+    /// Samples per pixel (bands).
+    spp: usize,
+    transform: Option<GeoTransform>,
+    crs: Option<crate::crs::CRS>,
+    /// Raw GDAL_NODATA value (cast per band when building the raster).
+    nodata: Option<f64>,
+}
+
+/// Internal: open the TIFF decoder with fuzz-safe limits, read the geo
+/// tags and the raw (native-type) pixel buffer. Does not know or care
+/// what element type the caller eventually wants — see `decode_image`
+/// and `decode_geotiff_any` for the two ways the result gets turned
+/// into a `Raster`.
+fn decode_raw<R>(reader: R, source_len: Option<u64>) -> Result<RawDecoded>
 where
-    T: RasterElement,
     R: std::io::Read + std::io::Seek,
 {
     // A hostile TIFF can declare huge ImageWidth/ImageLength or tag counts;
@@ -137,15 +191,34 @@ where
         .read_image()
         .map_err(|e| Error::Other(format!("Cannot read image data: {}", e)))?;
 
-    let data: Vec<T> = match result {
-        DecodingResult::F32(buf) => cast_and_normalize::<T, f32>(buf, nodata),
-        DecodingResult::F64(buf) => cast_and_normalize::<T, f64>(buf, nodata),
-        DecodingResult::U8(buf) => cast_and_normalize::<T, u8>(buf, nodata),
-        DecodingResult::U16(buf) => cast_and_normalize::<T, u16>(buf, nodata),
-        DecodingResult::U32(buf) => cast_and_normalize::<T, u32>(buf, nodata),
-        DecodingResult::I8(buf) => cast_and_normalize::<T, i8>(buf, nodata),
-        DecodingResult::I16(buf) => cast_and_normalize::<T, i16>(buf, nodata),
-        DecodingResult::I32(buf) => cast_and_normalize::<T, i32>(buf, nodata),
+    Ok(RawDecoded {
+        result,
+        rows,
+        cols,
+        spp,
+        transform,
+        crs,
+        nodata,
+    })
+}
+
+/// Internal: decode a GeoTIFF (all bands, interleaved) plus its geo-tags.
+fn decode_image<T, R>(reader: R, source_len: Option<u64>) -> Result<DecodedImage<T>>
+where
+    T: RasterElement,
+    R: std::io::Read + std::io::Seek,
+{
+    let raw = decode_raw(reader, source_len)?;
+
+    let data: Vec<T> = match raw.result {
+        DecodingResult::F32(buf) => cast_and_normalize::<T, f32>(buf, raw.nodata),
+        DecodingResult::F64(buf) => cast_and_normalize::<T, f64>(buf, raw.nodata),
+        DecodingResult::U8(buf) => cast_and_normalize::<T, u8>(buf, raw.nodata),
+        DecodingResult::U16(buf) => cast_and_normalize::<T, u16>(buf, raw.nodata),
+        DecodingResult::U32(buf) => cast_and_normalize::<T, u32>(buf, raw.nodata),
+        DecodingResult::I8(buf) => cast_and_normalize::<T, i8>(buf, raw.nodata),
+        DecodingResult::I16(buf) => cast_and_normalize::<T, i16>(buf, raw.nodata),
+        DecodingResult::I32(buf) => cast_and_normalize::<T, i32>(buf, raw.nodata),
         _ => {
             return Err(Error::UnsupportedDataType(
                 "Unsupported TIFF pixel format".to_string(),
@@ -153,21 +226,98 @@ where
         }
     };
 
-    if data.len() != rows * cols * spp {
+    if data.len() != raw.rows * raw.cols * raw.spp {
         return Err(Error::InvalidDimensions {
-            width: cols,
-            height: rows,
+            width: raw.cols,
+            height: raw.rows,
         });
     }
 
     Ok(DecodedImage {
         data,
-        rows,
-        cols,
-        spp,
-        transform,
-        crs,
-        nodata,
+        rows: raw.rows,
+        cols: raw.cols,
+        spp: raw.spp,
+        transform: raw.transform,
+        crs: raw.crs,
+        nodata: raw.nodata,
+    })
+}
+
+/// Internal: decode a GeoTIFF into an [`AnyRaster`], selecting one band
+/// (0-based; default: first) — the dtype-preserving counterpart of
+/// `decode_geotiff`.
+///
+/// Where `decode_geotiff`/`decode_image` cast every native TIFF sample
+/// type down to a single caller-chosen `T`, this keeps the file's own
+/// sample format and only widens the handful of native types without
+/// an exact `AnyRaster` variant:
+/// - `i8` → `I16` (exact: `i8`'s range is a strict subset of `i16`'s)
+/// - `f16` → `F32` (exact: `f32` has strictly more range/precision)
+/// - `u64`, `i64` → `F64` (lossless for any value up to 2^53 ≈ 9e15,
+///   far beyond any realistic DEM/raster cell value; `f64` is the
+///   widest numeric variant available so this is the best available
+///   fallback rather than a failure)
+fn decode_geotiff_any<R>(
+    reader: R,
+    band: Option<usize>,
+    source_len: Option<u64>,
+) -> Result<AnyRaster>
+where
+    R: std::io::Read + std::io::Seek,
+{
+    let raw = decode_raw(reader, source_len)?;
+    let b = band.unwrap_or(0);
+    if b >= raw.spp {
+        return Err(Error::Other(format!(
+            "band {b} out of range; image has {} band(s)",
+            raw.spp
+        )));
+    }
+
+    // Select band `b` out of an interleaved native-type buffer (or pass
+    // it straight through on the spp==1 fast path), then wrap it as a
+    // `Raster<T>` via the same metadata-attachment helper used by the
+    // fixed-`T` path.
+    macro_rules! band_raster {
+        ($buf:expr) => {{
+            let buf = $buf;
+            let selected = if raw.spp == 1 {
+                buf
+            } else {
+                let n = raw.rows * raw.cols;
+                (0..n).map(|i| buf[i * raw.spp + b]).collect()
+            };
+            finish_raster(selected, raw.rows, raw.cols, raw.transform, raw.crs, raw.nodata)?
+        }};
+    }
+
+    Ok(match raw.result {
+        DecodingResult::U8(buf) => AnyRaster::U8(band_raster!(buf)),
+        DecodingResult::U16(buf) => AnyRaster::U16(band_raster!(buf)),
+        DecodingResult::I16(buf) => AnyRaster::I16(band_raster!(buf)),
+        DecodingResult::U32(buf) => AnyRaster::U32(band_raster!(buf)),
+        DecodingResult::I32(buf) => AnyRaster::I32(band_raster!(buf)),
+        DecodingResult::F32(buf) => AnyRaster::F32(band_raster!(buf)),
+        DecodingResult::F64(buf) => AnyRaster::F64(band_raster!(buf)),
+        // No exact `AnyRaster` variant for these native TIFF sample
+        // types — widen losslessly rather than fail the read.
+        DecodingResult::I8(buf) => {
+            let widened: Vec<i16> = buf.iter().map(|&v| v as i16).collect();
+            AnyRaster::I16(band_raster!(widened))
+        }
+        DecodingResult::F16(buf) => {
+            let widened: Vec<f32> = buf.iter().map(|&v| v.to_f32()).collect();
+            AnyRaster::F32(band_raster!(widened))
+        }
+        DecodingResult::U64(buf) => {
+            let widened: Vec<f64> = buf.iter().map(|&v| v as f64).collect();
+            AnyRaster::F64(band_raster!(widened))
+        }
+        DecodingResult::I64(buf) => {
+            let widened: Vec<f64> = buf.iter().map(|&v| v as f64).collect();
+            AnyRaster::F64(band_raster!(widened))
+        }
     })
 }
 
@@ -775,7 +925,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::raster::Raster;
+    use crate::raster::{DataType, Raster};
     use tempfile::TempDir;
 
     fn ramp_band(rows: usize, cols: usize, base: f64) -> Raster<f64> {
@@ -996,5 +1146,171 @@ mod tests {
             "EPSG:32719 missing from GeoKeyDirectory: {:?}",
             gk
         );
+    }
+
+    // --- read_geotiff_any / AnyRaster -------------------------------
+
+    /// Write a single-band GeoTIFF with a genuinely native `CT` sample
+    /// type (not the `f32`-only path `write_geotiff` uses), so
+    /// `read_geotiff_any` has something other-than-`f32` to detect.
+    /// Includes scale/tiepoint tags so the transform round-trips too.
+    fn write_native_typed_tiff<CT>(path: &std::path::Path, rows: usize, cols: usize, data: &[CT::Inner])
+    where
+        CT: ColorType,
+        [CT::Inner]: tiff::encoder::TiffValue,
+    {
+        let file = File::create(path).unwrap();
+        let mut encoder = TiffEncoder::new(file).unwrap();
+        let mut image = encoder.new_image::<CT>(cols as u32, rows as u32).unwrap();
+        let scale = vec![2.0_f64, 3.0, 0.0];
+        image
+            .encoder()
+            .write_tag(Tag::Unknown(33550), scale.as_slice())
+            .unwrap();
+        let tiepoint = vec![0.0_f64, 0.0, 0.0, 500.0, 900.0, 0.0];
+        image
+            .encoder()
+            .write_tag(Tag::Unknown(33922), tiepoint.as_slice())
+            .unwrap();
+        image.write_data(data).unwrap();
+    }
+
+    #[test]
+    fn read_geotiff_any_detects_native_u16_without_upcasting() {
+        use tiff::encoder::colortype::Gray16;
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("native_u16.tif");
+        let data: Vec<u16> = vec![0, 1, 1000, u16::MAX, 42, 7, 65535, 12];
+        write_native_typed_tiff::<Gray16>(&path, 2, 4, &data);
+
+        let any = read_geotiff_any(&path, None).unwrap();
+        assert_eq!(any.dtype(), DataType::U16, "must stay u16, not upcast to f64");
+        match &any {
+            AnyRaster::U16(r) => {
+                assert_eq!(r.shape(), (2, 4));
+                assert_eq!(r.get(0, 0).unwrap(), 0);
+                assert_eq!(r.get(0, 2).unwrap(), 1000);
+                assert_eq!(r.get(0, 3).unwrap(), u16::MAX);
+                assert_eq!(r.get(1, 2).unwrap(), 65535);
+                // Transform round-trips from the tags we wrote.
+                assert_eq!(r.transform().origin_x, 500.0);
+                assert_eq!(r.transform().origin_y, 900.0);
+                assert_eq!(r.transform().pixel_width, 2.0);
+                assert_eq!(r.transform().pixel_height, -3.0);
+            }
+            other => panic!("expected AnyRaster::U16, got {:?}", other.dtype()),
+        }
+    }
+
+    #[test]
+    fn read_geotiff_any_detects_native_u8_without_upcasting() {
+        use tiff::encoder::colortype::Gray8;
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("native_u8.tif");
+        let data: Vec<u8> = vec![0, 1, 2, 3, 254, 255];
+        write_native_typed_tiff::<Gray8>(&path, 2, 3, &data);
+
+        let any = read_geotiff_any(&path, None).unwrap();
+        assert_eq!(any.dtype(), DataType::U8);
+        match &any {
+            AnyRaster::U8(r) => {
+                assert_eq!(r.shape(), (2, 3));
+                assert_eq!(r.get(0, 0).unwrap(), 0);
+                assert_eq!(r.get(1, 1).unwrap(), 254);
+                assert_eq!(r.get(1, 2).unwrap(), 255);
+            }
+            other => panic!("expected AnyRaster::U8, got {:?}", other.dtype()),
+        }
+    }
+
+    #[test]
+    fn read_geotiff_any_detects_native_f32_without_forcing_f64() {
+        // Gray32Float is what `write_geotiff` always emits, so this
+        // also doubles as "the common case still returns F32, not F64".
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("native_f32.tif");
+        let data: Vec<f32> = vec![0.0, -1.5, 3.25, 1e30, -1e-10, f32::NAN];
+        write_native_typed_tiff::<Gray32Float>(&path, 2, 3, &data);
+
+        let any = read_geotiff_any(&path, None).unwrap();
+        assert_eq!(any.dtype(), DataType::F32);
+        match &any {
+            AnyRaster::F32(r) => {
+                assert_eq!(r.get(0, 1).unwrap(), -1.5);
+                assert_eq!(r.get(0, 2).unwrap(), 3.25);
+                assert!(r.get(1, 2).unwrap().is_nan());
+            }
+            other => panic!("expected AnyRaster::F32, got {:?}", other.dtype()),
+        }
+    }
+
+    #[test]
+    fn read_geotiff_any_selects_band_on_multiband_file() {
+        // Multiband files still go through the native f32 stack writer;
+        // read_geotiff_any must still honour the band selection.
+        let r0 = ramp_band(4, 4, 0.0);
+        let r1 = ramp_band(4, 4, 100.0);
+        let r2 = ramp_band(4, 4, 200.0);
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("rgb_any.tif");
+        write_geotiff_multiband::<f64, _>(&[&r0, &r1, &r2], &path, None).unwrap();
+
+        let band0 = read_geotiff_any(&path, None).unwrap();
+        let band2 = read_geotiff_any(&path, Some(2)).unwrap();
+        assert_eq!(band0.dtype(), DataType::F32);
+        assert_eq!(band2.dtype(), DataType::F32);
+        if let (AnyRaster::F32(b0), AnyRaster::F32(b2)) = (&band0, &band2) {
+            assert_eq!(b0.get(1, 1).unwrap(), 2.0);
+            assert_eq!(b2.get(1, 1).unwrap(), 202.0);
+        } else {
+            panic!("expected AnyRaster::F32 for both bands");
+        }
+
+        // Out-of-range band is still rejected, same as read_geotiff.
+        assert!(read_geotiff_any(&path, Some(3)).is_err());
+    }
+
+    #[test]
+    fn any_raster_to_f64_matches_read_geotiff_f64() {
+        use tiff::encoder::colortype::Gray16;
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("native_u16_f64_check.tif");
+        let data: Vec<u16> = vec![0, 1, 1000, u16::MAX];
+        write_native_typed_tiff::<Gray16>(&path, 2, 2, &data);
+
+        let any = read_geotiff_any(&path, None).unwrap();
+        assert_eq!(any.dtype(), DataType::U16);
+        let as_f64 = any.to_f64();
+        // Same file, forced straight to f64 via the existing API.
+        let direct: Raster<f64> = read_geotiff(&path, None).unwrap();
+        assert_eq!(as_f64.shape(), direct.shape());
+        for row in 0..2 {
+            for col in 0..2 {
+                assert_eq!(as_f64.get(row, col).unwrap(), direct.get(row, col).unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn read_geotiff_any_from_buffer_matches_path_based_read() {
+        use tiff::encoder::colortype::Gray8;
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("native_u8_buf.tif");
+        let data: Vec<u8> = vec![10, 20, 30, 40];
+        write_native_typed_tiff::<Gray8>(&path, 2, 2, &data);
+
+        let bytes = std::fs::read(&path).unwrap();
+        let any = read_geotiff_any_from_buffer(&bytes, None).unwrap();
+        assert_eq!(any.dtype(), DataType::U8);
+        if let AnyRaster::U8(r) = &any {
+            assert_eq!(r.get(0, 0).unwrap(), 10);
+            assert_eq!(r.get(1, 1).unwrap(), 40);
+        } else {
+            unreachable!();
+        }
     }
 }
