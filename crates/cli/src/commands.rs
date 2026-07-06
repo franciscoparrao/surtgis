@@ -1995,6 +1995,11 @@ pub enum StacCommands {
         /// For 38 GB hosts, 3-5 is comfortable with ES; for PC, up to n_bands is fine.
         #[arg(long, default_value = "1")]
         band_chunk_size: usize,
+        /// Abort the composite if more than this many tiles fail after retries
+        /// (0 = never abort; just print a summary of how many tiles/scenes were
+        /// affected). Multi-band composites (--asset with commas) only.
+        #[arg(long, default_value = "0")]
+        max_tile_failures: usize,
         /// Output GeoTIFF file
         output: PathBuf,
     },

@@ -12,7 +12,7 @@ use surtgis_algorithms::imagery::{
 };
 use surtgis_cloud::blocking::{CogReaderBlocking, StacClientBlocking};
 use surtgis_cloud::{
-    BBox, CogReaderOptions, StacCatalog, StacClientOptions, StacItem, StacSearchParams,
+    BBox, CloudError, CogReaderOptions, StacCatalog, StacClientOptions, StacItem, StacSearchParams,
 };
 
 use tracing::debug;
@@ -704,6 +704,12 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                         }
                     };
 
+                    // `stac fetch` has no separate output-grid resolution (it
+                    // just reads the COG at its own native resolution), so
+                    // there's no ratio to compute here — full res (`None`) is
+                    // the correct and only choice. (Overview selection only
+                    // helps when reading is targeting a coarser output grid,
+                    // e.g. `--align-to`, see `overview_for_target_resolution`.)
                     let raster: surtgis_core::Raster<f64> = reader
                         .read_bbox(&read_bb, None)
                         .context("Failed to read bounding box from COG")?;
@@ -841,6 +847,9 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                     }
                 };
 
+                // Same as `stac fetch`: `fetch-mosaic` mosaics scenes at their
+                // own native resolution (no separate output grid), so there's
+                // no ratio to compute here — always full res.
                 match reader.read_bbox::<f64>(&read_bb, None) {
                     Ok(raster) => {
                         pb.finish_and_clear();
@@ -901,6 +910,7 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             cache,
             strip_rows: cli_strip_rows,
             band_chunk_size,
+            max_tile_failures,
             output,
         } => {
             // Multi-band support: --asset "red,nir,swir16,blue"
@@ -921,6 +931,7 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                     cli_strip_rows,
                     band_chunk_size,
                     compress,
+                    max_tile_failures,
                 );
             }
 
@@ -1431,12 +1442,13 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                                     tile_bb
                                 };
                                 let first = is_first_strip && tile_idx == 0;
+                                let out_px = out_transform.pixel_width.abs();
                                 handles.push(std::thread::spawn(move || {
-                                    let data = read_cog_tile(&data_href, &bb, first);
+                                    let data = read_cog_tile(&data_href, &bb, first, Some(out_px));
                                     let mask = if scl_href.is_empty() {
                                         None
                                     } else {
-                                        read_cog_tile_raw(&scl_href, &bb)
+                                        read_cog_tile_raw(&scl_href, &bb, Some(out_px))
                                     };
                                     (data, mask)
                                 }));
@@ -2301,6 +2313,12 @@ pub fn fetch_stac_band(
 ) -> Result<surtgis_core::Raster<f64>> {
     use surtgis_core::mosaic;
 
+    // Target output resolution, if we're aligning to a reference grid: lets
+    // reads use a COG overview instead of full resolution when the reference
+    // grid is much coarser than the source COG (see
+    // `overview_for_target_resolution` / `select_overview` fix).
+    let out_pixel_size: Option<f64> = align_to.map(|r| r.transform().pixel_width.abs());
+
     let cat = StacCatalog::from_str_or_url(catalog);
     let bb = parse_bbox(bbox)?;
 
@@ -2449,7 +2467,17 @@ pub fn fetch_stac_band(
             }
         };
 
-        let mut raster = match reader.read_bbox::<f64>(&read_bb, None) {
+        let data_overview = out_pixel_size.and_then(|out_px| {
+            let meta = reader.metadata();
+            overview_for_target_resolution(
+                meta.width,
+                meta.height,
+                meta.geo_transform.pixel_width.abs(),
+                &reader.overviews(),
+                out_px,
+            )
+        });
+        let mut raster = match reader.read_bbox::<f64>(&read_bb, data_overview) {
             Ok(r) => r,
             Err(e) => {
                 pb.finish_and_clear();
@@ -2484,7 +2512,17 @@ pub fn fetch_stac_band(
             };
 
             // Read mask as f64 and apply strategy
-            if let Ok(mask_raster) = mask_reader.read_bbox::<f64>(&read_bb, None) {
+            let mask_overview = out_pixel_size.and_then(|out_px| {
+                let meta = mask_reader.metadata();
+                overview_for_target_resolution(
+                    meta.width,
+                    meta.height,
+                    meta.geo_transform.pixel_width.abs(),
+                    &mask_reader.overviews(),
+                    out_px,
+                )
+            });
+            if let Ok(mask_raster) = mask_reader.read_bbox::<f64>(&read_bb, mask_overview) {
                 raster = cloud_mask_strategy
                     .mask(&raster, &mask_raster)
                     .unwrap_or(raster); // If masking fails, use original
@@ -2672,6 +2710,104 @@ impl Drop for RssPeakTracker {
     }
 }
 
+/// Outcome of attempting to fetch and decode a single COG tile.
+///
+/// Distinguishes benign "nothing here" results — the tile is outside the
+/// bbox of interest, or the asset legitimately doesn't exist (404), both
+/// expected in mosaics built from irregular STAC tile grids — from a real
+/// failure that survived retries. Historically both collapsed into the same
+/// `None`, so a run of real download failures (rate limiting, transient
+/// network errors, auth issues) looked identical to "this tile just isn't
+/// part of the scene" and silently degraded the composite (gap-filled with
+/// no diagnostic). Callers should count `Failed` separately and report it.
+enum TileOutcome<T> {
+    /// Tile fetched and decoded successfully.
+    Data(T),
+    /// Expected, benign absence: bbox doesn't intersect this tile, or the
+    /// server returned 404 for the asset.
+    OutsideOrMissing,
+    /// The download failed after exhausting retries. Carries a short error
+    /// description for diagnostics.
+    Failed(String),
+}
+
+/// Compute the jitter (in ms, `< base_ms`) to add to a retry backoff.
+///
+/// Uses wall-clock nanoseconds XORed with a per-task salt (e.g. the tile's
+/// index within the current chunk) so concurrently retrying tasks disperse
+/// instead of synchronizing.
+///
+/// This replaces a bug where jitter was computed as
+/// `Instant::now().elapsed().subsec_nanos()` on an `Instant` created moments
+/// earlier on the *same* line — that elapsed duration is ~0ns essentially
+/// always, so every retrying task computed the same (zero) "jitter" and all
+/// retries after a 429 woke up in the same instant, recreating exactly the
+/// thundering-herd problem jitter exists to avoid. `SystemTime::now()` gives
+/// real wall-clock entropy that isn't tautologically zero, and XOR-ing in
+/// the task's own salt disperses same-instant wakeups across different
+/// tiles further.
+fn compute_retry_jitter_ms(task_salt: u64, base_ms: u64) -> u64 {
+    let base_ms = base_ms.max(1);
+    let now_nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as u64)
+        .unwrap_or(0);
+    (now_nanos ^ task_salt) % base_ms
+}
+
+/// Classify a [`CloudError`] from a tile open/read as benign ("no data here")
+/// or not, matching on the *typed* error variants (see
+/// `crates/cloud/src/error.rs`) instead of substring-matching
+/// `.to_string()` output. The substring approach was fragile (tied to the
+/// exact `Display` wording) and meant a benign 404 and a real, retried-out
+/// 429/5xx were classified by parsing the same kind of string.
+///
+/// Returns `Some(TileOutcome::OutsideOrMissing)` for a benign miss, or `None`
+/// if the error is a real failure the caller should count/report (and, on
+/// the first attempt, retry once).
+fn classify_benign_tile_error<T>(e: &CloudError) -> Option<TileOutcome<T>> {
+    match e {
+        CloudError::BBoxOutside => Some(TileOutcome::OutsideOrMissing),
+        CloudError::HttpStatus { status, .. } if *status == reqwest::StatusCode::NOT_FOUND => {
+            Some(TileOutcome::OutsideOrMissing)
+        }
+        _ => None,
+    }
+}
+
+/// Decide which overview level (if any) to read a COG at, given its own
+/// native pixel size and a target output-grid pixel size.
+///
+/// Returns `None` (meaning: read at full native resolution) unless the
+/// output grid is substantially coarser than native (`ratio =
+/// out_pixel_size / native_pixel_size > 1.5`) — reading full-res tiles just
+/// to immediately downsample them to a much coarser output grid wastes
+/// network transfer and decode time proportional to `ratio²`. When an
+/// overview is used, [`select_overview_by_ratio`] picks the *coarsest*
+/// overview whose scale still does not exceed `ratio` (see the fix to that
+/// function in `crates/cloud/src/tile_index.rs` — it used to return the
+/// first/finest qualifying overview instead, e.g. scale=2 instead of
+/// scale=8 for `ratio=8`, wasting ~4x the intended saving).
+fn overview_for_target_resolution(
+    native_width: u32,
+    native_height: u32,
+    native_pixel_size: f64,
+    overviews: &[surtgis_cloud::OverviewInfo],
+    out_pixel_size: f64,
+) -> Option<usize> {
+    if native_pixel_size <= 0.0 || out_pixel_size <= 0.0 {
+        return None;
+    }
+    let ratio = out_pixel_size / native_pixel_size;
+    if ratio <= 1.5 {
+        return None;
+    }
+    let mut ifd_dims = vec![(native_width, native_height)];
+    ifd_dims.extend(overviews.iter().map(|o| (o.width, o.height)));
+    let idx = surtgis_cloud::tile_index::select_overview_by_ratio(&ifd_dims, ratio);
+    if idx > 0 { Some(idx) } else { None }
+}
+
 /// Download a batch of COG tile rasters concurrently, bounded by chunking.
 ///
 /// Only `tile_concurrency` tiles decode at a time, and each chunk fully
@@ -2681,27 +2817,52 @@ impl Drop for RssPeakTracker {
 /// - `tasks`: `(href, bbox_in_tile_crs)` per tile.
 /// - `zero_to_nan`: convert 0.0 / nodata → NaN for data bands. Masks (SCL,
 ///   QA_PIXEL) keep raw categorical values.
+/// - `out_pixel_size`: target output grid resolution (same CRS units as the
+///   COG), if known. When the COG's native resolution is much finer than
+///   this (ratio > 1.5), an overview level is used instead of full
+///   resolution — avoids downloading/decoding ~(ratio²) more data than the
+///   output grid can ever use. `None` (or a ratio <= 1.5) reads at native
+///   resolution, matching the previous always-`None` behaviour.
+///
+/// # Retry policy
+///
+/// `surtgis-cloud`'s `HttpClient` (`crates/cloud/src/http.rs`) already
+/// retries retryable HTTP statuses (429/5xx) internally with its own
+/// jittered backoff. This function used to layer a *second*, independent
+/// 4-attempt retry loop with its own (broken — see below) jitter on top,
+/// classifying errors by substring-matching `.to_string()`. That meant a
+/// single stubbornly-failing tile could generate up to 4 × (http.rs's own
+/// retries) requests, and a benign 404 was distinguished from a real
+/// failure only by hoping the error message contained "404" or "NotFound".
+///
+/// This is now a single bounded retry (2 attempts total) at the CLI level:
+/// benign errors ([`classify_benign_tile_error`]) short-circuit immediately
+/// as `OutsideOrMissing`; anything else gets one retry (http.rs has already
+/// exhausted *its* retries by the time an error surfaces here), then is
+/// reported as `Failed` rather than silently swallowed.
 fn download_tile_rasters_chunked(
     tasks: &[(String, BBox)],
     use_cache: bool,
     tile_concurrency: usize,
     download_rt: &tokio::runtime::Runtime,
     zero_to_nan: bool,
-) -> Vec<Option<surtgis_core::Raster<f64>>> {
+    out_pixel_size: Option<f64>,
+) -> Vec<TileOutcome<surtgis_core::Raster<f64>>> {
     if tasks.is_empty() {
         return Vec::new();
     }
     download_rt.block_on(async {
         use surtgis_cloud::{CogReader, CogReaderOptions};
 
-        let mut results: Vec<Option<surtgis_core::Raster<f64>>> =
-            (0..tasks.len()).map(|_| None).collect();
+        let mut results: Vec<TileOutcome<surtgis_core::Raster<f64>>> = (0..tasks.len())
+            .map(|_| TileOutcome::OutsideOrMissing)
+            .collect();
 
         let mut needs_download: Vec<usize> = Vec::with_capacity(tasks.len());
         for (idx, (href, bb)) in tasks.iter().enumerate() {
             if use_cache {
                 if let Some(r) = cache_read(&cog_cache_path(href, bb)) {
-                    results[idx] = Some(r);
+                    results[idx] = TileOutcome::Data(r);
                     continue;
                 }
             }
@@ -2712,30 +2873,25 @@ fn download_tile_rasters_chunked(
         for chunk_indices in needs_download.chunks(chunk_size) {
             let mut handles: Vec<(
                 usize,
-                tokio::task::JoinHandle<Option<surtgis_core::Raster<f64>>>,
+                tokio::task::JoinHandle<TileOutcome<surtgis_core::Raster<f64>>>,
             )> = Vec::with_capacity(chunk_indices.len());
             for &idx in chunk_indices {
                 let (href, bb) = tasks[idx].clone();
                 let do_cache = use_cache;
                 let zero_nan = zero_to_nan;
                 let href_cache = href.clone();
+                // Per-task salt so concurrent tiles in the same chunk don't
+                // compute identical jitter (see the jitter bug note below).
+                let task_salt = idx as u64;
                 handles.push((
                     idx,
                     tokio::spawn(async move {
-                        // Exponential backoff with jitter. Base 500ms × 2^attempt gives
-                        // 500ms, 1s, 2s, 4s across 4 attempts. Jitter desynchronises
-                        // retry waves so rate-limited catalogs don't get hit by a
-                        // synchronized wall of reopens after a 429. Rate-limit errors
-                        // (429) trigger longer sleep, transient 5xx shorter.
-                        const MAX_ATTEMPTS: u8 = 4;
+                        const MAX_ATTEMPTS: u8 = 2;
+                        let mut last_err: Option<String> = None;
                         for attempt in 0..MAX_ATTEMPTS {
                             if attempt > 0 {
-                                let base_ms: u64 = 500u64 << (attempt - 1);
-                                // Cheap jitter without adding a crate: low bits of the
-                                // monotonic clock are uncorrelated across tasks.
-                                let jitter_ms = (std::time::Instant::now().elapsed().subsec_nanos()
-                                    as u64)
-                                    % base_ms;
+                                let base_ms: u64 = 500;
+                                let jitter_ms = compute_retry_jitter_ms(task_salt, base_ms);
                                 tokio::time::sleep(std::time::Duration::from_millis(
                                     base_ms + jitter_ms,
                                 ))
@@ -2745,30 +2901,31 @@ fn download_tile_rasters_chunked(
                                 match CogReader::open(&href, CogReaderOptions::default()).await {
                                     Ok(r) => r,
                                     Err(e) => {
-                                        let msg = e.to_string();
-                                        if msg.contains("bbox does not intersect") {
-                                            return None;
+                                        if let Some(outcome) = classify_benign_tile_error(&e) {
+                                            return outcome;
                                         }
-                                        if msg.contains(" 404") || msg.contains("NotFound") {
-                                            return None;
-                                        }
-                                        // Rate limit — add an extra 2s on top of the base backoff
-                                        if msg.contains(" 429") || msg.contains("TooManyRequests") {
-                                            tokio::time::sleep(std::time::Duration::from_secs(2))
-                                                .await;
-                                        }
-                                        if attempt == MAX_ATTEMPTS - 1 {
-                                            eprintln!(
-                                                "    [cog] open FAILED after {} attempts: {}",
-                                                MAX_ATTEMPTS, msg
-                                            );
-                                            return None;
-                                        }
+                                        last_err = Some(e.to_string());
                                         continue;
                                     }
                                 };
                             let nodata_val = reader.metadata().nodata.unwrap_or(0.0);
-                            match reader.read_bbox::<f64>(&bb, None).await {
+
+                            // Use an overview when the output grid is
+                            // substantially coarser than the COG's native
+                            // resolution (ratio > 1.5) — see `select_overview`
+                            // fix in `crates/cloud/src/tile_index.rs`.
+                            let overview = out_pixel_size.and_then(|out_px| {
+                                let meta = reader.metadata();
+                                overview_for_target_resolution(
+                                    meta.width,
+                                    meta.height,
+                                    meta.geo_transform.pixel_width.abs(),
+                                    &reader.overviews(),
+                                    out_px,
+                                )
+                            });
+
+                            match reader.read_bbox::<f64>(&bb, overview).await {
                                 Ok(mut r) => {
                                     if zero_nan {
                                         for val in r.data_mut().iter_mut() {
@@ -2780,35 +2937,29 @@ fn download_tile_rasters_chunked(
                                     if do_cache {
                                         cache_write(&cog_cache_path(&href_cache, &bb), &r);
                                     }
-                                    return Some(r);
+                                    return TileOutcome::Data(r);
                                 }
                                 Err(e) => {
-                                    let msg = e.to_string();
-                                    if msg.contains("bbox does not intersect") {
-                                        return None;
+                                    if let Some(outcome) = classify_benign_tile_error(&e) {
+                                        return outcome;
                                     }
-                                    if msg.contains(" 404") || msg.contains("NotFound") {
-                                        return None;
-                                    }
-                                    if msg.contains(" 429") || msg.contains("TooManyRequests") {
-                                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                                    }
-                                    if attempt == MAX_ATTEMPTS - 1 {
-                                        eprintln!(
-                                            "    [cog] read FAILED after {} attempts: {}",
-                                            MAX_ATTEMPTS, msg
-                                        );
-                                        return None;
-                                    }
+                                    last_err = Some(e.to_string());
                                 }
                             }
                         }
-                        None
+                        let msg = last_err.unwrap_or_else(|| "unknown error".to_string());
+                        eprintln!(
+                            "    [cog] tile FAILED after {} attempts: {}",
+                            MAX_ATTEMPTS, msg
+                        );
+                        TileOutcome::Failed(msg)
                     }),
                 ));
             }
             for (idx, h) in handles {
-                results[idx] = h.await.ok().flatten();
+                results[idx] = h.await.unwrap_or_else(|join_err| {
+                    TileOutcome::Failed(format!("task panicked: {join_err}"))
+                });
             }
         }
 
@@ -2872,6 +3023,7 @@ fn handle_multiband_composite(
     strip_rows_cfg: usize,
     band_chunk_size: usize,
     compress: bool,
+    max_tile_failures: usize,
 ) -> Result<()> {
     use surtgis_cloud::reproject;
 
@@ -3304,6 +3456,21 @@ fn handle_multiband_composite(
     // of function. See BUG_RAM_V070_BUDGET_VS_REAL_MAULE_PC.md item #3.
     let rss_peak = RssPeakTracker::start(Duration::from_secs(2));
 
+    // Target output resolution for overview selection (see `select_overview`
+    // in `crates/cloud/src/tile_index.rs`): when a COG's native resolution is
+    // much finer than the output grid (e.g. --align-to a coarse DEM), reading
+    // a reduced-resolution overview instead of full res avoids downloading
+    // and decoding far more data than the output grid can ever use.
+    let out_pixel_size = out_transform.pixel_width.abs();
+
+    // Tile-failure tracking (distinct from benign "outside bbox"/404 misses):
+    // a `Failed` tile leaves a real gap that gap-filling papers over silently
+    // unless we count and report it. See `TileOutcome`/`download_tile_rasters_chunked`.
+    let mut total_failed_tiles: usize = 0;
+    let mut failed_scene_dates: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    let mut last_failure_msg: Option<String> = None;
+
     // === Strip loop ===
     //
     // Structural refactor (v0.6.24): outer-band loop eliminates the per-scene
@@ -3426,11 +3593,23 @@ fn handle_multiband_composite(
                 tile_concurrency,
                 &download_rt,
                 /* zero_to_nan */ false,
+                Some(out_pixel_size),
             );
             phase_a_tiles += mask_tasks.len();
             cumulative_tiles += mask_tasks.len();
-            let mask_tiles: Vec<surtgis_core::Raster<f64>> =
-                mask_rasters.into_iter().flatten().collect();
+            let mut mask_tiles: Vec<surtgis_core::Raster<f64>> =
+                Vec::with_capacity(mask_rasters.len());
+            for outcome in mask_rasters {
+                match outcome {
+                    TileOutcome::Data(r) => mask_tiles.push(r),
+                    TileOutcome::Failed(msg) => {
+                        total_failed_tiles += 1;
+                        failed_scene_dates.insert(scene.date.clone());
+                        last_failure_msg = Some(msg);
+                    }
+                    TileOutcome::OutsideOrMissing => {}
+                }
+            }
             scene_masks.push(mosaic_tile_rasters(mask_tiles));
         }
 
@@ -3526,15 +3705,22 @@ fn handle_multiband_composite(
                     tile_concurrency,
                     &download_rt,
                     /* zero_to_nan */ true,
+                    Some(out_pixel_size),
                 );
                 cumulative_tiles += all_tasks.len();
 
                 // Split results back by band index
                 let mut per_band: Vec<Vec<surtgis_core::Raster<f64>>> =
                     (0..chunk_k).map(|_| Vec::new()).collect();
-                for (raster_opt, &bi_local) in all_rasters.into_iter().zip(task_band_local.iter()) {
-                    if let Some(r) = raster_opt {
-                        per_band[bi_local].push(r);
+                for (outcome, &bi_local) in all_rasters.into_iter().zip(task_band_local.iter()) {
+                    match outcome {
+                        TileOutcome::Data(r) => per_band[bi_local].push(r),
+                        TileOutcome::Failed(msg) => {
+                            total_failed_tiles += 1;
+                            failed_scene_dates.insert(scene.date.clone());
+                            last_failure_msg = Some(msg);
+                        }
+                        TileOutcome::OutsideOrMissing => {}
                     }
                 }
 
@@ -3771,9 +3957,36 @@ fn handle_multiband_composite(
                 rss_after_collect as isize - rss_after_teardown as isize,
             );
         }
+
+        // Abort early if tile failures (real errors, not benign bbox/404
+        // misses — see `TileOutcome`) exceed the configured threshold. Checked
+        // per-strip so a systemic outage (e.g. the catalog is down) doesn't
+        // burn through the whole composite before the user finds out.
+        if max_tile_failures > 0 && total_failed_tiles > max_tile_failures {
+            println!();
+            anyhow::bail!(
+                "Aborting composite: {} tiles failed after retries (> --max-tile-failures={}), \
+                 {} scenes affected. Partial output was NOT written. Last error: {}",
+                total_failed_tiles,
+                max_tile_failures,
+                failed_scene_dates.len(),
+                last_failure_msg.as_deref().unwrap_or("(none)")
+            );
+        }
     } // end for strip
 
     println!(); // newline after \r progress
+
+    if total_failed_tiles > 0 {
+        eprintln!(
+            "⚠ {} tiles failed after retries ({} scenes affected); output quality may be \
+             degraded in those regions (gap-filled from neighbouring pixels/scenes instead \
+             of real data). Last error: {}",
+            total_failed_tiles,
+            failed_scene_dates.len(),
+            last_failure_msg.as_deref().unwrap_or("(none)")
+        );
+    }
 
     // -- Phase 4: Write N output files --
     let stem = output.file_stem().unwrap_or_default().to_string_lossy();
@@ -3829,7 +4042,16 @@ fn handle_multiband_composite(
 
 /// Read a COG tile (data band) at native resolution into a raster.
 /// Applies nodata filtering (DN=0 → NaN). Used by parallel tile download.
-fn read_cog_tile(href: &str, bb: &BBox, log_meta: bool) -> Option<surtgis_core::Raster<f64>> {
+/// `out_pixel_size`: target output-grid resolution, if known — lets the read
+/// use a COG overview instead of full resolution when the output grid is
+/// much coarser than this tile's native resolution (ratio > 1.5). See
+/// `overview_for_target_resolution`.
+fn read_cog_tile(
+    href: &str,
+    bb: &BBox,
+    log_meta: bool,
+    out_pixel_size: Option<f64>,
+) -> Option<surtgis_core::Raster<f64>> {
     let mut dr = match CogReaderBlocking::open(href, CogReaderOptions::default()) {
         Ok(r) => r,
         Err(e) => {
@@ -3850,7 +4072,16 @@ fn read_cog_tile(href: &str, bb: &BBox, log_meta: bool) -> Option<surtgis_core::
             tile_meta.geo_transform.pixel_width.abs()
         );
     }
-    let mut r: surtgis_core::Raster<f64> = match dr.read_bbox(bb, None) {
+    let overview = out_pixel_size.and_then(|out_px| {
+        overview_for_target_resolution(
+            tile_meta.width,
+            tile_meta.height,
+            tile_meta.geo_transform.pixel_width.abs(),
+            &dr.overviews(),
+            out_px,
+        )
+    });
+    let mut r: surtgis_core::Raster<f64> = match dr.read_bbox(bb, overview) {
         Ok(r) => r,
         Err(e) => {
             // BBoxOutside is expected (tile doesn't cover this strip) — don't log
@@ -3871,7 +4102,12 @@ fn read_cog_tile(href: &str, bb: &BBox, log_meta: bool) -> Option<surtgis_core::
 }
 
 /// Read a COG tile (mask/SCL band) at native resolution without nodata filtering.
-fn read_cog_tile_raw(href: &str, bb: &BBox) -> Option<surtgis_core::Raster<f64>> {
+/// See `read_cog_tile` for the `out_pixel_size` overview-selection behaviour.
+fn read_cog_tile_raw(
+    href: &str,
+    bb: &BBox,
+    out_pixel_size: Option<f64>,
+) -> Option<surtgis_core::Raster<f64>> {
     let mut sr = match CogReaderBlocking::open(href, CogReaderOptions::default()) {
         Ok(r) => r,
         Err(e) => {
@@ -3880,7 +4116,17 @@ fn read_cog_tile_raw(href: &str, bb: &BBox) -> Option<surtgis_core::Raster<f64>>
             return None;
         }
     };
-    match sr.read_bbox(bb, None) {
+    let meta = sr.metadata();
+    let overview = out_pixel_size.and_then(|out_px| {
+        overview_for_target_resolution(
+            meta.width,
+            meta.height,
+            meta.geo_transform.pixel_width.abs(),
+            &sr.overviews(),
+            out_px,
+        )
+    });
+    match sr.read_bbox(bb, overview) {
         Ok(r) => Some(r),
         Err(e) => {
             let msg = e.to_string();
@@ -4256,6 +4502,147 @@ mod tests {
         let s2_profile = CollectionProfile::from_collection_name("sentinel-2-l2a").unwrap();
         let debug_str = format!("{:?}", s2_profile);
         assert!(debug_str.contains("Sentinel2L2A"));
+    }
+
+    // --- Retry/jitter/TileOutcome reliability fixes (composite download) ---
+
+    /// Regression test for the jitter bug: the previous implementation used
+    /// `Instant::now().elapsed().subsec_nanos()`, which is ~0ns essentially
+    /// always (elapsed time since an `Instant` created moments earlier on
+    /// the same line), so distinct tasks always computed the same "jitter".
+    /// `compute_retry_jitter_ms` must vary across different task salts.
+    #[test]
+    fn jitter_varies_across_tasks_not_always_zero() {
+        let base_ms = 500;
+        let samples: Vec<u64> = (0..64u64)
+            .map(|salt| compute_retry_jitter_ms(salt, base_ms))
+            .collect();
+        let distinct: std::collections::HashSet<u64> = samples.iter().copied().collect();
+        assert!(
+            distinct.len() > 1,
+            "expected jitter to differ across tasks, got all-identical values: {:?}",
+            samples
+        );
+        // The old bug's specific symptom: jitter was always exactly 0.
+        assert!(
+            samples.iter().any(|&j| j != 0),
+            "jitter was always 0 — reproduces the Instant::now().elapsed() bug"
+        );
+    }
+
+    #[test]
+    fn jitter_is_bounded_by_base_ms() {
+        for salt in 0..32u64 {
+            let j = compute_retry_jitter_ms(salt, 500);
+            assert!(j < 500, "jitter {} not < base_ms 500", j);
+        }
+    }
+
+    #[test]
+    fn jitter_handles_zero_base_ms_without_panicking() {
+        // Division/modulo by zero would panic; base_ms is clamped to >= 1.
+        let _ = compute_retry_jitter_ms(42, 0);
+    }
+
+    /// 404 and BBoxOutside are benign ("nothing here") — typed classification
+    /// via `CloudError`, not `.to_string()` substring matching.
+    #[test]
+    fn classify_benign_tile_error_treats_404_and_bbox_outside_as_benign() {
+        let bbox_outside = CloudError::BBoxOutside;
+        assert!(matches!(
+            classify_benign_tile_error::<()>(&bbox_outside),
+            Some(TileOutcome::OutsideOrMissing)
+        ));
+
+        let not_found = CloudError::HttpStatus {
+            status: reqwest::StatusCode::NOT_FOUND,
+            url: "https://example.com/cog.tif".into(),
+        };
+        assert!(matches!(
+            classify_benign_tile_error::<()>(&not_found),
+            Some(TileOutcome::OutsideOrMissing)
+        ));
+    }
+
+    /// A 429/5xx that already exhausted http.rs's own retries, or any other
+    /// error, is NOT benign — the caller must count/report it as `Failed`,
+    /// not silently treat it the same as a benign miss.
+    #[test]
+    fn classify_benign_tile_error_treats_persistent_errors_as_not_benign() {
+        let rate_limited = CloudError::HttpStatus {
+            status: reqwest::StatusCode::TOO_MANY_REQUESTS,
+            url: "https://example.com/cog.tif".into(),
+        };
+        assert!(classify_benign_tile_error::<()>(&rate_limited).is_none());
+
+        let server_error = CloudError::HttpStatus {
+            status: reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            url: "https://example.com/cog.tif".into(),
+        };
+        assert!(classify_benign_tile_error::<()>(&server_error).is_none());
+
+        let network = CloudError::Network("connection reset".into());
+        assert!(classify_benign_tile_error::<()>(&network).is_none());
+    }
+
+    // --- select_overview wiring (overview_for_target_resolution) ---
+
+    #[test]
+    fn overview_for_target_resolution_stays_full_res_when_ratio_at_or_below_threshold() {
+        let overviews = vec![
+            surtgis_cloud::OverviewInfo {
+                index: 1,
+                width: 5000,
+                height: 5000,
+            },
+            surtgis_cloud::OverviewInfo {
+                index: 2,
+                width: 2500,
+                height: 2500,
+            },
+        ];
+        // native 10m, output 10m → ratio 1.0 → full res.
+        assert_eq!(
+            overview_for_target_resolution(10_000, 10_000, 10.0, &overviews, 10.0),
+            None
+        );
+        // native 10m, output 15m → ratio 1.5 → still full res (threshold is
+        // "> 1.5", not ">=").
+        assert_eq!(
+            overview_for_target_resolution(10_000, 10_000, 10.0, &overviews, 15.0),
+            None
+        );
+    }
+
+    #[test]
+    fn overview_for_target_resolution_uses_coarsest_overview_above_threshold() {
+        let overviews = vec![
+            surtgis_cloud::OverviewInfo {
+                index: 1,
+                width: 5000,
+                height: 5000,
+            }, // scale 2
+            surtgis_cloud::OverviewInfo {
+                index: 2,
+                width: 1250,
+                height: 1250,
+            }, // scale 8
+        ];
+        // native 10m, output 90m → ratio 9 → coarsest overview whose scale
+        // (8) doesn't exceed 9 → index 2 (NOT index 1 / scale 2).
+        assert_eq!(
+            overview_for_target_resolution(10_000, 10_000, 10.0, &overviews, 90.0),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn overview_for_target_resolution_handles_degenerate_native_pixel_size() {
+        let overviews: Vec<surtgis_cloud::OverviewInfo> = Vec::new();
+        assert_eq!(
+            overview_for_target_resolution(100, 100, 0.0, &overviews, 10.0),
+            None
+        );
     }
 }
 

@@ -4,6 +4,7 @@
 //! neighborhood. Enlarges bright regions and shrinks dark regions.
 
 use crate::maybe_rayon::*;
+use crate::statistics::focal_fast::sliding_extreme_1d;
 use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Algorithm, Error, Result};
@@ -54,57 +55,184 @@ pub fn dilate(raster: &Raster<f64>, element: &StructuringElement) -> Result<Rast
 
     let (rows, cols) = raster.shape();
     let nodata = raster.nodata();
-    let offsets = element.offsets();
-    let radius = element.radius() as isize;
 
-    let output_data: Vec<f64> = (0..rows)
-        .into_par_iter()
-        .flat_map(|row| {
-            let mut row_data = vec![f64::NAN; cols];
+    // Fast path: a square structuring element's maximum filter is
+    // separable (van Herk 1992 / Gil-Werman 1993), giving O(1) amortized
+    // per cell instead of the O(radius^2) brute-force scan over
+    // `element.offsets()` below. Cross/Disk/Custom elements aren't
+    // separable in general, so they keep the brute-force path.
+    let output_data: Vec<f64> = if let StructuringElement::Square(r) = element {
+        erode_dilate_square_fast(raster, *r, false)
+    } else {
+        let offsets = element.offsets();
+        let radius = element.radius() as isize;
 
-            for (col, row_data_col) in row_data.iter_mut().enumerate() {
-                let center = unsafe { raster.get_unchecked(row, col) };
-                if is_nodata_val(center, nodata) {
-                    continue;
-                }
+        (0..rows)
+            .into_par_iter()
+            .flat_map(|row| {
+                let mut row_data = vec![f64::NAN; cols];
 
-                // Skip edges where kernel extends beyond bounds
-                let r = row as isize;
-                let c = col as isize;
-                if r - radius < 0
-                    || r + radius >= rows as isize
-                    || c - radius < 0
-                    || c + radius >= cols as isize
-                {
-                    continue;
-                }
-
-                let mut max_val = f64::NEG_INFINITY;
-                let mut has_nodata = false;
-
-                for &(dr, dc) in &offsets {
-                    let nr = (r + dr) as usize;
-                    let nc = (c + dc) as usize;
-                    let v = unsafe { raster.get_unchecked(nr, nc) };
-                    if is_nodata_val(v, nodata) {
-                        has_nodata = true;
-                        break;
+                for (col, row_data_col) in row_data.iter_mut().enumerate() {
+                    let center = unsafe { raster.get_unchecked(row, col) };
+                    if is_nodata_val(center, nodata) {
+                        continue;
                     }
-                    if v > max_val {
-                        max_val = v;
+
+                    // Skip edges where kernel extends beyond bounds
+                    let r = row as isize;
+                    let c = col as isize;
+                    if r - radius < 0
+                        || r + radius >= rows as isize
+                        || c - radius < 0
+                        || c + radius >= cols as isize
+                    {
+                        continue;
+                    }
+
+                    let mut max_val = f64::NEG_INFINITY;
+                    let mut has_nodata = false;
+
+                    for &(dr, dc) in &offsets {
+                        let nr = (r + dr) as usize;
+                        let nc = (c + dc) as usize;
+                        let v = unsafe { raster.get_unchecked(nr, nc) };
+                        if is_nodata_val(v, nodata) {
+                            has_nodata = true;
+                            break;
+                        }
+                        if v > max_val {
+                            max_val = v;
+                        }
+                    }
+
+                    if !has_nodata {
+                        *row_data_col = max_val;
                     }
                 }
 
-                if !has_nodata {
-                    *row_data_col = max_val;
-                }
-            }
-
-            row_data
-        })
-        .collect();
+                row_data
+            })
+            .collect()
+    };
 
     build_output(raster, rows, cols, output_data)
+}
+
+/// Fast path for `erode`/`dilate` with a `Square(radius)` structuring
+/// element: `take_min = true` computes erosion (minimum filter),
+/// `take_min = false` computes dilation (maximum filter).
+///
+/// Reuses [`sliding_extreme_1d`] (the same van Herk/Gil-Werman primitive
+/// `focal_fast::hgw_square_2d` is built on) but layers on erode/dilate's
+/// own nodata rule, which differs from `focal_fast`'s: there, nodata
+/// cells are simply excluded from the reduction; here, *any* nodata cell
+/// anywhere in the window must invalidate the whole output cell (matching
+/// the brute-force `has_nodata` short-circuit above bit-for-bit, since
+/// min/max only ever return one of the window's actual values verbatim —
+/// no arithmetic rounding is introduced by reordering the reduction).
+///
+/// This is done with two separable passes over the whole raster:
+/// - one over the raw values (nodata cells replaced by a sentinel that
+///   can never win the reduction) to get the numeric extreme;
+/// - one over a 0.0/1.0 "is this cell nodata" indicator, run as a
+///   max-filter (i.e. logical OR over the window) to detect whether the
+///   window contains any nodata cell at all.
+fn erode_dilate_square_fast(raster: &Raster<f64>, radius: usize, take_min: bool) -> Vec<f64> {
+    let (rows, cols) = raster.shape();
+    let nodata = raster.nodata();
+    let pad = if take_min {
+        f64::INFINITY
+    } else {
+        f64::NEG_INFINITY
+    };
+
+    let mut values = Array2::<f64>::zeros((rows, cols));
+    let mut indicator = Array2::<f64>::zeros((rows, cols));
+    for r in 0..rows {
+        for c in 0..cols {
+            let v = unsafe { raster.get_unchecked(r, c) };
+            if is_nodata_val(v, nodata) {
+                values[[r, c]] = pad;
+                indicator[[r, c]] = 1.0;
+            } else {
+                values[[r, c]] = v;
+            }
+        }
+    }
+
+    let extreme = hgw_square_pass(&values, radius, take_min);
+    let any_nodata = hgw_square_pass(&indicator, radius, false); // OR over the window
+
+    let radius_i = radius as isize;
+    let mut out = vec![f64::NAN; rows * cols];
+    for r in 0..rows {
+        let ri = r as isize;
+        if ri - radius_i < 0 || ri + radius_i >= rows as isize {
+            continue;
+        }
+        for c in 0..cols {
+            let ci = c as isize;
+            if ci - radius_i < 0 || ci + radius_i >= cols as isize {
+                continue;
+            }
+            // Mirrors the brute-force path's separate up-front center
+            // check (redundant with `any_nodata` for a Square element,
+            // whose window always includes the center offset, but kept
+            // so the control flow matches 1:1).
+            let center = unsafe { raster.get_unchecked(r, c) };
+            if is_nodata_val(center, nodata) {
+                continue;
+            }
+            if any_nodata[[r, c]] > 0.5 {
+                continue;
+            }
+            out[r * cols + c] = extreme[[r, c]];
+        }
+    }
+    out
+}
+
+/// Separable van Herk (1992) / Gil-Werman (1993) sliding min/max over a
+/// square window of the given `radius`, applied to a plain `Array2<f64>`
+/// (rows pass, transpose, columns pass, transpose back) — the same
+/// structure as `focal_fast::hgw_square_2d`, but operating on data the
+/// caller has already prepared (nodata substituted by a sentinel that
+/// never wins the reduction), so it can be reused for both the raw-value
+/// pass and the nodata-indicator pass in [`erode_dilate_square_fast`].
+fn hgw_square_pass(data: &Array2<f64>, radius: usize, take_min: bool) -> Array2<f64> {
+    let (rows, cols) = data.dim();
+
+    // Horizontal pass.
+    let row_pass = par_map_rows(rows, cols, |row, out_row| {
+        let slice = data.row(row);
+        let slice = slice.as_slice().expect("raster row must be contiguous");
+        let filtered = sliding_extreme_1d(slice, radius, take_min);
+        out_row.copy_from_slice(&filtered);
+    });
+
+    // Transpose so the vertical pass can reuse the same 1D routine.
+    let mut transposed = Array2::<f64>::zeros((cols, rows));
+    for r in 0..rows {
+        for c in 0..cols {
+            transposed[[c, r]] = row_pass[[r, c]];
+        }
+    }
+
+    let col_pass = par_map_rows(cols, rows, |c, out_col| {
+        let slice = transposed.row(c);
+        let slice = slice.as_slice().expect("transposed row must be contiguous");
+        let filtered = sliding_extreme_1d(slice, radius, take_min);
+        out_col.copy_from_slice(&filtered);
+    });
+
+    // Transpose back.
+    let mut out = Array2::<f64>::zeros((rows, cols));
+    for c in 0..cols {
+        for r in 0..rows {
+            out[[r, c]] = col_pass[[c, r]];
+        }
+    }
+    out
 }
 
 fn is_nodata_val(value: f64, nodata: Option<f64>) -> bool {
@@ -193,6 +321,76 @@ mod tests {
         assert!(result.get(3, 3).unwrap().is_nan());
         assert!(result.get(3, 2).unwrap().is_nan());
         assert!(result.get(2, 3).unwrap().is_nan());
+    }
+
+    /// Independent brute-force reference (deliberately not reusing any of
+    /// `dilate`'s own code) checked against the `Square` fast path on a
+    /// raster with scattered nodata, to confirm the "any nodata neighbor
+    /// in the window -> NaN" rule survived the switch to the separable
+    /// van Herk/Gil-Werman filter.
+    #[test]
+    fn test_dilate_square_fast_path_matches_bruteforce_with_scattered_nodata() {
+        let rows = 15;
+        let cols = 17;
+        let nodata_val = -9999.0;
+        let mut raster = Raster::<f64>::new(rows, cols);
+        raster.set_transform(GeoTransform::new(0.0, rows as f64, 1.0, -1.0));
+        raster.set_nodata(Some(nodata_val));
+
+        for r in 0..rows {
+            for c in 0..cols {
+                let v = ((r * 13 + c * 7) % 23) as f64 * 1.3 - 5.0;
+                raster.set(r, c, v).unwrap();
+            }
+        }
+        // Scatter nodata cells, including one right at a corner.
+        for &(r, c) in &[(2, 3), (5, 5), (5, 6), (9, 12), (12, 2), (0, 0), (14, 16)] {
+            raster.set(r, c, nodata_val).unwrap();
+        }
+
+        let radius = 3usize;
+        let result = dilate(&raster, &StructuringElement::Square(radius)).unwrap();
+
+        let ri = radius as isize;
+        for r in 0..rows {
+            for c in 0..cols {
+                let ir = r as isize;
+                let ic = c as isize;
+                let expected = if ir - ri < 0
+                    || ir + ri >= rows as isize
+                    || ic - ri < 0
+                    || ic + ri >= cols as isize
+                {
+                    f64::NAN
+                } else {
+                    let mut has_nodata = false;
+                    let mut max_val = f64::NEG_INFINITY;
+                    for dr in -ri..=ri {
+                        for dc in -ri..=ri {
+                            let nr = (ir + dr) as usize;
+                            let nc = (ic + dc) as usize;
+                            let v = raster.get(nr, nc).unwrap();
+                            if v.is_nan() || v == nodata_val {
+                                has_nodata = true;
+                            } else if v > max_val {
+                                max_val = v;
+                            }
+                        }
+                    }
+                    if has_nodata { f64::NAN } else { max_val }
+                };
+
+                let got = result.get(r, c).unwrap();
+                match (expected.is_nan(), got.is_nan()) {
+                    (true, true) => {}
+                    (false, false) => assert!(
+                        (expected - got).abs() < 1e-12,
+                        "mismatch at ({r},{c}): expected={expected}, got={got}"
+                    ),
+                    _ => panic!("NaN mismatch at ({r},{c}): expected={expected}, got={got}"),
+                }
+            }
+        }
     }
 
     #[test]

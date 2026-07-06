@@ -166,16 +166,40 @@ pub fn select_overview(
     // IFDs are typically: [full, overview1, overview2, ...] with decreasing resolution.
     let ratio = (full_pixels as f64 / target as f64).sqrt();
 
+    select_overview_by_ratio(ifd_dimensions, ratio)
+}
+
+/// Select the coarsest overview whose downsample factor (`scale = full_width /
+/// overview_width`) does not exceed `ratio`.
+///
+/// `ifd_dimensions[0]` must be the full-resolution dimensions; the rest are
+/// overviews in any order (typically decreasing resolution). Returns `0`
+/// (full resolution) when no overview qualifies — i.e. `ratio` is smaller
+/// than even the finest overview's scale, so downsampling that far would
+/// lose more detail than the caller wants.
+///
+/// Note this deliberately does NOT stop at the *first* overview whose scale
+/// is `<= ratio` (that would pick the finest, most wasteful, qualifying
+/// overview) — it scans all of them and keeps the one with the *largest*
+/// qualifying scale, i.e. the coarsest overview that still meets the target.
+pub fn select_overview_by_ratio(ifd_dimensions: &[(u32, u32)], ratio: f64) -> usize {
+    if ifd_dimensions.is_empty() {
+        return 0;
+    }
+    let (fw, _fh) = ifd_dimensions[0];
+    let mut best_idx = 0usize;
+    let mut best_scale = 1.0f64; // full resolution's own "scale"
     for (i, &(w, _h)) in ifd_dimensions.iter().enumerate().skip(1) {
-        let (fw, _fh) = ifd_dimensions[0];
+        if w == 0 {
+            continue;
+        }
         let scale = fw as f64 / w as f64;
-        if scale <= ratio {
-            return i;
+        if scale <= ratio && scale > best_scale {
+            best_scale = scale;
+            best_idx = i;
         }
     }
-
-    // Most coarse overview
-    ifd_dimensions.len().saturating_sub(1)
+    best_idx
 }
 
 #[cfg(test)]
@@ -226,5 +250,32 @@ mod tests {
         // Target 250k pixels → ~500x500 → overview index 1
         let idx = select_overview(&bbox, &gt, &dims, Some(250_000));
         assert!(idx >= 1);
+    }
+
+    /// Regression test for the "returns finest qualifying overview instead of
+    /// coarsest" bug: with scales [1, 2, 4, 8, 16], a ratio of 8 must select
+    /// the scale=8 overview (index 3), not stop early at scale=2 (index 1).
+    #[test]
+    fn test_select_overview_by_ratio_picks_coarsest_not_finest() {
+        // full_width = 1600 → widths for scale 1,2,4,8,16
+        let dims = vec![(1600, 1600), (800, 800), (400, 400), (200, 200), (100, 100)];
+
+        // ratio=8 → exact match at scale=8 → index 3.
+        assert_eq!(select_overview_by_ratio(&dims, 8.0), 3);
+
+        // ratio=5 → largest scale <= 5 is scale=4 → index 2 (NOT scale=2/index 1).
+        assert_eq!(select_overview_by_ratio(&dims, 5.0), 2);
+
+        // ratio=1 → no overview qualifies (finest overview has scale=2 > 1) → full res.
+        assert_eq!(select_overview_by_ratio(&dims, 1.0), 0);
+
+        // ratio=16 → coarsest overview exactly matches → index 4.
+        assert_eq!(select_overview_by_ratio(&dims, 16.0), 4);
+
+        // ratio beyond the coarsest overview still returns the coarsest, not "no match".
+        assert_eq!(select_overview_by_ratio(&dims, 100.0), 4);
+
+        // Empty dimensions → full resolution (no panic).
+        assert_eq!(select_overview_by_ratio(&[], 8.0), 0);
     }
 }

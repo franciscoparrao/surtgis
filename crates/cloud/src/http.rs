@@ -4,6 +4,7 @@ use crate::auth::CloudAuth;
 use crate::error::{CloudError, Result};
 use reqwest::Client;
 use std::borrow::Cow;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 /// Translate `s3://bucket/key` into `https://bucket.s3.amazonaws.com/key` so
@@ -304,6 +305,54 @@ impl HttpClient {
     pub fn request_timeout(&self) -> Duration {
         self.request_timeout
     }
+}
+
+// ---------------------------------------------------------------------------
+// Process-wide shared client
+// ---------------------------------------------------------------------------
+
+/// Timeout/retry configuration used to build the [`shared_client`] singleton.
+///
+/// Matches [`crate::cog_reader::CogReaderOptions::default`]'s
+/// `request_timeout`/`max_retries` — the common case for every native call
+/// site in this workspace today.
+const SHARED_CLIENT_TIMEOUT: Duration = Duration::from_secs(30);
+const SHARED_CLIENT_MAX_RETRIES: u32 = 3;
+
+static SHARED_CLIENT: OnceLock<Arc<HttpClient>> = OnceLock::new();
+
+/// Return the process-wide shared [`HttpClient`], building it on first use.
+///
+/// # Why this exists
+///
+/// [`HttpClient::new`] builds a fresh `reqwest::Client` — and therefore a
+/// fresh connection pool and TLS config — every time it's called. Two
+/// `HttpClient`s pointed at the same host never share a socket, so opening
+/// the same remote COG through N separate `HttpClient::new()` calls costs N
+/// TLS handshakes to that host instead of one warm, reused connection. The
+/// STAC composite pipeline reopens the same COG many times (once per
+/// strip/tile task), so a shared client — and therefore a shared pool — is
+/// one of the largest available wall-clock wins on that path.
+///
+/// This function lazily builds **one** `HttpClient` for the whole process
+/// (via [`OnceLock`]) using the same pool tuning as [`HttpClient::new`] (see
+/// its docs for the `pool_max_idle_per_host` / keepalive rationale), and
+/// hands out cheap `Arc` clones of it thereafter.
+///
+/// Callers that need a different timeout or retry policy than
+/// [`SHARED_CLIENT_TIMEOUT`]/[`SHARED_CLIENT_MAX_RETRIES`] should keep using
+/// [`HttpClient::new`] directly to build their own private client — this
+/// function does not replace that constructor, it's an additional, opt-in
+/// fast path for the common case.
+pub fn shared_client() -> Arc<HttpClient> {
+    SHARED_CLIENT
+        .get_or_init(|| {
+            Arc::new(
+                HttpClient::new(SHARED_CLIENT_TIMEOUT, SHARED_CLIENT_MAX_RETRIES)
+                    .expect("failed to build process-wide shared reqwest client"),
+            )
+        })
+        .clone()
 }
 
 // ---------------------------------------------------------------------------
@@ -608,6 +657,41 @@ mod tests {
             parse_imf_fixdate("Wed, 01 Mar 2000 00:00:00 GMT"),
             Some(951_868_800)
         );
+    }
+
+    // ── Shared client ────────────────────────────────────────────────
+
+    /// `shared_client()` must hand out clones of the *same* underlying
+    /// `HttpClient` (and therefore the same `reqwest::Client` / connection
+    /// pool) across repeated calls, rather than constructing a fresh one
+    /// each time. This is the whole point of the singleton: reopening the
+    /// same COG many times should reuse warm sockets instead of paying a
+    /// fresh TLS handshake per open.
+    #[test]
+    fn shared_client_returns_the_same_instance_every_call() {
+        let a = shared_client();
+        let b = shared_client();
+        assert!(
+            Arc::ptr_eq(&a, &b),
+            "shared_client() must return clones of one process-wide instance"
+        );
+    }
+
+    /// Calling `shared_client()` concurrently from many threads must still
+    /// converge on a single constructed instance (guards against a naive
+    /// non-atomic "check then build" race).
+    #[test]
+    fn shared_client_is_singleton_under_concurrent_first_use() {
+        let handles: Vec<_> = (0..16).map(|_| std::thread::spawn(shared_client)).collect();
+        let clients: Vec<Arc<HttpClient>> =
+            handles.into_iter().map(|h| h.join().unwrap()).collect();
+        let first = &clients[0];
+        for c in &clients[1..] {
+            assert!(
+                Arc::ptr_eq(first, c),
+                "all threads must observe the same client"
+            );
+        }
     }
 
     #[test]

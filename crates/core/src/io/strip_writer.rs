@@ -190,31 +190,59 @@ where
             .map_err(|e| Error::Other(format!("Cannot write nodata tag: {}", e)))?;
     }
 
-    // Collect all strip data via callbacks, then write using write_data()
-    // which correctly applies compression. (write_strip() alone does not
-    // activate the compression encoder — it's a tiff crate design quirk.)
     let rps = config.rows_per_strip as usize;
     let num_strips = (config.rows + rps - 1) / rps;
-    let mut all_data: Vec<f32> = Vec::with_capacity(config.rows * config.cols);
 
-    for strip_idx in 0..num_strips {
-        let strip_rows = if strip_idx == num_strips - 1 {
-            config.rows - strip_idx * rps
-        } else {
-            rps
-        };
-
-        let data = produce_strip(strip_idx, strip_rows)?;
-
-        // Convert f64 -> f32 and accumulate
-        all_data.extend(data.iter().map(|&v| v as f32));
+    if config.compress {
+        // KNOWN LIMITATION OF THE `tiff` CRATE (0.10.3), not a bug in this
+        // module: the DEFLATE compressor is only ever engaged by
+        // `ImageEncoder::write_data()`, which internally toggles the
+        // encoder's compression state (`writer.set_compression` /
+        // `reset_compression`) around its own strip loop — and that
+        // toggle lives on a private field with no public accessor.
+        // `ImageEncoder::write_strip()` called directly never activates
+        // it, so bytes would be written raw while the TIFF tag still
+        // claims `Compression::Deflate`, producing a corrupt file. Since
+        // `write_data()` takes the whole image as one `&[f32]` slice,
+        // genuinely bounded-memory *compressed* streaming isn't reachable
+        // through this crate's public API — we fall back to buffering the
+        // full image here, same as the batch writer in `native.rs`.
+        let mut all_data: Vec<f32> = Vec::with_capacity(config.rows * config.cols);
+        for strip_idx in 0..num_strips {
+            let strip_rows = if strip_idx == num_strips - 1 {
+                config.rows - strip_idx * rps
+            } else {
+                rps
+            };
+            let data = produce_strip(strip_idx, strip_rows)?;
+            all_data.extend(data.iter().map(|&v| v as f32));
+        }
+        image
+            .write_data(&all_data)
+            .map_err(|e| Error::Other(format!("Cannot write image data: {}", e)))?;
+    } else {
+        // Uncompressed path: genuine bounded-memory streaming. The
+        // encoder's compressor defaults to `Uncompressed` and is never
+        // touched unless `write_data()` runs, so calling `write_strip()`
+        // directly, one strip at a time, is safe here and never holds
+        // more than one strip's worth of pixels in memory (plus whatever
+        // `produce_strip` itself allocates for that strip).
+        for strip_idx in 0..num_strips {
+            let strip_rows = if strip_idx == num_strips - 1 {
+                config.rows - strip_idx * rps
+            } else {
+                rps
+            };
+            let data = produce_strip(strip_idx, strip_rows)?;
+            let strip_f32: Vec<f32> = data.iter().map(|&v| v as f32).collect();
+            image
+                .write_strip(&strip_f32)
+                .map_err(|e| Error::Other(format!("Cannot write strip {}: {}", strip_idx, e)))?;
+        }
+        image
+            .finish()
+            .map_err(|e| Error::Other(format!("Cannot finish TIFF image: {}", e)))?;
     }
-
-    // Write all data at once using write_data(), which correctly
-    // activates compression (set_compression / reset_compression).
-    image
-        .write_data(&all_data)
-        .map_err(|e| Error::Other(format!("Cannot write image data: {}", e)))?;
 
     // Atomic rename: only appears at final path if write completed successfully
     std::fs::rename(&tmp_path, path)?;
@@ -270,5 +298,109 @@ mod tests {
         assert!(reader.crs().is_some());
         assert_eq!(reader.crs().unwrap().epsg(), Some(32719));
         // TempDir cleans up on drop.
+    }
+
+    /// Regression for the `compress: true` branch: it still buffers the
+    /// full image (a real `tiff`-crate API limitation, documented at the
+    /// call site) rather than streaming strip-by-strip, but it must
+    /// remain byte-for-byte correct after being split out of the
+    /// uncompressed streaming path. Single strip (whole image), so it
+    /// doesn't trip the multi-strip corruption documented in
+    /// `known_bug_multi_strip_deflate_corrupts_rows_after_first_strip`.
+    #[test]
+    fn test_write_and_read_back_compressed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("surtgis_strip_writer_compressed.tif");
+        let path = path.as_path();
+        let rows = 80;
+        let cols = 40;
+        let config = StripWriterConfig {
+            rows,
+            cols,
+            transform: GeoTransform::new(0.0, 500.0, 5.0, -5.0),
+            crs: Some(CRS::from_epsg(4326)),
+            nodata: Some(f64::NAN),
+            compress: true,
+            rows_per_strip: rows as u32,
+        };
+
+        write_geotiff_streaming(path, &config, |_strip_idx, strip_rows| {
+            let mut data = Array2::<f64>::zeros((strip_rows, cols));
+            for r in 0..strip_rows {
+                for c in 0..cols {
+                    data[[r, c]] = (r * 100 + c) as f64 * 0.5;
+                }
+            }
+            Ok(data)
+        })
+        .unwrap();
+
+        let mut reader = StripReader::open(path).unwrap();
+        assert_eq!(reader.rows(), rows);
+        assert_eq!(reader.cols(), cols);
+        assert_eq!(reader.crs().unwrap().epsg(), Some(4326));
+
+        let block = reader.read_rows(0, rows).unwrap();
+        for r in 0..rows {
+            for c in 0..cols {
+                let expected = (r * 100 + c) as f64 * 0.5;
+                assert_eq!(block[[r, c]], expected, "mismatch at ({}, {})", r, c);
+            }
+        }
+    }
+
+    /// NOT a regression introduced by this module's streaming refactor —
+    /// this reproduces against the unmodified `compress: true` path,
+    /// which buffers the full image and hands it to the `tiff` crate's
+    /// own `ImageEncoder::write_data()` unchanged. Rows at/after the
+    /// second DEFLATE-compressed strip come back as zeros: with
+    /// `rows_per_strip = 40` on an 80-row image (2 strips), row 40
+    /// reads back as `0.0` instead of `2000.0`, confirmed both through
+    /// `StripReader` and the plain full-image `read_geotiff` path (so
+    /// it's a write-side corruption, not a `StripReader` bug). Single
+    /// strip (`rows_per_strip >= rows`) is unaffected — see
+    /// `test_write_and_read_back_compressed` above.
+    ///
+    /// Ignored rather than fixed: out of scope for the memory-bound
+    /// streaming work this module was touched for (P6/P7), and worth a
+    /// dedicated investigation/upstream report against `tiff` 0.10.3's
+    /// multi-strip `write_data`/`Compressor::Deflate` interaction.
+    #[test]
+    #[ignore = "pre-existing bug: multi-strip Deflate write_data corrupts rows past the first strip (see doc comment); unrelated to the streaming/memory-bound work done here"]
+    fn known_bug_multi_strip_deflate_corrupts_rows_after_first_strip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("surtgis_strip_writer_multistrip_bug.tif");
+        let path = path.as_path();
+        let rows = 80;
+        let cols = 40;
+        let config = StripWriterConfig {
+            rows,
+            cols,
+            transform: GeoTransform::new(0.0, 500.0, 5.0, -5.0),
+            crs: Some(CRS::from_epsg(4326)),
+            nodata: Some(f64::NAN),
+            compress: true,
+            rows_per_strip: 40, // 2 strips over 80 rows
+        };
+
+        write_geotiff_streaming(path, &config, |_strip_idx, strip_rows| {
+            let mut data = Array2::<f64>::zeros((strip_rows, cols));
+            for r in 0..strip_rows {
+                for c in 0..cols {
+                    data[[r, c]] = (r * 100 + c) as f64 * 0.5;
+                }
+            }
+            Ok(data)
+        })
+        .unwrap();
+
+        let mut reader = StripReader::open(path).unwrap();
+        let block = reader.read_rows(0, rows).unwrap();
+        for r in 0..rows {
+            for c in 0..cols {
+                let expected = (r * 100 + c) as f64 * 0.5;
+                assert_eq!(block[[r, c]], expected, "mismatch at ({}, {})", r, c);
+            }
+        }
     }
 }
