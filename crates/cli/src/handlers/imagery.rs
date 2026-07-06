@@ -387,12 +387,12 @@ pub fn handle(algorithm: ImageryCommands, compress: bool) -> Result<()> {
                 .collect::<Result<Vec<_>>>()?;
             let refs: Vec<&surtgis_core::Raster<f64>> = rasters.iter().collect();
             let start = Instant::now();
-            // NativeGeoTiffOptions, not io::GeoTiffOptions: under the `gdal`
-            // feature the latter is the GDAL variant, but the multi-band writer
-            // is native-only and needs the native options type.
+            // write_geotiff_multiband is native-only, but GeoTiffOptions is now
+            // a single struct shared by both backends (see core::io::options).
             let opts = if compress {
-                Some(surtgis_core::io::NativeGeoTiffOptions {
+                Some(surtgis_core::io::GeoTiffOptions {
                     compression: "DEFLATE".to_string(),
+                    ..Default::default()
                 })
             } else {
                 None

@@ -116,6 +116,114 @@ impl Algorithm for Curvature {
     }
 }
 
+/// Per-cell curvature kernel shared by the batch (`curvature`) and
+/// streaming (`CurvatureStreaming::process_chunk`) paths.
+///
+/// `z1..z9` is the validated (non-NaN) 3×3 neighborhood:
+/// ```text
+/// z1 z2 z3
+/// z4 z5 z6
+/// z7 z8 z9
+/// ```
+/// `two_cs`/`cs6`/`cs2`/`cs2_3`/`cs2_4` are the method-specific cell-size
+/// constants derived from a single scalar `cell_size` (curvature does not
+/// currently apply the per-row geographic correction used by
+/// slope/aspect/hillshade). `zf` is the vertical exaggeration (GDAL
+/// convention: all five partial derivatives are linear in z, so scaling
+/// them by `zf` after computation is exactly `z' = zf*z`).
+///
+/// Computes the Evans-Young or Zevenbergen-Thorne partial derivatives
+/// (`p, q, r, s, t`) and then the requested curvature type/formula.
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn curvature_kernel(
+    z1: f64,
+    z2: f64,
+    z3: f64,
+    z4: f64,
+    z5: f64,
+    z6: f64,
+    z7: f64,
+    z8: f64,
+    z9: f64,
+    two_cs: f64,
+    cs6: f64,
+    cs2: f64,
+    cs2_3: f64,
+    cs2_4: f64,
+    zf: f64,
+    method: DerivativeMethod,
+    formula: CurvatureFormula,
+    curvature_type: CurvatureType,
+) -> f64 {
+    // Compute partial derivatives based on method
+    let (p, q, r, s, t) = match method {
+        DerivativeMethod::EvansYoung => {
+            let p = (z3 + z6 + z9 - z1 - z4 - z7) / cs6;
+            let q = (z1 + z2 + z3 - z7 - z8 - z9) / cs6;
+            let r = (z1 + z3 + z4 + z6 + z7 + z9 - 2.0 * (z2 + z5 + z8)) / cs2_3;
+            let s = (z3 + z7 - z1 - z9) / cs2_4;
+            let t = (z1 + z2 + z3 + z7 + z8 + z9 - 2.0 * (z4 + z5 + z6)) / cs2_3;
+            (p, q, r, s, t)
+        }
+        DerivativeMethod::ZevenbergenThorne => {
+            let p = (z6 - z4) / two_cs;
+            let q = (z2 - z8) / two_cs;
+            let r = (z4 - 2.0 * z5 + z6) / cs2;
+            let s = (z3 - z1 - z9 + z7) / (4.0 * cs2);
+            let t = (z2 - 2.0 * z5 + z8) / cs2;
+            (p, q, r, s, t)
+        }
+    };
+
+    // GDAL-convention z_factor: z' = zf·z (all derivatives linear in z)
+    let (p, q, r, s, t) = (zf * p, zf * q, zf * r, zf * s, zf * t);
+
+    let p2 = p * p;
+    let q2 = q * q;
+    let p2q2 = p2 + q2;
+
+    match (curvature_type, formula) {
+        // --- Full formulas (with denominators) ---
+        (CurvatureType::General, CurvatureFormula::Full) => {
+            let w = 1.0 + p2q2;
+            -((1.0 + q2) * r - 2.0 * p * q * s + (1.0 + p2) * t) / (2.0 * w * w.sqrt())
+        }
+        (CurvatureType::Profile, CurvatureFormula::Full) => {
+            if p2q2 < 1e-20 {
+                0.0
+            } else {
+                let w = 1.0 + p2q2;
+                -(p2 * r + 2.0 * p * q * s + q2 * t) / (p2q2 * w * w.sqrt())
+            }
+        }
+        (CurvatureType::Plan, CurvatureFormula::Full) => {
+            if p2q2 < 1e-20 {
+                0.0
+            } else {
+                let w_sqrt = (1.0 + p2q2).sqrt();
+                -(q2 * r - 2.0 * p * q * s + p2 * t) / (p2q2 * w_sqrt)
+            }
+        }
+        // --- Simplified formulas (legacy Z&T, no denominators) ---
+        (CurvatureType::General, CurvatureFormula::Simplified) => -(r + t) / 2.0,
+        (CurvatureType::Profile, CurvatureFormula::Simplified) => {
+            if p2q2 < 1e-20 {
+                0.0
+            } else {
+                -(p2 * r + 2.0 * p * q * s + q2 * t) / p2q2
+            }
+        }
+        (CurvatureType::Plan, CurvatureFormula::Simplified) => {
+            if p2q2 < 1e-20 {
+                0.0
+            } else {
+                -(q2 * r - 2.0 * p * q * s + p2 * t) / p2q2
+            }
+        }
+    }
+}
+
 /// Calculate surface curvature from a DEM
 ///
 /// Supports Evans-Young (default) and Zevenbergen-Thorne derivative methods,
@@ -148,6 +256,7 @@ pub fn curvature(dem: &Raster<f64>, params: CurvatureParams) -> Result<Raster<f6
     let cs2 = cs * cs;
     let method = params.method;
     let formula = params.formula;
+    let curvature_type = params.curvature_type;
 
     // Precompute method-specific constants
     let two_cs = 2.0 * cs;
@@ -155,113 +264,59 @@ pub fn curvature(dem: &Raster<f64>, params: CurvatureParams) -> Result<Raster<f6
     let cs2_3 = 3.0 * cs2;
     let cs2_4 = 4.0 * cs2;
 
-    let data = dem.data();
+    let data = dem
+        .data()
+        .as_slice()
+        .ok_or_else(|| Error::Other("raster data must be contiguous".into()))?;
 
-    let output_data: Vec<f64> = (0..rows)
-        .into_par_iter()
-        .flat_map(|row| {
-            let mut row_data = vec![f64::NAN; cols];
+    let output_data = par_map_rows(rows, cols, |row, out_row| {
+        if row == 0 || row == rows - 1 {
+            return; // edge rows stay NaN
+        }
+        let top = &data[(row - 1) * cols..row * cols];
+        let mid = &data[row * cols..(row + 1) * cols];
+        let bot = &data[(row + 1) * cols..(row + 2) * cols];
 
-            for (col, row_data_col) in row_data.iter_mut().enumerate() {
-                // Skip edges first
-                if row == 0 || row == rows - 1 || col == 0 || col == cols - 1 {
-                    continue;
-                }
-
-                let z5 = data[[row, col]];
-                if z5.is_nan() || nodata.is_some_and(|nd| (z5 - nd).abs() < f64::EPSILON) {
-                    continue;
-                }
-
-                let z1 = data[[row - 1, col - 1]];
-                let z2 = data[[row - 1, col]];
-                let z3 = data[[row - 1, col + 1]];
-                let z4 = data[[row, col - 1]];
-                let z6 = data[[row, col + 1]];
-                let z7 = data[[row + 1, col - 1]];
-                let z8 = data[[row + 1, col]];
-                let z9 = data[[row + 1, col + 1]];
-
-                if [z1, z2, z3, z4, z6, z7, z8, z9].iter().any(|v| v.is_nan()) {
-                    continue;
-                }
-
-                // Compute partial derivatives based on method
-                let (p, q, r, s, t) = match method {
-                    DerivativeMethod::EvansYoung => {
-                        let p = (z3 + z6 + z9 - z1 - z4 - z7) / cs6;
-                        let q = (z1 + z2 + z3 - z7 - z8 - z9) / cs6;
-                        let r = (z1 + z3 + z4 + z6 + z7 + z9 - 2.0 * (z2 + z5 + z8)) / cs2_3;
-                        let s = (z3 + z7 - z1 - z9) / cs2_4;
-                        let t = (z1 + z2 + z3 + z7 + z8 + z9 - 2.0 * (z4 + z5 + z6)) / cs2_3;
-                        (p, q, r, s, t)
-                    }
-                    DerivativeMethod::ZevenbergenThorne => {
-                        let p = (z6 - z4) / two_cs;
-                        let q = (z2 - z8) / two_cs;
-                        let r = (z4 - 2.0 * z5 + z6) / cs2;
-                        let s = (z3 - z1 - z9 + z7) / (4.0 * cs2);
-                        let t = (z2 - 2.0 * z5 + z8) / cs2;
-                        (p, q, r, s, t)
-                    }
-                };
-
-                // GDAL-convention z_factor: z' = zf·z (all derivatives linear in z)
-                let (p, q, r, s, t) = (zf * p, zf * q, zf * r, zf * s, zf * t);
-
-                let p2 = p * p;
-                let q2 = q * q;
-                let p2q2 = p2 + q2;
-
-                *row_data_col = match (params.curvature_type, formula) {
-                    // --- Full formulas (with denominators) ---
-                    (CurvatureType::General, CurvatureFormula::Full) => {
-                        let w = 1.0 + p2q2;
-                        -((1.0 + q2) * r - 2.0 * p * q * s + (1.0 + p2) * t) / (2.0 * w * w.sqrt())
-                    }
-                    (CurvatureType::Profile, CurvatureFormula::Full) => {
-                        if p2q2 < 1e-20 {
-                            0.0
-                        } else {
-                            let w = 1.0 + p2q2;
-                            -(p2 * r + 2.0 * p * q * s + q2 * t) / (p2q2 * w * w.sqrt())
-                        }
-                    }
-                    (CurvatureType::Plan, CurvatureFormula::Full) => {
-                        if p2q2 < 1e-20 {
-                            0.0
-                        } else {
-                            let w_sqrt = (1.0 + p2q2).sqrt();
-                            -(q2 * r - 2.0 * p * q * s + p2 * t) / (p2q2 * w_sqrt)
-                        }
-                    }
-                    // --- Simplified formulas (legacy Z&T, no denominators) ---
-                    (CurvatureType::General, CurvatureFormula::Simplified) => -(r + t) / 2.0,
-                    (CurvatureType::Profile, CurvatureFormula::Simplified) => {
-                        if p2q2 < 1e-20 {
-                            0.0
-                        } else {
-                            -(p2 * r + 2.0 * p * q * s + q2 * t) / p2q2
-                        }
-                    }
-                    (CurvatureType::Plan, CurvatureFormula::Simplified) => {
-                        if p2q2 < 1e-20 {
-                            0.0
-                        } else {
-                            -(q2 * r - 2.0 * p * q * s + p2 * t) / p2q2
-                        }
-                    }
-                };
+        for col in 1..cols - 1 {
+            let z5 = mid[col];
+            if z5.is_nan() || nodata.is_some_and(|nd| z5 == nd) {
+                continue; // stays NaN
             }
 
-            row_data
-        })
-        .collect();
+            let (z1, z2, z3) = (top[col - 1], top[col], top[col + 1]);
+            let (z4, z6) = (mid[col - 1], mid[col + 1]);
+            let (z7, z8, z9) = (bot[col - 1], bot[col], bot[col + 1]);
+
+            if [z1, z2, z3, z4, z6, z7, z8, z9].iter().any(|v| v.is_nan()) {
+                continue; // stays NaN
+            }
+
+            out_row[col] = curvature_kernel(
+                z1,
+                z2,
+                z3,
+                z4,
+                z5,
+                z6,
+                z7,
+                z8,
+                z9,
+                two_cs,
+                cs6,
+                cs2,
+                cs2_3,
+                cs2_4,
+                zf,
+                method,
+                formula,
+                curvature_type,
+            );
+        }
+    });
 
     let mut output = dem.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() = Array2::from_shape_vec((rows, cols), output_data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() = output_data;
 
     Ok(output)
 }
@@ -319,6 +374,7 @@ impl surtgis_core::WindowAlgorithm for CurvatureStreaming {
         let cs2 = cs * cs;
         let method = self.method;
         let formula = self.formula;
+        let curvature_type = self.curvature_type;
 
         // Precompute method-specific constants
         let two_cs = 2.0 * cs;
@@ -342,7 +398,7 @@ impl surtgis_core::WindowAlgorithm for CurvatureStreaming {
                 }
 
                 let z5 = input[[ir, c]];
-                if z5.is_nan() || nodata.map_or(false, |nd| (z5 - nd).abs() < f64::EPSILON) {
+                if z5.is_nan() || nodata.is_some_and(|nd| z5 == nd) {
                     output[[r, c]] = f64::NAN;
                     continue;
                 }
@@ -361,73 +417,26 @@ impl surtgis_core::WindowAlgorithm for CurvatureStreaming {
                     continue;
                 }
 
-                // Compute partial derivatives based on method
-                let (p, q, r_d, s, t) = match method {
-                    DerivativeMethod::EvansYoung => {
-                        let p = (z3 + z6 + z9 - z1 - z4 - z7) / cs6;
-                        let q = (z1 + z2 + z3 - z7 - z8 - z9) / cs6;
-                        let r_d = (z1 + z3 + z4 + z6 + z7 + z9 - 2.0 * (z2 + z5 + z8)) / cs2_3;
-                        let s = (z3 + z7 - z1 - z9) / cs2_4;
-                        let t = (z1 + z2 + z3 + z7 + z8 + z9 - 2.0 * (z4 + z5 + z6)) / cs2_3;
-                        (p, q, r_d, s, t)
-                    }
-                    DerivativeMethod::ZevenbergenThorne => {
-                        let p = (z6 - z4) / two_cs;
-                        let q = (z2 - z8) / two_cs;
-                        let r_d = (z4 - 2.0 * z5 + z6) / cs2;
-                        let s = (z3 - z1 - z9 + z7) / (4.0 * cs2);
-                        let t = (z2 - 2.0 * z5 + z8) / cs2;
-                        (p, q, r_d, s, t)
-                    }
-                };
-
-                // GDAL-convention z_factor: z' = zf·z (derivatives linear in z)
-                let (p, q, r_d, s, t) = (zf * p, zf * q, zf * r_d, zf * s, zf * t);
-
-                let p2 = p * p;
-                let q2 = q * q;
-                let p2q2 = p2 + q2;
-
-                output[[r, c]] = match (self.curvature_type, formula) {
-                    // --- Full formulas (with denominators) ---
-                    (CurvatureType::General, CurvatureFormula::Full) => {
-                        let w = 1.0 + p2q2;
-                        -((1.0 + q2) * r_d - 2.0 * p * q * s + (1.0 + p2) * t)
-                            / (2.0 * w * w.sqrt())
-                    }
-                    (CurvatureType::Profile, CurvatureFormula::Full) => {
-                        if p2q2 < 1e-20 {
-                            0.0
-                        } else {
-                            let w = 1.0 + p2q2;
-                            -(p2 * r_d + 2.0 * p * q * s + q2 * t) / (p2q2 * w * w.sqrt())
-                        }
-                    }
-                    (CurvatureType::Plan, CurvatureFormula::Full) => {
-                        if p2q2 < 1e-20 {
-                            0.0
-                        } else {
-                            let w_sqrt = (1.0 + p2q2).sqrt();
-                            -(q2 * r_d - 2.0 * p * q * s + p2 * t) / (p2q2 * w_sqrt)
-                        }
-                    }
-                    // --- Simplified formulas (legacy Z&T, no denominators) ---
-                    (CurvatureType::General, CurvatureFormula::Simplified) => -(r_d + t) / 2.0,
-                    (CurvatureType::Profile, CurvatureFormula::Simplified) => {
-                        if p2q2 < 1e-20 {
-                            0.0
-                        } else {
-                            -(p2 * r_d + 2.0 * p * q * s + q2 * t) / p2q2
-                        }
-                    }
-                    (CurvatureType::Plan, CurvatureFormula::Simplified) => {
-                        if p2q2 < 1e-20 {
-                            0.0
-                        } else {
-                            -(q2 * r_d - 2.0 * p * q * s + p2 * t) / p2q2
-                        }
-                    }
-                };
+                output[[r, c]] = curvature_kernel(
+                    z1,
+                    z2,
+                    z3,
+                    z4,
+                    z5,
+                    z6,
+                    z7,
+                    z8,
+                    z9,
+                    two_cs,
+                    cs6,
+                    cs2,
+                    cs2_3,
+                    cs2_4,
+                    zf,
+                    method,
+                    formula,
+                    curvature_type,
+                );
             }
         }
     }

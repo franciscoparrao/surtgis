@@ -43,6 +43,94 @@ impl Algorithm for Aspect {
     }
 }
 
+/// Threshold below which both gradient components are considered flat
+/// (no well-defined aspect direction).
+const FLAT_THRESHOLD: f64 = 1e-10;
+
+/// Per-cell Horn (1981) aspect-bearing kernel shared by the batch
+/// (`aspect`) and streaming (`AspectStreaming::process_row`) paths.
+///
+/// `a..i` is the validated (non-NaN) 3×3 neighborhood (see [`slope_kernel`
+/// docs](super::slope) for the layout). `eight_dx`/`eight_dy` are
+/// `8 * cell_size` for each axis, already resolved for the current row.
+///
+/// Returns `None` when the surface is flat (both gradient components
+/// below [`FLAT_THRESHOLD`]) — the caller decides how to encode that
+/// (batch uses a `-1.0` sentinel, streaming uses `NaN`). Otherwise
+/// returns the compass bearing in radians, normalized to `[0, 2π)`.
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn aspect_bearing_rad(
+    a: f64,
+    b: f64,
+    c: f64,
+    d: f64,
+    f: f64,
+    g: f64,
+    h: f64,
+    i: f64,
+    eight_dx: f64,
+    eight_dy: f64,
+) -> Option<f64> {
+    // Horn's method for gradients
+    let dz_dx = ((c + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_dx;
+    let dz_dy = ((g + 2.0 * h + i) - (a + 2.0 * b + c)) / eight_dy;
+
+    // Check for flat area
+    if dz_dx.abs() < FLAT_THRESHOLD && dz_dy.abs() < FLAT_THRESHOLD {
+        return None;
+    }
+
+    // Compute aspect as compass bearing (0=North, clockwise)
+    //
+    // In pixel space:
+    //   dz_dx > 0 → elevation increases eastward
+    //   dz_dy > 0 → elevation increases with row (= southward in north-up image)
+    //
+    // Descent direction in geographic (east, north) space:
+    //   east component  = -dz_dx
+    //   north component = dz_dy  (inverted because pixel Y opposes geo Y)
+    //
+    // Compass bearing = atan2(east, north)
+    let aspect_north = (-dz_dx).atan2(dz_dy);
+    Some(if aspect_north < 0.0 {
+        aspect_north + 2.0 * PI
+    } else {
+        aspect_north
+    })
+}
+
+/// Format an aspect bearing (radians, `[0, 2π)`) according to `output_format`.
+/// Shared by the batch and streaming paths.
+#[inline]
+fn format_aspect(aspect_north: f64, output_format: AspectOutput) -> f64 {
+    match output_format {
+        AspectOutput::Degrees => aspect_north.to_degrees(),
+        AspectOutput::Radians => aspect_north,
+        AspectOutput::Compass => {
+            // Convert to 8-direction compass (1-8)
+            let deg = aspect_north.to_degrees();
+            if !(22.5..337.5).contains(&deg) {
+                1.0 // N
+            } else if deg < 67.5 {
+                2.0 // NE
+            } else if deg < 112.5 {
+                3.0 // E
+            } else if deg < 157.5 {
+                4.0 // SE
+            } else if deg < 202.5 {
+                5.0 // S
+            } else if deg < 247.5 {
+                6.0 // SW
+            } else if deg < 292.5 {
+                7.0 // W
+            } else {
+                8.0 // NW
+            }
+        }
+    }
+}
+
 /// Calculate aspect from a DEM
 ///
 /// Uses Horn's (1981) method. Aspect is measured clockwise from north:
@@ -69,9 +157,6 @@ pub fn aspect(dem: &Raster<f64>, output_format: AspectOutput) -> Result<Raster<f
     // latitude — skipping the division distorts the direction.
     let cell_sizes = super::spheroidal_grid::CellSizes::for_dem(dem);
 
-    // Threshold for considering a surface flat
-    const FLAT_THRESHOLD: f64 = 1e-10;
-
     let data = dem
         .data()
         .as_slice()
@@ -95,7 +180,7 @@ pub fn aspect(dem: &Raster<f64>, output_format: AspectOutput) -> Result<Raster<f
             {
                 // Get center value
                 let e = mid[col];
-                if e.is_nan() || nodata.is_some_and(|nd| (e - nd).abs() < f64::EPSILON) {
+                if e.is_nan() || nodata.is_some_and(|nd| e == nd) {
                     continue;
                 }
 
@@ -117,58 +202,11 @@ pub fn aspect(dem: &Raster<f64>, output_format: AspectOutput) -> Result<Raster<f
                     continue;
                 }
 
-                // Horn's method for gradients
-                let dz_dx = ((c + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_dx;
-                let dz_dy = ((g + 2.0 * h + i) - (a + 2.0 * b + c)) / eight_dy;
-
-                // Check for flat area
-                if dz_dx.abs() < FLAT_THRESHOLD && dz_dy.abs() < FLAT_THRESHOLD {
-                    *row_data_col = -1.0;
-                    continue;
-                }
-
-                // Compute aspect as compass bearing (0=North, clockwise)
-                //
-                // In pixel space:
-                //   dz_dx > 0 → elevation increases eastward
-                //   dz_dy > 0 → elevation increases with row (= southward in north-up image)
-                //
-                // Descent direction in geographic (east, north) space:
-                //   east component  = -dz_dx
-                //   north component = dz_dy  (inverted because pixel Y opposes geo Y)
-                //
-                // Compass bearing = atan2(east, north)
-                let aspect_north = (-dz_dx).atan2(dz_dy);
-                let aspect_north = if aspect_north < 0.0 {
-                    aspect_north + 2.0 * PI
-                } else {
-                    aspect_north
-                };
-
-                *row_data_col = match output_format {
-                    AspectOutput::Degrees => aspect_north.to_degrees(),
-                    AspectOutput::Radians => aspect_north,
-                    AspectOutput::Compass => {
-                        // Convert to 8-direction compass (1-8)
-                        let deg = aspect_north.to_degrees();
-                        if !(22.5..337.5).contains(&deg) {
-                            1.0 // N
-                        } else if deg < 67.5 {
-                            2.0 // NE
-                        } else if deg < 112.5 {
-                            3.0 // E
-                        } else if deg < 157.5 {
-                            4.0 // SE
-                        } else if deg < 202.5 {
-                            5.0 // S
-                        } else if deg < 247.5 {
-                            6.0 // SW
-                        } else if deg < 292.5 {
-                            7.0 // W
-                        } else {
-                            8.0 // NW
-                        }
-                    }
+                *row_data_col = match aspect_bearing_rad(a, b, c, d, f, g, h, i, eight_dx, eight_dy)
+                {
+                    // Flat surface: batch's nodata/flat sentinel is -1.0 (not NaN)
+                    None => -1.0,
+                    Some(bearing) => format_aspect(bearing, output_format),
                 };
             }
         }
@@ -220,8 +258,6 @@ impl AspectStreaming {
         eight_dx: f64,
         eight_dy: f64,
     ) {
-        const FLAT_THRESHOLD: f64 = 1e-10;
-
         if ir == 0 || ir >= in_rows - 1 {
             // Edge row — fill with NaN
             for c in 0..cols {
@@ -237,7 +273,7 @@ impl AspectStreaming {
             }
 
             let e = input[[ir, c]];
-            if e.is_nan() || nodata.map_or(false, |nd| (e - nd).abs() < f64::EPSILON) {
+            if e.is_nan() || nodata.is_some_and(|nd| e == nd) {
                 output[[r, c]] = f64::NAN;
                 continue;
             }
@@ -256,47 +292,10 @@ impl AspectStreaming {
                 continue;
             }
 
-            // Horn's method for gradients
-            let dz_dx = ((cv + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_dx;
-            let dz_dy = ((g + 2.0 * h + i) - (a + 2.0 * b + cv)) / eight_dy;
-
-            // Check for flat area
-            if dz_dx.abs() < FLAT_THRESHOLD && dz_dy.abs() < FLAT_THRESHOLD {
-                output[[r, c]] = f64::NAN;
-                continue;
-            }
-
-            // Compass bearing (0=North, clockwise)
-            let aspect_north = (-dz_dx).atan2(dz_dy);
-            let aspect_north = if aspect_north < 0.0 {
-                aspect_north + 2.0 * PI
-            } else {
-                aspect_north
-            };
-
-            output[[r, c]] = match self.output_format {
-                AspectOutput::Degrees => aspect_north.to_degrees(),
-                AspectOutput::Radians => aspect_north,
-                AspectOutput::Compass => {
-                    let deg = aspect_north.to_degrees();
-                    if !(22.5..337.5).contains(&deg) {
-                        1.0 // N
-                    } else if deg < 67.5 {
-                        2.0 // NE
-                    } else if deg < 112.5 {
-                        3.0 // E
-                    } else if deg < 157.5 {
-                        4.0 // SE
-                    } else if deg < 202.5 {
-                        5.0 // S
-                    } else if deg < 247.5 {
-                        6.0 // SW
-                    } else if deg < 292.5 {
-                        7.0 // W
-                    } else {
-                        8.0 // NW
-                    }
-                }
+            // Streaming's nodata/flat sentinel is NaN (not batch's -1.0)
+            output[[r, c]] = match aspect_bearing_rad(a, b, cv, d, f, g, h, i, eight_dx, eight_dy) {
+                None => f64::NAN,
+                Some(bearing) => format_aspect(bearing, self.output_format),
             };
         }
     }

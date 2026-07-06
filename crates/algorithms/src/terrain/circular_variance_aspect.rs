@@ -67,7 +67,7 @@ fn circular_variance_kernel(
 
             // Compute aspect at (nr, nc) using Horn's 3x3 stencil
             let nv = data[[nr, nc]];
-            if nv.is_nan() || nodata.is_some_and(|nd| (nv - nd).abs() < f64::EPSILON) {
+            if nv.is_nan() || nodata.is_some_and(|nd| nv == nd) {
                 continue;
             }
 
@@ -130,7 +130,7 @@ pub fn circular_variance_aspect(
 
             for (col, out) in row_data.iter_mut().enumerate() {
                 let center = unsafe { dem.get_unchecked(row, col) };
-                if center.is_nan() || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON) {
+                if dem.is_nodata(center) {
                     continue;
                 }
 
@@ -213,9 +213,7 @@ impl surtgis_core::WindowAlgorithm for CircularVarianceStreaming {
                     }
 
                     let center = input[[ir, c]];
-                    if center.is_nan()
-                        || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON)
-                    {
+                    if center.is_nan() || nodata.is_some_and(|nd| center == nd) {
                         *out_v = f64::NAN;
                         continue;
                     }

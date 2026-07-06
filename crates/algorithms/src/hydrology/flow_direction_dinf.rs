@@ -71,7 +71,6 @@ pub struct DinfResult {
 /// -1.0 indicates a pit/flat cell (no downslope).
 pub fn flow_direction_dinf(dem: &Raster<f64>) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
-    let nodata = dem.nodata();
     let cs = dem.cell_size();
     let diag = cs * std::f64::consts::SQRT_2;
 
@@ -80,7 +79,7 @@ pub fn flow_direction_dinf(dem: &Raster<f64>) -> Result<Raster<f64>> {
     for row in 0..rows {
         for col in 0..cols {
             let z0 = unsafe { dem.get_unchecked(row, col) };
-            if z0.is_nan() || nodata.is_some_and(|nd| (z0 - nd).abs() < f64::EPSILON) {
+            if dem.is_nodata(z0) {
                 continue;
             }
 
@@ -98,7 +97,7 @@ pub fn flow_direction_dinf(dem: &Raster<f64>) -> Result<Raster<f64>> {
                 }
 
                 let nval = unsafe { dem.get_unchecked(nr as usize, nc as usize) };
-                if nval.is_nan() || nodata.is_some_and(|nd| (nval - nd).abs() < f64::EPSILON) {
+                if dem.is_nodata(nval) {
                     all_valid = false;
                     continue;
                 }

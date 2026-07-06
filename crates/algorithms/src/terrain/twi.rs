@@ -7,9 +7,8 @@
 //! High TWI values indicate areas prone to saturation.
 
 use crate::maybe_rayon::*;
-use ndarray::Array2;
+use surtgis_core::Result;
 use surtgis_core::raster::Raster;
-use surtgis_core::{Error, Result};
 
 /// Compute Topographic Wetness Index
 ///
@@ -29,32 +28,26 @@ pub fn twi(flow_acc: &Raster<f64>, slope_rad: &Raster<f64>) -> Result<Raster<f64
     // Minimum slope to avoid ln(inf); ~0.001 rad ≈ 0.057°
     let min_slope = 0.001_f64;
 
-    let output_data: Vec<f64> = (0..rows)
-        .into_par_iter()
-        .flat_map(|row| {
-            let mut row_data = vec![f64::NAN; cols];
-            for (col, row_data_col) in row_data.iter_mut().enumerate() {
-                let acc = unsafe { flow_acc.get_unchecked(row, col) };
-                let slp = unsafe { slope_rad.get_unchecked(row, col) };
+    let output_data = par_map_rows(rows, cols, |row, out_row| {
+        for (col, row_data_col) in out_row.iter_mut().enumerate() {
+            let acc = unsafe { flow_acc.get_unchecked(row, col) };
+            let slp = unsafe { slope_rad.get_unchecked(row, col) };
 
-                if acc.is_nan() || slp.is_nan() {
-                    continue;
-                }
-
-                // Specific catchment area: (acc + 1) * cell_size
-                let sca = (acc + 1.0) * cell_size;
-                let beta = slp.max(min_slope);
-
-                *row_data_col = (sca / beta.tan()).ln();
+            if acc.is_nan() || slp.is_nan() {
+                continue;
             }
-            row_data
-        })
-        .collect();
+
+            // Specific catchment area: (acc + 1) * cell_size
+            let sca = (acc + 1.0) * cell_size;
+            let beta = slp.max(min_slope);
+
+            *row_data_col = (sca / beta.tan()).ln();
+        }
+    });
 
     let mut output = flow_acc.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() = Array2::from_shape_vec((rows, cols), output_data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() = output_data;
 
     Ok(output)
 }

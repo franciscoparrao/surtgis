@@ -11,10 +11,9 @@
 //! quantify downslope controls on local drainage"
 
 use crate::hydrology::{PriorityFloodParams, priority_flood};
-use crate::maybe_rayon::*;
-use ndarray::Array2;
+use crate::maybe_rayon::par_map_rows;
+use surtgis_core::Result;
 use surtgis_core::raster::Raster;
-use surtgis_core::{Error, Result};
 
 /// Parameters for downslope index.
 #[derive(Debug, Clone)]
@@ -47,77 +46,67 @@ pub fn downslope_index(dem: &Raster<f64>, params: DownslopeIndexParams) -> Resul
     // Fill DEM so steepest descent path doesn't get stuck in pits
     let filled = priority_flood(dem, PriorityFloodParams { epsilon: 1e-5 })?;
 
-    let output_data: Vec<f64> = (0..rows)
-        .into_par_iter()
-        .flat_map(|row| {
-            let mut row_data = vec![f64::NAN; cols];
-
-            for (col, out) in row_data.iter_mut().enumerate() {
-                let start_elev = unsafe { dem.get_unchecked(row, col) };
-                if start_elev.is_nan()
-                    || nodata.is_some_and(|nd| (start_elev - nd).abs() < f64::EPSILON)
-                {
-                    continue;
-                }
-
-                let mut cur_r = row;
-                let mut cur_c = col;
-                let mut distance = 0.0;
-
-                for _ in 0..max_steps {
-                    // Check drop on ORIGINAL DEM
-                    let orig_elev = unsafe { dem.get_unchecked(cur_r, cur_c) };
-                    if !orig_elev.is_nan() && start_elev - orig_elev >= drop_threshold {
-                        break;
-                    }
-
-                    // Follow steepest descent on FILLED DEM (avoids pits)
-                    let cur_filled = unsafe { filled.get_unchecked(cur_r, cur_c) };
-                    let mut best_slope = 0.0;
-                    let mut best_idx: Option<usize> = None;
-
-                    for (idx, &(dr, dc)) in D8_OFFSETS.iter().enumerate() {
-                        let nr = cur_r as isize + dr;
-                        let nc = cur_c as isize + dc;
-                        if nr < 0 || nr >= rows as isize || nc < 0 || nc >= cols as isize {
-                            continue;
-                        }
-                        let nv = unsafe { filled.get_unchecked(nr as usize, nc as usize) };
-                        if nv.is_nan() {
-                            continue;
-                        }
-                        let elev_drop = cur_filled - nv;
-                        if elev_drop > 0.0 {
-                            let s = elev_drop / (D8_DIST[idx] * cell_size);
-                            if s > best_slope {
-                                best_slope = s;
-                                best_idx = Some(idx);
-                            }
-                        }
-                    }
-
-                    match best_idx {
-                        Some(idx) => {
-                            let (dr, dc) = D8_OFFSETS[idx];
-                            distance += D8_DIST[idx] * cell_size;
-                            cur_r = (cur_r as isize + dr) as usize;
-                            cur_c = (cur_c as isize + dc) as usize;
-                        }
-                        None => break, // boundary
-                    }
-                }
-
-                *out = distance;
+    let output_data = par_map_rows(rows, cols, |row, out_row| {
+        for (col, out) in out_row.iter_mut().enumerate() {
+            let start_elev = unsafe { dem.get_unchecked(row, col) };
+            if start_elev.is_nan() || nodata.is_some_and(|nd| start_elev == nd) {
+                continue;
             }
 
-            row_data
-        })
-        .collect();
+            let mut cur_r = row;
+            let mut cur_c = col;
+            let mut distance = 0.0;
+
+            for _ in 0..max_steps {
+                // Check drop on ORIGINAL DEM
+                let orig_elev = unsafe { dem.get_unchecked(cur_r, cur_c) };
+                if !orig_elev.is_nan() && start_elev - orig_elev >= drop_threshold {
+                    break;
+                }
+
+                // Follow steepest descent on FILLED DEM (avoids pits)
+                let cur_filled = unsafe { filled.get_unchecked(cur_r, cur_c) };
+                let mut best_slope = 0.0;
+                let mut best_idx: Option<usize> = None;
+
+                for (idx, &(dr, dc)) in D8_OFFSETS.iter().enumerate() {
+                    let nr = cur_r as isize + dr;
+                    let nc = cur_c as isize + dc;
+                    if nr < 0 || nr >= rows as isize || nc < 0 || nc >= cols as isize {
+                        continue;
+                    }
+                    let nv = unsafe { filled.get_unchecked(nr as usize, nc as usize) };
+                    if nv.is_nan() {
+                        continue;
+                    }
+                    let elev_drop = cur_filled - nv;
+                    if elev_drop > 0.0 {
+                        let s = elev_drop / (D8_DIST[idx] * cell_size);
+                        if s > best_slope {
+                            best_slope = s;
+                            best_idx = Some(idx);
+                        }
+                    }
+                }
+
+                match best_idx {
+                    Some(idx) => {
+                        let (dr, dc) = D8_OFFSETS[idx];
+                        distance += D8_DIST[idx] * cell_size;
+                        cur_r = (cur_r as isize + dr) as usize;
+                        cur_c = (cur_c as isize + dc) as usize;
+                    }
+                    None => break, // boundary
+                }
+            }
+
+            *out = distance;
+        }
+    });
 
     let mut output = dem.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() = Array2::from_shape_vec((rows, cols), output_data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() = output_data;
 
     Ok(output)
 }

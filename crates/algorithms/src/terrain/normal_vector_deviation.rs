@@ -13,8 +13,8 @@
 
 use crate::maybe_rayon::*;
 use ndarray::Array2;
+use surtgis_core::Result;
 use surtgis_core::raster::Raster;
-use surtgis_core::{Error, Result};
 
 /// Parameters for normal vector angular deviation.
 #[derive(Debug, Clone)]
@@ -64,7 +64,7 @@ fn normal_deviation_kernel(
             let nc = (col as isize + dc) as usize;
 
             let nv = data[[nr, nc]];
-            if nv.is_nan() || nodata.is_some_and(|nd| (nv - nd).abs() < f64::EPSILON) {
+            if nv.is_nan() || nodata.is_some_and(|nd| nv == nd) {
                 continue;
             }
             if nr == 0 || nr >= rows - 1 || nc == 0 || nc >= cols - 1 {
@@ -140,39 +140,31 @@ pub fn normal_vector_deviation(
 
     let cell_size = dem.cell_size();
 
-    let output_data: Vec<f64> = (0..rows)
-        .into_par_iter()
-        .flat_map(|row| {
-            let mut row_data = vec![f64::NAN; cols];
-
-            for (col, out) in row_data.iter_mut().enumerate() {
-                let center = unsafe { dem.get_unchecked(row, col) };
-                if center.is_nan() || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON) {
-                    continue;
-                }
-
-                let ri = row as isize;
-                let ci = col as isize;
-                let border = r + 1; // need 3x3 stencil at window edges
-                if ri < border
-                    || ri >= rows as isize - border
-                    || ci < border
-                    || ci >= cols as isize - border
-                {
-                    continue;
-                }
-
-                *out = normal_deviation_kernel(data, row, col, r, cell_size, nodata);
+    let output_data = par_map_rows(rows, cols, |row, out_row| {
+        for (col, out) in out_row.iter_mut().enumerate() {
+            let center = unsafe { dem.get_unchecked(row, col) };
+            if center.is_nan() || nodata.is_some_and(|nd| center == nd) {
+                continue;
             }
 
-            row_data
-        })
-        .collect();
+            let ri = row as isize;
+            let ci = col as isize;
+            let border = r + 1; // need 3x3 stencil at window edges
+            if ri < border
+                || ri >= rows as isize - border
+                || ci < border
+                || ci >= cols as isize - border
+            {
+                continue;
+            }
+
+            *out = normal_deviation_kernel(data, row, col, r, cell_size, nodata);
+        }
+    });
 
     let mut output = dem.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() = Array2::from_shape_vec((rows, cols), output_data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() = output_data;
 
     Ok(output)
 }
@@ -222,9 +214,7 @@ impl surtgis_core::WindowAlgorithm for NormalDeviationStreaming {
                     }
 
                     let center = input[[ir, c]];
-                    if center.is_nan()
-                        || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON)
-                    {
+                    if center.is_nan() || nodata.is_some_and(|nd| center == nd) {
                         *out_v = f64::NAN;
                         continue;
                     }

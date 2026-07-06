@@ -19,7 +19,6 @@ use surtgis_core::{Error, Result};
 /// `(z - z_min) / (z_max - z_min)`, producing values in [0, 1].
 pub fn hypsometric_hillshade(dem: &Raster<f64>, params: HillshadeParams) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
-    let nodata = dem.nodata();
 
     // Pass 1: compute global min/max
     let mut global_min = f64::INFINITY;
@@ -27,7 +26,7 @@ pub fn hypsometric_hillshade(dem: &Raster<f64>, params: HillshadeParams) -> Resu
     for row in 0..rows {
         for col in 0..cols {
             let v = unsafe { dem.get_unchecked(row, col) };
-            if v.is_nan() || nodata.is_some_and(|nd| (v - nd).abs() < f64::EPSILON) {
+            if dem.is_nodata(v) {
                 continue;
             }
             if v < global_min {
@@ -63,10 +62,10 @@ pub fn hypsometric_hillshade(dem: &Raster<f64>, params: HillshadeParams) -> Resu
             for col in 0..cols {
                 let elev = unsafe { dem.get_unchecked(row, col) };
                 let hs_val = unsafe { hs.get_unchecked(row, col) };
-                if elev.is_nan() || hs_val.is_nan() {
+                if hs_val.is_nan() {
                     continue;
                 }
-                if nodata.is_some_and(|nd| (elev - nd).abs() < f64::EPSILON) {
+                if dem.is_nodata(elev) {
                     continue;
                 }
                 let norm = (elev - global_min) / range;

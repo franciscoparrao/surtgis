@@ -72,7 +72,6 @@ use super::d8::{SCAN_DISTANCE as D8_DISTANCES, SCAN_OFFSETS as D8_OFFSETS};
 /// A new raster with all depressions filled
 pub fn fill_sinks(dem: &Raster<f64>, params: FillSinksParams) -> Result<Raster<f64>> {
     let (rows, cols) = dem.shape();
-    let nodata = dem.nodata();
     let cell_size = dem.cell_size();
     let epsilon = params.min_slope * cell_size;
 
@@ -93,12 +92,7 @@ pub fn fill_sinks(dem: &Raster<f64>, params: FillSinksParams) -> Result<Raster<f
     // init scheme, so they stay at big_value and contaminate
     // every downstream tool. Treating NaN as a drainage exit matches
     // GIS convention and what priority_flood already does.
-    let is_nodata = |val: f64| -> bool {
-        match nodata {
-            Some(nd) => val.is_nan() || (val - nd).abs() < f64::EPSILON,
-            None => val.is_nan(),
-        }
-    };
+    let is_nodata = |val: f64| -> bool { dem.is_nodata(val) };
 
     for row in 0..rows {
         for col in 0..cols {
@@ -145,12 +139,7 @@ pub fn fill_sinks(dem: &Raster<f64>, params: FillSinksParams) -> Result<Raster<f
                 let dem_val = unsafe { dem.get_unchecked(row, col) };
 
                 // Skip nodata
-                if dem_val.is_nan() {
-                    continue;
-                }
-                if let Some(nd) = nodata
-                    && (dem_val - nd).abs() < f64::EPSILON
-                {
+                if dem.is_nodata(dem_val) {
                     continue;
                 }
 
@@ -185,12 +174,7 @@ pub fn fill_sinks(dem: &Raster<f64>, params: FillSinksParams) -> Result<Raster<f
             for col in (1..cols - 1).rev() {
                 let dem_val = unsafe { dem.get_unchecked(row, col) };
 
-                if dem_val.is_nan() {
-                    continue;
-                }
-                if let Some(nd) = nodata
-                    && (dem_val - nd).abs() < f64::EPSILON
-                {
+                if dem.is_nodata(dem_val) {
                     continue;
                 }
 

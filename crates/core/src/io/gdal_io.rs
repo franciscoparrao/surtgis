@@ -1,5 +1,6 @@
 //! GeoTIFF reading and writing using GDAL
 
+use super::GeoTiffOptions;
 use crate::crs::CRS;
 use crate::error::Result;
 use crate::raster::{GeoTransform, Raster, RasterElement};
@@ -8,30 +9,6 @@ use gdal::raster::GdalType;
 use gdal::spatial_ref::SpatialRef;
 use gdal::{Dataset, DriverManager};
 use std::path::Path;
-
-/// Options for writing GeoTIFF files
-#[derive(Debug, Clone)]
-pub struct GeoTiffOptions {
-    /// Compression type: "DEFLATE", "LZW", "ZSTD", "NONE"
-    pub compression: String,
-    /// Tile size for tiled TIFFs (0 for strips)
-    pub tile_size: usize,
-    /// Create Cloud-Optimized GeoTIFF
-    pub cog: bool,
-    /// BigTIFF for files > 4GB
-    pub bigtiff: bool,
-}
-
-impl Default for GeoTiffOptions {
-    fn default() -> Self {
-        Self {
-            compression: "DEFLATE".to_string(),
-            tile_size: 256,
-            cog: false,
-            bigtiff: false,
-        }
-    }
-}
 
 /// Read a GeoTIFF file into a Raster
 ///

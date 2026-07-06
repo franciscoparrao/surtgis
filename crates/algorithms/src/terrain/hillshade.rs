@@ -60,6 +60,62 @@ impl Algorithm for Hillshade {
     }
 }
 
+/// Per-cell Horn (1981) hillshade kernel shared by the batch (`hillshade`)
+/// and streaming (`HillshadeStreaming::process_row`) paths.
+///
+/// `a..i` is the validated (non-NaN) 3×3 neighborhood (see [`slope_kernel`
+/// docs](super::slope) for the layout). `eight_dx`/`eight_dy` are
+/// `8 * cell_size` for each axis, already resolved for the current row.
+/// `cos_zenith`/`sin_zenith`/`sin_az`/`cos_az` are the pre-computed
+/// illumination geometry constants.
+///
+/// The classic formulation computes atan, cos, sin, atan2 and cos per
+/// cell. All of it collapses algebraically. With x = dz_dx, y = dz_dy,
+/// g = sqrt(x² + y²):
+///
+///   slope  = atan(g)          →  cos s = 1/√(1+g²),  sin s = g/√(1+g²)
+///   aspect = atan2(y, −x)     →  cos aspect = −x/g,  sin aspect = y/g
+///   cos(az − aspect) = cos az·cos aspect + sin az·sin aspect
+///                    = (−x·cos az + y·sin az) / g
+///
+///   shade = cosθz·cos s + sinθz·sin s·cos(az − aspect)
+///         = (cosθz + sinθz·(y·sin az − x·cos az)) / √(1 + x² + y²)
+///
+/// Zero transcendental calls per cell (one sqrt + one division), and the
+/// flat case (g = 0) needs no special branch: the formula reduces to
+/// cosθz on its own. This matches gdaldem's formulation.
+///
+/// Returns the shade value clamped to `[0, 1]` — the caller decides
+/// whether to keep it normalized or rescale to `[0, 255]`.
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn hillshade_shade(
+    a: f64,
+    b: f64,
+    c: f64,
+    d: f64,
+    f: f64,
+    g: f64,
+    h: f64,
+    i: f64,
+    eight_dx: f64,
+    eight_dy: f64,
+    zf: f64,
+    cos_zenith: f64,
+    sin_zenith: f64,
+    sin_az: f64,
+    cos_az: f64,
+) -> f64 {
+    // Horn's method (z_factor scales z, per GDAL convention)
+    let dz_dx = zf * ((c + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_dx;
+    let dz_dy = zf * ((g + 2.0 * h + i) - (a + 2.0 * b + c)) / eight_dy;
+
+    let num = cos_zenith + sin_zenith * (dz_dy * sin_az - dz_dx * cos_az);
+    let shade = num / (1.0 + dz_dx * dz_dx + dz_dy * dz_dy).sqrt();
+
+    shade.clamp(0.0, 1.0)
+}
+
 /// Calculate hillshade from a DEM
 ///
 /// Uses the standard algorithm based on slope, aspect, and illumination geometry.
@@ -93,21 +149,9 @@ pub fn hillshade(dem: &Raster<f64>, params: HillshadeParams) -> Result<Raster<f6
         .as_slice()
         .ok_or_else(|| Error::Other("raster data must be contiguous".into()))?;
 
-    // The classic formulation computes atan, cos, sin, atan2 and cos per
-    // cell. All of it collapses algebraically. With x = dz_dx, y = dz_dy,
-    // g = sqrt(x² + y²):
-    //
-    //   slope  = atan(g)          →  cos s = 1/√(1+g²),  sin s = g/√(1+g²)
-    //   aspect = atan2(y, −x)     →  cos aspect = −x/g,  sin aspect = y/g
-    //   cos(az − aspect) = cos az·cos aspect + sin az·sin aspect
-    //                    = (−x·cos az + y·sin az) / g
-    //
-    //   shade = cosθz·cos s + sinθz·sin s·cos(az − aspect)
-    //         = (cosθz + sinθz·(y·sin az − x·cos az)) / √(1 + x² + y²)
-    //
-    // Zero transcendental calls per cell (one sqrt + one division), and the
-    // flat case (g = 0) needs no special branch: the formula reduces to
-    // cosθz on its own. This matches gdaldem's formulation.
+    // Algebraic, transcendental-free reformulation of the classic
+    // slope/aspect/cos(az−aspect) shading formula — see `hillshade_shade`
+    // for the derivation.
     let output_data = par_map_rows(rows, cols, |row, out_row| {
         if row == 0 || row == rows - 1 {
             return; // edge rows stay NaN
@@ -124,7 +168,7 @@ pub fn hillshade(dem: &Raster<f64>, params: HillshadeParams) -> Result<Raster<f6
         for col in 1..cols - 1 {
             // Get center value
             let e = mid[col];
-            if e.is_nan() || nodata.is_some_and(|nd| (e - nd).abs() < f64::EPSILON) {
+            if e.is_nan() || nodata.is_some_and(|nd| e == nd) {
                 continue; // stays NaN
             }
 
@@ -145,14 +189,10 @@ pub fn hillshade(dem: &Raster<f64>, params: HillshadeParams) -> Result<Raster<f6
                 continue; // stays NaN
             }
 
-            // Horn's method (z_factor scales z, per GDAL convention)
-            let dz_dx = zf * ((c + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_dx;
-            let dz_dy = zf * ((g + 2.0 * h + i) - (a + 2.0 * b + c)) / eight_dy;
-
-            let num = cos_zenith + sin_zenith * (dz_dy * sin_az - dz_dx * cos_az);
-            let shade = num / (1.0 + dz_dx * dz_dx + dz_dy * dz_dy).sqrt();
-
-            let shade_clamped = shade.clamp(0.0, 1.0);
+            let shade_clamped = hillshade_shade(
+                a, b, c, d, f, g, h, i, eight_dx, eight_dy, zf, cos_zenith, sin_zenith, sin_az,
+                cos_az,
+            );
             out_row[col] = if normalized {
                 shade_clamped
             } else {
@@ -236,7 +276,7 @@ impl HillshadeStreaming {
             }
 
             let e = input[[ir, c]];
-            if e.is_nan() || nodata.map_or(false, |nd| (e - nd).abs() < f64::EPSILON) {
+            if e.is_nan() || nodata.is_some_and(|nd| e == nd) {
                 output[[r, c]] = f64::NAN;
                 continue;
             }
@@ -255,15 +295,15 @@ impl HillshadeStreaming {
                 continue;
             }
 
-            // Horn's method (z_factor scales z, per GDAL convention)
-            let dz_dx = zf * ((cv + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_dx;
-            let dz_dy = zf * ((g + 2.0 * h + i) - (a + 2.0 * b + cv)) / eight_dy;
+            let shade_clamped = hillshade_shade(
+                a, b, cv, d, f, g, h, i, eight_dx, eight_dy, zf, cos_zenith, sin_zenith, sin_az,
+                cos_az,
+            );
 
-            // Algebraic form — see hillshade() for the derivation.
-            let num = cos_zenith + sin_zenith * (dz_dy * sin_az - dz_dx * cos_az);
-            let shade = num / (1.0 + dz_dx * dz_dx + dz_dy * dz_dy).sqrt();
-
-            output[[r, c]] = (shade.clamp(0.0, 1.0) * 255.0).round();
+            // HillshadeStreaming has no `normalized` field (unlike the
+            // batch `HillshadeParams`) — it always rescales to [0, 255],
+            // matching its pre-existing (unchanged) behavior.
+            output[[r, c]] = (shade_clamped * 255.0).round();
         }
     }
 }

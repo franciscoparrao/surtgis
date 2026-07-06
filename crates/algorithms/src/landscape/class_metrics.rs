@@ -48,7 +48,6 @@ pub struct ClassMetrics {
 pub fn landscape_metrics(classification: &Raster<f64>) -> Result<LandscapeMetrics> {
     let (rows, cols) = classification.shape();
     let data = classification.data();
-    let nodata = classification.nodata();
 
     // Count cells per class
     let mut class_counts: HashMap<i64, usize> = HashMap::new();
@@ -57,13 +56,8 @@ pub fn landscape_metrics(classification: &Raster<f64>) -> Result<LandscapeMetric
     for r in 0..rows {
         for c in 0..cols {
             let v = data[[r, c]];
-            if v.is_nan() {
+            if classification.is_nodata(v) {
                 continue;
-            }
-            if let Some(nd) = nodata {
-                if nd.is_finite() && (v - nd).abs() < 1e-10 {
-                    continue;
-                }
             }
             *class_counts.entry(v.round() as i64).or_insert(0) += 1;
             total_valid += 1;
@@ -109,7 +103,6 @@ pub fn class_metrics(
 ) -> Result<Vec<ClassMetrics>> {
     let (rows, cols) = classification.shape();
     let data = classification.data();
-    let nodata = classification.nodata();
     let gt = classification.transform();
     let cell_area = gt.pixel_width.abs() * gt.pixel_height.abs();
 
@@ -118,13 +111,8 @@ pub fn class_metrics(
     for r in 0..rows {
         for c in 0..cols {
             let v = data[[r, c]];
-            if v.is_nan() {
+            if classification.is_nodata(v) {
                 continue;
-            }
-            if let Some(nd) = nodata {
-                if nd.is_finite() && (v - nd).abs() < 1e-10 {
-                    continue;
-                }
             }
             total_valid += 1;
         }
@@ -145,13 +133,8 @@ pub fn class_metrics(
     for r in 0..rows {
         for c in 0..cols {
             let v = data[[r, c]];
-            if v.is_nan() {
+            if classification.is_nodata(v) {
                 continue;
-            }
-            if let Some(nd) = nodata {
-                if nd.is_finite() && (v - nd).abs() < 1e-10 {
-                    continue;
-                }
             }
             let cls = v.round() as i64;
             *class_cells.entry(cls).or_insert(0) += 1;

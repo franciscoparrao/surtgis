@@ -41,6 +41,79 @@ impl Default for MultiHillshadeParams {
     }
 }
 
+/// Per-cell multidirectional hillshade kernel shared by the batch
+/// (`multidirectional_hillshade`) and streaming
+/// (`MultiHillshadeStreaming::process_row`) paths.
+///
+/// `a..i` is the validated (non-NaN) 3×3 neighborhood (see [`slope_kernel`
+/// docs](super::slope) for the layout). `eight_dx`/`eight_dy` are
+/// `8 * cell_size` for each axis, already resolved for the current row.
+/// `az_sin_cos` are the 6 equally-spaced azimuths (USGS Mark 1992),
+/// pre-converted to `(sin, cos)` pairs.
+///
+/// Per azimuth and cell, with x = dz_dx, y = dz_dy, g² = x² + y²:
+///
+///   shade  = (cosθz + sinθz·(y·sin az − x·cos az)) / √(1+g²)
+///   weight = 1 + cos²(az − aspect + π/2) = 1 + sin²(az − aspect)
+///          = 1 + (x·sin az + y·cos az)² / g²
+///
+/// Flat cells (g² = 0): every azimuth shades to cosθz, so any equal
+/// weighting yields the same blend — matching the old aspect=0 branch.
+///
+/// Returns the blended shade value in `[0, 1]` — the caller decides
+/// whether to keep it normalized or rescale to `[0, 255]`.
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn multi_hillshade_shade(
+    a: f64,
+    b: f64,
+    c: f64,
+    d: f64,
+    f: f64,
+    g: f64,
+    h: f64,
+    i: f64,
+    eight_dx: f64,
+    eight_dy: f64,
+    zf: f64,
+    cos_zenith: f64,
+    sin_zenith: f64,
+    az_sin_cos: &[(f64, f64)],
+) -> f64 {
+    // Horn's method (z_factor scales z, per GDAL convention)
+    let dz_dx = zf * ((c + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_dx;
+    let dz_dy = zf * ((g + 2.0 * h + i) - (a + 2.0 * b + c)) / eight_dy;
+
+    let g2 = dz_dx * dz_dx + dz_dy * dz_dy;
+    let inv_len = 1.0 / (1.0 + g2).sqrt();
+    let flat = g2 < 1e-20;
+
+    let mut weighted_sum = 0.0;
+    let mut weight_total = 0.0;
+
+    for &(sin_az, cos_az) in az_sin_cos {
+        let shade =
+            ((cos_zenith + sin_zenith * (dz_dy * sin_az - dz_dx * cos_az)) * inv_len).max(0.0);
+
+        // Weight: highest when azimuth is perpendicular to aspect
+        let w = if flat {
+            1.0
+        } else {
+            let cross = dz_dx * sin_az + dz_dy * cos_az;
+            1.0 + (cross * cross) / g2
+        };
+
+        weighted_sum += shade * w;
+        weight_total += w;
+    }
+
+    if weight_total > 0.0 {
+        (weighted_sum / weight_total).min(1.0)
+    } else {
+        0.0
+    }
+}
+
 /// Calculate multidirectional hillshade
 ///
 /// Blends hillshade from 6 azimuths (0°, 60°, 120°, 180°, 240°, 300°)
@@ -74,16 +147,8 @@ pub fn multidirectional_hillshade(
         .map(|i| (360.0 - (i as f64 * 60.0) + 90.0).to_radians())
         .collect();
 
-    // Per-azimuth constants; everything per-cell is algebraic (see
-    // hillshade() for the derivation). Per azimuth and cell, with
-    // x = dz_dx, y = dz_dy, g² = x² + y²:
-    //
-    //   shade  = (cosθz + sinθz·(y·sin az − x·cos az)) / √(1+g²)
-    //   weight = 1 + cos²(az − aspect + π/2) = 1 + sin²(az − aspect)
-    //          = 1 + (x·sin az + y·cos az)² / g²
-    //
-    // Flat cells (g² = 0): every azimuth shades to cosθz, so any equal
-    // weighting yields the same blend — matching the old aspect=0 branch.
+    // Per-azimuth constants; everything per-cell is algebraic — see
+    // `multi_hillshade_shade` for the derivation.
     let az_sin_cos: Vec<(f64, f64)> = azimuths_rad.iter().map(|az| az.sin_cos()).collect();
     let normalized = params.normalized;
 
@@ -105,7 +170,7 @@ pub fn multidirectional_hillshade(
 
         for col in 1..cols - 1 {
             let e = mid[col];
-            if e.is_nan() || nodata.is_some_and(|nd| (e - nd).abs() < f64::EPSILON) {
+            if e.is_nan() || nodata.is_some_and(|nd| e == nd) {
                 continue; // stays NaN
             }
 
@@ -125,39 +190,22 @@ pub fn multidirectional_hillshade(
                 continue; // stays NaN
             }
 
-            // Horn's method (z_factor scales z, per GDAL convention)
-            let dz_dx = zf * ((c + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_dx;
-            let dz_dy = zf * ((g + 2.0 * h + i) - (a + 2.0 * b + c)) / eight_dy;
-
-            let g2 = dz_dx * dz_dx + dz_dy * dz_dy;
-            let inv_len = 1.0 / (1.0 + g2).sqrt();
-            let flat = g2 < 1e-20;
-
-            let mut weighted_sum = 0.0;
-            let mut weight_total = 0.0;
-
-            for &(sin_az, cos_az) in &az_sin_cos {
-                let shade = ((cos_zenith + sin_zenith * (dz_dy * sin_az - dz_dx * cos_az))
-                    * inv_len)
-                    .max(0.0);
-
-                // Weight: highest when azimuth is perpendicular to aspect
-                let w = if flat {
-                    1.0
-                } else {
-                    let cross = dz_dx * sin_az + dz_dy * cos_az;
-                    1.0 + (cross * cross) / g2
-                };
-
-                weighted_sum += shade * w;
-                weight_total += w;
-            }
-
-            let shade_val = if weight_total > 0.0 {
-                (weighted_sum / weight_total).min(1.0)
-            } else {
-                0.0
-            };
+            let shade_val = multi_hillshade_shade(
+                a,
+                b,
+                c,
+                d,
+                f,
+                g,
+                h,
+                i,
+                eight_dx,
+                eight_dy,
+                zf,
+                cos_zenith,
+                sin_zenith,
+                &az_sin_cos,
+            );
 
             out_row[col] = if normalized {
                 shade_val
@@ -241,7 +289,7 @@ impl MultiHillshadeStreaming {
             }
 
             let e = input[[ir, c]];
-            if e.is_nan() || nodata.map_or(false, |nd| (e - nd).abs() < f64::EPSILON) {
+            if e.is_nan() || nodata.is_some_and(|nd| e == nd) {
                 output[[r, c]] = f64::NAN;
                 continue;
             }
@@ -260,40 +308,9 @@ impl MultiHillshadeStreaming {
                 continue;
             }
 
-            // Horn's method (z_factor scales z, per GDAL convention)
-            let dz_dx = zf * ((cv + 2.0 * f + i) - (a + 2.0 * d + g)) / eight_dx;
-            let dz_dy = zf * ((g + 2.0 * h + i) - (a + 2.0 * b + cv)) / eight_dy;
-
-            // Algebraic form — see multidirectional_hillshade().
-            let g2 = dz_dx * dz_dx + dz_dy * dz_dy;
-            let inv_len = 1.0 / (1.0 + g2).sqrt();
-            let flat = g2 < 1e-20;
-
-            let mut weighted_sum = 0.0;
-            let mut weight_total = 0.0;
-
-            for &(sin_az, cos_az) in az_sin_cos {
-                let shade = ((cos_zenith + sin_zenith * (dz_dy * sin_az - dz_dx * cos_az))
-                    * inv_len)
-                    .max(0.0);
-
-                // Weight: highest when azimuth is perpendicular to aspect
-                let w = if flat {
-                    1.0
-                } else {
-                    let cross = dz_dx * sin_az + dz_dy * cos_az;
-                    1.0 + (cross * cross) / g2
-                };
-
-                weighted_sum += shade * w;
-                weight_total += w;
-            }
-
-            let shade_val = if weight_total > 0.0 {
-                (weighted_sum / weight_total).min(1.0)
-            } else {
-                0.0
-            };
+            let shade_val = multi_hillshade_shade(
+                a, b, cv, d, f, g, h, i, eight_dx, eight_dy, zf, cos_zenith, sin_zenith, az_sin_cos,
+            );
 
             output[[r, c]] = if self.normalized {
                 shade_val

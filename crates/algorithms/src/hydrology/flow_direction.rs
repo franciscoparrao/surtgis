@@ -62,7 +62,6 @@ impl Algorithm for FlowDirection {
 /// `Raster<u8>` with flow direction codes
 pub fn flow_direction(dem: &Raster<f64>) -> Result<Raster<u8>> {
     let (rows, cols) = dem.shape();
-    let nodata = dem.nodata();
     let cell_size = dem.cell_size();
 
     let output_data: Vec<u8> = (0..rows)
@@ -74,12 +73,7 @@ pub fn flow_direction(dem: &Raster<f64>) -> Result<Raster<u8>> {
                 let center = unsafe { dem.get_unchecked(row, col) };
 
                 // Skip nodata
-                if center.is_nan() {
-                    continue;
-                }
-                if let Some(nd) = nodata
-                    && (center - nd).abs() < f64::EPSILON
-                {
+                if dem.is_nodata(center) {
                     continue;
                 }
 
@@ -96,12 +90,7 @@ pub fn flow_direction(dem: &Raster<f64>) -> Result<Raster<u8>> {
 
                     let neighbor = unsafe { dem.get_unchecked(nr as usize, nc as usize) };
 
-                    if neighbor.is_nan() {
-                        continue;
-                    }
-                    if let Some(nd) = nodata
-                        && (neighbor - nd).abs() < f64::EPSILON
-                    {
+                    if dem.is_nodata(neighbor) {
                         continue;
                     }
 

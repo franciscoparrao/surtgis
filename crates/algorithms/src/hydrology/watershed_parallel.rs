@@ -19,6 +19,46 @@ use surtgis_core::{Error, Result};
 
 use super::d8::{D8_COL_OFF as D8_DC, D8_ROW_OFF as D8_DR};
 
+/// Check that the flow-direction and flow-accumulation rasters share the
+/// same geotransform and (lenient, EPSG-only) CRS.
+///
+/// `watershed_parallel` combines a `Raster<u8>` (flow direction) with a
+/// `Raster<f64>` (flow accumulation), so the shared-type
+/// `surtgis_core::raster::check_aligned` helper cannot be used directly (it
+/// requires a homogeneous `&[&Raster<T>]` slice). This mirrors its
+/// tolerance and CRS-lenience semantics for the two-type case. Shape is
+/// checked separately by the caller via `Error::SizeMismatch`.
+fn check_geo_alignment(flow_dir: &Raster<u8>, flow_acc: &Raster<f64>) -> Result<()> {
+    const REL_TOL: f64 = 1e-9;
+    let gt_d = flow_dir.transform().to_gdal();
+    let gt_a = flow_acc.transform().to_gdal();
+    for (a, b) in gt_d.iter().zip(gt_a.iter()) {
+        let tol = REL_TOL * a.abs().max(b.abs()).max(1.0);
+        if (a - b).abs() > tol {
+            return Err(Error::Misaligned {
+                reason: format!(
+                    "geotransform mismatch: flow_dir raster has {gt_d:?} but \
+                     flow_acc raster has {gt_a:?} (GDAL coefficient order)"
+                ),
+            });
+        }
+    }
+
+    if let (Some(a), Some(b)) = (
+        flow_dir.crs().and_then(|c| c.epsg()),
+        flow_acc.crs().and_then(|c| c.epsg()),
+    ) && a != b
+    {
+        return Err(Error::Misaligned {
+            reason: format!(
+                "CRS mismatch: flow_dir raster is EPSG:{a} but flow_acc raster is EPSG:{b}"
+            ),
+        });
+    }
+
+    Ok(())
+}
+
 /// Parameters for parallel watershed delineation
 #[derive(Debug, Clone)]
 pub struct ParallelWatershedParams {
@@ -62,6 +102,8 @@ pub fn watershed_parallel(
             ac,
         });
     }
+
+    check_geo_alignment(flow_dir, flow_acc)?;
 
     let n = rows * cols;
 
@@ -229,7 +271,8 @@ mod tests {
         fdir.set(2, 1, 3).unwrap(); // N
         fdir.set(2, 2, 4).unwrap(); // NW
 
-        let facc = Raster::filled(3, 3, 1.0_f64);
+        let mut facc = Raster::filled(3, 3, 1.0_f64);
+        facc.set_transform(GeoTransform::new(0.0, 3.0, 1.0, -1.0));
 
         let result = watershed_parallel(&fdir, &facc, ParallelWatershedParams::default()).unwrap();
 
@@ -267,7 +310,8 @@ mod tests {
             fdir.set(row, 5, 0).unwrap();
         }
 
-        let facc = Raster::filled(3, 6, 1.0_f64);
+        let mut facc = Raster::filled(3, 6, 1.0_f64);
+        facc.set_transform(GeoTransform::new(0.0, 3.0, 1.0, -1.0));
         let result = watershed_parallel(&fdir, &facc, ParallelWatershedParams::default()).unwrap();
 
         // Each left pit gets its own label (they're separate pits), but cells flowing

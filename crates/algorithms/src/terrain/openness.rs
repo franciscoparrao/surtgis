@@ -5,7 +5,6 @@
 //! Both expressed in degrees (0-180).
 
 use crate::maybe_rayon::*;
-use ndarray::Array2;
 use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
@@ -68,61 +67,53 @@ fn compute_openness(
         })
         .collect();
 
-    let output_data: Vec<f64> = (0..rows)
-        .into_par_iter()
-        .flat_map(|row| {
-            let mut row_data = vec![f64::NAN; cols];
-
-            for (col, row_data_col) in row_data.iter_mut().enumerate() {
-                let z0 = unsafe { dem.get_unchecked(row, col) };
-                if z0.is_nan() {
-                    continue;
-                }
-
-                let mut angle_sum = 0.0;
-
-                for &(dc_step, dr_step) in &dir_vectors {
-                    let angle = if positive {
-                        compute_positive_angle(
-                            dem,
-                            row,
-                            col,
-                            z0,
-                            dr_step,
-                            dc_step,
-                            params.radius,
-                            cell_size,
-                            rows,
-                            cols,
-                        )
-                    } else {
-                        compute_negative_angle(
-                            dem,
-                            row,
-                            col,
-                            z0,
-                            dr_step,
-                            dc_step,
-                            params.radius,
-                            cell_size,
-                            rows,
-                            cols,
-                        )
-                    };
-                    angle_sum += angle;
-                }
-
-                *row_data_col = angle_sum / n_dirs as f64;
+    let output_data = par_map_rows(rows, cols, |row, out_row| {
+        for (col, row_data_col) in out_row.iter_mut().enumerate() {
+            let z0 = unsafe { dem.get_unchecked(row, col) };
+            if z0.is_nan() {
+                continue;
             }
 
-            row_data
-        })
-        .collect();
+            let mut angle_sum = 0.0;
+
+            for &(dc_step, dr_step) in &dir_vectors {
+                let angle = if positive {
+                    compute_positive_angle(
+                        dem,
+                        row,
+                        col,
+                        z0,
+                        dr_step,
+                        dc_step,
+                        params.radius,
+                        cell_size,
+                        rows,
+                        cols,
+                    )
+                } else {
+                    compute_negative_angle(
+                        dem,
+                        row,
+                        col,
+                        z0,
+                        dr_step,
+                        dc_step,
+                        params.radius,
+                        cell_size,
+                        rows,
+                        cols,
+                    )
+                };
+                angle_sum += angle;
+            }
+
+            *row_data_col = angle_sum / n_dirs as f64;
+        }
+    });
 
     let mut output = dem.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() = Array2::from_shape_vec((rows, cols), output_data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() = output_data;
 
     Ok(output)
 }

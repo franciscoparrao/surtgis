@@ -1,11 +1,11 @@
 # `surtgis pipeline`
 
-_Pipeline: integrated workflows for specific use cases_
+_Pipeline: integrated workflows for specific use cases (cloud feature only)_
 
 ## Overview
 
 ```text
-Pipeline: integrated workflows for specific use cases
+Pipeline: integrated workflows for specific use cases (cloud feature only)
 
 Usage: surtgis pipeline [OPTIONS] <COMMAND>
 

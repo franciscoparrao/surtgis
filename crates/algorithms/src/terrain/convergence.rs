@@ -42,28 +42,20 @@ pub fn convergence_index(dem: &Raster<f64>, params: ConvergenceParams) -> Result
     let r = params.radius as isize;
     let data = dem.data();
 
-    let output_data: Vec<f64> = (0..rows)
-        .into_par_iter()
-        .flat_map(|row| {
-            let mut row_data = vec![f64::NAN; cols];
-
-            for (col, row_data_col) in row_data.iter_mut().enumerate() {
-                let z0 = data[[row, col]];
-                if z0.is_nan() {
-                    continue;
-                }
-
-                *row_data_col = convergence_kernel(data, row, col, r);
+    let output_data = par_map_rows(rows, cols, |row, out_row| {
+        for (col, row_data_col) in out_row.iter_mut().enumerate() {
+            let z0 = data[[row, col]];
+            if z0.is_nan() {
+                continue;
             }
 
-            row_data
-        })
-        .collect();
+            *row_data_col = convergence_kernel(data, row, col, r);
+        }
+    });
 
     let mut output = dem.with_same_meta::<f64>(rows, cols);
     output.set_nodata(Some(f64::NAN));
-    *output.data_mut() = Array2::from_shape_vec((rows, cols), output_data)
-        .map_err(|e| Error::Other(e.to_string()))?;
+    *output.data_mut() = output_data;
 
     Ok(output)
 }
@@ -234,7 +226,7 @@ impl surtgis_core::WindowAlgorithm for ConvergenceStreaming {
                     }
 
                     let z0 = input[[ir, c]];
-                    if z0.is_nan() || nodata.is_some_and(|nd| (z0 - nd).abs() < f64::EPSILON) {
+                    if z0.is_nan() || nodata.is_some_and(|nd| z0 == nd) {
                         *out_v = f64::NAN;
                         continue;
                     }

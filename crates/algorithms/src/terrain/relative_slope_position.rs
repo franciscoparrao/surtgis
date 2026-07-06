@@ -46,9 +46,6 @@ pub fn relative_slope_position(
         });
     }
 
-    let nodata_h = hand.nodata();
-    let nodata_v = valley_depth.nodata();
-
     let output_data: Vec<f64> = (0..rows)
         .into_par_iter()
         .flat_map(|row| {
@@ -58,11 +55,7 @@ pub fn relative_slope_position(
                 let v = unsafe { valley_depth.get_unchecked(row, col) };
 
                 // Skip nodata
-                if h.is_nan()
-                    || v.is_nan()
-                    || nodata_h.is_some_and(|nd| (h - nd).abs() < f64::EPSILON)
-                    || nodata_v.is_some_and(|nd| (v - nd).abs() < f64::EPSILON)
-                {
+                if hand.is_nodata(h) || valley_depth.is_nodata(v) {
                     continue;
                 }
 

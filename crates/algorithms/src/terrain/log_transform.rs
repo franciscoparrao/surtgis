@@ -31,7 +31,6 @@ use surtgis_core::{Error, Result};
 /// Raster with log-transformed values
 pub fn log_transform(raster: &Raster<f64>) -> Result<Raster<f64>> {
     let (rows, cols) = raster.shape();
-    let nodata = raster.nodata();
 
     let data: Vec<f64> = (0..rows)
         .into_par_iter()
@@ -39,7 +38,7 @@ pub fn log_transform(raster: &Raster<f64>) -> Result<Raster<f64>> {
             let mut row_data = vec![f64::NAN; cols];
             for (col, row_data_col) in row_data.iter_mut().enumerate() {
                 let v = unsafe { raster.get_unchecked(row, col) };
-                if v.is_nan() || nodata.is_some_and(|nd| (v - nd).abs() < f64::EPSILON) {
+                if raster.is_nodata(v) {
                     continue;
                 }
                 *row_data_col = v.signum() * (1.0 + v.abs()).ln();
