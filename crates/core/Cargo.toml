@@ -35,6 +35,13 @@ num-complex = { workspace = true, optional = true }
 shapefile = { workspace = true, optional = true }
 rusqlite = { workspace = true, optional = true }
 tiff.workspace = true
+# Own DEFLATE ("Adobe Deflate") compression for the native N-band stack
+# writer (`write_geotiff_stack`): `tiff`'s built-in compressors are only
+# reachable through its `ImageEncoder`, whose `ColorType` is fixed at
+# compile time — unusable for a runtime-determined band count. We drive
+# `tiff`'s lower-level `DirectoryEncoder` directly instead and compress
+# strips ourselves with the same zlib wrapper `tiff` uses internally.
+flate2.workspace = true
 
 [dev-dependencies]
 approx.workspace = true

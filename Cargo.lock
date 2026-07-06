@@ -5763,6 +5763,7 @@ version = "0.17.0"
 dependencies = [
  "anyhow",
  "approx",
+ "flate2",
  "gdal",
  "geo",
  "geo-types",

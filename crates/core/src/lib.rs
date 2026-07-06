@@ -40,7 +40,7 @@ pub use crs::CRS;
 pub use cube::{Cube, CubeChunk};
 pub use error::{Error, Result};
 pub use mosaic::{MosaicOptions, mosaic};
-pub use raster::{GeoTransform, Raster, RasterCell, RasterElement};
+pub use raster::{AnyRaster, DataType, GeoTransform, Raster, RasterCell, RasterElement};
 pub use resample::{ResampleMethod, resample_to_grid};
 pub use streaming::{GeoRowContext, StripProcessor, WindowAlgorithm};
 pub use tiling::{Tile, TileGrid};
@@ -49,10 +49,11 @@ pub use tiling::{Tile, TileGrid};
 pub mod prelude {
     pub use crate::Algorithm;
     pub use crate::crs::CRS;
+    pub use crate::dispatch_any;
     pub use crate::error::{Error, Result};
     pub use crate::raster::{
-        GeoTransform, Raster, RasterCell, RasterElement, check_aligned, check_same_crs,
-        check_same_shape,
+        AnyRaster, DataType, GeoTransform, Raster, RasterCell, RasterElement, check_aligned,
+        check_same_crs, check_same_shape,
     };
 }
 
