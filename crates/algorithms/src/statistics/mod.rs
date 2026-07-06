@@ -6,6 +6,7 @@
 
 pub mod autocorrelation;
 pub mod focal;
+mod focal_fast;
 pub mod zonal;
 
 pub use autocorrelation::{GetisOrdResult, MoransIResult, global_morans_i, local_getis_ord};
