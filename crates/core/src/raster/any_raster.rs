@@ -240,22 +240,18 @@ mod tests {
         let f32r = AnyRaster::F32(Raster::from_vec(vec![1.5f32, -2.25, 0.0, 3.75], 2, 2).unwrap());
         let f64r = AnyRaster::F64(Raster::from_vec(vec![1.5f64, -2.25, 0.0, 3.75], 2, 2).unwrap());
 
-        assert_eq!(u16r.to_f64().data().iter().copied().collect::<Vec<_>>(), [
-            0.0,
-            1.0,
-            2.0,
-            u16::MAX as f64
-        ]);
+        assert_eq!(
+            u16r.to_f64().data().iter().copied().collect::<Vec<_>>(),
+            [0.0, 1.0, 2.0, u16::MAX as f64]
+        );
         assert_eq!(
             i16r.to_f64().data().iter().copied().collect::<Vec<_>>(),
             [i16::MIN as f64, -1.0, 0.0, i16::MAX as f64]
         );
-        assert_eq!(u32r.to_f64().data().iter().copied().collect::<Vec<_>>(), [
-            0.0,
-            1.0,
-            2.0,
-            u32::MAX as f64
-        ]);
+        assert_eq!(
+            u32r.to_f64().data().iter().copied().collect::<Vec<_>>(),
+            [0.0, 1.0, 2.0, u32::MAX as f64]
+        );
         assert_eq!(
             i32r.to_f64().data().iter().copied().collect::<Vec<_>>(),
             [i32::MIN as f64, -1.0, 0.0, i32::MAX as f64]

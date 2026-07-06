@@ -374,8 +374,7 @@ where
 /// private to that module).
 fn deflate_compress_bytes(data: &[u8]) -> Result<Vec<u8>> {
     use std::io::Write as _;
-    let mut encoder =
-        flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::new(6));
+    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::new(6));
     encoder
         .write_all(data)
         .map_err(|e| Error::Other(format!("DEFLATE compression failed: {}", e)))?;
@@ -392,17 +391,41 @@ fn geokeys_for_crs(crs: Option<&crate::crs::CRS>) -> Vec<u16> {
         if let Some(epsg) = crs.epsg() {
             if epsg == 4326 {
                 vec![
-                    1, 1, 0, 3, // Version 1.1.0, 3 keys
-                    1024, 0, 1, 2, // GTModelTypeGeoKey = ModelTypeGeographic
-                    1025, 0, 1, 1, // GTRasterTypeGeoKey = RasterPixelIsArea
-                    2048, 0, 1, epsg as u16, // GeographicTypeGeoKey
+                    1,
+                    1,
+                    0,
+                    3, // Version 1.1.0, 3 keys
+                    1024,
+                    0,
+                    1,
+                    2, // GTModelTypeGeoKey = ModelTypeGeographic
+                    1025,
+                    0,
+                    1,
+                    1, // GTRasterTypeGeoKey = RasterPixelIsArea
+                    2048,
+                    0,
+                    1,
+                    epsg as u16, // GeographicTypeGeoKey
                 ]
             } else {
                 vec![
-                    1, 1, 0, 3, // Version 1.1.0, 3 keys
-                    1024, 0, 1, 1, // GTModelTypeGeoKey = ModelTypeProjected
-                    1025, 0, 1, 1, // GTRasterTypeGeoKey = RasterPixelIsArea
-                    3072, 0, 1, epsg as u16, // ProjectedCSTypeGeoKey
+                    1,
+                    1,
+                    0,
+                    3, // Version 1.1.0, 3 keys
+                    1024,
+                    0,
+                    1,
+                    1, // GTModelTypeGeoKey = ModelTypeProjected
+                    1025,
+                    0,
+                    1,
+                    1, // GTRasterTypeGeoKey = RasterPixelIsArea
+                    3072,
+                    0,
+                    1,
+                    epsg as u16, // ProjectedCSTypeGeoKey
                 ]
             }
         } else {
@@ -463,8 +486,11 @@ where
         .map_err(|e| Error::Other(format!("Cannot write ImageWidth: {}", e)))?;
     dir.write_tag(Tag::ImageLength, level.rows as u32)
         .map_err(|e| Error::Other(format!("Cannot write ImageLength: {}", e)))?;
-    dir.write_tag(Tag::BitsPerSample, <T::Gray as ColorType>::BITS_PER_SAMPLE[0])
-        .map_err(|e| Error::Other(format!("Cannot write BitsPerSample: {}", e)))?;
+    dir.write_tag(
+        Tag::BitsPerSample,
+        <T::Gray as ColorType>::BITS_PER_SAMPLE[0],
+    )
+    .map_err(|e| Error::Other(format!("Cannot write BitsPerSample: {}", e)))?;
     dir.write_tag(
         Tag::SampleFormat,
         <T::Gray as ColorType>::SAMPLE_FORMAT[0].to_u16(),
@@ -598,7 +624,11 @@ mod tests {
     fn pyramid_no_overviews_when_raster_fits_one_tile() {
         let r = ramp_raster(100, 100);
         let levels = build_pyramid(&r, 512, &CogOptions::default()).unwrap();
-        assert_eq!(levels.len(), 1, "a raster smaller than one tile needs no overviews");
+        assert_eq!(
+            levels.len(),
+            1,
+            "a raster smaller than one tile needs no overviews"
+        );
     }
 
     #[test]
@@ -862,7 +892,9 @@ mod tests {
     #[test]
     fn interop_gdalinfo_reports_tiles_and_overviews() {
         if !command_available("gdalinfo", "--version") {
-            eprintln!("skipping interop_gdalinfo_reports_tiles_and_overviews: gdalinfo not on PATH");
+            eprintln!(
+                "skipping interop_gdalinfo_reports_tiles_and_overviews: gdalinfo not on PATH"
+            );
             return;
         }
         let r = ramp_raster(2000, 2000);
@@ -890,14 +922,22 @@ mod tests {
             "expected an Overviews section, got:\n{text}"
         );
         // 2000 -> 1000 -> 500: both overview sizes should be listed.
-        assert!(text.contains("1000x1000"), "missing 1000x1000 overview:\n{text}");
-        assert!(text.contains("500x500"), "missing 500x500 overview:\n{text}");
+        assert!(
+            text.contains("1000x1000"),
+            "missing 1000x1000 overview:\n{text}"
+        );
+        assert!(
+            text.contains("500x500"),
+            "missing 500x500 overview:\n{text}"
+        );
     }
 
     #[test]
     fn interop_rasterio_reads_overviews_and_pixel_values() {
         if !command_available("python3", "--version") {
-            eprintln!("skipping interop_rasterio_reads_overviews_and_pixel_values: python3 not on PATH");
+            eprintln!(
+                "skipping interop_rasterio_reads_overviews_and_pixel_values: python3 not on PATH"
+            );
             return;
         }
         let r = ramp_raster(2000, 2000);

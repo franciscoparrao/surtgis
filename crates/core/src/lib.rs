@@ -49,12 +49,12 @@ pub use tiling::{Tile, TileGrid};
 pub mod prelude {
     pub use crate::Algorithm;
     pub use crate::crs::CRS;
+    pub use crate::dispatch_any;
     pub use crate::error::{Error, Result};
     pub use crate::raster::{
         AnyRaster, DataType, GeoTransform, Raster, RasterCell, RasterElement, check_aligned,
         check_same_crs, check_same_shape,
     };
-    pub use crate::dispatch_any;
 }
 
 /// Core trait for all algorithms in SurtGis.

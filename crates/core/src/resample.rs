@@ -132,9 +132,9 @@ pub fn resample_to_grid(
                         }
                     }
                 }
-                ResampleMethod::Cubic => cubic_value(
-                    src_data, src_rows, src_cols, nodata, src_row_f, src_col_f,
-                ),
+                ResampleMethod::Cubic => {
+                    cubic_value(src_data, src_rows, src_cols, nodata, src_row_f, src_col_f)
+                }
             };
         }
     }
@@ -206,7 +206,11 @@ fn bilinear_value(
             wtotal += w;
         }
     }
-    if wtotal > 0.0 { wsum / wtotal } else { f64::NAN }
+    if wtotal > 0.0 {
+        wsum / wtotal
+    } else {
+        f64::NAN
+    }
 }
 
 /// Area-weighted average of every source pixel overlapping the rectangle
@@ -267,7 +271,11 @@ fn average_value(
         }
     }
 
-    if wtotal > 0.0 { wsum / wtotal } else { f64::NAN }
+    if wtotal > 0.0 {
+        wsum / wtotal
+    } else {
+        f64::NAN
+    }
 }
 
 /// 1D cubic convolution kernel (Catmull-Rom, `a = -0.5`), matching GDAL's

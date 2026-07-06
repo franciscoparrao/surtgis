@@ -293,7 +293,14 @@ where
                 let n = raw.rows * raw.cols;
                 (0..n).map(|i| buf[i * raw.spp + b]).collect()
             };
-            finish_raster(selected, raw.rows, raw.cols, raw.transform, raw.crs, raw.nodata)?
+            finish_raster(
+                selected,
+                raw.rows,
+                raw.cols,
+                raw.transform,
+                raw.crs,
+                raw.nodata,
+            )?
         }};
     }
 
@@ -1674,8 +1681,12 @@ mod tests {
     /// type (not the `f32`-only path `write_geotiff` uses), so
     /// `read_geotiff_any` has something other-than-`f32` to detect.
     /// Includes scale/tiepoint tags so the transform round-trips too.
-    fn write_native_typed_tiff<CT>(path: &std::path::Path, rows: usize, cols: usize, data: &[CT::Inner])
-    where
+    fn write_native_typed_tiff<CT>(
+        path: &std::path::Path,
+        rows: usize,
+        cols: usize,
+        data: &[CT::Inner],
+    ) where
         CT: ColorType,
         [CT::Inner]: tiff::encoder::TiffValue,
     {
@@ -1705,7 +1716,11 @@ mod tests {
         write_native_typed_tiff::<Gray16>(&path, 2, 4, &data);
 
         let any = read_geotiff_any(&path, None).unwrap();
-        assert_eq!(any.dtype(), DataType::U16, "must stay u16, not upcast to f64");
+        assert_eq!(
+            any.dtype(),
+            DataType::U16,
+            "must stay u16, not upcast to f64"
+        );
         match &any {
             AnyRaster::U16(r) => {
                 assert_eq!(r.shape(), (2, 4));
