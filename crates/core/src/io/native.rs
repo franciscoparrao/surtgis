@@ -11,10 +11,15 @@ use std::fs::File;
 use std::io::Cursor;
 use std::path::Path;
 use tiff::decoder::{Decoder, DecodingResult, Limits};
-use tiff::encoder::colortype::{ColorType, Gray32Float, RGB32Float, RGBA32Float};
+use tiff::encoder::colortype::{
+    ColorType, Gray8, Gray16, Gray32, Gray32Float, Gray64, Gray64Float, GrayI8, GrayI16, GrayI32,
+    GrayI64, RGB32Float, RGBA32Float,
+};
 use tiff::encoder::compression::DeflateLevel;
-use tiff::encoder::{Compression, TiffEncoder};
-use tiff::tags::Tag;
+use tiff::encoder::{
+    Compression, DirectoryEncoder, TiffEncoder, TiffKind, TiffKindBig, TiffKindStandard,
+};
+use tiff::tags::{CompressionMethod, PhotometricInterpretation, Tag};
 
 /// Read a GeoTIFF file into a Raster
 ///
@@ -412,103 +417,173 @@ fn read_nodata<R: std::io::Read + std::io::Seek>(decoder: &mut Decoder<R>) -> Op
     s.trim().trim_end_matches('\0').parse::<f64>().ok()
 }
 
-/// Write a Raster to a GeoTIFF file
+/// Maps a [`RasterElement`] to the native `tiff`-crate `ColorType` that
+/// stores it losslessly. The writer used to always cast to `f32`
+/// (`Gray32Float`) regardless of `T`, so a `u16` DEM or a `u8` mask was
+/// written 2-4x larger than necessary and lost its integer sample
+/// semantics (`SampleFormat` claimed `IEEEFP` for integer data).
 ///
-/// Native writer with limited GeoTIFF metadata support.
-/// Writes as 32-bit float. For full support, enable the `gdal` feature.
-pub fn write_geotiff<T, P>(
-    raster: &Raster<T>,
-    path: P,
-    options: Option<GeoTiffOptions>,
+/// `tiff` 0.10's `colortype` module happens to expose an exact
+/// single-sample grayscale type for every numeric type
+/// [`RasterElement`] is implemented for (`u8`, `i8`, `u16`, `i16`,
+/// `u32`, `i32`, `u64`, `i64`, `f32`, `f64` -- see
+/// `crates/core/src/raster/element.rs`), so every impl below is a
+/// lossless 1:1 mapping; no fallback casting to a wider/narrower type
+/// is needed for any of the ten.
+pub trait NativeGraySample: RasterElement
+where
+    [Self]: tiff::encoder::TiffValue,
+{
+    /// The `tiff` colortype with `Inner = Self`.
+    type Gray: ColorType<Inner = Self>;
+
+    /// Append this value's native-endian bytes (matching how the `tiff`
+    /// crate itself serializes samples -- see `encoder::writer::TiffWriter`,
+    /// which always writes `to_ne_bytes()`) to `buf`. Used by
+    /// `write_geotiff_stack`, which drives the low-level
+    /// `DirectoryEncoder` API directly and therefore has to assemble the
+    /// strip bytes (and, when compressing, deflate them) itself instead
+    /// of going through `ImageEncoder`.
+    fn write_ne_bytes(self, buf: &mut Vec<u8>);
+}
+
+macro_rules! impl_native_gray_sample {
+    ($t:ty, $ct:ty) => {
+        impl NativeGraySample for $t {
+            type Gray = $ct;
+
+            fn write_ne_bytes(self, buf: &mut Vec<u8>) {
+                buf.extend_from_slice(&self.to_ne_bytes());
+            }
+        }
+    };
+}
+
+impl_native_gray_sample!(u8, Gray8);
+impl_native_gray_sample!(i8, GrayI8);
+impl_native_gray_sample!(u16, Gray16);
+impl_native_gray_sample!(i16, GrayI16);
+impl_native_gray_sample!(u32, Gray32);
+impl_native_gray_sample!(i32, GrayI32);
+impl_native_gray_sample!(u64, Gray64);
+impl_native_gray_sample!(i64, GrayI64);
+impl_native_gray_sample!(f32, Gray32Float);
+impl_native_gray_sample!(f64, Gray64Float);
+
+/// Resolve `options.compression` into a concrete `tiff::encoder::Compression`.
+///
+/// Previously any non-`"NONE"` string silently fell back to DEFLATE --
+/// requesting `"LZW"` or `"ZSTD"` (both valid for the `gdal` backend)
+/// produced a DEFLATE-compressed file with no indication the requested
+/// codec was ignored. Now only `"NONE"`/`"DEFLATE"` (case-insensitive)
+/// resolve; anything else the native backend can't actually produce is
+/// a hard error naming the unsupported codec.
+fn resolve_compression(options: Option<&GeoTiffOptions>) -> Result<Compression> {
+    let Some(options) = options else {
+        return Ok(Compression::Uncompressed);
+    };
+    match options.compression.to_lowercase().as_str() {
+        "none" | "" => Ok(Compression::Uncompressed),
+        "deflate" => Ok(Compression::Deflate(DeflateLevel::Balanced)),
+        other => Err(Error::Other(format!(
+            "compression '{other}' is not supported by the native GeoTIFF writer (only NONE/DEFLATE); use the gdal feature for other codecs"
+        ))),
+    }
+}
+
+/// Estimated uncompressed on-disk size of a GeoTIFF, for the BigTIFF
+/// heads-up in [`warn_if_bigtiff_recommended`]. Compression may shrink
+/// the real file, but strip/tile *offsets* -- the thing that actually
+/// overflows in a classic (non-Big) TIFF -- are driven by the
+/// uncompressed layout geometry, not the compressed size, so this stays
+/// a meaningful (if conservative) trigger either way.
+fn estimate_geotiff_bytes(
+    rows: usize,
+    cols: usize,
+    n_bands: usize,
+    bytes_per_sample: usize,
+) -> u64 {
+    (rows as u64) * (cols as u64) * (n_bands as u64) * (bytes_per_sample as u64)
+}
+
+/// Comfortably under the 4 GiB (2^32 byte) classic-TIFF offset ceiling,
+/// so the warning fires with headroom to actually switch to BigTIFF
+/// before hitting the real limit.
+const BIGTIFF_WARN_THRESHOLD_BYTES: u64 = 3_800_000_000;
+
+/// Emit a heads-up when writing a large classic (non-Big) TIFF.
+///
+/// The `tiff` crate itself already returns a clear `TryFromIntError`-
+/// wrapped error if a strip offset genuinely overflows `u32::MAX` (see
+/// `TiffKindStandard::convert_offset`) -- this warning fires earlier, at
+/// the point the file is *likely* to approach that ceiling, so callers
+/// get a chance to opt into BigTIFF instead of hitting the failure only
+/// after most of the (potentially expensive) write has happened.
+fn warn_if_bigtiff_recommended(bigtiff: bool, estimated_bytes: u64) {
+    if !bigtiff && estimated_bytes > BIGTIFF_WARN_THRESHOLD_BYTES {
+        eprintln!(
+            "surtgis: WARNING - estimated GeoTIFF size is {:.2} GiB, close to the 4 GiB \
+             classic-TIFF limit. Pass GeoTiffOptions {{ bigtiff: true, .. }} to write BigTIFF \
+             instead of risking a write failure once strip offsets exceed u32::MAX.",
+            estimated_bytes as f64 / (1024.0 * 1024.0 * 1024.0)
+        );
+    }
+}
+
+/// Write the GeoTIFF geo-referencing tags (pixel scale, tiepoint,
+/// geokeys, nodata) shared by every native write path. Factored out of
+/// the old per-function copies so `write_geotiff_stack` (which drives
+/// `DirectoryEncoder` directly rather than through `ImageEncoder`) can
+/// reuse the same tag payloads without duplicating the CRS -> GeoKey
+/// logic a third time.
+fn write_geo_metadata_tags<W, K>(
+    dir: &mut DirectoryEncoder<'_, W, K>,
+    transform: &GeoTransform,
+    crs: Option<&crate::crs::CRS>,
+    nodata_f64: Option<f64>,
 ) -> Result<()>
 where
-    T: RasterElement,
-    P: AsRef<Path>,
-{
-    let compress = options
-        .as_ref()
-        .map(|o| o.compression.to_lowercase() != "none")
-        .unwrap_or(false);
-
-    // Write to temp file first, then atomic rename to prevent corrupt partial files
-    let final_path = path.as_ref();
-    let tmp_path = final_path.with_extension("tmp");
-    let file = File::create(&tmp_path)?;
-    encode_geotiff(raster, file, compress)?;
-    std::fs::rename(&tmp_path, final_path)?;
-    Ok(())
-}
-
-/// Write a Raster to an in-memory GeoTIFF buffer
-///
-/// Same as `write_geotiff` but returns a `Vec<u8>` instead of writing to a file.
-/// Useful for WASM environments where filesystem access is not available.
-pub fn write_geotiff_to_buffer<T>(
-    raster: &Raster<T>,
-    options: Option<GeoTiffOptions>,
-) -> Result<Vec<u8>>
-where
-    T: RasterElement,
-{
-    let compress = options
-        .as_ref()
-        .map(|o| o.compression.to_lowercase() != "none")
-        .unwrap_or(false);
-    let mut buf = Vec::new();
-    encode_geotiff(raster, Cursor::new(&mut buf), compress)?;
-    Ok(buf)
-}
-
-/// Internal: encode a Raster as GeoTIFF into any `Write + Seek` sink
-fn encode_geotiff<T, W>(raster: &Raster<T>, writer: W, compress: bool) -> Result<()>
-where
-    T: RasterElement,
     W: std::io::Write + std::io::Seek,
+    K: TiffKind,
 {
-    let compression = if compress {
-        Compression::Deflate(DeflateLevel::Balanced)
-    } else {
-        Compression::Uncompressed
-    };
-
-    let mut encoder = TiffEncoder::new(writer)
-        .map_err(|e| Error::Other(format!("TIFF encoder error: {}", e)))?
-        .with_compression(compression);
-
-    let (rows, cols) = raster.shape();
-
-    // Convert data to f32
-    let data: Vec<f32> = raster
-        .data()
-        .iter()
-        .map(|&v| num_traits::cast(v).unwrap_or(f32::NAN))
-        .collect();
-
-    let mut image = encoder
-        .new_image::<Gray32Float>(cols as u32, rows as u32)
-        .map_err(|e| Error::Other(format!("Cannot create TIFF image: {}", e)))?;
-
-    // Write GeoTIFF tags
-    let gt = raster.transform();
-
     // ModelPixelScaleTag
-    let scale = vec![gt.pixel_width, gt.pixel_height.abs(), 0.0];
-    image
-        .encoder()
-        .write_tag(Tag::Unknown(33550), scale.as_slice())
+    let scale = vec![transform.pixel_width, transform.pixel_height.abs(), 0.0];
+    dir.write_tag(Tag::Unknown(33550), scale.as_slice())
         .map_err(|e| Error::Other(format!("Cannot write scale tag: {}", e)))?;
 
     // ModelTiepointTag
-    let tiepoint = vec![0.0, 0.0, 0.0, gt.origin_x, gt.origin_y, 0.0];
-    image
-        .encoder()
-        .write_tag(Tag::Unknown(33922), tiepoint.as_slice())
+    let tiepoint = vec![0.0, 0.0, 0.0, transform.origin_x, transform.origin_y, 0.0];
+    dir.write_tag(Tag::Unknown(33922), tiepoint.as_slice())
         .map_err(|e| Error::Other(format!("Cannot write tiepoint tag: {}", e)))?;
 
-    // GeoKeyDirectoryTag (34735) — embed actual CRS from raster metadata.
-    // GeoKey structure: [KeyDirectoryVersion, KeyRevision, MinorRevision, NumberOfKeys,
-    //                    KeyID, TIFFTagLocation, Count, Value_Offset, ...]
-    let geokeys: Vec<u16> = if let Some(crs) = raster.crs() {
+    // GeoKeyDirectoryTag (34735)
+    let geokeys = geokeys_for_crs(crs);
+    dir.write_tag(Tag::Unknown(34735), geokeys.as_slice())
+        .map_err(|e| Error::Other(format!("Cannot write geokey tag: {}", e)))?;
+
+    // GDAL_NODATA tag (42113) — write as ASCII string
+    if let Some(nd_f64) = nodata_f64 {
+        let nodata_str = if nd_f64.is_nan() {
+            "nan".to_string()
+        } else {
+            format!("{}", nd_f64)
+        };
+        // Write as a proper ASCII tag (the str impl appends the NUL);
+        // writing via as_bytes() produced a BYTE-typed tag that
+        // get_tag_ascii_string rejects on read-back.
+        dir.write_tag(Tag::Unknown(42113), nodata_str.as_str())
+            .map_err(|e| Error::Other(format!("Cannot write nodata tag: {}", e)))?;
+    }
+
+    Ok(())
+}
+
+/// GeoKeyDirectoryTag (34735) payload for a raster's CRS.
+///
+/// GeoKey structure: `[KeyDirectoryVersion, KeyRevision, MinorRevision,
+/// NumberOfKeys, KeyID, TIFFTagLocation, Count, Value_Offset, ...]`.
+fn geokeys_for_crs(crs: Option<&crate::crs::CRS>) -> Vec<u16> {
+    if let Some(crs) = crs {
         if let Some(epsg) = crs.epsg() {
             if epsg == 4326 {
                 // Geographic CRS (WGS84)
@@ -561,30 +636,113 @@ where
     } else {
         // No CRS — write generic projected (backward compatible)
         vec![1, 1, 0, 2, 1024, 0, 1, 1, 1025, 0, 1, 1]
-    };
-    image
-        .encoder()
-        .write_tag(Tag::Unknown(34735), geokeys.as_slice())
-        .map_err(|e| Error::Other(format!("Cannot write geokey tag: {}", e)))?;
-
-    // GDAL_NODATA tag (42113) — write as ASCII string
-    if let Some(nd) = raster.nodata() {
-        if let Some(nd_f64) = nd.to_f64() {
-            let nodata_str = if nd_f64.is_nan() {
-                "nan".to_string()
-            } else {
-                format!("{}", nd_f64)
-            };
-            // Write as a proper ASCII tag (the str impl appends the NUL);
-            // writing via as_bytes() produced a BYTE-typed tag that
-            // get_tag_ascii_string rejects on read-back.
-            image
-                .encoder()
-                .write_tag(Tag::Unknown(42113), nodata_str.as_str())
-                .map_err(|e| Error::Other(format!("Cannot write nodata tag: {}", e)))?;
-        }
     }
+}
 
+/// Write a Raster to a GeoTIFF file
+///
+/// Native writer with limited GeoTIFF metadata support. Writes using
+/// `T`'s own native TIFF sample type (`u8` -> Gray8, `u16` -> Gray16,
+/// `f32` -> Gray32Float, etc. -- see [`NativeGraySample`]), not always
+/// Float32. For full support, enable the `gdal` feature.
+pub fn write_geotiff<T, P>(
+    raster: &Raster<T>,
+    path: P,
+    options: Option<GeoTiffOptions>,
+) -> Result<()>
+where
+    T: RasterElement + NativeGraySample,
+    [T]: tiff::encoder::TiffValue,
+    P: AsRef<Path>,
+{
+    // Write to temp file first, then atomic rename to prevent corrupt partial files
+    let final_path = path.as_ref();
+    let tmp_path = final_path.with_extension("tmp");
+    let file = File::create(&tmp_path)?;
+    encode_geotiff(raster, file, options.as_ref())?;
+    std::fs::rename(&tmp_path, final_path)?;
+    Ok(())
+}
+
+/// Write a Raster to an in-memory GeoTIFF buffer
+///
+/// Same as `write_geotiff` but returns a `Vec<u8>` instead of writing to a file.
+/// Useful for WASM environments where filesystem access is not available.
+pub fn write_geotiff_to_buffer<T>(
+    raster: &Raster<T>,
+    options: Option<GeoTiffOptions>,
+) -> Result<Vec<u8>>
+where
+    T: RasterElement + NativeGraySample,
+    [T]: tiff::encoder::TiffValue,
+{
+    let mut buf = Vec::new();
+    encode_geotiff(raster, Cursor::new(&mut buf), options.as_ref())?;
+    Ok(buf)
+}
+
+/// Internal: encode a Raster as GeoTIFF into any `Write + Seek` sink,
+/// using `T`'s native TIFF sample type and honouring `options.bigtiff`.
+fn encode_geotiff<T, W>(
+    raster: &Raster<T>,
+    writer: W,
+    options: Option<&GeoTiffOptions>,
+) -> Result<()>
+where
+    T: RasterElement + NativeGraySample,
+    [T]: tiff::encoder::TiffValue,
+    W: std::io::Write + std::io::Seek,
+{
+    let compression = resolve_compression(options)?;
+    let bigtiff = options.map(|o| o.bigtiff).unwrap_or(false);
+    let (rows, cols) = raster.shape();
+    warn_if_bigtiff_recommended(
+        bigtiff,
+        estimate_geotiff_bytes(rows, cols, 1, std::mem::size_of::<T>()),
+    );
+
+    if bigtiff {
+        let mut encoder = TiffEncoder::new_big(writer)
+            .map_err(|e| Error::Other(format!("TIFF encoder error: {}", e)))?
+            .with_compression(compression);
+        let image = encoder
+            .new_image::<T::Gray>(cols as u32, rows as u32)
+            .map_err(|e| Error::Other(format!("Cannot create TIFF image: {}", e)))?;
+        write_single_band_image(image, raster)
+    } else {
+        let mut encoder = TiffEncoder::new(writer)
+            .map_err(|e| Error::Other(format!("TIFF encoder error: {}", e)))?
+            .with_compression(compression);
+        let image = encoder
+            .new_image::<T::Gray>(cols as u32, rows as u32)
+            .map_err(|e| Error::Other(format!("Cannot create TIFF image: {}", e)))?;
+        write_single_band_image(image, raster)
+    }
+}
+
+/// Write geo-tags + pixel data into an already-created single-band
+/// `ImageEncoder`, generic over both TIFF/BigTIFF (`K`) so the two
+/// branches of `encode_geotiff` share one code path.
+fn write_single_band_image<T, W, K>(
+    mut image: tiff::encoder::ImageEncoder<'_, W, T::Gray, K>,
+    raster: &Raster<T>,
+) -> Result<()>
+where
+    T: RasterElement + NativeGraySample,
+    [T]: tiff::encoder::TiffValue,
+    W: std::io::Write + std::io::Seek,
+    K: TiffKind,
+{
+    write_geo_metadata_tags(
+        image.encoder(),
+        raster.transform(),
+        raster.crs(),
+        raster.nodata().and_then(|nd| nd.to_f64()),
+    )?;
+
+    // No cast needed: T::Gray::Inner == T, so the raw sample buffer is
+    // written verbatim instead of through the old lossy f32 conversion.
+    let data: Vec<T> = raster.data().iter().copied().collect();
     image
         .write_data(&data)
         .map_err(|e| Error::Other(format!("Cannot write image data: {}", e)))?;
@@ -627,10 +785,10 @@ where
         )));
     }
 
-    let compress = options
-        .as_ref()
-        .map(|o| o.compression.to_lowercase() != "none")
-        .unwrap_or(false);
+    // Explicit resolve: a compression string the native backend can't
+    // actually produce (e.g. "LZW"/"ZSTD", valid for the `gdal` backend)
+    // is now a hard error instead of a silent fallback to DEFLATE.
+    let compression = resolve_compression(options.as_ref())?;
 
     let final_path = path.as_ref();
     let tmp_path = final_path.with_extension("tmp");
@@ -650,9 +808,9 @@ where
     }
 
     match n_bands {
-        1 => encode_multiband_image::<Gray32Float, _>(file, bands[0], &interleaved, compress)?,
-        3 => encode_multiband_image::<RGB32Float, _>(file, bands[0], &interleaved, compress)?,
-        4 => encode_multiband_image::<RGBA32Float, _>(file, bands[0], &interleaved, compress)?,
+        1 => encode_multiband_image::<Gray32Float, _>(file, bands[0], &interleaved, compression)?,
+        3 => encode_multiband_image::<RGB32Float, _>(file, bands[0], &interleaved, compression)?,
+        4 => encode_multiband_image::<RGBA32Float, _>(file, bands[0], &interleaved, compression)?,
         _ => unreachable!(),
     }
     std::fs::rename(&tmp_path, final_path)?;
@@ -667,17 +825,12 @@ fn encode_multiband_image<CT, W>(
     writer: W,
     meta: &Raster<impl RasterElement>,
     interleaved: &[f32],
-    compress: bool,
+    compression: Compression,
 ) -> Result<()>
 where
     CT: ColorType<Inner = f32>,
     W: std::io::Write + std::io::Seek,
 {
-    let compression = if compress {
-        Compression::Deflate(DeflateLevel::Balanced)
-    } else {
-        Compression::Uncompressed
-    };
     let mut encoder = TiffEncoder::new(writer)
         .map_err(|e| Error::Other(format!("TIFF encoder error: {}", e)))?
         .with_compression(compression);
@@ -769,6 +922,279 @@ where
     image
         .write_data(interleaved)
         .map_err(|e| Error::Other(format!("Cannot write image data: {}", e)))?;
+    Ok(())
+}
+
+/// Write an arbitrary number (1..=N, not just 1/3/4) of single-band
+/// rasters as one multi-band GeoTIFF, using `T`'s *native* TIFF sample
+/// type (not always Float32 like [`write_geotiff_multiband`]) and
+/// `PhotometricInterpretation = BlackIsZero` — never RGB/RGBA, which the
+/// engine audit flagged as misleading for stacks of unrelated bands
+/// (e.g. spectral indices) that happen to number 3 or 4.
+///
+/// If `names` is provided, band descriptions are written to the
+/// GDAL_METADATA tag (42112) as `<Item name="DESCRIPTION" sample="i">`
+/// entries, readable by GDAL/rasterio as per-band descriptions.
+///
+/// # Implementation note
+///
+/// `tiff`'s `ImageEncoder`/`ColorType` API requires the sample layout
+/// (`BITS_PER_SAMPLE`, `SAMPLE_FORMAT`) to be a `const` fixed at compile
+/// time, which is incompatible with `bands.len()` only being known at
+/// runtime. This function instead drives the lower-level
+/// `DirectoryEncoder` API directly and writes the tags by hand.
+///
+/// That lower-level API does not run the crate's built-in compressors
+/// (`Compression::Deflate`'s zlib pass lives behind a private
+/// `TiffWriter` field that only `ImageEncoder`, in the same module, can
+/// reach) — so when DEFLATE is requested this function performs its own
+/// zlib/DEFLATE pass via `flate2`, using the exact same "Adobe Deflate"
+/// wrapper (`ZlibEncoder`) the `tiff` crate's own `Deflate` compressor
+/// uses internally, and writes the resulting bytes as one raw strip.
+pub fn write_geotiff_stack<T, P>(
+    bands: &[&Raster<T>],
+    names: Option<&[&str]>,
+    path: P,
+    options: &GeoTiffOptions,
+) -> Result<()>
+where
+    T: RasterElement + NativeGraySample,
+    [T]: tiff::encoder::TiffValue,
+    P: AsRef<Path>,
+{
+    if bands.is_empty() {
+        return Err(Error::Other("stack needs at least one band".into()));
+    }
+    let (rows, cols) = bands[0].shape();
+    for b in bands.iter().skip(1) {
+        if b.shape() != (rows, cols) {
+            return Err(Error::Other("stack bands must share shape".into()));
+        }
+    }
+    if let Some(names) = names
+        && names.len() != bands.len()
+    {
+        return Err(Error::Other(format!(
+            "names length ({}) must match band count ({})",
+            names.len(),
+            bands.len()
+        )));
+    }
+
+    let compression = resolve_compression(Some(options))?;
+    let n_bands = bands.len();
+    let n_px = rows * cols;
+
+    // Build the interleaved (chunky) buffer, native dtype (no f32 cast):
+    //   [b0_px0, b1_px0, ..., bK_px0, b0_px1, b1_px1, ..., bK_px1, ...]
+    let mut interleaved: Vec<T> = vec![T::zero(); n_px * n_bands];
+    for (b, raster) in bands.iter().enumerate() {
+        for (i, &v) in raster.data().iter().enumerate() {
+            interleaved[i * n_bands + b] = v;
+        }
+    }
+
+    warn_if_bigtiff_recommended(
+        options.bigtiff,
+        estimate_geotiff_bytes(rows, cols, n_bands, std::mem::size_of::<T>()),
+    );
+
+    let final_path = path.as_ref();
+    let tmp_path = final_path.with_extension("tmp");
+    let file = File::create(&tmp_path)?;
+
+    if options.bigtiff {
+        let mut encoder = TiffEncoder::new_big(file)
+            .map_err(|e| Error::Other(format!("TIFF encoder error: {}", e)))?;
+        write_stack_ifd::<T, _, TiffKindBig>(
+            &mut encoder,
+            rows,
+            cols,
+            n_bands,
+            &interleaved,
+            compression,
+            bands[0],
+            names,
+        )?;
+    } else {
+        let mut encoder = TiffEncoder::new(file)
+            .map_err(|e| Error::Other(format!("TIFF encoder error: {}", e)))?;
+        write_stack_ifd::<T, _, TiffKindStandard>(
+            &mut encoder,
+            rows,
+            cols,
+            n_bands,
+            &interleaved,
+            compression,
+            bands[0],
+            names,
+        )?;
+    }
+
+    std::fs::rename(&tmp_path, final_path)?;
+    Ok(())
+}
+
+/// Flatten `data` into its native-endian byte representation, matching
+/// exactly what the `tiff` crate itself writes for a `[T]` sample
+/// buffer (see `encoder::writer::TiffWriter`, which always serializes
+/// via `to_ne_bytes()`).
+fn flatten_native_bytes<T: NativeGraySample>(data: &[T]) -> Vec<u8>
+where
+    [T]: tiff::encoder::TiffValue,
+{
+    let mut buf = Vec::with_capacity(data.len() * std::mem::size_of::<T>());
+    for &v in data {
+        v.write_ne_bytes(&mut buf);
+    }
+    buf
+}
+
+/// Zlib/DEFLATE-compress `data`, using the same wrapper (`flate2`'s
+/// `ZlibEncoder`) and level mapping the `tiff` crate's own `Deflate`
+/// compressor uses (`encoder::compression::deflate`), so the resulting
+/// stream is the same "Adobe Deflate" TIFF readers expect.
+fn deflate_compress_bytes(data: &[u8], level: DeflateLevel) -> Result<Vec<u8>> {
+    use std::io::Write as _;
+    let mut encoder =
+        flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::new(level as u32));
+    encoder
+        .write_all(data)
+        .map_err(|e| Error::Other(format!("DEFLATE compression failed: {}", e)))?;
+    encoder
+        .finish()
+        .map_err(|e| Error::Other(format!("DEFLATE compression failed: {}", e)))
+}
+
+/// Escape the handful of characters that are meaningful in XML text
+/// content/attribute values.
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// Build the GDAL_METADATA (tag 42112) XML payload carrying per-band
+/// descriptions, in the format GDAL's GTiff driver writes/reads:
+/// `<Item name="DESCRIPTION" sample="i">...</Item>` per band.
+fn gdal_metadata_xml(names: &[&str]) -> String {
+    let mut xml = String::from("<GDALMetadata>");
+    for (i, name) in names.iter().enumerate() {
+        xml.push_str(&format!(
+            "<Item name=\"DESCRIPTION\" sample=\"{}\" role=\"description\">{}</Item>",
+            i,
+            xml_escape(name)
+        ));
+    }
+    xml.push_str("</GDALMetadata>");
+    xml
+}
+
+/// Low-level IFD writer behind [`write_geotiff_stack`]: writes every
+/// tag by hand via `DirectoryEncoder` (rather than `ImageEncoder`)
+/// because the sample layout (band count) is only known at runtime.
+/// Generic over `K` so the same code serves both classic TIFF and
+/// BigTIFF.
+fn write_stack_ifd<T, W, K>(
+    encoder: &mut TiffEncoder<W, K>,
+    rows: usize,
+    cols: usize,
+    n_bands: usize,
+    interleaved: &[T],
+    compression: Compression,
+    meta: &Raster<T>,
+    names: Option<&[&str]>,
+) -> Result<()>
+where
+    T: RasterElement + NativeGraySample,
+    [T]: tiff::encoder::TiffValue,
+    W: std::io::Write + std::io::Seek,
+    K: TiffKind,
+{
+    let mut dir = encoder
+        .image_directory()
+        .map_err(|e| Error::Other(format!("Cannot create TIFF directory: {}", e)))?;
+
+    let bits_per_sample: Vec<u16> = vec![<T::Gray as ColorType>::BITS_PER_SAMPLE[0]; n_bands];
+    let sample_format: Vec<u16> = vec![<T::Gray as ColorType>::SAMPLE_FORMAT[0].to_u16(); n_bands];
+
+    dir.write_tag(Tag::ImageWidth, cols as u32)
+        .map_err(|e| Error::Other(format!("Cannot write ImageWidth: {}", e)))?;
+    dir.write_tag(Tag::ImageLength, rows as u32)
+        .map_err(|e| Error::Other(format!("Cannot write ImageLength: {}", e)))?;
+    dir.write_tag(Tag::BitsPerSample, bits_per_sample.as_slice())
+        .map_err(|e| Error::Other(format!("Cannot write BitsPerSample: {}", e)))?;
+    dir.write_tag(Tag::SampleFormat, sample_format.as_slice())
+        .map_err(|e| Error::Other(format!("Cannot write SampleFormat: {}", e)))?;
+    // Never RGB/RGBA: an N-band stack of arbitrary (possibly unrelated)
+    // bands should not imply a color interpretation.
+    dir.write_tag(
+        Tag::PhotometricInterpretation,
+        PhotometricInterpretation::BlackIsZero.to_u16(),
+    )
+    .map_err(|e| Error::Other(format!("Cannot write PhotometricInterpretation: {}", e)))?;
+    dir.write_tag(Tag::SamplesPerPixel, n_bands as u16)
+        .map_err(|e| Error::Other(format!("Cannot write SamplesPerPixel: {}", e)))?;
+    if n_bands > 1 {
+        // PhotometricInterpretation::BlackIsZero only accounts for one
+        // "color" channel; without ExtraSamples, libtiff/GDAL emit a
+        // (harmless, but noisy) "Sum of Photometric type-related color
+        // channels and ExtraSamples doesn't match SamplesPerPixel"
+        // warning for every band beyond the first. Declaring the rest
+        // as "0 = Unspecified data" (not alpha) is the correct tag for
+        // an arbitrary stack of unrelated bands and silences it.
+        let extra_samples: Vec<u16> = vec![0; n_bands - 1];
+        dir.write_tag(Tag::ExtraSamples, extra_samples.as_slice())
+            .map_err(|e| Error::Other(format!("Cannot write ExtraSamples: {}", e)))?;
+    }
+    dir.write_tag(Tag::RowsPerStrip, rows as u32)
+        .map_err(|e| Error::Other(format!("Cannot write RowsPerStrip: {}", e)))?;
+
+    // Single strip covering the whole image — simple and spec-legal;
+    // `write_geotiff_streaming` (strip_writer.rs) is the path for
+    // memory-bounded chunked writes.
+    let raw_bytes = flatten_native_bytes(interleaved);
+    let (compression_code, strip_bytes) = match compression {
+        Compression::Uncompressed => (CompressionMethod::None.to_u16(), raw_bytes),
+        Compression::Deflate(level) => (
+            CompressionMethod::Deflate.to_u16(),
+            deflate_compress_bytes(&raw_bytes, level)?,
+        ),
+        // `resolve_compression` only ever returns Uncompressed or
+        // Deflate for the native backend (see its doc comment).
+        _ => unreachable!("resolve_compression only returns Uncompressed/Deflate"),
+    };
+    dir.write_tag(Tag::Compression, compression_code)
+        .map_err(|e| Error::Other(format!("Cannot write Compression: {}", e)))?;
+
+    let offset = dir
+        .write_data(strip_bytes.as_slice())
+        .map_err(|e| Error::Other(format!("Cannot write strip data: {}", e)))?;
+    let strip_offset = K::convert_offset(offset)
+        .map_err(|e| Error::Other(format!("Strip offset overflow: {}", e)))?;
+    let strip_byte_count = K::convert_offset(strip_bytes.len() as u64)
+        .map_err(|e| Error::Other(format!("Strip byte count overflow: {}", e)))?;
+    dir.write_tag(Tag::StripOffsets, strip_offset)
+        .map_err(|e| Error::Other(format!("Cannot write StripOffsets: {}", e)))?;
+    dir.write_tag(Tag::StripByteCounts, strip_byte_count)
+        .map_err(|e| Error::Other(format!("Cannot write StripByteCounts: {}", e)))?;
+
+    write_geo_metadata_tags(
+        &mut dir,
+        meta.transform(),
+        meta.crs(),
+        meta.nodata().and_then(|nd| nd.to_f64()),
+    )?;
+
+    if let Some(names) = names {
+        let xml = gdal_metadata_xml(names);
+        dir.write_tag(Tag::Unknown(42112), xml.as_str())
+            .map_err(|e| Error::Other(format!("Cannot write GDAL_METADATA tag: {}", e)))?;
+    }
+
+    dir.finish()
+        .map_err(|e| Error::Other(format!("Cannot finish TIFF directory: {}", e)))?;
     Ok(())
 }
 
@@ -996,5 +1422,514 @@ mod tests {
             "EPSG:32719 missing from GeoKeyDirectory: {:?}",
             gk
         );
+    }
+
+    // ---------------------------------------------------------------
+    // Native dtype (mejora 1): `write_geotiff<T>` now writes T's own
+    // TIFF sample type instead of always casting to Gray32Float.
+    // ---------------------------------------------------------------
+
+    /// Roundtrip `write_geotiff` -> `read_geotiff` for a native dtype,
+    /// plus a direct tag inspection confirming BitsPerSample/SampleFormat
+    /// actually match `T` on disk (not always 32/IEEEFP).
+    macro_rules! native_dtype_roundtrip_test {
+        ($name:ident, $t:ty, $bits:expr, $fmt:expr, $v0:expr, $v1:expr) => {
+            #[test]
+            fn $name() {
+                let mut r: Raster<$t> = Raster::new(3, 3);
+                r.set_transform(GeoTransform::new(0.0, 3.0, 1.0, -1.0));
+                r.set(0, 0, $v0).unwrap();
+                r.set(1, 1, $v1).unwrap();
+                let dir = TempDir::new().unwrap();
+                let path = dir.path().join(concat!(stringify!($name), ".tif"));
+                write_geotiff(&r, &path, None).unwrap();
+
+                // Native dtype on disk: BitsPerSample/SampleFormat match T,
+                // not the old hardcoded 32/IEEEFP.
+                let file = File::open(&path).unwrap();
+                let mut dec = Decoder::new(file).unwrap();
+                let bps = dec.get_tag_u32(Tag::BitsPerSample).unwrap();
+                assert_eq!(bps, $bits, "BitsPerSample mismatch for {}", stringify!($t));
+                let fmt = dec.get_tag_u32(Tag::SampleFormat).unwrap_or(1);
+                assert_eq!(fmt, $fmt, "SampleFormat mismatch for {}", stringify!($t));
+
+                // Roundtrip through the native reader.
+                let back: Raster<$t> = read_geotiff(&path, None).unwrap();
+                assert_eq!(back.get(0, 0).unwrap(), $v0);
+                assert_eq!(back.get(1, 1).unwrap(), $v1);
+            }
+        };
+    }
+
+    // SampleFormat codes: 1 = Uint, 2 = Int, 3 = IEEEFP (tiff::tags::SampleFormat).
+    native_dtype_roundtrip_test!(native_dtype_roundtrip_u8, u8, 8, 1, 7u8, 200u8);
+    native_dtype_roundtrip_test!(native_dtype_roundtrip_i8, i8, 8, 2, -5i8, 100i8);
+    native_dtype_roundtrip_test!(native_dtype_roundtrip_u16, u16, 16, 1, 500u16, 60000u16);
+    native_dtype_roundtrip_test!(native_dtype_roundtrip_i16, i16, 16, 2, -500i16, 30000i16);
+    native_dtype_roundtrip_test!(
+        native_dtype_roundtrip_u32,
+        u32,
+        32,
+        1,
+        70_000u32,
+        4_000_000_000u32
+    );
+    native_dtype_roundtrip_test!(
+        native_dtype_roundtrip_i32,
+        i32,
+        32,
+        2,
+        -70_000i32,
+        2_000_000_000i32
+    );
+    native_dtype_roundtrip_test!(native_dtype_roundtrip_f32, f32, 32, 3, 1.5f32, -2.25f32);
+    native_dtype_roundtrip_test!(native_dtype_roundtrip_f64, f64, 64, 3, 1.5f64, -2.25f64);
+
+    /// u64/i64: the native *writer* supports them via `Gray64`/`GrayI64`
+    /// (mejora 1 maps every `RasterElement` type losslessly), but the
+    /// native *reader*'s `decode_image` match (which this task was
+    /// explicitly told not to touch) only handles
+    /// `DecodingResult::{U8,U16,U32,I8,I16,I32,F32,F64}` — not `U64`/
+    /// `I64` — so `read_geotiff::<u64/i64>` can't round-trip these yet.
+    /// This test verifies the writer side directly against the `tiff`
+    /// decoder (bypassing our reader) instead of asserting a roundtrip
+    /// that the reader doesn't support.
+    #[test]
+    fn native_dtype_u64_writer_produces_correct_tags_and_bytes() {
+        let mut r: Raster<u64> = Raster::new(2, 2);
+        r.set_transform(GeoTransform::new(0.0, 2.0, 1.0, -1.0));
+        r.set(0, 0, 42u64).unwrap();
+        r.set(1, 1, 9_000_000_000u64).unwrap();
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("u64.tif");
+        write_geotiff(&r, &path, None).unwrap();
+
+        let file = File::open(&path).unwrap();
+        let mut dec = Decoder::new(file).unwrap();
+        assert_eq!(dec.get_tag_u32(Tag::BitsPerSample).unwrap(), 64);
+        assert_eq!(dec.get_tag_u32(Tag::SampleFormat).unwrap(), 1); // Uint
+        let img = dec.read_image().unwrap();
+        match img {
+            DecodingResult::U64(buf) => {
+                assert_eq!(buf[0], 42u64);
+                assert_eq!(buf[3], 9_000_000_000u64);
+            }
+            other => panic!("expected DecodingResult::U64, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn native_dtype_i64_writer_produces_correct_tags_and_bytes() {
+        let mut r: Raster<i64> = Raster::new(2, 2);
+        r.set_transform(GeoTransform::new(0.0, 2.0, 1.0, -1.0));
+        r.set(0, 0, -42i64).unwrap();
+        r.set(1, 1, 5_000_000_000i64).unwrap();
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("i64.tif");
+        write_geotiff(&r, &path, None).unwrap();
+
+        let file = File::open(&path).unwrap();
+        let mut dec = Decoder::new(file).unwrap();
+        assert_eq!(dec.get_tag_u32(Tag::BitsPerSample).unwrap(), 64);
+        assert_eq!(dec.get_tag_u32(Tag::SampleFormat).unwrap(), 2); // Int
+        let img = dec.read_image().unwrap();
+        match img {
+            DecodingResult::I64(buf) => {
+                assert_eq!(buf[0], -42i64);
+                assert_eq!(buf[3], 5_000_000_000i64);
+            }
+            other => panic!("expected DecodingResult::I64, got {:?}", other),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // BigTIFF (mejora 2)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn bigtiff_option_writes_bigtiff_header_and_roundtrips() {
+        let mut r: Raster<f32> = Raster::new(5, 5);
+        r.set_transform(GeoTransform::new(0.0, 5.0, 1.0, -1.0));
+        for i in 0..5 {
+            for j in 0..5 {
+                r.set(i, j, (i * 5 + j) as f32).unwrap();
+            }
+        }
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("big.tif");
+        let opts = GeoTiffOptions {
+            bigtiff: true,
+            ..GeoTiffOptions::default()
+        };
+        write_geotiff(&r, &path, Some(opts)).unwrap();
+
+        // BigTIFF header: byte-order mark + version 43 (vs. 42 for
+        // classic TIFF) — see `tiff::encoder::writer::write_bigtiff_header`.
+        let bytes = std::fs::read(&path).unwrap();
+        let version = u16::from_ne_bytes([bytes[2], bytes[3]]);
+        assert_eq!(version, 43, "expected BigTIFF version marker (43)");
+
+        // The `tiff` decoder itself can open and read it back fine.
+        let back: Raster<f32> = read_geotiff(&path, None).unwrap();
+        assert_eq!(back.get(3, 4).unwrap(), 19.0);
+    }
+
+    #[test]
+    fn non_bigtiff_option_writes_classic_tiff_header() {
+        let r = ramp_band(4, 4, 0.0);
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("classic.tif");
+        write_geotiff(&r, &path, None).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let version = u16::from_ne_bytes([bytes[2], bytes[3]]);
+        assert_eq!(version, 42, "expected classic TIFF version marker (42)");
+    }
+
+    // ---------------------------------------------------------------
+    // Explicit compression errors (mejora 4)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn write_geotiff_rejects_unsupported_compression() {
+        let r = ramp_band(3, 3, 0.0);
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("zstd.tif");
+        let opts = GeoTiffOptions {
+            compression: "zstd".to_string(),
+            ..GeoTiffOptions::default()
+        };
+        let err = write_geotiff(&r, &path, Some(opts)).unwrap_err();
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("zstd") && msg.contains("not supported"),
+            "got: {}",
+            msg
+        );
+        // No partial/corrupt file left behind.
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn write_geotiff_multiband_rejects_unsupported_compression() {
+        let r0 = ramp_band(3, 3, 0.0);
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("lzw.tif");
+        let opts = GeoTiffOptions {
+            compression: "lzw".to_string(),
+            ..GeoTiffOptions::default()
+        };
+        let err = write_geotiff_multiband(&[&r0], &path, Some(opts)).unwrap_err();
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("lzw") && msg.contains("not supported"),
+            "got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn write_geotiff_stack_rejects_unsupported_compression() {
+        let r0 = ramp_band(3, 3, 0.0);
+        let r1 = ramp_band(3, 3, 1.0);
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("stack_lzw.tif");
+        let opts = GeoTiffOptions {
+            compression: "LZW".to_string(),
+            ..GeoTiffOptions::default()
+        };
+        let err = write_geotiff_stack(&[&r0, &r1], None, &path, &opts).unwrap_err();
+        let msg = format!("{}", err);
+        assert!(
+            msg.to_lowercase().contains("lzw") && msg.contains("not supported"),
+            "got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn compression_none_and_deflate_both_still_work() {
+        let r = ramp_band(4, 4, 0.0);
+        let dir = TempDir::new().unwrap();
+
+        let none_opts = GeoTiffOptions {
+            compression: "NONE".to_string(),
+            ..GeoTiffOptions::default()
+        };
+        let p1 = dir.path().join("none.tif");
+        write_geotiff(&r, &p1, Some(none_opts)).unwrap();
+        let back1: Raster<f64> = read_geotiff(&p1, None).unwrap();
+        assert_eq!(back1.get(2, 2).unwrap(), 4.0);
+
+        let deflate_opts = GeoTiffOptions {
+            compression: "DEFLATE".to_string(),
+            ..GeoTiffOptions::default()
+        };
+        let p2 = dir.path().join("deflate.tif");
+        write_geotiff(&r, &p2, Some(deflate_opts)).unwrap();
+        let back2: Raster<f64> = read_geotiff(&p2, None).unwrap();
+        assert_eq!(back2.get(2, 2).unwrap(), 4.0);
+    }
+
+    // ---------------------------------------------------------------
+    // write_geotiff_stack: arbitrary N bands (mejora 3)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn write_geotiff_stack_roundtrips_arbitrary_band_count() {
+        // 5 bands — outside the 1/3/4 the legacy multiband writer allows.
+        let bands_owned: Vec<Raster<u16>> = (0..5)
+            .map(|k| {
+                let mut r: Raster<u16> = Raster::new(4, 4);
+                r.set_transform(GeoTransform::new(0.0, 4.0, 1.0, -1.0));
+                for i in 0..4 {
+                    for j in 0..4 {
+                        r.set(i, j, (k * 100 + i * 4 + j) as u16).unwrap();
+                    }
+                }
+                r
+            })
+            .collect();
+        let bands: Vec<&Raster<u16>> = bands_owned.iter().collect();
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("stack5.tif");
+        write_geotiff_stack(&bands, None, &path, &GeoTiffOptions::default()).unwrap();
+
+        // Tags: SamplesPerPixel=5, BlackIsZero (never RGB), native u16 dtype.
+        let file = File::open(&path).unwrap();
+        let mut dec = Decoder::new(file).unwrap();
+        assert_eq!(dec.get_tag_u32(Tag::SamplesPerPixel).unwrap(), 5);
+        assert_eq!(
+            dec.get_tag_u32(Tag::PhotometricInterpretation).unwrap(),
+            1,
+            "expected BlackIsZero (1), not RGB (2)"
+        );
+        // SampleFormat/BitsPerSample are per-sample arrays once n_bands > 1.
+        let sample_format = dec.get_tag_u32_vec(Tag::SampleFormat).unwrap();
+        assert_eq!(sample_format, vec![1u32; 5]); // Uint x5
+        let bits_per_sample = dec.get_tag_u32_vec(Tag::BitsPerSample).unwrap();
+        assert_eq!(bits_per_sample, vec![16u32; 5]);
+
+        // Readable back through the existing multi-band reader.
+        let read_back = read_geotiff_bands::<u16, _>(&path).unwrap();
+        assert_eq!(read_back.len(), 5);
+        for (k, band) in read_back.iter().enumerate() {
+            assert_eq!(band.get(2, 3).unwrap(), (k * 100 + 2 * 4 + 3) as u16);
+        }
+    }
+
+    #[test]
+    fn write_geotiff_stack_writes_gdal_metadata_band_names() {
+        let r0 = ramp_band(3, 3, 0.0);
+        let r1 = ramp_band(3, 3, 10.0);
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("named.tif");
+        write_geotiff_stack(
+            &[&r0, &r1],
+            Some(&["ndvi", "ndwi"]),
+            &path,
+            &GeoTiffOptions::default(),
+        )
+        .unwrap();
+
+        let file = File::open(&path).unwrap();
+        let mut dec = Decoder::new(file).unwrap();
+        let xml = dec.get_tag_ascii_string(Tag::Unknown(42112)).unwrap();
+        assert!(xml.contains("ndvi"), "GDAL_METADATA missing 'ndvi': {xml}");
+        assert!(xml.contains("ndwi"), "GDAL_METADATA missing 'ndwi': {xml}");
+        assert!(xml.contains("sample=\"0\""));
+        assert!(xml.contains("sample=\"1\""));
+    }
+
+    #[test]
+    fn write_geotiff_stack_rejects_name_count_mismatch() {
+        let r0 = ramp_band(3, 3, 0.0);
+        let r1 = ramp_band(3, 3, 1.0);
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("bad_names.tif");
+        let err = write_geotiff_stack(
+            &[&r0, &r1],
+            Some(&["only_one"]),
+            &path,
+            &GeoTiffOptions::default(),
+        )
+        .unwrap_err();
+        assert!(format!("{}", err).contains("names length"));
+    }
+
+    #[test]
+    fn write_geotiff_stack_rejects_mismatched_shapes() {
+        let r0 = ramp_band(4, 4, 0.0);
+        let r1 = ramp_band(4, 5, 0.0);
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("bad_shape.tif");
+        let err =
+            write_geotiff_stack(&[&r0, &r1], None, &path, &GeoTiffOptions::default()).unwrap_err();
+        assert!(format!("{}", err).contains("share shape"));
+    }
+
+    #[test]
+    fn write_geotiff_stack_rejects_empty() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("empty.tif");
+        let bands: Vec<&Raster<f64>> = vec![];
+        let err = write_geotiff_stack(&bands, None, &path, &GeoTiffOptions::default()).unwrap_err();
+        assert!(format!("{}", err).contains("at least one band"));
+    }
+
+    #[test]
+    fn write_geotiff_stack_supports_bigtiff_and_f64() {
+        let r0 = ramp_band(6, 6, 0.0);
+        let r1 = ramp_band(6, 6, 50.0);
+        let r2 = ramp_band(6, 6, 100.0);
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("stack_big.tif");
+        let opts = GeoTiffOptions {
+            bigtiff: true,
+            ..GeoTiffOptions::default()
+        };
+        write_geotiff_stack(&[&r0, &r1, &r2], None, &path, &opts).unwrap();
+
+        let bytes = std::fs::read(&path).unwrap();
+        let version = u16::from_ne_bytes([bytes[2], bytes[3]]);
+        assert_eq!(version, 43, "expected BigTIFF version marker (43)");
+
+        let read_back = read_geotiff_bands::<f64, _>(&path).unwrap();
+        assert_eq!(read_back.len(), 3);
+        assert_eq!(read_back[1].get(1, 1).unwrap(), 52.0);
+    }
+
+    #[test]
+    fn write_geotiff_stack_single_band_matches_write_geotiff_dtype() {
+        // n_bands == 1 is a valid stack too (not just the 1/3/4 special
+        // case the legacy multiband writer hardcodes).
+        let r0 = ramp_band(3, 3, 0.0);
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("stack1.tif");
+        write_geotiff_stack(&[&r0], None, &path, &GeoTiffOptions::default()).unwrap();
+        let file = File::open(&path).unwrap();
+        let mut dec = Decoder::new(file).unwrap();
+        assert_eq!(dec.get_tag_u32(Tag::SamplesPerPixel).unwrap(), 1);
+        assert_eq!(dec.get_tag_u32(Tag::BitsPerSample).unwrap(), 64); // f64
+        let read_back = read_geotiff_bands::<f64, _>(&path).unwrap();
+        assert_eq!(read_back[0].get(1, 1).unwrap(), 2.0);
+    }
+
+    // ---------------------------------------------------------------
+    // GDAL/rasterio interop (empirical validation, not just "in theory")
+    // ---------------------------------------------------------------
+    //
+    // These invoke the real `gdalinfo` / `python3 -c "import rasterio..."`
+    // binaries on this machine. They skip (rather than fail) when the
+    // tool isn't on PATH so `cargo test` stays green in environments
+    // without a GDAL install (e.g. some CI images) — but on a machine
+    // that has them (this one does), they are the actual proof the
+    // written files interoperate with the GDAL ecosystem, not just with
+    // SurtGIS's own reader.
+
+    fn command_available(cmd: &str, arg: &str) -> bool {
+        std::process::Command::new(cmd)
+            .arg(arg)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn interop_gdalinfo_reports_native_dtype_bands_and_bigtiff() {
+        if !command_available("gdalinfo", "--version") {
+            eprintln!(
+                "skipping interop_gdalinfo_reports_native_dtype_bands_and_bigtiff: gdalinfo not on PATH"
+            );
+            return;
+        }
+        let bands_owned: Vec<Raster<u16>> = (0..3)
+            .map(|k| {
+                let mut r: Raster<u16> = Raster::new(4, 4);
+                r.set_transform(GeoTransform::new(500000.0, 6300000.0, 10.0, -10.0));
+                r.set_crs(Some(crate::crs::CRS::from_epsg(32719)));
+                for i in 0..4 {
+                    for j in 0..4 {
+                        r.set(i, j, (k * 1000 + i * 4 + j) as u16).unwrap();
+                    }
+                }
+                r
+            })
+            .collect();
+        let bands: Vec<&Raster<u16>> = bands_owned.iter().collect();
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("interop_stack.tif");
+        let opts = GeoTiffOptions {
+            bigtiff: true,
+            ..GeoTiffOptions::default()
+        };
+        write_geotiff_stack(&bands, Some(&["b1", "b2", "b3"]), &path, &opts).unwrap();
+
+        let output = std::process::Command::new("gdalinfo")
+            .arg(path.to_str().unwrap())
+            .output()
+            .expect("failed to run gdalinfo");
+        assert!(
+            output.status.success(),
+            "gdalinfo failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let text = String::from_utf8_lossy(&output.stdout);
+        eprintln!("--- gdalinfo output ---\n{text}");
+        assert!(
+            text.contains("Type=UInt16"),
+            "expected UInt16, got:\n{text}"
+        );
+        assert!(text.contains("Band 3"), "expected 3 bands, got:\n{text}");
+    }
+
+    #[test]
+    fn interop_rasterio_reads_values_and_dtype() {
+        if !command_available("python3", "--version") {
+            eprintln!("skipping interop_rasterio_reads_values_and_dtype: python3 not on PATH");
+            return;
+        }
+        let mut r: Raster<i16> = Raster::new(4, 4);
+        r.set_transform(GeoTransform::new(0.0, 4.0, 1.0, -1.0));
+        for i in 0..4 {
+            for j in 0..4 {
+                r.set(i, j, (i * 4 + j) as i16 - 5).unwrap();
+            }
+        }
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("interop_i16.tif");
+        write_geotiff(&r, &path, None).unwrap();
+
+        let script = format!(
+            "import rasterio\n\
+             ds = rasterio.open('{p}')\n\
+             assert ds.dtypes[0] == 'int16', ds.dtypes\n\
+             arr = ds.read(1)\n\
+             assert arr[1, 1] == 0, arr[1,1]\n\
+             print('OK', ds.dtypes, arr[1,1])\n",
+            p = path.to_str().unwrap()
+        );
+        let output = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(&script)
+            .output()
+            .expect("failed to run python3");
+        eprintln!(
+            "--- rasterio stdout ---\n{}\n--- rasterio stderr ---\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if !output.status.success() {
+            // rasterio itself may not be installed even though python3 is;
+            // treat that as "skip", not "fail".
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if stderr.contains("ModuleNotFoundError") || stderr.contains("No module named") {
+                eprintln!(
+                    "skipping interop_rasterio_reads_values_and_dtype: rasterio not installed"
+                );
+                return;
+            }
+            panic!("rasterio check failed: {}", stderr);
+        }
     }
 }

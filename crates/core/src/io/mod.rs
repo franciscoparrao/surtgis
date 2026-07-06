@@ -22,6 +22,11 @@ pub use native::{read_geotiff, write_geotiff};
 // (1, 3, or 4 bands).
 pub use native::write_geotiff_multiband;
 
+// N-band ("stack") writer — native backend, arbitrary band count (not
+// limited to 1/3/4), native sample dtype, BlackIsZero photometric
+// interpretation (never RGB/RGBA), optional GDAL_METADATA band names.
+pub use native::{NativeGraySample, write_geotiff_stack};
+
 // Multi-band reading — de-interleaves every band into its own raster
 // (native backend). The single-band `read_geotiff(path, Some(band))` also
 // selects a band from a multi-band file.
