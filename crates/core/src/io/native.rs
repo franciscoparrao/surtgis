@@ -2170,7 +2170,13 @@ mod tests {
              arr = ds.read(1)\n\
              assert arr[1, 1] == 0, arr[1,1]\n\
              print('OK', ds.dtypes, arr[1,1])\n",
-            p = path.to_str().unwrap()
+            // Forward slashes: on Windows, `path.to_str()` yields
+            // backslashes, and interpolating those raw into a Python
+            // single-quoted string turns e.g. `\U` into the start of a
+            // unicode escape, breaking the script with a SyntaxError.
+            // Forward slashes are accepted as path separators by both
+            // Python and the underlying GDAL/rasterio on all platforms.
+            p = path.to_str().unwrap().replace('\\', "/")
         );
         let output = std::process::Command::new("python3")
             .arg("-c")

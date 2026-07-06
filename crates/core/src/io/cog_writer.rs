@@ -964,7 +964,13 @@ mod tests {
              region = full[0:4, 0:4].astype(np.float64)\n\
              assert abs(float(ov[0, 0]) - region.mean()) < region.mean() * 0.05 + 1.0, (ov[0,0], region.mean())\n\
              print('OK', ovr, full[5,5], ov[0,0], region.mean())\n",
-            p = path.to_str().unwrap()
+            // Forward slashes: on Windows, `path.to_str()` yields
+            // backslashes, and interpolating those raw into a Python
+            // single-quoted string turns e.g. `\U` into the start of a
+            // unicode escape, breaking the script with a SyntaxError.
+            // Forward slashes are accepted as path separators by both
+            // Python and the underlying GDAL/rasterio on all platforms.
+            p = path.to_str().unwrap().replace('\\', "/")
         );
         let output = std::process::Command::new("python3")
             .arg("-c")
