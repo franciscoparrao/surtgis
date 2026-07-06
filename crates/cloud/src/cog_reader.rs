@@ -1,7 +1,10 @@
 //! Core COG reader: open remote COGs, read by bounding box or full extent.
 
+use std::num::NonZeroUsize;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
+use lru::LruCache;
 use ndarray::Array2;
 use surtgis_core::crs::CRS;
 use surtgis_core::raster::{GeoTransform, Raster, RasterElement};
@@ -99,13 +102,72 @@ pub struct OverviewInfo {
 /// Reads tiles on-demand via HTTP Range requests with LRU caching.
 pub struct CogReader {
     url: String,
-    client: HttpClient,
+    client: Arc<HttpClient>,
     #[allow(dead_code)]
     byte_order: TiffByteOrder,
     ifds: Vec<IfdInfo>,
     geo_meta: GeoTiffMeta,
     cache: TileCache,
     options: CogReaderOptions,
+}
+
+// ---------------------------------------------------------------------------
+// Structural metadata cache (IFDs + GeoTIFF meta), keyed by URL
+// ---------------------------------------------------------------------------
+
+/// Everything [`CogReader::open`] extracts from a COG's header bytes before
+/// any tile data is read: TIFF byte order, the parsed IFD chain (full
+/// resolution + overviews), and GeoTIFF metadata (transform/CRS/nodata).
+///
+/// This depends only on the remote file's *bytes*, not on any per-open
+/// option (auth, timeouts, cache sizes, ...), so it is safe to share across
+/// repeated `open()` calls for the same URL.
+#[derive(Debug, Clone)]
+struct CachedCogHeader {
+    byte_order: TiffByteOrder,
+    ifds: Vec<IfdInfo>,
+    geo_meta: GeoTiffMeta,
+}
+
+/// Capacity of the process-wide IFD/header cache, in distinct COG URLs.
+const IFD_CACHE_CAPACITY: usize = 256;
+
+/// Process-wide cache of [`CachedCogHeader`], keyed by [`cache_key_for_url`].
+static IFD_CACHE: OnceLock<Mutex<LruCache<String, Arc<CachedCogHeader>>>> = OnceLock::new();
+
+fn ifd_cache() -> &'static Mutex<LruCache<String, Arc<CachedCogHeader>>> {
+    IFD_CACHE.get_or_init(|| {
+        Mutex::new(LruCache::new(
+            NonZeroUsize::new(IFD_CACHE_CAPACITY).expect("capacity is a nonzero constant"),
+        ))
+    })
+}
+
+/// Cache key for a COG URL: the URL with any query string removed.
+///
+/// STAC asset hrefs are frequently re-signed with time-limited SAS tokens
+/// or presigned-URL query parameters on every catalog fetch, even though
+/// they point at the exact same underlying file. Keying the cache on the
+/// full URL would make every re-signed href a guaranteed miss; stripping
+/// the query string means repeat opens of the same asset — even through
+/// differently-signed URLs — share one cache entry.
+///
+/// This is a plain `split('?')`, not full URL normalization: it does not
+/// canonicalize scheme/host casing, trailing slashes, percent-encoding,
+/// etc. That's an accepted limitation — STAC catalogs consistently emit
+/// the same href casing/encoding for a given asset within one process run.
+pub(crate) fn cache_key_for_url(url: &str) -> &str {
+    url.split('?').next().unwrap_or(url)
+}
+
+fn cached_header(cache_key: &str) -> Option<Arc<CachedCogHeader>> {
+    let mut guard = ifd_cache().lock().unwrap_or_else(|e| e.into_inner());
+    guard.get(cache_key).cloned()
+}
+
+fn insert_cached_header(cache_key: String, header: CachedCogHeader) {
+    let mut guard = ifd_cache().lock().unwrap_or_else(|e| e.into_inner());
+    guard.put(cache_key, Arc::new(header));
 }
 
 // ---------------------------------------------------------------------------
@@ -117,71 +179,115 @@ impl CogReader {
     ///
     /// Fetches the TIFF header and all IFD chains (full resolution + overviews)
     /// in as few HTTP Range requests as possible.
+    ///
+    /// The parsed IFD chain and GeoTIFF metadata (everything up to but not
+    /// including tile pixel data) are cached process-wide, keyed by URL with
+    /// the query string stripped (see [`cache_key_for_url`]) — so re-opening
+    /// the same COG (e.g. once per strip/tile task in the STAC composite
+    /// pipeline, or across differently-signed SAS URLs for the same asset)
+    /// skips the header HEAD request, the header Range fetch, and IFD/GeoTIFF
+    /// parsing entirely after the first open.
+    ///
+    /// # Cache staleness
+    ///
+    /// The cache is never invalidated or expired within a process. If the
+    /// file at a cached URL/path is replaced with different content between
+    /// two `open()` calls in the same process, the second call silently
+    /// reuses the first file's stale structural metadata (tile layout,
+    /// geotransform, nodata, ...) — though tile *pixel* reads are unaffected,
+    /// since those still always go over the network via `client`. This is an
+    /// accepted trade-off for the STAC composite use case, where the COGs
+    /// backing a catalog item do not change mid-run; it is not safe to rely
+    /// on for URLs whose content can mutate during a process's lifetime.
     pub async fn open(url: &str, options: CogReaderOptions) -> Result<Self> {
-        let client = HttpClient::new(options.request_timeout, options.max_retries)?;
+        let client = Self::client_for(&options)?;
         let auth = options.auth.as_ref();
 
-        // 1. Fetch first 64 KiB — usually contains header + first IFD + geotiff tags.
-        let initial_size: u64 = 64 * 1024;
-        let head_info = client.head(url, auth).await?;
+        let cache_key = cache_key_for_url(url).to_string();
 
-        let file_size = head_info.content_length.unwrap_or(0);
-        let fetch_size = if file_size > 0 {
-            initial_size.min(file_size)
+        let (byte_order, ifds, geo_meta) = if let Some(cached) = cached_header(&cache_key) {
+            (cached.byte_order, cached.ifds.clone(), cached.geo_meta.clone())
         } else {
-            initial_size
-        };
+            // 1. Fetch first 64 KiB — usually contains header + first IFD + geotiff tags.
+            let initial_size: u64 = 64 * 1024;
+            let head_info = client.head(url, auth).await?;
 
-        let header_bytes = client.fetch_range(url, 0, fetch_size, auth).await?;
+            let file_size = head_info.content_length.unwrap_or(0);
+            let fetch_size = if file_size > 0 {
+                initial_size.min(file_size)
+            } else {
+                initial_size
+            };
 
-        // 2. Parse TIFF header.
-        let tiff_header = ifd::parse_header(&header_bytes)?;
-        let byte_order = tiff_header.byte_order;
-        reject_big_endian(byte_order)?;
+            let header_bytes = client.fetch_range(url, 0, fetch_size, auth).await?;
 
-        // 3. Parse IFD chain.
-        let mut ifds = Vec::new();
-        let mut ifd_offset = tiff_header.first_ifd_offset as usize;
+            // 2. Parse TIFF header.
+            let tiff_header = ifd::parse_header(&header_bytes)?;
+            let byte_order = tiff_header.byte_order;
+            reject_big_endian(byte_order)?;
 
-        while ifd_offset > 0 {
-            let ifd_data =
-                self::ensure_data(&client, url, auth, &header_bytes, ifd_offset, file_size).await?;
+            // 3. Parse IFD chain.
+            let mut ifds = Vec::new();
+            let mut ifd_offset = tiff_header.first_ifd_offset as usize;
 
-            let raw_ifd = ifd::parse_ifd(byte_order, &ifd_data)?;
+            while ifd_offset > 0 {
+                let ifd_data = self::ensure_data(
+                    client.as_ref(),
+                    url,
+                    auth,
+                    &header_bytes,
+                    ifd_offset,
+                    file_size,
+                )
+                .await?;
 
-            // Resolve external tag values needed for this IFD.
-            let ifd_info = resolve_ifd(
-                &client,
+                let raw_ifd = ifd::parse_ifd(byte_order, &ifd_data)?;
+
+                // Resolve external tag values needed for this IFD.
+                let ifd_info = resolve_ifd(
+                    client.as_ref(),
+                    url,
+                    auth,
+                    byte_order,
+                    &raw_ifd.entries,
+                    &header_bytes,
+                    file_size,
+                )
+                .await?;
+
+                ifds.push(ifd_info);
+                ifd_offset = raw_ifd.next_ifd_offset as usize;
+            }
+
+            if ifds.is_empty() {
+                return Err(CloudError::NoIfd);
+            }
+
+            validate_tiled(&ifds[0])?;
+
+            // 4. Extract GeoTIFF metadata from the first (full-res) IFD.
+            let geo_meta = resolve_geotiff_meta(
+                client.as_ref(),
                 url,
                 auth,
                 byte_order,
-                &raw_ifd.entries,
+                &ifds[0].raw_entries,
                 &header_bytes,
                 file_size,
             )
             .await?;
 
-            ifds.push(ifd_info);
-            ifd_offset = raw_ifd.next_ifd_offset as usize;
-        }
+            insert_cached_header(
+                cache_key,
+                CachedCogHeader {
+                    byte_order,
+                    ifds: ifds.clone(),
+                    geo_meta: geo_meta.clone(),
+                },
+            );
 
-        if ifds.is_empty() {
-            return Err(CloudError::NoIfd);
-        }
-
-        validate_tiled(&ifds[0])?;
-
-        // 4. Extract GeoTIFF metadata from the first (full-res) IFD.
-        let geo_meta = resolve_geotiff_meta(
-            &client,
-            url,
-            auth,
-            byte_order,
-            &ifds[0].raw_entries,
-            &header_bytes,
-            file_size,
-        )
-        .await?;
+            (byte_order, ifds, geo_meta)
+        };
 
         let cache = TileCache::new(options.cache_capacity);
 
@@ -194,6 +300,26 @@ impl CogReader {
             cache,
             options,
         })
+    }
+
+    /// Pick the [`HttpClient`] to use for this open: the process-wide shared
+    /// client (see [`crate::http::shared_client`]) when the caller left
+    /// timeout/retries at their defaults — the common case, and the one the
+    /// shared connection pool is designed for — or a private client built to
+    /// the caller's exact settings otherwise, preserving prior behaviour for
+    /// callers that customize them.
+    fn client_for(options: &CogReaderOptions) -> Result<Arc<HttpClient>> {
+        let defaults = CogReaderOptions::default();
+        if options.request_timeout == defaults.request_timeout
+            && options.max_retries == defaults.max_retries
+        {
+            Ok(crate::http::shared_client())
+        } else {
+            Ok(Arc::new(HttpClient::new(
+                options.request_timeout,
+                options.max_retries,
+            )?))
+        }
     }
 
     /// Read a geographic bounding box into a `Raster<T>`.
@@ -967,5 +1093,168 @@ mod byte_order_tests {
         assert_eq!(parsed.byte_order, TiffByteOrder::BigEndian);
         let err = reject_big_endian(parsed.byte_order).unwrap_err();
         assert!(format!("{err}").to_lowercase().contains("big-endian"));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// IFD/header cache tests (P8)
+//
+// `surtgis-cloud` has no mock-HTTP test infrastructure (no `httpmock`/
+// `wiremock`/local test server anywhere in this crate — verified by
+// searching `crates/cloud` before writing these tests), and the existing
+// network-dependent tests in `tests/integration.rs` are all `#[ignore]`d,
+// hitting real public COG endpoints. Building one from scratch just for
+// this change would mean hand-crafting a byte-exact minimal tiled COG
+// (valid IFD chain + GeoTIFF keys) to drive `CogReader::open()`
+// end-to-end, which is a much larger and riskier undertaking than the
+// caching logic it would be testing.
+//
+// Instead, these tests exercise the cache key derivation and the
+// insert/lookup primitives directly and in isolation (no network, no
+// `CogReader::open()`), using unique per-test cache keys (via an atomic
+// counter) so they don't interfere with each other despite sharing the
+// process-wide `IFD_CACHE` static under parallel test execution.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod ifd_cache_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn sample_ifds() -> Vec<IfdInfo> {
+        vec![IfdInfo {
+            width: 10,
+            height: 10,
+            tile_width: 10,
+            tile_height: 10,
+            tile_offsets: vec![8],
+            tile_byte_counts: vec![100],
+            bits_per_sample: 32,
+            sample_format: 3,
+            compression: 1,
+            samples_per_pixel: 1,
+            planar_config: 1,
+            predictor: 1,
+            raw_entries: vec![],
+        }]
+    }
+
+    fn sample_geo_meta() -> GeoTiffMeta {
+        GeoTiffMeta {
+            geo_transform: GeoTransform::new(0.0, 0.0, 1.0, -1.0),
+            crs: None,
+            nodata: Some(-9999.0),
+        }
+    }
+
+    /// Generates a fresh `https://.../<label>-<n>.tif` base URL on every
+    /// call, so tests running in parallel never collide on the shared
+    /// process-wide `IFD_CACHE`.
+    fn unique_base_url(label: &str) -> String {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        format!("https://example.blob.core.windows.net/container/{label}-{n}.tif")
+    }
+
+    #[test]
+    fn cache_key_strips_query_string() {
+        assert_eq!(
+            cache_key_for_url("https://x/y.tif?sig=abc&exp=123"),
+            "https://x/y.tif"
+        );
+        assert_eq!(cache_key_for_url("https://x/y.tif?"), "https://x/y.tif");
+    }
+
+    #[test]
+    fn cache_key_passes_through_url_without_query() {
+        let url = "https://x/y.tif";
+        assert_eq!(cache_key_for_url(url), url);
+    }
+
+    /// Core regression for the P8 header cache: two URLs for the exact
+    /// same file that differ ONLY in their query string — exactly what
+    /// happens when a STAC catalog re-signs the same asset href with a new
+    /// SAS token / expiry on every fetch — must resolve to the same cache
+    /// key, and a value inserted under one must be visible under the
+    /// other. This is what lets `CogReader::open()` skip the header
+    /// HEAD+fetch+parse on the second open of the "same" (differently
+    /// signed) URL.
+    #[test]
+    fn same_path_different_query_shares_one_cache_entry() {
+        let base = unique_base_url("scene");
+        let url_a = format!("{base}?sv=2024-01-01&sig=AAAAAAAA");
+        let url_b = format!("{base}?sv=2024-01-01&sig=BBBBBBBB");
+
+        let key_a = cache_key_for_url(&url_a).to_string();
+        let key_b = cache_key_for_url(&url_b).to_string();
+        assert_eq!(
+            key_a, key_b,
+            "same path with differing SAS-token-like query strings must share a cache key"
+        );
+
+        insert_cached_header(
+            key_a,
+            CachedCogHeader {
+                byte_order: TiffByteOrder::LittleEndian,
+                ifds: sample_ifds(),
+                geo_meta: sample_geo_meta(),
+            },
+        );
+
+        // Looking up via url_b's key (different query string, same path)
+        // must hit the entry inserted under url_a's key — i.e. no second
+        // fetch/parse would be needed for url_b in `open()`.
+        let hit = cached_header(&key_b)
+            .expect("expected a cache hit across differing query strings for the same path");
+        assert_eq!(hit.ifds.len(), 1);
+        assert_eq!(hit.ifds[0].width, 10);
+        assert_eq!(hit.ifds[0].tile_offsets, vec![8]);
+        assert_eq!(hit.geo_meta.nodata, Some(-9999.0));
+    }
+
+    /// Two genuinely different files (different path, not just different
+    /// query string) must NOT share a cache entry.
+    #[test]
+    fn different_paths_do_not_share_a_cache_entry() {
+        let url_a = format!("{}?sig=AAA", unique_base_url("scene-a"));
+        let url_b = format!("{}?sig=AAA", unique_base_url("scene-b"));
+
+        let key_a = cache_key_for_url(&url_a).to_string();
+        let key_b = cache_key_for_url(&url_b).to_string();
+        assert_ne!(key_a, key_b);
+
+        insert_cached_header(
+            key_a,
+            CachedCogHeader {
+                byte_order: TiffByteOrder::LittleEndian,
+                ifds: sample_ifds(),
+                geo_meta: sample_geo_meta(),
+            },
+        );
+
+        assert!(
+            cached_header(&key_b).is_none(),
+            "a different path must not hit another path's cache entry"
+        );
+    }
+
+    #[test]
+    fn insert_then_lookup_round_trips() {
+        let key = cache_key_for_url(&unique_base_url("roundtrip")).to_string();
+
+        assert!(cached_header(&key).is_none(), "must be a clean miss before insert");
+
+        insert_cached_header(
+            key.clone(),
+            CachedCogHeader {
+                byte_order: TiffByteOrder::LittleEndian,
+                ifds: sample_ifds(),
+                geo_meta: sample_geo_meta(),
+            },
+        );
+
+        let hit = cached_header(&key).expect("just-inserted key must be a hit");
+        assert_eq!(hit.ifds[0].tile_offsets, vec![8]);
+        assert_eq!(hit.geo_meta.nodata, Some(-9999.0));
     }
 }
