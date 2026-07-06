@@ -682,13 +682,15 @@ mod tests {
     /// non-atomic "check then build" race).
     #[test]
     fn shared_client_is_singleton_under_concurrent_first_use() {
-        let handles: Vec<_> = (0..16)
-            .map(|_| std::thread::spawn(shared_client))
-            .collect();
-        let clients: Vec<Arc<HttpClient>> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        let handles: Vec<_> = (0..16).map(|_| std::thread::spawn(shared_client)).collect();
+        let clients: Vec<Arc<HttpClient>> =
+            handles.into_iter().map(|h| h.join().unwrap()).collect();
         let first = &clients[0];
         for c in &clients[1..] {
-            assert!(Arc::ptr_eq(first, c), "all threads must observe the same client");
+            assert!(
+                Arc::ptr_eq(first, c),
+                "all threads must observe the same client"
+            );
         }
     }
 

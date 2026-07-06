@@ -220,9 +220,7 @@ fn hgw_square_pass(data: &Array2<f64>, radius: usize, take_min: bool) -> Array2<
 
     let col_pass = par_map_rows(cols, rows, |c, out_col| {
         let slice = transposed.row(c);
-        let slice = slice
-            .as_slice()
-            .expect("transposed row must be contiguous");
+        let slice = slice.as_slice().expect("transposed row must be contiguous");
         let filtered = sliding_extreme_1d(slice, radius, take_min);
         out_col.copy_from_slice(&filtered);
     });
@@ -431,9 +429,7 @@ mod tests {
                         (expected - got).abs() < 1e-12,
                         "mismatch at ({r},{c}): expected={expected}, got={got}"
                     ),
-                    _ => panic!(
-                        "NaN mismatch at ({r},{c}): expected={expected}, got={got}"
-                    ),
+                    _ => panic!("NaN mismatch at ({r},{c}): expected={expected}, got={got}"),
                 }
             }
         }

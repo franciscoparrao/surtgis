@@ -206,7 +206,11 @@ impl CogReader {
         let cache_key = cache_key_for_url(url).to_string();
 
         let (byte_order, ifds, geo_meta) = if let Some(cached) = cached_header(&cache_key) {
-            (cached.byte_order, cached.ifds.clone(), cached.geo_meta.clone())
+            (
+                cached.byte_order,
+                cached.ifds.clone(),
+                cached.geo_meta.clone(),
+            )
         } else {
             // 1. Fetch first 64 KiB — usually contains header + first IFD + geotiff tags.
             let initial_size: u64 = 64 * 1024;
@@ -1242,7 +1246,10 @@ mod ifd_cache_tests {
     fn insert_then_lookup_round_trips() {
         let key = cache_key_for_url(&unique_base_url("roundtrip")).to_string();
 
-        assert!(cached_header(&key).is_none(), "must be a clean miss before insert");
+        assert!(
+            cached_header(&key).is_none(),
+            "must be a clean miss before insert"
+        );
 
         insert_cached_header(
             key.clone(),
