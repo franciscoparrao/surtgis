@@ -44,6 +44,19 @@ use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
 use crate::classification::pca::jacobi_eigen;
+use crate::maybe_rayon::*;
+
+/// Flat, contiguous view of one band's samples, row-major (`data[row *
+/// cols + col]`). Extracting these once per call (instead of repeated
+/// `Raster::get(row, col)`, which is `Result`-wrapped and re-derefs the
+/// `Array2` on every cell/band) is what lets the hot loops below index
+/// with a single `[p]` lookup and be handed out row-by-row to rayon.
+#[inline]
+fn band_slice(r: &Raster<f64>) -> Result<&[f64]> {
+    r.data()
+        .as_slice()
+        .ok_or_else(|| Error::Other("raster data must be contiguous".into()))
+}
 
 // ─── Public API ────────────────────────────────────────────────────
 
@@ -103,7 +116,7 @@ pub struct IrMadResult {
 /// emit `B` MAD variates and `B` canonical correlations.
 pub fn mad(t1: &[&Raster<f64>], t2: &[&Raster<f64>]) -> Result<MadResult> {
     let (rows, cols, b) = validate_inputs(t1, t2)?;
-    let valid_mask = build_valid_mask(t1, t2, rows, cols);
+    let valid_mask = build_valid_mask(t1, t2, rows, cols)?;
     let n_valid = valid_mask.iter().filter(|v| **v).count();
     if n_valid < 2 {
         return Err(Error::Algorithm("MAD: need ≥2 valid pixels".into()));
@@ -126,7 +139,7 @@ pub fn ir_mad(
     params: IrMadParams,
 ) -> Result<IrMadResult> {
     let (rows, cols, b) = validate_inputs(t1, t2)?;
-    let valid_mask = build_valid_mask(t1, t2, rows, cols);
+    let valid_mask = build_valid_mask(t1, t2, rows, cols)?;
     let n_px = rows * cols;
     let n_valid = valid_mask.iter().filter(|v| **v).count();
     if n_valid < 2 {
@@ -139,6 +152,11 @@ pub fn ir_mad(
     let mut bv = vec![0.0; b * b];
     let mut rhos = vec![0.0; b];
     let mut n_iter = 0;
+
+    // t1/t2 don't change across iterations, so their flat slices are
+    // hoisted out of the loop instead of being re-derived every pass.
+    let t1_data: Vec<&[f64]> = t1.iter().map(|r| band_slice(r)).collect::<Result<_>>()?;
+    let t2_data: Vec<&[f64]> = t2.iter().map(|r| band_slice(r)).collect::<Result<_>>()?;
 
     for it in 1..=params.max_iter {
         n_iter = it;
@@ -155,29 +173,35 @@ pub fn ir_mad(
         rhos = nr;
 
         // Compute MAD variates per valid pixel for the χ² weight.
-        // MAD_i variance = 2·(1 − ρ_i); standardise by that.
+        // MAD_i variance = 2·(1 − ρ_i); standardise by that. Each pixel's
+        // weight is independent of every other pixel's (no reduction), so
+        // rows are handed out to rayon straight into their slice of the
+        // output buffer — same `par_chunks_mut` harness as `par_map_rows`.
         let mut new_weights = vec![0.0; n_px];
-        for row in 0..rows {
-            for col in 0..cols {
-                let p = row * cols + col;
-                if !valid_mask[p] {
-                    continue;
-                }
-                let mut t2_stat = 0.0;
-                for i in 0..b {
-                    let mut u = 0.0;
-                    let mut v = 0.0;
-                    for k in 0..b {
-                        u += a[i * b + k] * t1[k].get(row, col).unwrap();
-                        v += bv[i * b + k] * t2[k].get(row, col).unwrap();
+        new_weights
+            .par_chunks_mut(cols)
+            .enumerate()
+            .for_each(|(row, row_out)| {
+                for (col, out) in row_out.iter_mut().enumerate() {
+                    let p = row * cols + col;
+                    if !valid_mask[p] {
+                        continue;
                     }
-                    let mad_i = u - v;
-                    let var = (2.0 * (1.0 - rhos[i])).max(1e-12);
-                    t2_stat += mad_i * mad_i / var;
+                    let mut t2_stat = 0.0;
+                    for i in 0..b {
+                        let mut u = 0.0;
+                        let mut v = 0.0;
+                        for k in 0..b {
+                            u += a[i * b + k] * t1_data[k][p];
+                            v += bv[i * b + k] * t2_data[k][p];
+                        }
+                        let mad_i = u - v;
+                        let var = (2.0 * (1.0 - rhos[i])).max(1e-12);
+                        t2_stat += mad_i * mad_i / var;
+                    }
+                    *out = 1.0 - chi2_cdf(t2_stat, b);
                 }
-                new_weights[p] = 1.0 - chi2_cdf(t2_stat, b);
-            }
-        }
+            });
         weights = new_weights;
 
         // Convergence: max change in any canonical correlation.
@@ -240,21 +264,31 @@ fn build_valid_mask(
     t2: &[&Raster<f64>],
     rows: usize,
     cols: usize,
-) -> Vec<bool> {
+) -> Result<Vec<bool>> {
+    // Independent per-pixel test (no cross-pixel reduction), so each row
+    // can be evaluated by a different thread straight into its slice of
+    // the output mask — same `par_chunks_mut` harness as `par_map_rows`.
+    let slices: Vec<&[f64]> = t1
+        .iter()
+        .chain(t2.iter())
+        .map(|r| band_slice(r))
+        .collect::<Result<_>>()?;
     let n = rows * cols;
     let mut mask = vec![true; n];
-    for row in 0..rows {
-        for col in 0..cols {
-            let p = row * cols + col;
-            for r in t1.iter().chain(t2.iter()) {
-                if !unsafe { r.get_unchecked(row, col) }.is_finite() {
-                    mask[p] = false;
-                    break;
+    mask.par_chunks_mut(cols)
+        .enumerate()
+        .for_each(|(row, mask_row)| {
+            for (col, valid) in mask_row.iter_mut().enumerate() {
+                let p = row * cols + col;
+                for s in &slices {
+                    if !s[p].is_finite() {
+                        *valid = false;
+                        break;
+                    }
                 }
             }
-        }
-    }
-    mask
+        });
+    Ok(mask)
 }
 
 /// Solve CCA on `(t1, t2)` over the `valid_mask` pixels with
@@ -271,24 +305,46 @@ fn solve_cca(
     b: usize,
 ) -> Result<(Vec<f64>, Vec<f64>, Vec<f64>)> {
     let (rows, cols) = t1[0].shape();
+    let t1_data: Vec<&[f64]> = t1.iter().map(|r| band_slice(r)).collect::<Result<_>>()?;
+    let t2_data: Vec<&[f64]> = t2.iter().map(|r| band_slice(r)).collect::<Result<_>>()?;
 
-    // Weighted means.
+    // Weighted means: a per-row partial sum computed independently in
+    // parallel, then merged sequentially (cheap — O(rows·B), not
+    // O(rows·cols·B)). The merge groups the sum by row instead of one
+    // running total across every pixel; this can shift float rounding by
+    // a handful of ULPs relative to the fully-sequential accumulation,
+    // well inside the 1e-9 tolerances the existing tests use.
+    let mean_partials: Vec<(Vec<f64>, Vec<f64>, f64)> = (0..rows)
+        .into_par_iter()
+        .map(|row| {
+            let mut mu_x = vec![0.0; b];
+            let mut mu_y = vec![0.0; b];
+            let mut w_sum = 0.0;
+            for col in 0..cols {
+                let p = row * cols + col;
+                if !valid_mask[p] {
+                    continue;
+                }
+                let w = weights.map(|ws| ws[p]).unwrap_or(1.0);
+                for k in 0..b {
+                    mu_x[k] += w * t1_data[k][p];
+                    mu_y[k] += w * t2_data[k][p];
+                }
+                w_sum += w;
+            }
+            (mu_x, mu_y, w_sum)
+        })
+        .collect();
+
     let mut mu_x = vec![0.0; b];
     let mut mu_y = vec![0.0; b];
     let mut w_sum = 0.0;
-    for row in 0..rows {
-        for col in 0..cols {
-            let p = row * cols + col;
-            if !valid_mask[p] {
-                continue;
-            }
-            let w = weights.map(|ws| ws[p]).unwrap_or(1.0);
-            for k in 0..b {
-                mu_x[k] += w * t1[k].get(row, col).unwrap();
-                mu_y[k] += w * t2[k].get(row, col).unwrap();
-            }
-            w_sum += w;
+    for (px, py, pw) in mean_partials {
+        for k in 0..b {
+            mu_x[k] += px[k];
+            mu_y[k] += py[k];
         }
+        w_sum += pw;
     }
     if w_sum < 1e-9 {
         return Err(Error::Algorithm("MAD: total weight ≈ 0".into()));
@@ -299,29 +355,49 @@ fn solve_cca(
     }
 
     // Weighted covariance blocks: S_XX (B×B), S_YY (B×B), S_XY (B×B).
+    // This is the O(rows·cols·B²) hot loop of CCA (re-run every IR-MAD
+    // iteration), so it uses the same per-row-partial + sequential-merge
+    // reduction as the means above.
+    let cov_partials: Vec<(Vec<f64>, Vec<f64>, Vec<f64>)> = (0..rows)
+        .into_par_iter()
+        .map(|row| {
+            let mut s_xx = vec![0.0; b * b];
+            let mut s_yy = vec![0.0; b * b];
+            let mut s_xy = vec![0.0; b * b];
+            for col in 0..cols {
+                let p = row * cols + col;
+                if !valid_mask[p] {
+                    continue;
+                }
+                let w = weights.map(|ws| ws[p]).unwrap_or(1.0);
+                for i in 0..b {
+                    let xi = t1_data[i][p] - mu_x[i];
+                    let yi = t2_data[i][p] - mu_y[i];
+                    for j in i..b {
+                        let xj = t1_data[j][p] - mu_x[j];
+                        let yj = t2_data[j][p] - mu_y[j];
+                        s_xx[i * b + j] += w * xi * xj;
+                        s_yy[i * b + j] += w * yi * yj;
+                    }
+                    for j in 0..b {
+                        let yj = t2_data[j][p] - mu_y[j];
+                        s_xy[i * b + j] += w * xi * yj;
+                    }
+                }
+            }
+            (s_xx, s_yy, s_xy)
+        })
+        .collect();
+
     let mut s_xx = vec![vec![0.0; b]; b];
     let mut s_yy = vec![vec![0.0; b]; b];
     let mut s_xy = vec![vec![0.0; b]; b];
-    for row in 0..rows {
-        for col in 0..cols {
-            let p = row * cols + col;
-            if !valid_mask[p] {
-                continue;
-            }
-            let w = weights.map(|ws| ws[p]).unwrap_or(1.0);
-            for i in 0..b {
-                let xi = t1[i].get(row, col).unwrap() - mu_x[i];
-                let yi = t2[i].get(row, col).unwrap() - mu_y[i];
-                for j in i..b {
-                    let xj = t1[j].get(row, col).unwrap() - mu_x[j];
-                    let yj = t2[j].get(row, col).unwrap() - mu_y[j];
-                    s_xx[i][j] += w * xi * xj;
-                    s_yy[i][j] += w * yi * yj;
-                }
-                for j in 0..b {
-                    let yj = t2[j].get(row, col).unwrap() - mu_y[j];
-                    s_xy[i][j] += w * xi * yj;
-                }
+    for (pxx, pyy, pxy) in cov_partials {
+        for i in 0..b {
+            for j in 0..b {
+                s_xx[i][j] += pxx[i * b + j];
+                s_yy[i][j] += pyy[i * b + j];
+                s_xy[i][j] += pxy[i * b + j];
             }
         }
     }
@@ -442,26 +518,41 @@ fn project_mad(
     valid_mask: &[bool],
 ) -> Result<Vec<Raster<f64>>> {
     let n_px = rows * cols;
-    let mut out: Vec<Vec<f64>> = (0..b).map(|_| vec![f64::NAN; n_px]).collect();
-    for row in 0..rows {
-        for col in 0..cols {
-            let p = row * cols + col;
-            if !valid_mask[p] {
-                continue;
-            }
-            for i in 0..b {
-                let mut u = 0.0;
-                let mut v = 0.0;
-                for k in 0..b {
-                    u += a[i * b + k] * t1[k].get(row, col).unwrap();
-                    v += bv[i * b + k] * t2[k].get(row, col).unwrap();
+    let t1_data: Vec<&[f64]> = t1.iter().map(|r| band_slice(r)).collect::<Result<_>>()?;
+    let t2_data: Vec<&[f64]> = t2.iter().map(|r| band_slice(r)).collect::<Result<_>>()?;
+
+    // Each pixel's B MAD variates are independent of every other pixel's
+    // (no reduction), so rows are handed out to rayon in parallel. Values
+    // are laid out band-interleaved per pixel (`interleaved[p*B + i]`) so
+    // one contiguous per-row chunk (`cols*B` wide) can be written by a
+    // single thread without any cross-thread bookkeeping; de-interleaving
+    // into the final per-band `Vec<f64>`s afterwards is an O(n·B) copy,
+    // negligible next to the O(n·B²) compute above.
+    let mut interleaved = vec![f64::NAN; n_px * b];
+    interleaved
+        .par_chunks_mut(cols * b)
+        .enumerate()
+        .for_each(|(row, out_row)| {
+            for col in 0..cols {
+                let p = row * cols + col;
+                if !valid_mask[p] {
+                    continue;
                 }
-                out[i][p] = u - v;
+                for i in 0..b {
+                    let mut u = 0.0;
+                    let mut v = 0.0;
+                    for k in 0..b {
+                        u += a[i * b + k] * t1_data[k][p];
+                        v += bv[i * b + k] * t2_data[k][p];
+                    }
+                    out_row[col * b + i] = u - v;
+                }
             }
-        }
-    }
+        });
+
     let mut rasters = Vec::with_capacity(b);
-    for band_data in out.into_iter() {
+    for i in 0..b {
+        let band_data: Vec<f64> = interleaved[i..].iter().step_by(b).copied().collect();
         let mut r = t1[0].with_same_meta::<f64>(rows, cols);
         r.set_nodata(Some(f64::NAN));
         *r.data_mut() = Array2::from_shape_vec((rows, cols), band_data)
