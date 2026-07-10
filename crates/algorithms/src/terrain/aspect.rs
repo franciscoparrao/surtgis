@@ -32,9 +32,10 @@ const FLAT_THRESHOLD: f64 = 1e-10;
 /// `8 * cell_size` for each axis, already resolved for the current row.
 ///
 /// Returns `None` when the surface is flat (both gradient components
-/// below [`FLAT_THRESHOLD`]) — the caller decides how to encode that
-/// (batch uses a `-1.0` sentinel, streaming uses `NaN`). Otherwise
-/// returns the compass bearing in radians, normalized to `[0, 2π)`.
+/// below [`FLAT_THRESHOLD`]) — the caller encodes that as `NaN`,
+/// matching every other terrain kernel (batch and streaming alike).
+/// Otherwise returns the compass bearing in radians, normalized to
+/// `[0, 2π)`.
 #[inline]
 #[allow(clippy::too_many_arguments)]
 fn aspect_bearing_rad(
@@ -116,7 +117,7 @@ fn format_aspect(aspect_north: f64, output_format: AspectOutput) -> f64 {
 /// - 180° = South
 /// - 270° = West
 ///
-/// Flat areas (slope = 0) are assigned -1 (nodata).
+/// Flat areas (slope = 0) are assigned NaN (nodata).
 ///
 /// # Arguments
 /// * `dem` - Input DEM raster
@@ -140,8 +141,7 @@ pub fn aspect(dem: &Raster<f64>, output_format: AspectOutput) -> Result<Raster<f
         .ok_or_else(|| Error::Other("raster data must be contiguous".into()))?;
 
     let output_data = par_map_rows(rows, cols, |row, out_row| {
-        // Aspect's sentinel is -1.0 (flat/nodata), not NaN
-        out_row.fill(-1.0);
+        out_row.fill(f64::NAN);
         if row == 0 || row == rows - 1 {
             return;
         }
@@ -181,8 +181,7 @@ pub fn aspect(dem: &Raster<f64>, output_format: AspectOutput) -> Result<Raster<f
 
                 *row_data_col = match aspect_bearing_rad(a, b, c, d, f, g, h, i, eight_dx, eight_dy)
                 {
-                    // Flat surface: batch's nodata/flat sentinel is -1.0 (not NaN)
-                    None => -1.0,
+                    None => f64::NAN,
                     Some(bearing) => format_aspect(bearing, output_format),
                 };
             }
@@ -190,7 +189,7 @@ pub fn aspect(dem: &Raster<f64>, output_format: AspectOutput) -> Result<Raster<f
     });
 
     let mut output = dem.with_same_meta::<f64>(rows, cols);
-    output.set_nodata(Some(-1.0));
+    output.set_nodata(Some(f64::NAN));
     *output.data_mut() = output_data;
 
     Ok(output)
@@ -269,7 +268,6 @@ impl AspectStreaming {
                 continue;
             }
 
-            // Streaming's nodata/flat sentinel is NaN (not batch's -1.0)
             output[[r, c]] = match aspect_bearing_rad(a, b, cv, d, f, g, h, i, eight_dx, eight_dy) {
                 None => f64::NAN,
                 Some(bearing) => format_aspect(bearing, self.output_format),
@@ -407,7 +405,33 @@ mod tests {
         let result = aspect(&dem, AspectOutput::Degrees).unwrap();
         let val = result.get(5, 5).unwrap();
 
-        // Flat areas should return -1
-        assert_eq!(val, -1.0, "Expected -1 for flat area, got {}", val);
+        // Flat areas should return NaN (matches every other terrain
+        // kernel's nodata convention, and the streaming path).
+        assert!(val.is_nan(), "Expected NaN for flat area, got {}", val);
+    }
+
+    /// Regression: batch and streaming must encode "invalid" (flat/edge/
+    /// nodata) cells identically. Before this fix, batch used a `-1.0`
+    /// sentinel while streaming used `NaN` — a `-1.0` in radians output
+    /// (~-57.3°) silently passed `solar_radiation`'s `is_nan()`-only
+    /// validity check as if it were a real aspect value on every flat
+    /// cell (see terrain::solar_radiation, which only filters `is_nan()`).
+    #[test]
+    fn test_aspect_batch_flat_sentinel_is_nan_not_negative_one() {
+        let mut dem: Raster<f64> = Raster::filled(10, 10, 100.0);
+        dem.set_transform(surtgis_core::GeoTransform::new(0.0, 10.0, 1.0, -1.0));
+
+        let result = aspect(&dem, AspectOutput::Radians).unwrap();
+        for row in 1..9 {
+            for col in 1..9 {
+                let v = result.get(row, col).unwrap();
+                assert!(
+                    v.is_nan(),
+                    "flat cell ({row},{col}) should be NaN, got {v} \
+                     (a stray -1.0 would silently pass an is_nan()-only check)"
+                );
+            }
+        }
+        assert!(result.nodata().unwrap().is_nan());
     }
 }

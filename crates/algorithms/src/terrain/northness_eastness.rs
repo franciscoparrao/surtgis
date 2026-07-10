@@ -36,7 +36,8 @@ pub fn northness(dem: &Raster<f64>) -> Result<Raster<f64>> {
     let data = par_map_rows(rows, cols, |row, out_row| {
         for (col, out_val) in out_row.iter_mut().enumerate() {
             let a = aspect_data[[row, col]];
-            // aspect returns -1.0 for flat/nodata cells
+            // aspect returns NaN for flat/nodata cells; `a < 0.0` is
+            // defensive leftover from when it used a `-1.0` sentinel.
             if a < 0.0 || a.is_nan() {
                 continue;
             }

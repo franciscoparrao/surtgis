@@ -692,8 +692,9 @@ fn warn_if_bigtiff_recommended(bigtiff: bool, estimated_bytes: u64) {
 /// the old per-function copies so `write_geotiff_stack` (which drives
 /// `DirectoryEncoder` directly rather than through `ImageEncoder`) can
 /// reuse the same tag payloads without duplicating the CRS -> GeoKey
-/// logic a third time.
-fn write_geo_metadata_tags<W, K>(
+/// logic a third time — and `pub(crate)` so `strip_writer.rs`'s
+/// compressed streaming path is the fourth.
+pub(crate) fn write_geo_metadata_tags<W, K>(
     dir: &mut DirectoryEncoder<'_, W, K>,
     transform: &GeoTransform,
     crs: Option<&crate::crs::CRS>,
@@ -1196,7 +1197,7 @@ where
 /// exactly what the `tiff` crate itself writes for a `[T]` sample
 /// buffer (see `encoder::writer::TiffWriter`, which always serializes
 /// via `to_ne_bytes()`).
-fn flatten_native_bytes<T: NativeGraySample>(data: &[T]) -> Vec<u8>
+pub(crate) fn flatten_native_bytes<T: NativeGraySample>(data: &[T]) -> Vec<u8>
 where
     [T]: tiff::encoder::TiffValue,
 {
@@ -1211,7 +1212,7 @@ where
 /// `ZlibEncoder`) and level mapping the `tiff` crate's own `Deflate`
 /// compressor uses (`encoder::compression::deflate`), so the resulting
 /// stream is the same "Adobe Deflate" TIFF readers expect.
-fn deflate_compress_bytes(data: &[u8], level: DeflateLevel) -> Result<Vec<u8>> {
+pub(crate) fn deflate_compress_bytes(data: &[u8], level: DeflateLevel) -> Result<Vec<u8>> {
     use std::io::Write as _;
     let mut encoder =
         flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::new(level as u32));
