@@ -600,7 +600,7 @@ fn uncertainty_slope<'py>(
 
 /// Compute viewshed from observer location.
 #[pyfunction]
-#[pyo3(signature = (dem, cell_size=1.0, observer_row=0, observer_col=0, observer_height=1.8, target_height=0.0, max_radius=0))]
+#[pyo3(signature = (dem, cell_size=1.0, observer_row=0, observer_col=0, observer_height=1.8, target_height=0.0, max_radius=0, earth_curvature=false, refraction_coeff=0.14286))]
 fn viewshed_compute<'py>(
     py: Python<'py>,
     dem: PyReadonlyArray2<'py, f64>,
@@ -610,20 +610,21 @@ fn viewshed_compute<'py>(
     observer_height: f64,
     target_height: f64,
     max_radius: usize,
+    earth_curvature: bool,
+    refraction_coeff: f64,
 ) -> PyResult<Bound<'py, PyArray2<u8>>> {
     let raster = numpy_to_raster(&dem, cell_size)?;
     let result = py
         .allow_threads(|| {
-            compute_viewshed(
-                &raster,
-                ViewshedParams {
-                    observer_row,
-                    observer_col,
-                    observer_height,
-                    target_height,
-                    max_radius,
-                },
-            )
+            let mut vp = ViewshedParams::default();
+            vp.observer_row = observer_row;
+            vp.observer_col = observer_col;
+            vp.observer_height = observer_height;
+            vp.target_height = target_height;
+            vp.max_radius = max_radius;
+            vp.earth_curvature = earth_curvature;
+            vp.refraction_coeff = refraction_coeff;
+            compute_viewshed(&raster, vp)
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_u8_to_numpy(py, result))
@@ -1765,7 +1766,7 @@ fn accumulation_zones_compute<'py>(
 
 /// Compute XDraw viewshed (faster than Bresenham for large DEMs).
 #[pyfunction]
-#[pyo3(signature = (dem, cell_size=1.0, observer_row=0, observer_col=0, observer_height=1.8, target_height=0.0, max_radius=0))]
+#[pyo3(signature = (dem, cell_size=1.0, observer_row=0, observer_col=0, observer_height=1.8, target_height=0.0, max_radius=0, earth_curvature=false, refraction_coeff=0.14286))]
 fn viewshed_xdraw_compute<'py>(
     py: Python<'py>,
     dem: PyReadonlyArray2<'py, f64>,
@@ -1775,20 +1776,21 @@ fn viewshed_xdraw_compute<'py>(
     observer_height: f64,
     target_height: f64,
     max_radius: usize,
+    earth_curvature: bool,
+    refraction_coeff: f64,
 ) -> PyResult<Bound<'py, PyArray2<u8>>> {
     let raster = numpy_to_raster(&dem, cell_size)?;
     let result = py
         .allow_threads(|| {
-            compute_viewshed_xdraw(
-                &raster,
-                ViewshedParams {
-                    observer_row,
-                    observer_col,
-                    observer_height,
-                    target_height,
-                    max_radius,
-                },
-            )
+            let mut vp = ViewshedParams::default();
+            vp.observer_row = observer_row;
+            vp.observer_col = observer_col;
+            vp.observer_height = observer_height;
+            vp.target_height = target_height;
+            vp.max_radius = max_radius;
+            vp.earth_curvature = earth_curvature;
+            vp.refraction_coeff = refraction_coeff;
+            compute_viewshed_xdraw(&raster, vp)
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_u8_to_numpy(py, result))

@@ -1101,21 +1101,15 @@ pub fn dispatch_algorithm(
                 let observer_height = get_f64(&params, "observer_height", 1.7);
                 let target_height = get_f64(&params, "target_height", 0.0);
                 let max_radius = get_usize(&params, "max_radius", 0);
-                dispatch_u8(
-                    &tx,
-                    "Viewshed",
-                    start,
-                    viewshed(
-                        &input,
-                        ViewshedParams {
-                            observer_row,
-                            observer_col,
-                            observer_height,
-                            target_height,
-                            max_radius,
-                        },
-                    ),
-                );
+                dispatch_u8(&tx, "Viewshed", start, {
+                    let mut vp = ViewshedParams::default();
+                    vp.observer_row = observer_row;
+                    vp.observer_col = observer_col;
+                    vp.observer_height = observer_height;
+                    vp.target_height = target_height;
+                    vp.max_radius = max_radius;
+                    viewshed(&input, vp)
+                });
             }
 
             "mrvbf" => {

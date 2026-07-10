@@ -483,6 +483,10 @@ Options:
           Target height above ground (meters) [default: 0.0]
       --max-radius <MAX_RADIUS>
           Maximum visibility radius in cells (0 = unlimited) [default: 0]
+      --curvature
+          Correct for Earth curvature and atmospheric refraction
+      --refraction <REFRACTION>
+          Refraction coefficient (used with --curvature; GRASS default) [default: 0.14286]
   -h, --help
           Print help
 ```
@@ -989,7 +993,9 @@ Options:
       --compress                 Compress output GeoTIFFs (deflate)
       --height <HEIGHT>          Observer height above ground [default: 1.7]
       --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
+      --curvature                Correct for Earth curvature and atmospheric refraction
       --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --refraction <REFRACTION>  Refraction coefficient (used with --curvature; GRASS default) [default: 0.14286]
   -h, --help                     Print help
 ```
 

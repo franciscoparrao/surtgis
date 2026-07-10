@@ -492,20 +492,20 @@ pub fn handle(
             observer_height,
             target_height,
             max_radius,
+            curvature,
+            refraction,
         } => {
             let dem = read_dem(&input)?;
             let start = Instant::now();
-            let result = viewshed(
-                &dem,
-                ViewshedParams {
-                    observer_row,
-                    observer_col,
-                    observer_height,
-                    target_height,
-                    max_radius,
-                },
-            )
-            .context("Failed to compute viewshed")?;
+            let mut vp = ViewshedParams::default();
+            vp.observer_row = observer_row;
+            vp.observer_col = observer_col;
+            vp.observer_height = observer_height;
+            vp.target_height = target_height;
+            vp.max_radius = max_radius;
+            vp.earth_curvature = curvature;
+            vp.refraction_coeff = refraction;
+            let result = viewshed(&dem, vp).context("Failed to compute viewshed")?;
             let elapsed = start.elapsed();
             write_result_u8(&result, &output, compress)?;
             done("Viewshed", &output, elapsed);
@@ -981,22 +981,20 @@ pub fn handle(
             row,
             col,
             height,
+            curvature,
+            refraction,
         } => {
             use surtgis_algorithms::terrain::viewshed_xdraw;
             let dem = read_dem(&input)?;
             let start = Instant::now();
             let pb = spinner("XDraw viewshed...");
-            let result = viewshed_xdraw(
-                &dem,
-                ViewshedParams {
-                    observer_row: row,
-                    observer_col: col,
-                    observer_height: height,
-                    target_height: 0.0,
-                    max_radius: 0,
-                },
-            )
-            .context("Viewshed failed")?;
+            let mut vp = ViewshedParams::default();
+            vp.observer_row = row;
+            vp.observer_col = col;
+            vp.observer_height = height;
+            vp.earth_curvature = curvature;
+            vp.refraction_coeff = refraction;
+            let result = viewshed_xdraw(&dem, vp).context("Viewshed failed")?;
             pb.finish_and_clear();
             write_result_u8(&result, &output, compress)?;
             done("XDraw Viewshed", &output, start.elapsed());

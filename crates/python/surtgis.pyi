@@ -832,12 +832,12 @@ def valley_depth_compute(dem: npt.NDArray[np.float64], cell_size: float = 1.0) -
     """
     ...
 
-def viewshed_compute(dem: npt.NDArray[np.float64], cell_size: float = 1.0, observer_row: int = 0, observer_col: int = 0, observer_height: float = 1.8, target_height: float = 0.0, max_radius: int = 0) -> npt.NDArray[np.uint8]:
+def viewshed_compute(dem: npt.NDArray[np.float64], cell_size: float = 1.0, observer_row: int = 0, observer_col: int = 0, observer_height: float = 1.8, target_height: float = 0.0, max_radius: int = 0, earth_curvature: bool = False, refraction_coeff: float = 0.14286) -> npt.NDArray[np.uint8]:
     """Compute viewshed from observer location.
     """
     ...
 
-def viewshed_xdraw_compute(dem: npt.NDArray[np.float64], cell_size: float = 1.0, observer_row: int = 0, observer_col: int = 0, observer_height: float = 1.8, target_height: float = 0.0, max_radius: int = 0) -> npt.NDArray[np.uint8]:
+def viewshed_xdraw_compute(dem: npt.NDArray[np.float64], cell_size: float = 1.0, observer_row: int = 0, observer_col: int = 0, observer_height: float = 1.8, target_height: float = 0.0, max_radius: int = 0, earth_curvature: bool = False, refraction_coeff: float = 0.14286) -> npt.NDArray[np.uint8]:
     """Compute XDraw viewshed (faster than Bresenham for large DEMs).
     """
     ...
