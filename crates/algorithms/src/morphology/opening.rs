@@ -3,8 +3,8 @@
 //! Removes small bright features (noise, spikes) while preserving
 //! the overall shape and size of larger bright regions.
 
+use surtgis_core::Result;
 use surtgis_core::raster::Raster;
-use surtgis_core::{Algorithm, Error, Result};
 
 use super::dilate::dilate;
 use super::element::StructuringElement;
@@ -15,29 +15,6 @@ use super::erode::erode;
 pub struct OpeningParams {
     /// Structuring element shape
     pub element: StructuringElement,
-}
-
-/// Opening algorithm
-#[derive(Debug, Clone, Default)]
-pub struct Opening;
-
-impl Algorithm for Opening {
-    type Input = Raster<f64>;
-    type Output = Raster<f64>;
-    type Params = OpeningParams;
-    type Error = Error;
-
-    fn name(&self) -> &'static str {
-        "Opening"
-    }
-
-    fn description(&self) -> &'static str {
-        "Morphological opening (erosion then dilation) to remove small bright features"
-    }
-
-    fn execute(&self, input: Self::Input, params: Self::Params) -> Result<Self::Output> {
-        opening(&input, &params.element)
-    }
 }
 
 /// Perform morphological opening on a raster

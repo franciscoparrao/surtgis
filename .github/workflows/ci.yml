@@ -122,10 +122,19 @@ jobs:
         run: |
           COUNT=$(grep -c "export function" pkg/surtgis_wasm.d.ts)
           echo "Exported functions: $COUNT"
-          if [ "$COUNT" -lt 29 ]; then
-            echo "ERROR: Expected at least 29 exported functions, got $COUNT"
+          if [ "$COUNT" -lt 55 ]; then
+            echo "ERROR: Expected at least 55 exported functions, got $COUNT"
             exit 1
           fi
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      # Runs the same #[wasm_bindgen_test] functions the "test" job already
+      # runs natively (via `unsupported = test`), plus any wasm32-only
+      # cases (e.g. JsValue-constructing error paths, which panic on
+      # native targets) that can only execute here, in Node's wasm engine.
+      - name: Run wasm_bindgen_test suite (Node)
+        run: wasm-pack test --node crates/wasm
 
   web-build:
     name: Web Demo Build
@@ -185,20 +194,28 @@ jobs:
 
 
   msrv:
-    name: MSRV (1.88)
+    name: MSRV (1.91)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.88.0
+          toolchain: 1.91.0
       - uses: Swatinem/rust-cache@v2
         with:
           key: msrv
-      # Default features only: verifying the declared rust-version for the
-      # publishable core without dragging system libs into the job.
+      # surtgis (CLI) pulls netcdf/grib by default; same system libs as the
+      # main build job.
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgdal-dev libhdf5-dev libnetcdf-dev libeccodes-dev pkg-config
+      # Default features only: verifying the declared rust-version across all
+      # 9 default-member (publishable) crates without dragging system libs
+      # (gui, relief-3d) into the job.
       - name: Check with MSRV toolchain
-        run: cargo +1.88.0 check -p surtgis-core -p surtgis-algorithms -p surtgis-relief -p surtgis-colormap
+        run: cargo +1.91.0 check -p surtgis-core -p surtgis-algorithms -p surtgis-parallel -p surtgis-relief -p surtgis-colormap -p surtgis-cloud -p surtgis -p surtgis-wasm -p surtgis-python
 
   deny:
     name: cargo-deny (advisories, licenses, sources)

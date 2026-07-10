@@ -90,13 +90,22 @@ not the project's priority. QGIS is a dramatically better interactive
 environment. SurtGIS integrates cleanly as a QGIS algorithm provider if
 you want the CLI-backed pipeline with the QGIS UX.
 
-### You need Python interoperability beyond a handful of functions
+### You need Python interoperability beyond most of the algorithm surface
 
-`surtgis-python` exposes `extract_at_points` and `predict_raster` for ML
-pipelines. That's it. If you're building on numpy/xarray/rasterio and
-want the full toolbox, rasterio + rioxarray + pyproj + scikit-image is the
-mature stack. SurtGIS is for Rust-first users who occasionally want to
-bridge to Python.
+`surtgis-python` exposes 124 functions via PyO3 — terrain, hydrology,
+imagery, morphology, statistics (incl. zonal), temporal (trend/Mann-Kendall),
+interpolation (incl. kriging), classification, segmentation (incl. SLIC),
+texture, pansharpening, fluvial geomorphology, plus `extract_at_points` /
+`predict_raster` for ML pipelines and COG/STAC cloud I/O. Ships as a single
+`abi3` wheel (CPython 3.9+, one build per platform). Python-side test
+coverage spans terrain, hydrology, imagery, morphology, classification,
+interpolation, landscape ecology, texture, SAR, zonal statistics, temporal
+trend, segmentation, and pansharpening (~75 pytest cases), though not
+every one of the 124 functions has a dedicated test yet. If you're
+building on numpy/xarray/rasterio and want the full toolbox with the most
+mature test coverage, rasterio + rioxarray + pyproj + scikit-image is
+still the safer stack. SurtGIS Python bindings are for Rust-first users
+who want to bridge most of the engine into a numpy workflow.
 
 ### You need a wider algorithm surface than 250 functions
 

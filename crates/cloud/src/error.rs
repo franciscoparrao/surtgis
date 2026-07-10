@@ -6,8 +6,20 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 pub enum CloudError {
     /// An underlying HTTP request failed (transport, status, or body error).
-    #[error("HTTP error: {0}")]
-    Http(#[from] reqwest::Error),
+    ///
+    /// Deliberately opaque (`status`/`msg`, not `reqwest::Error`): reqwest
+    /// is an implementation detail of this crate, and a `#[from]` on the
+    /// concrete type would make a reqwest version bump a semver break for
+    /// every downstream consumer of `CloudError`. `?` still works at every
+    /// call site via the hand-written `From<reqwest::Error>` impl below.
+    #[error("HTTP error: {msg}")]
+    Http {
+        /// HTTP status code, if the failure was an HTTP-level response
+        /// (as opposed to a transport/connection error).
+        status: Option<u16>,
+        /// Human-readable error message (reqwest's `Display` output).
+        msg: String,
+    },
 
     /// The server does not accept HTTP Range requests, which are required for
     /// partial COG reads.
@@ -48,13 +60,14 @@ pub enum CloudError {
     /// The server answered with a non-success HTTP status (after the client
     /// exhausted its retries for retryable statuses such as 429/5xx).
     ///
-    /// Carries the [`reqwest::StatusCode`] structurally so callers can match
-    /// on it (e.g. rate limiting vs. server error) instead of parsing the
-    /// error message.
+    /// Carries the status code as a plain `u16` (not `reqwest::StatusCode`,
+    /// to keep reqwest out of the public API — see [`CloudError::Http`])
+    /// so callers can still match on it (e.g. rate limiting vs. server
+    /// error) instead of parsing the error message.
     #[error("HTTP {status} fetching {url}")]
     HttpStatus {
         /// The HTTP status code returned by the server.
-        status: reqwest::StatusCode,
+        status: u16,
         /// URL of the request that failed.
         url: String,
     },
@@ -131,12 +144,24 @@ impl CloudError {
     /// Return the HTTP status code carried by this error, if any.
     ///
     /// Covers both the structured [`CloudError::HttpStatus`] variant and
-    /// status errors surfaced through the underlying [`reqwest::Error`].
-    pub fn status(&self) -> Option<reqwest::StatusCode> {
+    /// status errors surfaced through [`CloudError::Http`].
+    pub fn status(&self) -> Option<u16> {
         match self {
             CloudError::HttpStatus { status, .. } => Some(*status),
-            CloudError::Http(e) => e.status(),
+            CloudError::Http { status, .. } => *status,
             _ => None,
+        }
+    }
+}
+
+// Hand-written rather than `#[from]` on the variant itself, so `?` keeps
+// working at every call site while `reqwest::Error` never appears in the
+// public `CloudError` API (see the `Http` variant's doc comment).
+impl From<reqwest::Error> for CloudError {
+    fn from(e: reqwest::Error) -> Self {
+        CloudError::Http {
+            status: e.status().map(|s| s.as_u16()),
+            msg: e.to_string(),
         }
     }
 }
@@ -151,15 +176,25 @@ mod tests {
     #[test]
     fn http_status_variant_exposes_structured_status() {
         let err = CloudError::HttpStatus {
-            status: reqwest::StatusCode::TOO_MANY_REQUESTS,
+            status: 429,
             url: "https://example.com/cog.tif".into(),
         };
-        assert_eq!(err.status(), Some(reqwest::StatusCode::TOO_MANY_REQUESTS));
-        // Display keeps the "HTTP <code> <reason> fetching <url>" shape that
+        assert_eq!(err.status(), Some(429));
+        // Display keeps the "HTTP <code> fetching <url>" shape that
         // downstream substring-based classifiers rely on (e.g. " 429").
         let msg = err.to_string();
         assert!(msg.contains(" 429"), "message was: {msg}");
         assert!(msg.contains("fetching https://example.com/cog.tif"));
+    }
+
+    #[test]
+    fn http_variant_carries_opaque_status_and_message() {
+        let err = CloudError::Http {
+            status: Some(500),
+            msg: "server error".into(),
+        };
+        assert_eq!(err.status(), Some(500));
+        assert!(err.to_string().contains("server error"));
     }
 
     #[test]

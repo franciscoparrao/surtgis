@@ -26,7 +26,7 @@
 use crate::maybe_rayon::*;
 use ndarray::Array2;
 use surtgis_core::raster::Raster;
-use surtgis_core::{Algorithm, Error, Result};
+use surtgis_core::{Error, Result};
 
 /// Which curvature to compute
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -90,29 +90,6 @@ impl Default for CurvatureParams {
             formula: CurvatureFormula::Full,
             z_factor: 1.0,
         }
-    }
-}
-
-/// Curvature algorithm
-#[derive(Debug, Clone, Default)]
-pub struct Curvature;
-
-impl Algorithm for Curvature {
-    type Input = Raster<f64>;
-    type Output = Raster<f64>;
-    type Params = CurvatureParams;
-    type Error = Error;
-
-    fn name(&self) -> &'static str {
-        "Curvature"
-    }
-
-    fn description(&self) -> &'static str {
-        "Calculate surface curvature from a DEM (Zevenbergen & Thorne 1987)"
-    }
-
-    fn execute(&self, input: Self::Input, params: Self::Params) -> Result<Self::Output> {
-        curvature(&input, params)
     }
 }
 

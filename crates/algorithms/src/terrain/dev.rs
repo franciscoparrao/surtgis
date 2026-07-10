@@ -16,8 +16,8 @@
 
 use crate::maybe_rayon::*;
 use ndarray::Array2;
+use surtgis_core::Result;
 use surtgis_core::raster::Raster;
-use surtgis_core::{Algorithm, Error, Result};
 
 /// Parameters for DEV calculation
 #[derive(Debug, Clone)]
@@ -30,29 +30,6 @@ pub struct DevParams {
 impl Default for DevParams {
     fn default() -> Self {
         Self { radius: 10 }
-    }
-}
-
-/// DEV algorithm
-#[derive(Debug, Clone, Default)]
-pub struct Dev;
-
-impl Algorithm for Dev {
-    type Input = Raster<f64>;
-    type Output = Raster<f64>;
-    type Params = DevParams;
-    type Error = Error;
-
-    fn name(&self) -> &'static str {
-        "DEV"
-    }
-
-    fn description(&self) -> &'static str {
-        "Deviation from Mean Elevation: TPI normalized by local standard deviation"
-    }
-
-    fn execute(&self, input: Self::Input, params: Self::Params) -> Result<Self::Output> {
-        dev(&input, params)
     }
 }
 

@@ -6,7 +6,7 @@
 use crate::maybe_rayon::*;
 use ndarray::Array2;
 use surtgis_core::raster::Raster;
-use surtgis_core::{Algorithm, Error, Result};
+use surtgis_core::{Error, Result};
 
 use super::dilate::dilate;
 use super::element::StructuringElement;
@@ -17,29 +17,6 @@ use super::erode::erode;
 pub struct GradientParams {
     /// Structuring element shape
     pub element: StructuringElement,
-}
-
-/// Morphological gradient algorithm
-#[derive(Debug, Clone, Default)]
-pub struct Gradient;
-
-impl Algorithm for Gradient {
-    type Input = Raster<f64>;
-    type Output = Raster<f64>;
-    type Params = GradientParams;
-    type Error = Error;
-
-    fn name(&self) -> &'static str {
-        "MorphologicalGradient"
-    }
-
-    fn description(&self) -> &'static str {
-        "Morphological gradient (dilation minus erosion) for edge detection"
-    }
-
-    fn execute(&self, input: Self::Input, params: Self::Params) -> Result<Self::Output> {
-        gradient(&input, &params.element)
-    }
 }
 
 /// Compute the morphological gradient of a raster

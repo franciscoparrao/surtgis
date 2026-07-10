@@ -6,7 +6,7 @@ use crate::maybe_rayon::*;
 use ndarray::Array2;
 use std::f64::consts::PI;
 use surtgis_core::raster::Raster;
-use surtgis_core::{Algorithm, Error, Result};
+use surtgis_core::{Error, Result};
 
 /// Output format for aspect
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -18,29 +18,6 @@ pub enum AspectOutput {
     Radians,
     /// Compass direction (N, NE, E, SE, S, SW, W, NW) as 1-8
     Compass,
-}
-
-/// Aspect algorithm
-#[derive(Debug, Clone, Default)]
-pub struct Aspect;
-
-impl Algorithm for Aspect {
-    type Input = Raster<f64>;
-    type Output = Raster<f64>;
-    type Params = AspectOutput;
-    type Error = Error;
-
-    fn name(&self) -> &'static str {
-        "Aspect"
-    }
-
-    fn description(&self) -> &'static str {
-        "Calculate aspect (direction of steepest descent) from a DEM"
-    }
-
-    fn execute(&self, input: Self::Input, params: Self::Params) -> Result<Self::Output> {
-        aspect(&input, params)
-    }
 }
 
 /// Threshold below which both gradient components are considered flat

@@ -9,8 +9,8 @@
 //! Catena, 46(2-3), 159-176.
 
 use ndarray::Array2;
+use surtgis_core::Result;
 use surtgis_core::raster::Raster;
-use surtgis_core::{Algorithm, Error, Result};
 
 /// Parameters for sink filling
 #[derive(Debug, Clone)]
@@ -29,29 +29,6 @@ pub struct FillSinksParams {
 impl Default for FillSinksParams {
     fn default() -> Self {
         Self { min_slope: 1e-5 }
-    }
-}
-
-/// Fill sinks algorithm
-#[derive(Debug, Clone, Default)]
-pub struct FillSinks;
-
-impl Algorithm for FillSinks {
-    type Input = Raster<f64>;
-    type Output = Raster<f64>;
-    type Params = FillSinksParams;
-    type Error = Error;
-
-    fn name(&self) -> &'static str {
-        "Fill Sinks"
-    }
-
-    fn description(&self) -> &'static str {
-        "Fill depressions in a DEM using Planchon-Darboux (2001) method"
-    }
-
-    fn execute(&self, input: Self::Input, params: Self::Params) -> Result<Self::Output> {
-        fill_sinks(&input, params)
     }
 }
 

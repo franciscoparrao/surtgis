@@ -17,8 +17,8 @@
 use ndarray::Array2;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
+use surtgis_core::Result;
 use surtgis_core::raster::Raster;
-use surtgis_core::{Algorithm, Error, Result};
 
 /// A cell in the priority queue, ordered by elevation (min-heap via Reverse).
 #[derive(Debug, Clone)]
@@ -70,29 +70,6 @@ pub struct PriorityFloodParams {
 impl Default for PriorityFloodParams {
     fn default() -> Self {
         Self { epsilon: 1e-5 }
-    }
-}
-
-/// Priority-Flood fill algorithm
-#[derive(Debug, Clone, Default)]
-pub struct PriorityFlood;
-
-impl Algorithm for PriorityFlood {
-    type Input = Raster<f64>;
-    type Output = Raster<f64>;
-    type Params = PriorityFloodParams;
-    type Error = Error;
-
-    fn name(&self) -> &'static str {
-        "Priority-Flood"
-    }
-
-    fn description(&self) -> &'static str {
-        "Fill depressions using Priority-Flood (Barnes 2014)"
-    }
-
-    fn execute(&self, input: Self::Input, params: Self::Params) -> Result<Self::Output> {
-        priority_flood(&input, params)
     }
 }
 

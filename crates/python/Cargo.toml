@@ -23,9 +23,17 @@ cloud = ["dep:surtgis-cloud"]
 
 [dependencies]
 surtgis-core = { version = "0.17", path = "../core", default-features = false }
-surtgis-algorithms = { version = "0.17", path = "../algorithms", default-features = false }
+surtgis-algorithms = { version = "0.17", path = "../algorithms", default-features = false, features = [
+    "unstable",
+] }
 surtgis-relief = { version = "0.17", path = "../relief" }
 surtgis-colormap = { version = "0.17", path = "../colormap" }
 surtgis-cloud = { version = "0.17", path = "../cloud", features = ["native"], optional = true }
-pyo3.workspace = true
+# abi3-py39: build one stable-ABI wheel per platform instead of one per
+# CPython minor version. Matches `requires-python = ">=3.9"` in
+# pyproject.toml. Collapses the release matrix from 25 wheels to 5 (see
+# .github/workflows/python-release.yml) at the cost of losing
+# version-specific PyO3 fast paths — negligible for this numeric-extension
+# workload, which spends its time in Rust, not in Python/C API calls.
+pyo3 = { workspace = true, features = ["abi3-py39"] }
 numpy.workspace = true

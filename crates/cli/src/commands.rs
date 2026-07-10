@@ -357,6 +357,12 @@ pub enum Commands {
         #[command(subcommand)]
         action: MlCommands,
     },
+    /// Generate shell completion scripts (write to a file in your shell's
+    /// completion directory, e.g. `surtgis completions bash > /etc/bash_completion.d/surtgis`)
+    Completions {
+        /// Target shell
+        shell: clap_complete::Shell,
+    },
 }
 
 // ─── Terrain subcommands ────────────────────────────────────────────────

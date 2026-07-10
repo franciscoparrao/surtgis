@@ -6,7 +6,6 @@
 //! - `Raster<T>`: Generic raster grid type
 //! - `GeoTransform`: Affine transformation for georeferencing
 //! - `CRS`: Coordinate Reference System handling
-//! - Algorithm traits for consistent API
 //! - I/O for common geospatial formats
 //! - Streaming ([`StripProcessor`]) and tiling ([`TileGrid`]) for
 //!   bounded-memory and windowed processing
@@ -20,6 +19,22 @@
 //! a `Breaking` heading. Sibling crates should depend on
 //! `surtgis-core = "0.15"` alone; the CLI and GUI crates carry no
 //! stability promise.
+//!
+//! ### `ndarray` / `geo-types` re-exports
+//!
+//! [`Raster`]'s data-access methods return `ndarray` types
+//! ([`ndarray::Array2`], `ArrayView2`, ...) and [`vector::Feature`]
+//! carries a [`geo_types::Geometry`] — both are part of this crate's
+//! public API surface, not internal implementation details. Depend on
+//! the versions re-exported here (`surtgis_core::ndarray`,
+//! `surtgis_core::geo`, `surtgis_core::geo_types`) rather than adding
+//! your own `ndarray`/`geo`/`geo-types` dependency, so your code always
+//! matches the exact version this crate was built against — Rust's type
+//! system treats two different semver-major versions of the same crate
+//! as unrelated types even when named identically. A major-version bump
+//! of `ndarray`, `geo`, or `geo-types` is a **major** (breaking) bump of
+//! `surtgis-core` too, under the same pre-announced `Breaking` policy
+//! above.
 
 // The foundation crate's public API is part of the stability contract, so every
 // public item must be documented — enforced at build time.
@@ -36,6 +51,19 @@ pub mod streaming;
 pub mod tiling;
 pub mod vector;
 
+/// Re-exported so downstream code can depend on the exact `geo` version
+/// used by algorithm-crate vector operations built on this crate.
+/// See the crate-level "Stability" section.
+pub use geo;
+/// Re-exported so downstream code can depend on the exact `geo-types`
+/// version this crate's public API ([`vector::Feature`]) uses. See the
+/// crate-level "Stability" section.
+pub use geo_types;
+/// Re-exported so downstream code can depend on the exact `ndarray`
+/// version this crate's public API (`Raster::data`, `view`, ...) uses.
+/// See the crate-level "Stability" section.
+pub use ndarray;
+
 pub use crs::CRS;
 pub use cube::{Cube, CubeChunk};
 pub use error::{Error, Result};
@@ -47,7 +75,6 @@ pub use tiling::{Tile, TileGrid};
 
 /// Prelude for convenient imports
 pub mod prelude {
-    pub use crate::Algorithm;
     pub use crate::crs::CRS;
     pub use crate::dispatch_any;
     pub use crate::error::{Error, Result};
@@ -55,49 +82,4 @@ pub mod prelude {
         AnyRaster, DataType, GeoTransform, Raster, RasterCell, RasterElement, check_aligned,
         check_same_crs, check_same_shape,
     };
-}
-
-/// Core trait for all algorithms in SurtGis.
-///
-/// Algorithms are pure functions that transform input data according to parameters.
-pub trait Algorithm {
-    /// Input type for the algorithm
-    type Input;
-    /// Output type for the algorithm
-    type Output;
-    /// Parameters controlling algorithm behavior
-    type Params: Default;
-    /// Error type for algorithm execution
-    type Error: std::error::Error;
-
-    /// Returns the algorithm name
-    fn name(&self) -> &'static str;
-
-    /// Returns a description of what the algorithm does
-    fn description(&self) -> &'static str;
-
-    /// Execute the algorithm
-    fn execute(
-        &self,
-        input: Self::Input,
-        params: Self::Params,
-    ) -> std::result::Result<Self::Output, Self::Error>;
-
-    /// Execute with default parameters
-    fn execute_default(
-        &self,
-        input: Self::Input,
-    ) -> std::result::Result<Self::Output, Self::Error> {
-        self.execute(input, Self::Params::default())
-    }
-}
-
-/// Marker trait for algorithms that can be parallelized
-pub trait ParallelAlgorithm: Algorithm {
-    /// Execute in parallel using available cores
-    fn execute_parallel(
-        &self,
-        input: Self::Input,
-        params: Self::Params,
-    ) -> std::result::Result<Self::Output, Self::Error>;
 }

@@ -3,8 +3,11 @@
 //! All terrain functions accept a 2D numpy array (f64) and a `cell_size` parameter.
 //! Returns a 2D numpy array of the same shape.
 
-use numpy::ndarray::{Array2, Array3};
-use numpy::{IntoPyArray, PyArray2, PyArray3, PyReadonlyArray2, PyUntypedArrayMethods};
+use numpy::ndarray::{Array2, Array3, Axis};
+use numpy::{
+    IntoPyArray, PyArray2, PyArray3, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3,
+    PyUntypedArrayMethods,
+};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
@@ -83,8 +86,11 @@ use surtgis_algorithms::imagery::{
     savi as compute_savi,
 };
 use surtgis_algorithms::interpolation::{
-    IdwParams, NaturalNeighborParams, NearestNeighborParams, SamplePoint, idw as compute_idw,
+    IdwParams, NaturalNeighborParams, NearestNeighborParams, OrdinaryKrigingParams, SamplePoint,
+    VariogramParams, empirical_variogram as compute_empirical_variogram,
+    fit_best_variogram as compute_fit_best_variogram, idw as compute_idw,
     natural_neighbor as compute_natural_neighbor, nearest_neighbor as compute_nearest_neighbor,
+    ordinary_kriging as compute_ordinary_kriging,
 };
 use surtgis_algorithms::landscape::{
     Connectivity, DiversityParams, label_patches as compute_label_patches,
@@ -96,7 +102,20 @@ use surtgis_algorithms::morphology::{
     dilate as compute_dilate, erode as compute_erode, gradient as compute_gradient,
     opening as compute_opening, top_hat as compute_top_hat,
 };
-use surtgis_algorithms::statistics::{FocalParams, FocalStatistic, focal_statistics};
+use surtgis_algorithms::pansharpening::{
+    brovey as compute_brovey, gram_schmidt as compute_gram_schmidt,
+    pca_pansharpen as compute_pca_pansharpen,
+};
+use surtgis_algorithms::segmentation::{
+    FelzenszwalbParams, SlicParams, felzenszwalb as compute_felzenszwalb, slic as compute_slic,
+};
+use surtgis_algorithms::statistics::{
+    FocalParams, FocalStatistic, ZonalStatistic, focal_statistics,
+    zonal_statistics_raster as compute_zonal_statistics_raster,
+};
+use surtgis_algorithms::temporal::{
+    linear_trend as compute_linear_trend, mann_kendall as compute_mann_kendall,
+};
 use surtgis_algorithms::terrain::{
     AdvancedCurvatureType,
     AspectOutput,
@@ -226,26 +245,64 @@ fn numpy_f64_to_raster_i32(
     Ok(raster)
 }
 
-/// Convert Raster<f64> back to a numpy 2D array.
-fn raster_to_numpy<'py>(py: Python<'py>, raster: &Raster<f64>) -> Bound<'py, PyArray2<f64>> {
-    let arr: Array2<f64> = raster.data().clone();
-    arr.into_pyarray(py)
+/// Build one `Raster<f64>` per band from a `(bands, rows, cols)` numpy
+/// stack — the input shape for every multi-band binding below (SLIC,
+/// Felzenszwalb, pansharpening's MS stack, temporal trend/Mann-Kendall).
+fn array3_to_rasters(
+    stack: &PyReadonlyArray3<'_, f64>,
+    cell_size: f64,
+) -> PyResult<Vec<Raster<f64>>> {
+    let shape = stack.shape();
+    let (n_bands, rows, cols) = (shape[0], shape[1], shape[2]);
+    let arr = stack.as_array();
+    let mut rasters = Vec::with_capacity(n_bands);
+    for b in 0..n_bands {
+        let data: Vec<f64> = arr.index_axis(Axis(0), b).iter().copied().collect();
+        let mut r =
+            Raster::from_vec(data, rows, cols).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        r.set_transform(GeoTransform::new(0.0, 0.0, cell_size, -cell_size));
+        rasters.push(r);
+    }
+    Ok(rasters)
 }
 
-/// Convert Raster<u8> back to a numpy 2D array.
-fn raster_u8_to_numpy<'py>(py: Python<'py>, raster: &Raster<u8>) -> Bound<'py, PyArray2<u8>> {
-    let arr: Array2<u8> = raster.data().clone();
-    arr.into_pyarray(py)
+/// Stack a `Vec<Raster<f64>>` (one per band) into a `(bands, rows, cols)`
+/// numpy array — the mirror image of `array3_to_rasters`, used for
+/// multi-band outputs (pansharpening).
+fn rasters_to_array3<'py>(py: Python<'py>, rasters: Vec<Raster<f64>>) -> Bound<'py, PyArray3<f64>> {
+    let n_bands = rasters.len();
+    let (rows, cols) = rasters.first().map(|r| r.shape()).unwrap_or((0, 0));
+    let mut out = Array3::<f64>::zeros((n_bands, rows, cols));
+    for (b, r) in rasters.into_iter().enumerate() {
+        out.index_axis_mut(Axis(0), b).assign(&r.into_array());
+    }
+    out.into_pyarray(py)
+}
+
+/// Convert Raster<f64> back to a numpy 2D array.
+///
+/// Takes ownership (not `&Raster<f64>`): `into_array()` moves the backing
+/// `Vec` straight into the `PyArray` with no element-wise copy, unlike the
+/// old `raster.data().clone()` which allocated and copied the whole grid
+/// on every single call across the ~100 functions that return a raster.
+fn raster_to_numpy<'py>(py: Python<'py>, raster: Raster<f64>) -> Bound<'py, PyArray2<f64>> {
+    raster.into_array().into_pyarray(py)
+}
+
+/// Convert Raster<u8> back to a numpy 2D array. See `raster_to_numpy` for
+/// why this takes ownership instead of a reference.
+fn raster_u8_to_numpy<'py>(py: Python<'py>, raster: Raster<u8>) -> Bound<'py, PyArray2<u8>> {
+    raster.into_array().into_pyarray(py)
 }
 
 /// Convert Raster<i32> back to a numpy 2D f64 array (cast i32 to f64).
-fn raster_i32_to_numpy_f64<'py>(
-    py: Python<'py>,
-    raster: &Raster<i32>,
-) -> Bound<'py, PyArray2<f64>> {
-    let arr: Array2<i32> = raster.data().clone();
-    let arr_f64 = arr.mapv(|v| v as f64);
-    arr_f64.into_pyarray(py)
+///
+/// Unlike `raster_to_numpy`/`raster_u8_to_numpy`, the i32->f64 element cast
+/// (`mapv`) always allocates a new array regardless of ownership — there's
+/// no copy to eliminate here, but it still takes the raster by value for
+/// API consistency with the other two converters.
+fn raster_i32_to_numpy_f64<'py>(py: Python<'py>, raster: Raster<i32>) -> Bound<'py, PyArray2<f64>> {
+    raster.into_array().mapv(|v| v as f64).into_pyarray(py)
 }
 
 // ===========================================================================
@@ -285,7 +342,7 @@ fn slope<'py>(
             )
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute aspect in degrees (0-360, 0=North, clockwise).
@@ -300,7 +357,7 @@ fn aspect_degrees<'py>(
     let result = py
         .allow_threads(|| aspect(&raster, AspectOutput::Degrees))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute hillshade from a DEM.
@@ -327,7 +384,7 @@ fn hillshade_compute<'py>(
             )
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute multidirectional hillshade.
@@ -342,7 +399,7 @@ fn multidirectional_hillshade<'py>(
     let result = py
         .allow_threads(|| compute_multi_hillshade(&raster, MultiHillshadeParams::default()))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute curvature. `ctype`: "general", "profile", or "plan".
@@ -373,7 +430,7 @@ fn curvature_compute<'py>(
             )
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute TPI (Topographic Position Index).
@@ -389,7 +446,7 @@ fn tpi_compute<'py>(
     let result = py
         .allow_threads(|| compute_tpi(&raster, TpiParams { radius }))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute TRI (Terrain Ruggedness Index).
@@ -404,7 +461,7 @@ fn tri_compute<'py>(
     let result = py
         .allow_threads(|| compute_tri(&raster, TriParams::default()))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute geomorphons landform classification. Returns u8 landform codes.
@@ -429,7 +486,7 @@ fn geomorphons_compute<'py>(
             )
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_u8_to_numpy(py, &result))
+    Ok(raster_u8_to_numpy(py, result))
 }
 
 /// Compute northness (cos of aspect).
@@ -444,7 +501,7 @@ fn northness_compute<'py>(
     let result = py
         .allow_threads(|| northness(&raster))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute eastness (sin of aspect).
@@ -459,7 +516,7 @@ fn eastness_compute<'py>(
     let result = py
         .allow_threads(|| eastness(&raster))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute DEV (Deviation from Mean Elevation).
@@ -475,7 +532,7 @@ fn dev_compute<'py>(
     let result = py
         .allow_threads(|| compute_dev(&raster, DevParams { radius }))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute shape index.
@@ -490,7 +547,7 @@ fn shape_index_compute<'py>(
     let result = py
         .allow_threads(|| compute_shape_index(&raster))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute curvedness.
@@ -505,7 +562,7 @@ fn curvedness_compute<'py>(
     let result = py
         .allow_threads(|| compute_curvedness(&raster))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute sky view factor.
@@ -522,7 +579,7 @@ fn sky_view_factor_compute<'py>(
     let result = py
         .allow_threads(|| compute_svf(&raster, SvfParams { directions, radius }))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute uncertainty maps (slope RMSE) from DEM error.
@@ -538,7 +595,7 @@ fn uncertainty_slope<'py>(
     let result = py
         .allow_threads(|| compute_uncertainty(&raster, UncertaintyParams { dem_rmse }))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result.slope_rmse))
+    Ok(raster_to_numpy(py, result.slope_rmse))
 }
 
 /// Compute viewshed from observer location.
@@ -569,7 +626,7 @@ fn viewshed_compute<'py>(
             )
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_u8_to_numpy(py, &result))
+    Ok(raster_u8_to_numpy(py, result))
 }
 
 /// Compute positive openness (above-horizon visibility).
@@ -586,7 +643,7 @@ fn openness_positive<'py>(
     let result = py
         .allow_threads(|| positive_openness(&raster, OpennessParams { directions, radius }))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute negative openness (below-horizon enclosure).
@@ -603,7 +660,7 @@ fn openness_negative<'py>(
     let result = py
         .allow_threads(|| negative_openness(&raster, OpennessParams { directions, radius }))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute MRVBF (Multi-resolution Valley Bottom Flatness).
@@ -619,7 +676,7 @@ fn mrvbf_compute<'py>(
     let (mrvbf, mrrtf) = py
         .allow_threads(|| compute_mrvbf(&raster, MrvbfParams::default()))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok((raster_to_numpy(py, &mrvbf), raster_to_numpy(py, &mrrtf)))
+    Ok((raster_to_numpy(py, mrvbf), raster_to_numpy(py, mrrtf)))
 }
 
 /// Compute VRM (Vector Ruggedness Measure).
@@ -635,7 +692,7 @@ fn vrm_compute<'py>(
     let result = py
         .allow_threads(|| compute_vrm(&raster, VrmParams { radius }))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute advanced curvature (Florinsky system).
@@ -677,7 +734,7 @@ fn advanced_curvature<'py>(
     let result = py
         .allow_threads(|| advanced_curvatures(&raster, curv_type))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 // ===========================================================================
@@ -696,7 +753,7 @@ fn fill_depressions<'py>(
     let result = py
         .allow_threads(|| fill_sinks(&raster, FillSinksParams::default()))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Priority-flood depression filling (Barnes 2014).
@@ -711,7 +768,7 @@ fn priority_flood_fill<'py>(
     let result = py
         .allow_threads(|| priority_flood(&raster, PriorityFloodParams::default()))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute D8 flow direction. Returns u8 direction codes.
@@ -726,7 +783,7 @@ fn flow_direction_d8<'py>(
     let result = py
         .allow_threads(|| flow_direction(&raster))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_u8_to_numpy(py, &result))
+    Ok(raster_u8_to_numpy(py, result))
 }
 
 /// Compute D-infinity flow direction (Tarboton 1997).
@@ -742,7 +799,7 @@ fn flow_direction_dinf<'py>(
     let result = py
         .allow_threads(|| compute_flow_direction_dinf(&raster))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute flow accumulation from D8 flow direction raster.
@@ -757,7 +814,7 @@ fn flow_accumulation_d8<'py>(
     let result = py
         .allow_threads(|| flow_accumulation(&raster))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute TWI from a DEM (fill → flow_dir → flow_acc → slope → TWI).
@@ -792,7 +849,7 @@ fn twi_compute<'py>(
     let result = py
         .allow_threads(|| compute_twi(&facc, &slp))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute HAND from a DEM (fill → flow_dir → flow_acc → HAND).
@@ -817,7 +874,7 @@ fn hand_compute<'py>(
     let result = py
         .allow_threads(|| compute_hand(&raster, &fdir, &facc, HandParams { stream_threshold }))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Breach depressions (Lindsay 2016) - preferred over filling.
@@ -832,7 +889,7 @@ fn breach_fill<'py>(
     let result = py
         .allow_threads(|| breach_depressions(&raster, BreachParams::default()))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute MFD (Multiple Flow Direction) accumulation.
@@ -851,7 +908,7 @@ fn flow_accumulation_mfd_compute<'py>(
     let result = py
         .allow_threads(|| flow_accumulation_mfd(&filled, MfdParams { exponent }))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Extract stream network from flow accumulation.
@@ -876,7 +933,7 @@ fn stream_network_compute<'py>(
     let result = py
         .allow_threads(|| compute_stream_network(&facc, StreamNetworkParams { threshold }))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_u8_to_numpy(py, &result))
+    Ok(raster_u8_to_numpy(py, result))
 }
 
 // ===========================================================================
@@ -895,7 +952,7 @@ fn ndvi_compute<'py>(
     let result = py
         .allow_threads(|| compute_ndvi(&nir_r, &red_r))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute NDWI from Green and NIR bands.
@@ -910,7 +967,7 @@ fn ndwi_compute<'py>(
     let result = py
         .allow_threads(|| compute_ndwi(&green_r, &nir_r))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute SAVI from NIR and Red bands.
@@ -927,7 +984,7 @@ fn savi_compute<'py>(
     let result = py
         .allow_threads(|| compute_savi(&nir_r, &red_r, SaviParams { l_factor }))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute normalized difference: (A - B) / (A + B).
@@ -942,7 +999,7 @@ fn normalized_diff<'py>(
     let result = py
         .allow_threads(|| normalized_difference(&a_r, &b_r))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute MNDWI (Modified NDWI) from Green and SWIR bands.
@@ -957,7 +1014,7 @@ fn mndwi_compute<'py>(
     let result = py
         .allow_threads(|| compute_mndwi(&green_r, &swir_r))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute NBR (Normalized Burn Ratio) from NIR and SWIR bands.
@@ -972,7 +1029,7 @@ fn nbr_compute<'py>(
     let result = py
         .allow_threads(|| compute_nbr(&nir_r, &swir_r))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute EVI (Enhanced Vegetation Index) from NIR, Red, and Blue bands.
@@ -994,7 +1051,7 @@ fn evi_compute<'py>(
     let result = py
         .allow_threads(|| compute_evi(&nir_r, &red_r, &blue_r, EviParams { g, c1, c2, l }))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute BSI (Bare Soil Index) from SWIR, NIR, Red, and Blue bands.
@@ -1013,7 +1070,7 @@ fn bsi_compute<'py>(
     let result = py
         .allow_threads(|| compute_bsi(&swir_r, &red_r, &nir_r, &blue_r))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute NDRE (Normalized Difference Red Edge) from NIR and RedEdge bands.
@@ -1028,7 +1085,7 @@ fn ndre_compute<'py>(
     let result = py
         .allow_threads(|| compute_ndre(&nir_r, &re_r))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute GNDVI (Green NDVI) from NIR and Green bands.
@@ -1043,7 +1100,7 @@ fn gndvi_compute<'py>(
     let result = py
         .allow_threads(|| compute_gndvi(&nir_r, &green_r))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute NGRDI (Normalized Green-Red Difference) from Green and Red bands.
@@ -1058,7 +1115,7 @@ fn ngrdi_compute<'py>(
     let result = py
         .allow_threads(|| compute_ngrdi(&green_r, &red_r))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute RECI (Red Edge Chlorophyll Index) from NIR and RedEdge bands.
@@ -1073,7 +1130,7 @@ fn reci_compute<'py>(
     let result = py
         .allow_threads(|| compute_reci(&nir_r, &re_r))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute NDSI (Normalized Difference Snow Index) from Green and SWIR bands.
@@ -1088,7 +1145,7 @@ fn ndsi_compute<'py>(
     let result = py
         .allow_threads(|| compute_ndsi(&green_r, &swir_r))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute NDBI (Normalized Difference Built-up Index) from SWIR and NIR bands.
@@ -1103,7 +1160,7 @@ fn ndbi_compute<'py>(
     let result = py
         .allow_threads(|| compute_ndbi(&swir_r, &nir_r))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute NDMI (Normalized Difference Moisture Index) from NIR and SWIR bands.
@@ -1118,7 +1175,7 @@ fn ndmi_compute<'py>(
     let result = py
         .allow_threads(|| compute_ndmi(&nir_r, &swir_r))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute MSAVI (Modified Soil-Adjusted Vegetation Index) from NIR and Red bands.
@@ -1133,7 +1190,7 @@ fn msavi_compute<'py>(
     let result = py
         .allow_threads(|| compute_msavi(&nir_r, &red_r))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute EVI2 (Two-band Enhanced Vegetation Index) from NIR and Red bands.
@@ -1148,7 +1205,7 @@ fn evi2_compute<'py>(
     let result = py
         .allow_threads(|| compute_evi2(&nir_r, &red_r))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 // ===========================================================================
@@ -1168,7 +1225,7 @@ fn morph_erode<'py>(
     let result = py
         .allow_threads(|| compute_erode(&raster, &elem))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Morphological dilation with square kernel.
@@ -1184,7 +1241,7 @@ fn morph_dilate<'py>(
     let result = py
         .allow_threads(|| compute_dilate(&raster, &elem))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Morphological opening (erosion followed by dilation).
@@ -1200,7 +1257,7 @@ fn morph_opening<'py>(
     let result = py
         .allow_threads(|| compute_opening(&raster, &elem))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Morphological closing (dilation followed by erosion).
@@ -1216,7 +1273,7 @@ fn morph_closing<'py>(
     let result = py
         .allow_threads(|| compute_closing(&raster, &elem))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Morphological gradient (dilation minus erosion).
@@ -1232,7 +1289,7 @@ fn morph_gradient<'py>(
     let result = py
         .allow_threads(|| compute_gradient(&raster, &elem))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Top-hat transform (original minus opening). Extracts bright features.
@@ -1248,7 +1305,7 @@ fn morph_top_hat<'py>(
     let result = py
         .allow_threads(|| compute_top_hat(&raster, &elem))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Black-hat transform (closing minus original). Extracts dark features.
@@ -1264,7 +1321,7 @@ fn morph_black_hat<'py>(
     let result = py
         .allow_threads(|| compute_black_hat(&raster, &elem))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 // ===========================================================================
@@ -1293,7 +1350,7 @@ fn focal_mean<'py>(
             )
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Focal standard deviation.
@@ -1318,7 +1375,7 @@ fn focal_std<'py>(
             )
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Focal range (max - min).
@@ -1343,7 +1400,7 @@ fn focal_range<'py>(
             )
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Focal minimum statistic.
@@ -1368,7 +1425,7 @@ fn focal_min<'py>(
             )
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Focal maximum statistic.
@@ -1393,7 +1450,7 @@ fn focal_max<'py>(
             )
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Focal sum statistic.
@@ -1418,7 +1475,7 @@ fn focal_sum<'py>(
             )
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Focal median statistic.
@@ -1443,7 +1500,7 @@ fn focal_median<'py>(
             )
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 // ===========================================================================
@@ -1496,7 +1553,7 @@ fn solar_radiation_compute<'py>(
     let result = py
         .allow_threads(|| compute_solar_radiation(&slope_rad, &aspect_rad, params))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result.total))
+    Ok(raster_to_numpy(py, result.total))
 }
 
 /// Compute surface area ratio (Jenness 2004).
@@ -1511,7 +1568,7 @@ fn surface_area_ratio_compute<'py>(
     let result = py
         .allow_threads(|| compute_surface_area_ratio(&raster, SarParams::default()))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute valley depth.
@@ -1526,7 +1583,7 @@ fn valley_depth_compute<'py>(
     let result = py
         .allow_threads(|| compute_valley_depth(&raster))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute convergence index.
@@ -1542,7 +1599,7 @@ fn convergence_index_compute<'py>(
     let result = py
         .allow_threads(|| compute_convergence_index(&raster, ConvergenceParams { radius }))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute landform classification (Weiss 2001, 11 classes).
@@ -1557,7 +1614,7 @@ fn landform_classification_compute<'py>(
     let result = py
         .allow_threads(|| compute_landform_classification(&raster, LandformParams::default()))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute wind exposure (Topex index).
@@ -1583,7 +1640,7 @@ fn wind_exposure_compute<'py>(
             )
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Generate contour lines as a raster.
@@ -1607,7 +1664,7 @@ fn contour_lines_compute<'py>(
             )
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute cost distance from source cells.
@@ -1631,7 +1688,7 @@ fn cost_distance_compute<'py>(
             )
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Feature-preserving DEM smoothing.
@@ -1657,7 +1714,7 @@ fn feature_preserving_smoothing_compute<'py>(
             )
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Gaussian smoothing of a DEM.
@@ -1677,7 +1734,7 @@ fn gaussian_smoothing_compute<'py>(
             compute_gaussian_smoothing(&raster, GaussianSmoothingParams { radius, sigma })
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Sign-preserving log transform: f(x) = sign(x) * ln(1 + |x|).
@@ -1690,7 +1747,7 @@ fn log_transform_compute<'py>(
     let result = py
         .allow_threads(|| compute_log_transform(&raster))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Classify terrain into accumulation/dispersion zones.
@@ -1705,7 +1762,7 @@ fn accumulation_zones_compute<'py>(
     let result = py
         .allow_threads(|| compute_accumulation_zones(&raster))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute XDraw viewshed (faster than Bresenham for large DEMs).
@@ -1736,7 +1793,7 @@ fn viewshed_xdraw_compute<'py>(
             )
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_u8_to_numpy(py, &result))
+    Ok(raster_u8_to_numpy(py, result))
 }
 
 /// Compute horizon angle map for a single azimuth direction.
@@ -1754,7 +1811,7 @@ fn horizon_angle_map_compute<'py>(
     let result = py
         .allow_threads(|| compute_horizon_angle_map(&raster, azimuth_rad, max_distance))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 // ===========================================================================
@@ -1784,7 +1841,7 @@ fn watershed_compute<'py>(
     let result = py
         .allow_threads(|| compute_watershed(&raster, params))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_i32_to_numpy_f64(py, &result))
+    Ok(raster_i32_to_numpy_f64(py, result))
 }
 
 /// TFGA (Facet-to-Facet) flow accumulation.
@@ -1802,7 +1859,7 @@ fn flow_accumulation_tfga_compute<'py>(
     let result = py
         .allow_threads(|| compute_tfga(&filled, TfgaParams::default()))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Adaptive MFD flow accumulation (Qin 2011).
@@ -1829,7 +1886,7 @@ fn flow_accumulation_adaptive_mfd<'py>(
             )
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Priority-flood with flat resolution.
@@ -1844,7 +1901,7 @@ fn priority_flood_flat_compute<'py>(
     let result = py
         .allow_threads(|| compute_priority_flood_flat(&raster))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute Strahler stream order from flow direction and stream mask.
@@ -1861,7 +1918,7 @@ fn strahler_order_compute<'py>(
     let result = py
         .allow_threads(|| compute_strahler_order(&fdir_r, &mask_r))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute flow path length from D8 flow direction.
@@ -1876,7 +1933,7 @@ fn flow_path_length_compute<'py>(
     let result = py
         .allow_threads(|| compute_flow_path_length(&fdir_r))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 // ===========================================================================
@@ -1905,7 +1962,7 @@ fn kmeans_compute<'py>(
             )
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// ISODATA unsupervised classification on a single raster.
@@ -1930,7 +1987,7 @@ fn isodata_compute<'py>(
             )
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 // ===========================================================================
@@ -1984,7 +2041,7 @@ fn idw_interpolation<'py>(
     let result = py
         .allow_threads(|| compute_idw(&sample_points, params))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Nearest-neighbor interpolation from scattered points to a raster grid.
@@ -2031,7 +2088,7 @@ fn nearest_neighbor_interpolation<'py>(
     let result = py
         .allow_threads(|| compute_nearest_neighbor(&sample_points, params))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Natural neighbor (Sibson) interpolation from scattered points to a raster grid.
@@ -2078,7 +2135,7 @@ fn natural_neighbor_interpolation<'py>(
     let result = py
         .allow_threads(|| compute_natural_neighbor(&sample_points, params))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 // ===========================================================================
@@ -2103,7 +2160,7 @@ fn label_patches_compute<'py>(
     let (labels, n_patches) = py
         .allow_threads(|| compute_label_patches(&raster, conn))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok((raster_i32_to_numpy_f64(py, &labels), n_patches))
+    Ok((raster_i32_to_numpy_f64(py, labels), n_patches))
 }
 
 /// Compute Shannon Diversity Index in a moving window.
@@ -2126,7 +2183,7 @@ fn shannon_diversity_compute<'py>(
             )
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute Simpson Diversity Index in a moving window.
@@ -2149,7 +2206,7 @@ fn simpson_diversity_compute<'py>(
             )
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute patch density in a moving window.
@@ -2172,7 +2229,7 @@ fn patch_density_compute<'py>(
             )
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute landscape-level metrics (SHDI, SIDI, etc.).
@@ -2210,7 +2267,7 @@ fn sobel_edge_compute<'py>(
     let result = py
         .allow_threads(|| compute_sobel_edge(&raster))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Laplacian edge detection (second derivative).
@@ -2223,7 +2280,7 @@ fn laplacian_compute<'py>(
     let result = py
         .allow_threads(|| compute_laplacian(&raster))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 /// Compute GLCM (Haralick) texture feature.
@@ -2265,7 +2322,7 @@ fn haralick_glcm_compute<'py>(
             )
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &result))
+    Ok(raster_to_numpy(py, result))
 }
 
 // ===========================================================================
@@ -2482,6 +2539,275 @@ fn predict_raster<'py>(
 }
 
 // ===========================================================================
+// Zonal statistics
+// ===========================================================================
+
+fn parse_zonal_statistic(s: &str) -> PyResult<ZonalStatistic> {
+    match s.to_lowercase().as_str() {
+        "mean" => Ok(ZonalStatistic::Mean),
+        "stddev" | "std" => Ok(ZonalStatistic::StdDev),
+        "min" => Ok(ZonalStatistic::Min),
+        "max" => Ok(ZonalStatistic::Max),
+        "range" => Ok(ZonalStatistic::Range),
+        "sum" => Ok(ZonalStatistic::Sum),
+        "count" => Ok(ZonalStatistic::Count),
+        "median" => Ok(ZonalStatistic::Median),
+        "majority" => Ok(ZonalStatistic::Majority),
+        "minority" => Ok(ZonalStatistic::Minority),
+        "variety" => Ok(ZonalStatistic::Variety),
+        other => Err(PyValueError::new_err(format!(
+            "unknown zonal statistic '{other}' (expected one of: mean, stddev, min, max, \
+             range, sum, count, median, majority, minority, variety)"
+        ))),
+    }
+}
+
+/// Zonal statistics: for each zone in `zones` (integer IDs), compute
+/// `statistic` over the corresponding cells of `values`, mapped back onto
+/// a raster of the same shape (every cell in a zone gets that zone's
+/// value — the same "broadcast back to grid" shape as the focal_* family).
+///
+/// Zone id `0` means "no zone" (excluded from every statistic, its output
+/// cells come back NaN) — the same convention as watershed/basin IDs
+/// elsewhere in this crate. Use positive zone ids only.
+#[pyfunction]
+#[pyo3(signature = (values, zones, cell_size=1.0, statistic="mean"))]
+fn zonal_statistics_compute<'py>(
+    py: Python<'py>,
+    values: PyReadonlyArray2<'py, f64>,
+    zones: PyReadonlyArray2<'py, f64>,
+    cell_size: f64,
+    statistic: &str,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let values_r = numpy_to_raster(&values, cell_size)?;
+    let zones_r = numpy_f64_to_raster_i32(&zones, cell_size)?;
+    let stat = parse_zonal_statistic(statistic)?;
+    let result = py
+        .allow_threads(|| compute_zonal_statistics_raster(&values_r, &zones_r, stat))
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(raster_to_numpy(py, result))
+}
+
+// ===========================================================================
+// Kriging
+// ===========================================================================
+
+/// Ordinary Kriging interpolation from scattered points to a raster grid.
+/// Points given as (N,2) array of (x,y) coords, values as (N,1) array —
+/// same input shape as `idw_interpolation`/`nearest_neighbor_interpolation`.
+///
+/// Fits the best-RSS variogram model (spherical/exponential/Gaussian)
+/// automatically from the empirical semivariance, then krige with it —
+/// the common case; use the lower-level Rust API directly if you need to
+/// choose or inspect the variogram model.
+#[pyfunction]
+#[pyo3(signature = (points_xy, values, grid_rows=100, grid_cols=100, cellsize=1.0, max_points=16))]
+#[allow(clippy::too_many_arguments)]
+fn ordinary_kriging_interpolation<'py>(
+    py: Python<'py>,
+    points_xy: PyReadonlyArray2<'py, f64>,
+    values: PyReadonlyArray2<'py, f64>,
+    grid_rows: usize,
+    grid_cols: usize,
+    cellsize: f64,
+    max_points: usize,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let xy_shape = points_xy.shape();
+    let n = xy_shape[0];
+    if xy_shape[1] != 2 {
+        return Err(PyValueError::new_err("points_xy must have shape (N, 2)"));
+    }
+    let val_shape = values.shape();
+    if val_shape[0] != n || val_shape[1] != 1 {
+        return Err(PyValueError::new_err("values must have shape (N, 1)"));
+    }
+    let xy_slice = points_xy
+        .as_slice()
+        .map_err(|_| PyValueError::new_err("points_xy must be contiguous"))?;
+    let val_slice = values
+        .as_slice()
+        .map_err(|_| PyValueError::new_err("values must be contiguous"))?;
+    let mut sample_points = Vec::with_capacity(n);
+    for i in 0..n {
+        sample_points.push(SamplePoint::new(
+            xy_slice[i * 2],
+            xy_slice[i * 2 + 1],
+            val_slice[i],
+        ));
+    }
+    let transform = GeoTransform::new(0.0, grid_rows as f64 * cellsize, cellsize, -cellsize);
+    let result = py
+        .allow_threads(|| {
+            let empirical =
+                compute_empirical_variogram(&sample_points, VariogramParams::default())?;
+            let fitted = compute_fit_best_variogram(&empirical)?;
+            let params = OrdinaryKrigingParams {
+                rows: grid_rows,
+                cols: grid_cols,
+                transform,
+                max_points,
+                ..OrdinaryKrigingParams::default()
+            };
+            compute_ordinary_kriging(&sample_points, &fitted, params)
+        })
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(raster_to_numpy(py, result.estimate))
+}
+
+// ===========================================================================
+// Temporal: trend / Mann-Kendall
+// ===========================================================================
+
+/// Per-pixel linear trend across a temporal stack. `stack` is
+/// `(time, rows, cols)`; `times` (optional) are the time coordinate for
+/// each band, default `0..T`. Returns `(slope, intercept, r_squared, p_value)`.
+#[pyfunction]
+#[pyo3(signature = (stack, times=None, cell_size=1.0))]
+fn linear_trend_compute<'py>(
+    py: Python<'py>,
+    stack: PyReadonlyArray3<'py, f64>,
+    times: Option<PyReadonlyArray1<'py, f64>>,
+    cell_size: f64,
+) -> PyResult<(
+    Bound<'py, PyArray2<f64>>,
+    Bound<'py, PyArray2<f64>>,
+    Bound<'py, PyArray2<f64>>,
+    Bound<'py, PyArray2<f64>>,
+)> {
+    let rasters = array3_to_rasters(&stack, cell_size)?;
+    let refs: Vec<&Raster<f64>> = rasters.iter().collect();
+    let times_vec: Option<Vec<f64>> = match times {
+        Some(t) => Some(
+            t.as_slice()
+                .map_err(|_| PyValueError::new_err("times must be contiguous"))?
+                .to_vec(),
+        ),
+        None => None,
+    };
+    let result = py
+        .allow_threads(|| compute_linear_trend(&refs, times_vec.as_deref()))
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok((
+        raster_to_numpy(py, result.slope),
+        raster_to_numpy(py, result.intercept),
+        raster_to_numpy(py, result.r_squared),
+        raster_to_numpy(py, result.p_value),
+    ))
+}
+
+/// Per-pixel Mann-Kendall trend test across a temporal stack `(time, rows,
+/// cols)`. Returns `(tau, p_value, trend, sens_slope)` — `trend` is
+/// 1=increasing / -1=decreasing / 0=no significant trend at alpha=0.05.
+#[pyfunction]
+#[pyo3(signature = (stack, cell_size=1.0))]
+fn mann_kendall_compute<'py>(
+    py: Python<'py>,
+    stack: PyReadonlyArray3<'py, f64>,
+    cell_size: f64,
+) -> PyResult<(
+    Bound<'py, PyArray2<f64>>,
+    Bound<'py, PyArray2<f64>>,
+    Bound<'py, PyArray2<f64>>,
+    Bound<'py, PyArray2<f64>>,
+)> {
+    let rasters = array3_to_rasters(&stack, cell_size)?;
+    let refs: Vec<&Raster<f64>> = rasters.iter().collect();
+    let result = py
+        .allow_threads(|| compute_mann_kendall(&refs))
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok((
+        raster_to_numpy(py, result.tau),
+        raster_to_numpy(py, result.p_value),
+        raster_to_numpy(py, result.trend),
+        raster_to_numpy(py, result.sens_slope),
+    ))
+}
+
+// ===========================================================================
+// Segmentation: SLIC / Felzenszwalb
+// ===========================================================================
+
+/// SLIC superpixel segmentation over a `(bands, rows, cols)` multi-band
+/// stack. Returns an integer label raster (as f64, matching this binding's
+/// other integer-raster outputs like `watershed_compute`).
+#[pyfunction]
+#[pyo3(signature = (bands, n_segments=100, compactness=0.1, cell_size=1.0))]
+fn slic_compute<'py>(
+    py: Python<'py>,
+    bands: PyReadonlyArray3<'py, f64>,
+    n_segments: usize,
+    compactness: f64,
+    cell_size: f64,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let rasters = array3_to_rasters(&bands, cell_size)?;
+    let refs: Vec<&Raster<f64>> = rasters.iter().collect();
+    let params = SlicParams {
+        n_segments,
+        compactness,
+        ..SlicParams::default()
+    };
+    let result = py
+        .allow_threads(|| compute_slic(&refs, params))
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(raster_i32_to_numpy_f64(py, result))
+}
+
+/// Felzenszwalb-Huttenlocher graph-based segmentation over a `(bands,
+/// rows, cols)` multi-band stack. Returns an integer label raster (as
+/// f64, same convention as `slic_compute`).
+#[pyfunction]
+#[pyo3(signature = (bands, scale=1.0, min_size=20, cell_size=1.0))]
+fn felzenszwalb_compute<'py>(
+    py: Python<'py>,
+    bands: PyReadonlyArray3<'py, f64>,
+    scale: f64,
+    min_size: usize,
+    cell_size: f64,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let rasters = array3_to_rasters(&bands, cell_size)?;
+    let refs: Vec<&Raster<f64>> = rasters.iter().collect();
+    let params = FelzenszwalbParams { scale, min_size };
+    let result = py
+        .allow_threads(|| compute_felzenszwalb(&refs, params))
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(raster_i32_to_numpy_f64(py, result))
+}
+
+// ===========================================================================
+// Pansharpening
+// ===========================================================================
+
+/// Sharpen a multispectral stack `(bands, rows, cols)` using a
+/// co-registered panchromatic band, on the same grid. `method`: "brovey"
+/// (default), "gram_schmidt"/"gs", or "pca". Returns a `(bands, rows,
+/// cols)` array, same band count as the input `ms` stack.
+#[pyfunction]
+#[pyo3(signature = (pan, ms, cell_size=1.0, method="brovey"))]
+fn pansharpen_compute<'py>(
+    py: Python<'py>,
+    pan: PyReadonlyArray2<'py, f64>,
+    ms: PyReadonlyArray3<'py, f64>,
+    cell_size: f64,
+    method: &str,
+) -> PyResult<Bound<'py, PyArray3<f64>>> {
+    let pan_r = numpy_to_raster(&pan, cell_size)?;
+    let ms_rasters = array3_to_rasters(&ms, cell_size)?;
+    let ms_refs: Vec<&Raster<f64>> = ms_rasters.iter().collect();
+    let method_lower = method.to_lowercase();
+    let result = py
+        .allow_threads(|| match method_lower.as_str() {
+            "brovey" => compute_brovey(&pan_r, &ms_refs),
+            "gram_schmidt" | "gs" => compute_gram_schmidt(&pan_r, &ms_refs),
+            "pca" => compute_pca_pansharpen(&pan_r, &ms_refs),
+            other => Err(surtgis_core::Error::Other(format!(
+                "unknown pansharpening method '{other}' (expected: brovey, gram_schmidt, pca)"
+            ))),
+        })
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(rasters_to_array3(py, result))
+}
+
+// ===========================================================================
 // Module definition
 // ===========================================================================
 
@@ -2607,7 +2933,7 @@ fn sar_linear_to_db<'py>(
     let out = py
         .allow_threads(|| compute_linear_to_db(&r))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &out))
+    Ok(raster_to_numpy(py, out))
 }
 
 /// Convert decibel SAR backscatter back to linear power (10^(x/10)).
@@ -2622,7 +2948,7 @@ fn sar_db_to_linear<'py>(
     let out = py
         .allow_threads(|| compute_db_to_linear(&r))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &out))
+    Ok(raster_to_numpy(py, out))
 }
 
 /// Dual-pol SAR water index: (co_pol - cross_pol) / (co_pol + cross_pol).
@@ -2641,7 +2967,7 @@ fn sar_dual_pol_water_index<'py>(
     let out = py
         .allow_threads(|| compute_dual_pol_water_index(&co, &cross))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &out))
+    Ok(raster_to_numpy(py, out))
 }
 
 /// Threshold a backscatter or index raster into a binary water mask.
@@ -2667,7 +2993,7 @@ fn sar_water_mask<'py>(
     let out = py
         .allow_threads(|| compute_sar_water_mask(&r, threshold, !water_above))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_u8_to_numpy(py, &out))
+    Ok(raster_u8_to_numpy(py, out))
 }
 
 /// Lee adaptive speckle filter for SAR backscatter.
@@ -2701,7 +3027,7 @@ fn sar_lee_filter<'py>(
             }
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &out))
+    Ok(raster_to_numpy(py, out))
 }
 
 /// Excess topography above a threshold hillslope angle (Blöthe et al. 2015).
@@ -2735,7 +3061,7 @@ fn excess_topography_compute<'py>(
             )
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &out))
+    Ok(raster_to_numpy(py, out))
 }
 
 /// Energy-cone lahar / mass-flow inundation (Malin & Sheridan 1982).
@@ -2771,7 +3097,7 @@ fn energy_cone_compute<'py>(
             )
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &out))
+    Ok(raster_to_numpy(py, out))
 }
 
 /// LAHARZ lahar / debris-flow inundation (Iverson, Schilling & Vallance 1998).
@@ -2818,7 +3144,7 @@ fn laharz_compute<'py>(
     let out = py
         .allow_threads(|| compute_laharz(&dem_r, &fdir, params))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &out))
+    Ok(raster_to_numpy(py, out))
 }
 
 // ===========================================================================
@@ -2906,7 +3232,7 @@ fn chi_compute<'py>(
             )
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &out))
+    Ok(raster_to_numpy(py, out))
 }
 
 /// Normalized channel steepness index k_sn (per-cell raster).
@@ -2951,7 +3277,7 @@ fn ksn_compute<'py>(
             )
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Ok(raster_to_numpy(py, &res.ksn_raster))
+    Ok(raster_to_numpy(py, res.ksn_raster))
 }
 
 /// Detect knickpoints on a stream network.
@@ -3273,6 +3599,23 @@ fn surtgis(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(knickpoints_compute, m)?)?;
     m.add_function(wrap_pyfunction!(concavity_compute, m)?)?;
     m.add_function(wrap_pyfunction!(divide_migration_compute, m)?)?;
+
+    // Zonal statistics
+    m.add_function(wrap_pyfunction!(zonal_statistics_compute, m)?)?;
+
+    // Kriging
+    m.add_function(wrap_pyfunction!(ordinary_kriging_interpolation, m)?)?;
+
+    // Temporal: trend / Mann-Kendall
+    m.add_function(wrap_pyfunction!(linear_trend_compute, m)?)?;
+    m.add_function(wrap_pyfunction!(mann_kendall_compute, m)?)?;
+
+    // Segmentation: SLIC / Felzenszwalb
+    m.add_function(wrap_pyfunction!(slic_compute, m)?)?;
+    m.add_function(wrap_pyfunction!(felzenszwalb_compute, m)?)?;
+
+    // Pansharpening
+    m.add_function(wrap_pyfunction!(pansharpen_compute, m)?)?;
 
     // Cloud: remote COG reading + STAC search (feature = "cloud")
     #[cfg(feature = "cloud")]

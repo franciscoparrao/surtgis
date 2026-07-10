@@ -16,8 +16,8 @@ surtgis/
 ├── crates/parallel       # Rayon-based strategies, maybe_rayon compile-time switch
 ├── crates/cli            # 19 top-level subcommands, binary `surtgis`
 ├── crates/cloud          # COG reader, STAC client, bbox reprojection, s3:// normalisation
-├── crates/wasm           # WebAssembly bindings (~17% of algorithms currently)
-├── crates/python         # PyO3 bindings: extract_at_points, predict_raster
+├── crates/wasm           # WebAssembly bindings (57 functions, ~37% of algorithms currently)
+├── crates/python         # PyO3 bindings, 124 functions across most algorithm modules
 ├── crates/gui            # egui desktop app (experimental)
 └── crates/colormap       # Color schemes and raster → PNG rendering
 ```

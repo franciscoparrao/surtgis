@@ -17,6 +17,7 @@ mod advanced;
 mod basin_morphometry;
 mod breach;
 mod drainage_density;
+#[cfg(feature = "unstable")]
 mod energy_cone;
 pub(crate) mod fill_sinks;
 pub(crate) mod flow_accumulation;
@@ -27,6 +28,7 @@ mod flow_direction_mfd_adaptive;
 mod flow_direction_tfga;
 mod hand;
 mod hypsometric;
+#[cfg(feature = "unstable")]
 mod laharz;
 mod melton;
 mod nested_depressions;
@@ -43,23 +45,25 @@ pub use advanced::{
 pub use basin_morphometry::{BasinMorphometry, basin_morphometry};
 pub use breach::{BreachParams, breach_depressions};
 pub use drainage_density::{DrainageDensityParams, drainage_density};
+#[cfg(feature = "unstable")]
 pub use energy_cone::{EnergyConeParams, energy_cone};
-pub use fill_sinks::{FillSinks, FillSinksParams, fill_sinks};
-pub use flow_accumulation::{FlowAccumulation, flow_accumulation};
-pub use flow_direction::{FlowDirection, flow_direction};
+pub use fill_sinks::{FillSinksParams, fill_sinks};
+pub use flow_accumulation::flow_accumulation;
+pub use flow_direction::flow_direction;
 pub use flow_direction_dinf::{DinfResult, flow_accumulation_dinf, flow_dinf, flow_direction_dinf};
 pub use flow_direction_mfd::{MfdParams, flow_accumulation_mfd};
 pub use flow_direction_mfd_adaptive::{AdaptiveMfdParams, flow_accumulation_mfd_adaptive};
 pub use flow_direction_tfga::{TfgaParams, flow_accumulation_tfga};
 pub use hand::{HandParams, hand};
 pub use hypsometric::hypsometric_integral;
+#[cfg(feature = "unstable")]
 pub use laharz::{LaharzFlowType, LaharzParams, laharz};
 pub use melton::{MeltonRuggedness, melton_ruggedness};
 pub use nested_depressions::{
     Depression, NestedDepressionParams, NestedDepressionResult, nested_depressions,
 };
-pub use priority_flood::{PriorityFlood, PriorityFloodParams, priority_flood, priority_flood_flat};
+pub use priority_flood::{PriorityFloodParams, priority_flood, priority_flood_flat};
 pub use sediment_connectivity::{SedimentConnectivityParams, sediment_connectivity};
 pub use stream_network::{StreamNetworkParams, stream_network};
-pub use watershed::{Watershed, WatershedParams, watershed};
+pub use watershed::{WatershedParams, watershed};
 pub use watershed_parallel::{ParallelWatershedParams, watershed_parallel};

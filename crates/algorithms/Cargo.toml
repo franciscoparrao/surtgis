@@ -14,6 +14,10 @@ categories = ["science::geo", "algorithms"]
 default = ["parallel"]
 parallel = ["dep:rayon", "surtgis-core/parallel", "surtgis-parallel/parallel"]
 shapefile = ["surtgis-core/shapefile"]
+# Newer/experimental modules whose API may still change: hazard (v0.16)
+# and exotic terrain algorithms. Off by default for external consumers of
+# this crate; internal workspace members that use them enable it explicitly.
+unstable = []
 
 [dependencies]
 surtgis-core = { version = "0.17", path = "../core", default-features = false }

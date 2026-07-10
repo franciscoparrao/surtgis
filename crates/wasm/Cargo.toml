@@ -18,10 +18,15 @@ default = []
 
 [dependencies]
 surtgis-core = { version = "0.17", path = "../core", default-features = false }
-surtgis-algorithms = { version = "0.17", path = "../algorithms", default-features = false }
+surtgis-algorithms = { version = "0.17", path = "../algorithms", default-features = false, features = [
+    "unstable",
+] }
 surtgis-relief = { version = "0.17", path = "../relief" }
 surtgis-colormap = { version = "0.17", path = "../colormap" }
 wasm-bindgen.workspace = true
 js-sys.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+wasm-bindgen-test.workspace = true

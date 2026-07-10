@@ -6,7 +6,7 @@
 use crate::maybe_rayon::*;
 use ndarray::Array2;
 use surtgis_core::raster::Raster;
-use surtgis_core::{Algorithm, Error, Result};
+use surtgis_core::{Error, Result};
 
 /// Units for slope output
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -40,29 +40,6 @@ impl Default for SlopeParams {
             units: SlopeUnits::Degrees,
             z_factor: 1.0,
         }
-    }
-}
-
-/// Slope algorithm
-#[derive(Debug, Clone, Default)]
-pub struct Slope;
-
-impl Algorithm for Slope {
-    type Input = Raster<f64>;
-    type Output = Raster<f64>;
-    type Params = SlopeParams;
-    type Error = Error;
-
-    fn name(&self) -> &'static str {
-        "Slope"
-    }
-
-    fn description(&self) -> &'static str {
-        "Calculate slope (rate of change of elevation) from a DEM using Horn's method"
-    }
-
-    fn execute(&self, input: Self::Input, params: Self::Params) -> Result<Self::Output> {
-        slope(&input, params)
     }
 }
 

@@ -14,32 +14,9 @@
 use crate::maybe_rayon::*;
 use ndarray::Array2;
 use surtgis_core::raster::Raster;
-use surtgis_core::{Algorithm, Error, Result};
+use surtgis_core::{Error, Result};
 
 use super::d8::{D8_DISTANCE as D8_DIST, D8_OFFSETS};
-
-/// Flow direction algorithm (D8)
-#[derive(Debug, Clone, Default)]
-pub struct FlowDirection;
-
-impl Algorithm for FlowDirection {
-    type Input = Raster<f64>;
-    type Output = Raster<u8>;
-    type Params = ();
-    type Error = Error;
-
-    fn name(&self) -> &'static str {
-        "Flow Direction (D8)"
-    }
-
-    fn description(&self) -> &'static str {
-        "Calculate D8 flow direction from a filled DEM"
-    }
-
-    fn execute(&self, input: Self::Input, _params: Self::Params) -> Result<Self::Output> {
-        flow_direction(&input)
-    }
-}
 
 /// Calculate D8 flow direction from a DEM.
 ///
