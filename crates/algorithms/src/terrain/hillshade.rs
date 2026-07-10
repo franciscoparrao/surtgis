@@ -6,7 +6,7 @@
 use crate::maybe_rayon::*;
 use ndarray::Array2;
 use surtgis_core::raster::Raster;
-use surtgis_core::{Algorithm, Error, Result};
+use surtgis_core::{Error, Result};
 
 /// Parameters for hillshade calculation
 #[derive(Debug, Clone)]
@@ -34,29 +34,6 @@ impl Default for HillshadeParams {
             z_factor: 1.0,
             normalized: false,
         }
-    }
-}
-
-/// Hillshade algorithm
-#[derive(Debug, Clone, Default)]
-pub struct Hillshade;
-
-impl Algorithm for Hillshade {
-    type Input = Raster<f64>;
-    type Output = Raster<f64>;
-    type Params = HillshadeParams;
-    type Error = Error;
-
-    fn name(&self) -> &'static str {
-        "Hillshade"
-    }
-
-    fn description(&self) -> &'static str {
-        "Calculate shaded relief from a DEM"
-    }
-
-    fn execute(&self, input: Self::Input, params: Self::Params) -> Result<Self::Output> {
-        hillshade(&input, params)
     }
 }
 

@@ -53,10 +53,10 @@ pub trait RasterElement: RasterCell + PartialOrd + NumCast {
 }
 
 macro_rules! impl_raster_element_int {
-    ($t:ty) => {
+    ($t:ty, $default_nodata:expr) => {
         impl RasterCell for $t {
             fn default_nodata() -> Self {
-                <$t>::MIN
+                $default_nodata
             }
 
             fn is_nodata(&self, nodata: Option<Self>) -> bool {
@@ -122,14 +122,18 @@ macro_rules! impl_raster_element_float {
     };
 }
 
-impl_raster_element_int!(i8);
-impl_raster_element_int!(i16);
-impl_raster_element_int!(i32);
-impl_raster_element_int!(i64);
-impl_raster_element_int!(u8);
-impl_raster_element_int!(u16);
-impl_raster_element_int!(u32);
-impl_raster_element_int!(u64);
+// Signed types: MIN is a natural sentinel, far from typical valid data.
+impl_raster_element_int!(i8, i8::MIN);
+impl_raster_element_int!(i16, i16::MIN);
+impl_raster_element_int!(i32, i32::MIN);
+impl_raster_element_int!(i64, i64::MIN);
+// Unsigned types: MAX, not MIN — 0 is frequently a valid data value
+// (counts, masks, band values), while MAX is a safer accidental-collision
+// sentinel. Breaking change from the pre-0.18 MIN (=0) default.
+impl_raster_element_int!(u8, u8::MAX);
+impl_raster_element_int!(u16, u16::MAX);
+impl_raster_element_int!(u32, u32::MAX);
+impl_raster_element_int!(u64, u64::MAX);
 impl_raster_element_float!(f32);
 impl_raster_element_float!(f64);
 
@@ -204,5 +208,26 @@ mod tests {
         assert!(255u8.is_nodata(Some(255)));
         assert!(!0u8.is_nodata(Some(255)));
         assert!(!5i32.is_nodata(None));
+    }
+
+    /// Unsigned default_nodata is MAX, not MIN: 0 is frequently a valid
+    /// data value (counts, masks, band DNs), while MAX is a far-sentinel
+    /// unlikely to collide with real data.
+    #[test]
+    fn test_unsigned_default_nodata_is_max() {
+        assert_eq!(u8::default_nodata(), u8::MAX);
+        assert_eq!(u16::default_nodata(), u16::MAX);
+        assert_eq!(u32::default_nodata(), u32::MAX);
+        assert_eq!(u64::default_nodata(), u64::MAX);
+    }
+
+    /// Signed default_nodata stays MIN — already a natural far-sentinel,
+    /// unaffected by the unsigned MIN->MAX flip.
+    #[test]
+    fn test_signed_default_nodata_is_min() {
+        assert_eq!(i8::default_nodata(), i8::MIN);
+        assert_eq!(i16::default_nodata(), i16::MIN);
+        assert_eq!(i32::default_nodata(), i32::MIN);
+        assert_eq!(i64::default_nodata(), i64::MIN);
     }
 }

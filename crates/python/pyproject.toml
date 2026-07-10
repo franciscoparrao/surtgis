@@ -43,3 +43,9 @@ numpy = ["numpy>=1.20"]
 [tool.maturin]
 features = ["pyo3/extension-module"]
 module-name = "surtgis"
+# PEP 561: py.typed marks the package as typed; surtgis.pyi carries the
+# type stubs (this is a bare extension-module project, not a mixed
+# python-source layout, so maturin needs these listed explicitly to bundle
+# them next to the compiled extension). Regenerate surtgis.pyi with
+# gen_stubs.py after changing a #[pyfunction] signature.
+include = ["py.typed", "surtgis.pyi"]

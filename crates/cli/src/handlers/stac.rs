@@ -2768,7 +2768,9 @@ fn compute_retry_jitter_ms(task_salt: u64, base_ms: u64) -> u64 {
 fn classify_benign_tile_error<T>(e: &CloudError) -> Option<TileOutcome<T>> {
     match e {
         CloudError::BBoxOutside => Some(TileOutcome::OutsideOrMissing),
-        CloudError::HttpStatus { status, .. } if *status == reqwest::StatusCode::NOT_FOUND => {
+        CloudError::HttpStatus { status, .. }
+            if *status == reqwest::StatusCode::NOT_FOUND.as_u16() =>
+        {
             Some(TileOutcome::OutsideOrMissing)
         }
         _ => None,
@@ -4555,7 +4557,7 @@ mod tests {
         ));
 
         let not_found = CloudError::HttpStatus {
-            status: reqwest::StatusCode::NOT_FOUND,
+            status: reqwest::StatusCode::NOT_FOUND.as_u16(),
             url: "https://example.com/cog.tif".into(),
         };
         assert!(matches!(
@@ -4570,13 +4572,13 @@ mod tests {
     #[test]
     fn classify_benign_tile_error_treats_persistent_errors_as_not_benign() {
         let rate_limited = CloudError::HttpStatus {
-            status: reqwest::StatusCode::TOO_MANY_REQUESTS,
+            status: reqwest::StatusCode::TOO_MANY_REQUESTS.as_u16(),
             url: "https://example.com/cog.tif".into(),
         };
         assert!(classify_benign_tile_error::<()>(&rate_limited).is_none());
 
         let server_error = CloudError::HttpStatus {
-            status: reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            status: reqwest::StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
             url: "https://example.com/cog.tif".into(),
         };
         assert!(classify_benign_tile_error::<()>(&server_error).is_none());

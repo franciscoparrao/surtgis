@@ -28,7 +28,7 @@
 use crate::maybe_rayon::*;
 use ndarray::Array2;
 use surtgis_core::raster::Raster;
-use surtgis_core::{Algorithm, Error, Result};
+use surtgis_core::{Error, Result};
 
 use crate::terrain::slope::{SlopeParams, SlopeUnits, slope};
 use crate::terrain::tpi::{TpiParams, tpi};
@@ -71,29 +71,6 @@ impl Default for LandformParams {
             tpi_threshold: 1.0,
             slope_threshold: 6.0,
         }
-    }
-}
-
-/// Landform classification algorithm
-#[derive(Debug, Clone, Default)]
-pub struct Landform;
-
-impl Algorithm for Landform {
-    type Input = Raster<f64>;
-    type Output = Raster<f64>;
-    type Params = LandformParams;
-    type Error = Error;
-
-    fn name(&self) -> &'static str {
-        "Landform Classification"
-    }
-
-    fn description(&self) -> &'static str {
-        "Classify terrain into landform categories using multi-scale TPI and slope"
-    }
-
-    fn execute(&self, input: Self::Input, params: Self::Params) -> Result<Self::Output> {
-        landform_classification(&input, params)
     }
 }
 

@@ -9,7 +9,9 @@ name: Python wheels (PyPI)
 #   - macOS x86_64
 #   - macOS arm64
 #   - Windows x86_64
-# CPython 3.9 through 3.13.
+# One abi3 wheel per platform (cp39-abi3), forward-compatible with CPython
+# 3.9+ — no per-version interpreter matrix needed (see pyo3's `abi3-py39`
+# feature in crates/python/Cargo.toml).
 #
 # Triggers:
 #   - Tag push matching v*  (auto-release on the same tag that triggers the CLI
@@ -72,7 +74,7 @@ jobs:
         with:
           target: ${{ matrix.target }}
           manylinux: auto
-          args: --release --out dist --interpreter "3.9 3.10 3.11 3.12 3.13"
+          args: --release --out dist
           sccache: true
           working-directory: crates/python
 
@@ -81,7 +83,7 @@ jobs:
         with:
           target: ${{ matrix.target }}
           manylinux: musllinux_1_2
-          args: --release --out dist --interpreter "3.9 3.10 3.11 3.12 3.13"
+          args: --release --out dist
           sccache: true
           working-directory: crates/python
 
@@ -111,7 +113,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --interpreter "3.9 3.10 3.11 3.12 3.13"
+          args: --release --out dist
           sccache: true
           working-directory: crates/python
 
@@ -138,7 +140,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: x64
-          args: --release --out dist --interpreter "3.9 3.10 3.11 3.12 3.13"
+          args: --release --out dist
           sccache: true
           working-directory: crates/python
 

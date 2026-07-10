@@ -5,33 +5,10 @@
 //! contributing area (in cell counts).
 
 use ndarray::Array2;
+use surtgis_core::Result;
 use surtgis_core::raster::Raster;
-use surtgis_core::{Algorithm, Error, Result};
 
 use super::d8::D8_OFFSETS;
-
-/// Flow accumulation algorithm
-#[derive(Debug, Clone, Default)]
-pub struct FlowAccumulation;
-
-impl Algorithm for FlowAccumulation {
-    type Input = Raster<u8>;
-    type Output = Raster<f64>;
-    type Params = ();
-    type Error = Error;
-
-    fn name(&self) -> &'static str {
-        "Flow Accumulation"
-    }
-
-    fn description(&self) -> &'static str {
-        "Calculate upstream contributing area from D8 flow direction"
-    }
-
-    fn execute(&self, input: Self::Input, _params: Self::Params) -> Result<Self::Output> {
-        flow_accumulation(&input)
-    }
-}
 
 /// Calculate flow accumulation from a D8 flow direction raster.
 ///

@@ -37,8 +37,8 @@
 
 use crate::maybe_rayon::*;
 use ndarray::Array2;
+use surtgis_core::Result;
 use surtgis_core::raster::Raster;
-use surtgis_core::{Algorithm, Error, Result};
 
 /// Parameters for TRI calculation
 #[derive(Debug, Clone)]
@@ -50,29 +50,6 @@ pub struct TriParams {
 impl Default for TriParams {
     fn default() -> Self {
         Self { radius: 1 }
-    }
-}
-
-/// TRI algorithm
-#[derive(Debug, Clone, Default)]
-pub struct Tri;
-
-impl Algorithm for Tri {
-    type Input = Raster<f64>;
-    type Output = Raster<f64>;
-    type Params = TriParams;
-    type Error = Error;
-
-    fn name(&self) -> &'static str {
-        "TRI"
-    }
-
-    fn description(&self) -> &'static str {
-        "Terrain Ruggedness Index: elevation variability in a neighborhood"
-    }
-
-    fn execute(&self, input: Self::Input, params: Self::Params) -> Result<Self::Output> {
-        tri(&input, params)
     }
 }
 

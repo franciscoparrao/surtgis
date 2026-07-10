@@ -14,8 +14,8 @@
 
 use crate::maybe_rayon::*;
 use ndarray::Array2;
+use surtgis_core::Result;
 use surtgis_core::raster::Raster;
-use surtgis_core::{Algorithm, Error, Result};
 
 /// Parameters for TPI calculation
 #[derive(Debug, Clone)]
@@ -28,29 +28,6 @@ pub struct TpiParams {
 impl Default for TpiParams {
     fn default() -> Self {
         Self { radius: 1 }
-    }
-}
-
-/// TPI algorithm
-#[derive(Debug, Clone, Default)]
-pub struct Tpi;
-
-impl Algorithm for Tpi {
-    type Input = Raster<f64>;
-    type Output = Raster<f64>;
-    type Params = TpiParams;
-    type Error = Error;
-
-    fn name(&self) -> &'static str {
-        "TPI"
-    }
-
-    fn description(&self) -> &'static str {
-        "Topographic Position Index: elevation relative to neighborhood mean"
-    }
-
-    fn execute(&self, input: Self::Input, params: Self::Params) -> Result<Self::Output> {
-        tpi(&input, params)
     }
 }
 

@@ -33,12 +33,13 @@ relief-3d = ["dep:surtgis-relief-3d"]
 
 [dependencies]
 surtgis-core = { version = "0.17", path = "../core", features = ["shapefile", "geopackage"] }
-surtgis-algorithms = { version = "0.17", path = "../algorithms" }
+surtgis-algorithms = { version = "0.17", path = "../algorithms", features = ["unstable"] }
 surtgis-parallel = { version = "0.17", path = "../parallel" }
 surtgis-relief = { version = "0.17", path = "../relief" }
 surtgis-relief-3d = { version = "0.17", path = "../relief-3d", optional = true }
 surtgis-cloud = { version = "0.17", path = "../cloud", features = ["native"], optional = true }
 clap.workspace = true
+clap_complete.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
@@ -67,3 +68,8 @@ libmimalloc-sys = { version = "0.1", features = ["extended"], optional = true }
 [[example]]
 name = "test_mi_collect"
 required-features = ["mimalloc"]
+
+[dev-dependencies]
+assert_cmd.workspace = true
+predicates.workspace = true
+tempfile.workspace = true

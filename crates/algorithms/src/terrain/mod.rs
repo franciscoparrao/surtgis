@@ -22,6 +22,7 @@
 
 mod accumulation_zones;
 mod aspect;
+#[cfg(feature = "unstable")]
 mod chebyshev_spectral;
 mod circular_variance_aspect;
 mod contour;
@@ -37,7 +38,9 @@ mod downslope_index;
 mod edge_density;
 mod elev_above_pit;
 mod elev_relative_to_min_max;
+#[cfg(feature = "unstable")]
 mod excess_topography;
+#[cfg(feature = "unstable")]
 mod gaussian_scale_space;
 mod geomorphons;
 mod hillshade;
@@ -49,6 +52,7 @@ mod log_transform;
 mod ls_factor;
 mod max_branch_length;
 mod mrvbf;
+#[cfg(feature = "unstable")]
 mod msv;
 mod multidirectional_hillshade;
 mod multiscale_curvatures;
@@ -56,9 +60,11 @@ mod neighbours;
 mod normal_vector_deviation;
 mod northness_eastness;
 mod openness;
+#[cfg(feature = "unstable")]
 mod pderl_viewshed;
 mod pennock;
 mod percent_elev_range;
+#[cfg(feature = "unstable")]
 mod rea;
 mod relative_aspect;
 mod relative_slope_position;
@@ -70,6 +76,7 @@ mod solar_radiation;
 mod spherical_std_dev;
 mod spheroidal_grid;
 mod spi_sti;
+#[cfg(feature = "unstable")]
 mod ssa_2d;
 mod surface_area_ratio;
 mod tpi;
@@ -85,7 +92,8 @@ pub use accumulation_zones::{
     ZONE_ACCUMULATION, ZONE_DISPERSION, ZONE_TRANSITIONAL_ACC, ZONE_TRANSITIONAL_DISP,
     accumulation_zones,
 };
-pub use aspect::{Aspect, AspectOutput, AspectStreaming, aspect};
+pub use aspect::{AspectOutput, AspectStreaming, aspect};
+#[cfg(feature = "unstable")]
 pub use chebyshev_spectral::{ChebyshevDerivatives, ChebyshevParams, chebyshev_derivatives};
 pub use circular_variance_aspect::{
     CircularVarianceParams, CircularVarianceStreaming, circular_variance_aspect,
@@ -94,37 +102,40 @@ pub use contour::{ContourParams, contour_lines};
 pub use convergence::{ConvergenceParams, ConvergenceStreaming, convergence_index};
 pub use cost_distance::{CostDistanceParams, cost_distance};
 pub use curvature::{
-    Curvature, CurvatureFormula, CurvatureParams, CurvatureStreaming, CurvatureType,
-    DerivativeMethod, curvature,
+    CurvatureFormula, CurvatureParams, CurvatureStreaming, CurvatureType, DerivativeMethod,
+    curvature,
 };
 pub use curvature_advanced::{
     AdvancedCurvatureType, AllCurvatures, advanced_curvatures, all_curvatures,
 };
 pub use derivatives::{Derivatives, evans_young, extract_window, horn, zevenbergen_thorne};
-pub use dev::{Dev, DevParams, DevStreaming, dev};
+pub use dev::{DevParams, DevStreaming, dev};
 pub use diff_from_mean_elev::{DiffFromMeanParams, DiffFromMeanStreaming, diff_from_mean_elev};
 pub use directional_relief::{DirectionalReliefParams, directional_relief};
 pub use downslope_index::{DownslopeIndexParams, downslope_index};
 pub use edge_density::{EdgeDensityParams, edge_density};
 pub use elev_above_pit::elev_above_pit;
 pub use elev_relative_to_min_max::elev_relative_to_min_max;
+#[cfg(feature = "unstable")]
 pub use excess_topography::{ExcessTopographyParams, excess_topography};
+#[cfg(feature = "unstable")]
 pub use gaussian_scale_space::{
     GssParams, GssResult, ScaleLevel, gaussian_scale_space, scale_space_derivatives,
 };
 pub use geomorphons::{GeomorphonParams, geomorphons};
-pub use hillshade::{Hillshade, HillshadeParams, HillshadeStreaming, hillshade};
+pub use hillshade::{HillshadeParams, HillshadeStreaming, hillshade};
 pub use horizon_angles::{
     FastHorizonParams, HorizonAngles, HorizonParams, horizon_angle_map, horizon_angle_map_fast,
     horizon_angles, horizon_angles_fast,
 };
 pub use hypsometric_hillshade::hypsometric_hillshade;
-pub use landform::{Landform, LandformParams, landform_classification};
+pub use landform::{LandformParams, landform_classification};
 pub use lineament::{LineamentParams, LineamentResult, LineamentType, lineament_detection};
 pub use log_transform::log_transform;
 pub use ls_factor::{LsFactorParams, ls_factor};
 pub use max_branch_length::max_branch_length;
 pub use mrvbf::{MrvbfParams, mrvbf};
+#[cfg(feature = "unstable")]
 pub use msv::{MsvCombination, MsvParams, MsvResult, msv};
 pub use multidirectional_hillshade::{
     MultiHillshadeParams, MultiHillshadeStreaming, multidirectional_hillshade,
@@ -140,17 +151,19 @@ pub use northness_eastness::{
     EastnessStreaming, NorthnessStreaming, eastness, northness, northness_eastness,
 };
 pub use openness::{OpennessParams, negative_openness, positive_openness};
+#[cfg(feature = "unstable")]
 pub use pderl_viewshed::{PderlViewshedParams, viewshed_pderl};
 pub use pennock::{PennockParams, pennock};
 pub use percent_elev_range::{
     PercentElevRangeParams, PercentElevRangeStreaming, percent_elev_range,
 };
+#[cfg(feature = "unstable")]
 pub use rea::{ReaParams, ReaResult, ReaScaleResult, ReaVariable, rea_analysis};
 pub use relative_aspect::{RelativeAspectParams, relative_aspect};
 pub use relative_slope_position::relative_slope_position;
 pub use shape_index::{curvedness, shape_index};
 pub use sky_view_factor::{SvfParams, sky_view_factor, sky_view_factor_fast};
-pub use slope::{Slope, SlopeParams, SlopeStreaming, SlopeUnits, slope};
+pub use slope::{SlopeParams, SlopeStreaming, SlopeUnits, slope};
 pub use smoothing::{
     FftLowPassParams, GaussianSmoothingParams, IterativeMeanParams, SmoothingParams,
     feature_preserving_smoothing, fft_low_pass, gaussian_smoothing, iterative_mean_smoothing,
@@ -166,10 +179,11 @@ pub use spheroidal_grid::{
     vincenty_distance,
 };
 pub use spi_sti::{StiParams, spi, sti};
+#[cfg(feature = "unstable")]
 pub use ssa_2d::{Ssa2dParams, ssa_2d};
 pub use surface_area_ratio::{SarParams, surface_area_ratio};
-pub use tpi::{Tpi, TpiParams, TpiStreaming, tpi};
-pub use tri::{Tri, TriParams, TriStreaming, tri};
+pub use tpi::{TpiParams, TpiStreaming, tpi};
+pub use tri::{TriParams, TriStreaming, tri};
 pub use twi::twi;
 pub use uncertainty::{UncertaintyParams, UncertaintyResult, uncertainty};
 pub use valley_depth::valley_depth;

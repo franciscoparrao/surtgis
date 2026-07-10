@@ -17,6 +17,7 @@ mod index_builder;
 mod indices;
 mod mad;
 mod reclassify;
+#[cfg(feature = "unstable")]
 mod sar;
 
 pub use band_math::{BandMathOp, band_math, band_math_binary};
@@ -42,6 +43,7 @@ pub use indices::{
 };
 pub use mad::{IrMadParams, IrMadResult, MadResult, ir_mad, mad};
 pub use reclassify::{ReclassEntry, ReclassifyParams, reclassify};
+#[cfg(feature = "unstable")]
 pub use sar::{
     SAR_NODATA, SAR_NON_WATER, SAR_WATER, db_to_linear, dual_pol_water_index, lee_filter,
     linear_to_db, refined_lee_filter, sar_water_mask,

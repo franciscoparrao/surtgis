@@ -3,8 +3,8 @@
 //! Fills small dark gaps and holes while preserving the overall
 //! shape and size of larger dark regions.
 
+use surtgis_core::Result;
 use surtgis_core::raster::Raster;
-use surtgis_core::{Algorithm, Error, Result};
 
 use super::dilate::dilate;
 use super::element::StructuringElement;
@@ -15,29 +15,6 @@ use super::erode::erode;
 pub struct ClosingParams {
     /// Structuring element shape
     pub element: StructuringElement,
-}
-
-/// Closing algorithm
-#[derive(Debug, Clone, Default)]
-pub struct Closing;
-
-impl Algorithm for Closing {
-    type Input = Raster<f64>;
-    type Output = Raster<f64>;
-    type Params = ClosingParams;
-    type Error = Error;
-
-    fn name(&self) -> &'static str {
-        "Closing"
-    }
-
-    fn description(&self) -> &'static str {
-        "Morphological closing (dilation then erosion) to fill small dark gaps"
-    }
-
-    fn execute(&self, input: Self::Input, params: Self::Params) -> Result<Self::Output> {
-        closing(&input, &params.element)
-    }
 }
 
 /// Perform morphological closing on a raster

@@ -7,8 +7,8 @@
 
 use ndarray::Array2;
 use std::collections::VecDeque;
+use surtgis_core::Result;
 use surtgis_core::raster::Raster;
-use surtgis_core::{Algorithm, Error, Result};
 
 use super::d8::D8_OFFSETS;
 
@@ -20,29 +20,6 @@ pub struct WatershedParams {
     /// Pour points as (row, col) coordinates.
     /// If empty, all independent basins are delineated.
     pub pour_points: Vec<(usize, usize)>,
-}
-
-/// Watershed delineation algorithm
-#[derive(Debug, Clone, Default)]
-pub struct Watershed;
-
-impl Algorithm for Watershed {
-    type Input = Raster<u8>;
-    type Output = Raster<i32>;
-    type Params = WatershedParams;
-    type Error = Error;
-
-    fn name(&self) -> &'static str {
-        "Watershed"
-    }
-
-    fn description(&self) -> &'static str {
-        "Delineate watersheds from D8 flow direction"
-    }
-
-    fn execute(&self, input: Self::Input, params: Self::Params) -> Result<Self::Output> {
-        watershed(&input, params)
-    }
 }
 
 /// Delineate watersheds from a D8 flow direction raster.

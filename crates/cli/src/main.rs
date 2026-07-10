@@ -25,12 +25,43 @@ mod streaming;
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use anyhow::Result;
-use clap::Parser;
+use clap::{CommandFactory, Parser};
+use std::process::ExitCode;
 
 use commands::{Cli, Commands};
 
-fn main() -> Result<()> {
+/// Exit code for "input file not found" (`std::io::ErrorKind::NotFound`
+/// anywhere in the error's source chain), distinct from the generic
+/// failure code so scripts can tell a missing/mistyped path apart from a
+/// computation error without parsing stderr text.
+const EXIT_NOT_FOUND: u8 = 3;
+/// Generic failure: everything that isn't a clap usage error (exit 2,
+/// handled by clap itself before `main` runs) or a not-found error.
+const EXIT_FAILURE: u8 = 1;
+
+fn exit_code_for(err: &anyhow::Error) -> u8 {
+    for cause in err.chain() {
+        if let Some(io_err) = cause.downcast_ref::<std::io::Error>()
+            && io_err.kind() == std::io::ErrorKind::NotFound
+        {
+            return EXIT_NOT_FOUND;
+        }
+    }
+    EXIT_FAILURE
+}
+
+fn main() -> ExitCode {
     let cli = Cli::parse();
+    match run(cli) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("Error: {e:?}");
+            ExitCode::from(exit_code_for(&e))
+        }
+    }
+}
+
+fn run(cli: Cli) -> Result<()> {
     let compress = cli.compress;
     let streaming = cli.streaming;
     let verbose = cli.verbose;
@@ -45,6 +76,14 @@ fn main() -> Result<()> {
     helpers::setup_logging(verbose);
 
     match cli.command {
+        Commands::Completions { shell } => {
+            clap_complete::generate(
+                shell,
+                &mut commands::Cli::command(),
+                "surtgis",
+                &mut std::io::stdout(),
+            );
+        }
         Commands::Info { input } => handlers::info::handle(input)?,
         Commands::Terrain { algorithm } => {
             handlers::terrain::handle(algorithm, compress, streaming, mem_limit_bytes)?

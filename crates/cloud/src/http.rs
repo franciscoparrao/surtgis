@@ -155,7 +155,7 @@ impl HttpClient {
 
         if !status.is_success() {
             return Err(CloudError::HttpStatus {
-                status,
+                status: status.as_u16(),
                 url: url.to_string(),
             });
         }

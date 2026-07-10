@@ -74,6 +74,7 @@ crossbeam = "0.8"
 
 # CLI
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
 indicatif = "0.17"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -101,6 +102,7 @@ chrono = "0.4"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
+wasm-bindgen-test = "0.3"
 
 # Python
 pyo3 = { version = "0.23", features = ["extension-module", "generate-import-lib"] }
@@ -127,6 +129,8 @@ csv = "1"
 criterion = { version = "0.5", features = ["html_reports"] }
 approx = "0.5"
 tempfile = "3"
+assert_cmd = "2"
+predicates = "3"
 
 [profile.release]
 # Fat LTO: cross-crate inlining between core and algorithms is worth the

@@ -8,7 +8,7 @@
 use crate::maybe_rayon::*;
 use ndarray::Array2;
 use surtgis_core::raster::Raster;
-use surtgis_core::{Algorithm, Error, Result};
+use surtgis_core::{Error, Result};
 
 use super::closing::closing;
 use super::element::StructuringElement;
@@ -21,57 +21,11 @@ pub struct TopHatParams {
     pub element: StructuringElement,
 }
 
-/// Top-hat (white top-hat) algorithm
-#[derive(Debug, Clone, Default)]
-pub struct TopHat;
-
-impl Algorithm for TopHat {
-    type Input = Raster<f64>;
-    type Output = Raster<f64>;
-    type Params = TopHatParams;
-    type Error = Error;
-
-    fn name(&self) -> &'static str {
-        "TopHat"
-    }
-
-    fn description(&self) -> &'static str {
-        "Top-hat transform (original minus opening) to extract bright features"
-    }
-
-    fn execute(&self, input: Self::Input, params: Self::Params) -> Result<Self::Output> {
-        top_hat(&input, &params.element)
-    }
-}
-
 /// Parameters for black-hat transform
 #[derive(Debug, Clone, Default)]
 pub struct BlackHatParams {
     /// Structuring element shape
     pub element: StructuringElement,
-}
-
-/// Black-hat algorithm
-#[derive(Debug, Clone, Default)]
-pub struct BlackHat;
-
-impl Algorithm for BlackHat {
-    type Input = Raster<f64>;
-    type Output = Raster<f64>;
-    type Params = BlackHatParams;
-    type Error = Error;
-
-    fn name(&self) -> &'static str {
-        "BlackHat"
-    }
-
-    fn description(&self) -> &'static str {
-        "Black-hat transform (closing minus original) to extract dark features"
-    }
-
-    fn execute(&self, input: Self::Input, params: Self::Params) -> Result<Self::Output> {
-        black_hat(&input, &params.element)
-    }
 }
 
 /// Compute the top-hat (white top-hat) transform

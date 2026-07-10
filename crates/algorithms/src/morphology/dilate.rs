@@ -7,7 +7,7 @@ use crate::maybe_rayon::*;
 use crate::statistics::focal_fast::sliding_extreme_1d;
 use ndarray::Array2;
 use surtgis_core::raster::Raster;
-use surtgis_core::{Algorithm, Error, Result};
+use surtgis_core::{Error, Result};
 
 use super::element::StructuringElement;
 
@@ -16,29 +16,6 @@ use super::element::StructuringElement;
 pub struct DilateParams {
     /// Structuring element shape
     pub element: StructuringElement,
-}
-
-/// Dilation algorithm
-#[derive(Debug, Clone, Default)]
-pub struct Dilate;
-
-impl Algorithm for Dilate {
-    type Input = Raster<f64>;
-    type Output = Raster<f64>;
-    type Params = DilateParams;
-    type Error = Error;
-
-    fn name(&self) -> &'static str {
-        "Dilate"
-    }
-
-    fn description(&self) -> &'static str {
-        "Morphological dilation (maximum filter over structuring element)"
-    }
-
-    fn execute(&self, input: Self::Input, params: Self::Params) -> Result<Self::Output> {
-        dilate(&input, &params.element)
-    }
 }
 
 /// Perform morphological dilation on a raster
