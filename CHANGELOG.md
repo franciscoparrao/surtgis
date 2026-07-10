@@ -9,6 +9,27 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+### Breaking
+
+- `GeomorphonParams` gains `skip` and `flatness_distance` fields (GRASS
+  `skip`/`dist`) and is now `#[non_exhaustive]` (pre-1.0 extensibility
+  policy): construct it via `GeomorphonParams::default()` and set fields.
+
+### Changed
+
+- **Geomorphons rewritten for GRASS `r.geomorphon` parity** (audit
+  divergence D2). The previous classification was an ad-hoc heuristic
+  (segment counting); it now implements Jasiewicz & Stepinski (2013)
+  exactly as the reference implementation does in its default mode
+  (`comparison=anglev1`, basic correction): circular distance-based search,
+  inner `skip` ring, `dist` flatness-threshold relaxation, the exact
+  zenith/nadir ternary rule (tie → 0), the canonical 9×9 form matrix, and
+  the nulled border ring of width `skip+1`. Output codes are unchanged
+  (1–10, matching the GRASS category values). CLI gains `--skip` and
+  `--flat-dist`; Python `geomorphons(...)` gains `skip=0` and
+  `flatness_distance=0.0` keyword arguments. Validated cell by cell against
+  GRASS (`benchmarks/validate_geomorphons_grass.py`).
+
 ### Added
 
 - **D8 flow direction now resolves flat surfaces** with the Garbrecht &

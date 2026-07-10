@@ -17,7 +17,7 @@ Commands:
   tpi                           Calculate Topographic Position Index
   tri                           Calculate Terrain Ruggedness Index
   landform                      Landform classification (multi-scale TPI + slope)
-  geomorphons                   Geomorphon landform classification (Jasiewicz & Stepinski 2013)
+  geomorphons                   Geomorphon landform classification (Jasiewicz & Stepinski 2013, GRASS r.geomorphon parity)
   northness                     Northness: cos(aspect), north-facing = 1, south-facing = -1
   eastness                      Eastness: sin(aspect), east-facing = 1, west-facing = -1
   openness-positive             Positive topographic openness (sky visibility above)
@@ -246,7 +246,7 @@ Options:
 ## `terrain geomorphons` {#geomorphons}
 
 ```text
-Geomorphon landform classification (Jasiewicz & Stepinski 2013)
+Geomorphon landform classification (Jasiewicz & Stepinski 2013, GRASS r.geomorphon parity)
 
 Usage: surtgis terrain geomorphons [OPTIONS] <INPUT> <OUTPUT>
 
@@ -255,11 +255,13 @@ Arguments:
   <OUTPUT>  
 
 Options:
-  -r, --radius <RADIUS>          Lookup radius in cells [default: 10]
+  -r, --radius <RADIUS>          Search radius in cells (circular; GRASS r.geomorphon `search`) [default: 10]
   -v, --verbose                  Verbose output
       --compress                 Compress output GeoTIFFs (deflate)
   -f, --flatness <FLATNESS>      Flatness threshold in degrees [default: 1.0]
+      --skip <SKIP>              Inner skip radius in cells (GRASS `skip`); must be < radius [default: 0]
       --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
+      --flat-dist <FLAT_DIST>    Flatness distance in cells (GRASS `dist`), 0 = disabled [default: 0]
       --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
   -h, --help                     Print help
 ```

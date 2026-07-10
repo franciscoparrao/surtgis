@@ -303,8 +303,9 @@ def gaussian_smoothing_compute(dem: npt.NDArray[np.float64], cell_size: float = 
     """
     ...
 
-def geomorphons_compute(dem: npt.NDArray[np.float64], cell_size: float = 1.0, flatness: float = 1.0, radius: int = 10) -> npt.NDArray[np.uint8]:
-    """Compute geomorphons landform classification. Returns u8 landform codes.
+def geomorphons_compute(dem: npt.NDArray[np.float64], cell_size: float = 1.0, flatness: float = 1.0, radius: int = 10, skip: int = 0, flatness_distance: float = 0.0) -> npt.NDArray[np.uint8]:
+    """Compute geomorphons landform classification (GRASS r.geomorphon parity).
+Returns u8 landform codes (1-10, GRASS categories; 0 = nodata/border).
     """
     ...
 

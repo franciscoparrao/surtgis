@@ -290,17 +290,17 @@ pub fn handle(
             output,
             radius,
             flatness,
+            skip,
+            flat_dist,
         } => {
             let dem = read_dem(&input)?;
             let start = Instant::now();
-            let result = geomorphons(
-                &dem,
-                GeomorphonParams {
-                    radius,
-                    flatness_threshold: flatness,
-                },
-            )
-            .context("Failed to compute geomorphons")?;
+            let mut params = GeomorphonParams::default();
+            params.radius = radius;
+            params.flatness_threshold = flatness;
+            params.skip = skip;
+            params.flatness_distance = flat_dist;
+            let result = geomorphons(&dem, params).context("Failed to compute geomorphons")?;
             let elapsed = start.elapsed();
             write_result_u8(&result, &output, compress)?;
             done("Geomorphons", &output, elapsed);
@@ -1448,14 +1448,7 @@ pub fn handle(
             write_result(&tr, &outdir.join("tri.tif"), compress)?;
             println!("  tri.tif");
 
-            let g = geomorphons(
-                &dem,
-                GeomorphonParams {
-                    radius: 10,
-                    flatness_threshold: 1.0,
-                },
-            )
-            .context("geomorphons")?;
+            let g = geomorphons(&dem, GeomorphonParams::default()).context("geomorphons")?;
             write_result_u8(&g, &outdir.join("geomorphons.tif"), compress)?;
             println!("  geomorphons.tif");
 
@@ -1587,14 +1580,7 @@ pub fn handle_terrain_all(
     write_result(&tr, &outdir.join("tri.tif"), compress)?;
     println!("  tri.tif");
 
-    let g = geomorphons(
-        &dem,
-        GeomorphonParams {
-            radius: 10,
-            flatness_threshold: 1.0,
-        },
-    )
-    .context("geomorphons")?;
+    let g = geomorphons(&dem, GeomorphonParams::default()).context("geomorphons")?;
     write_result_u8(&g, &outdir.join("geomorphons.tif"), compress)?;
     println!("  geomorphons.tif");
 

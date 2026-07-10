@@ -199,13 +199,12 @@ pub fn dispatch_algorithm(
             }
 
             "geomorphons" => {
-                let result = geomorphons(
-                    &input,
-                    GeomorphonParams {
-                        radius: get_usize(&params, "radius", 10),
-                        flatness_threshold: get_f64(&params, "flatness", 1.0),
-                    },
-                );
+                let mut p = GeomorphonParams::default();
+                p.radius = get_usize(&params, "radius", 10);
+                p.flatness_threshold = get_f64(&params, "flatness", 1.0);
+                p.skip = get_usize(&params, "skip", 0);
+                p.flatness_distance = get_f64(&params, "flat_dist", 0.0);
+                let result = geomorphons(&input, p);
                 dispatch_u8(&tx, "Geomorphons", start, result);
             }
 
