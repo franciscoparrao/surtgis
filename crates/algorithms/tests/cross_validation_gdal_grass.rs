@@ -135,7 +135,10 @@ fn is_slope_nodata(v: f64) -> bool {
     v.is_nan()
 }
 
-/// SurtGIS aspect: NaN or -1.0 = nodata/flat/edge
+/// SurtGIS aspect: NaN = nodata/flat/edge. The `v < 0.0` check is
+/// defensive leftover from when batch used a `-1.0` sentinel (now fixed
+/// to NaN, matching streaming) — kept so this predicate stays correct
+/// against old fixture files written before that fix.
 fn is_aspect_nodata_surtgis(v: f64) -> bool {
     v.is_nan() || v < 0.0
 }

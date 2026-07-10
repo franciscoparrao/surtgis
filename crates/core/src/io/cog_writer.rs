@@ -371,8 +371,9 @@ where
 /// `tiff` crate's own `Compression::Deflate` uses internally (so the
 /// resulting stream is the "Adobe Deflate" TIFF readers expect).
 /// Reimplemented locally (see module docs: `native.rs`'s equivalent is
-/// private to that module).
-fn deflate_compress_bytes(data: &[u8]) -> Result<Vec<u8>> {
+/// private to that module) but `pub(crate)` so `strip_writer.rs`'s
+/// compressed streaming path can reuse it too, rather than a third copy.
+pub(crate) fn deflate_compress_bytes(data: &[u8]) -> Result<Vec<u8>> {
     use std::io::Write as _;
     let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::new(6));
     encoder

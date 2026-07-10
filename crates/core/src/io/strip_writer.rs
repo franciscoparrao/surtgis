@@ -1,18 +1,23 @@
 //! Strip-based GeoTIFF writer for streaming I/O.
 //!
 //! Writes GeoTIFF files one strip at a time using a callback-based
-//! approach, enabling bounded-memory output of large rasters.
+//! approach, enabling bounded-memory output of large rasters — both
+//! uncompressed and DEFLATE-compressed (see
+//! [`write_compressed_streaming`] for why the compressed path needs its
+//! own manual `DirectoryEncoder`-driven implementation instead of the
+//! `tiff` crate's higher-level `ImageEncoder`).
 
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
 
 use ndarray::Array2;
-use tiff::encoder::colortype::Gray32Float;
+use tiff::encoder::colortype::{ColorType, Gray32Float};
 use tiff::encoder::compression::DeflateLevel;
-use tiff::encoder::{Compression, TiffEncoder};
-use tiff::tags::Tag;
+use tiff::encoder::{TiffEncoder, TiffKindStandard};
+use tiff::tags::{CompressionMethod, PhotometricInterpretation, Tag};
 
+use super::native::{deflate_compress_bytes, flatten_native_bytes, write_geo_metadata_tags};
 use crate::crs::CRS;
 use crate::error::{Error, Result};
 use crate::raster::GeoTransform;
@@ -75,177 +80,174 @@ where
     let tmp_path = path.with_extension("tmp");
     let file = BufWriter::new(File::create(&tmp_path)?);
 
-    let compression = if config.compress {
-        Compression::Deflate(DeflateLevel::Balanced)
-    } else {
-        Compression::Uncompressed
-    };
-
-    let mut encoder = TiffEncoder::new(file)
-        .map_err(|e| Error::Other(format!("TIFF encoder error: {}", e)))?
-        .with_compression(compression);
-
-    let mut image = encoder
-        .new_image::<Gray32Float>(config.cols as u32, config.rows as u32)
-        .map_err(|e| Error::Other(format!("Cannot create TIFF image: {}", e)))?;
-
-    // Set rows per strip (must be called before any write_strip)
-    image
-        .rows_per_strip(config.rows_per_strip)
-        .map_err(|e| Error::Other(format!("Cannot set rows_per_strip: {}", e)))?;
-
-    // Write GeoTIFF tags via the underlying DirectoryEncoder
-    let gt = &config.transform;
-
-    // ModelPixelScaleTag (33550)
-    let scale = vec![gt.pixel_width, gt.pixel_height.abs(), 0.0];
-    image
-        .encoder()
-        .write_tag(Tag::Unknown(33550), scale.as_slice())
-        .map_err(|e| Error::Other(format!("Cannot write scale tag: {}", e)))?;
-
-    // ModelTiepointTag (33922)
-    let tiepoint = vec![0.0, 0.0, 0.0, gt.origin_x, gt.origin_y, 0.0];
-    image
-        .encoder()
-        .write_tag(Tag::Unknown(33922), tiepoint.as_slice())
-        .map_err(|e| Error::Other(format!("Cannot write tiepoint tag: {}", e)))?;
-
-    // GeoKeyDirectoryTag (34735)
-    let geokeys: Vec<u16> = if let Some(ref crs) = config.crs {
-        if let Some(epsg) = crs.epsg() {
-            if epsg == 4326 {
-                // Geographic CRS (WGS84)
-                vec![
-                    1,
-                    1,
-                    0,
-                    3, // Version 1.1.0, 3 keys
-                    1024,
-                    0,
-                    1,
-                    2, // GTModelTypeGeoKey = ModelTypeGeographic
-                    1025,
-                    0,
-                    1,
-                    1, // GTRasterTypeGeoKey = RasterPixelIsArea
-                    2048,
-                    0,
-                    1,
-                    epsg as u16, // GeographicTypeGeoKey
-                ]
-            } else {
-                // Projected CRS (e.g., UTM)
-                vec![
-                    1,
-                    1,
-                    0,
-                    3, // Version 1.1.0, 3 keys
-                    1024,
-                    0,
-                    1,
-                    1, // GTModelTypeGeoKey = ModelTypeProjected
-                    1025,
-                    0,
-                    1,
-                    1, // GTRasterTypeGeoKey = RasterPixelIsArea
-                    3072,
-                    0,
-                    1,
-                    epsg as u16, // ProjectedCSTypeGeoKey
-                ]
-            }
-        } else {
-            // CRS without EPSG code
-            vec![
-                1, 1, 0, 2, // Version 1.1.0, 2 keys
-                1024, 0, 1, 1, // ModelTypeProjected
-                1025, 0, 1, 1, // RasterPixelIsArea
-            ]
-        }
-    } else {
-        // No CRS
-        vec![
-            1, 1, 0, 2, // Version 1.1.0, 2 keys
-            1024, 0, 1, 1, // ModelTypeProjected
-            1025, 0, 1, 1, // RasterPixelIsArea
-        ]
-    };
-    image
-        .encoder()
-        .write_tag(Tag::Unknown(34735), geokeys.as_slice())
-        .map_err(|e| Error::Other(format!("Cannot write geokey tag: {}", e)))?;
-
-    // GDAL_NODATA tag (42113) — write as ASCII string
-    if let Some(nd) = config.nodata {
-        let nodata_str = if nd.is_nan() {
-            "nan".to_string()
-        } else {
-            format!("{}", nd)
-        };
-        // ASCII tag; the str impl appends the NUL (see native::write_geotiff).
-        image
-            .encoder()
-            .write_tag(Tag::Unknown(42113), nodata_str.as_str())
-            .map_err(|e| Error::Other(format!("Cannot write nodata tag: {}", e)))?;
-    }
-
-    let rps = config.rows_per_strip as usize;
-    let num_strips = (config.rows + rps - 1) / rps;
+    let mut encoder =
+        TiffEncoder::new(file).map_err(|e| Error::Other(format!("TIFF encoder error: {}", e)))?;
 
     if config.compress {
-        // KNOWN LIMITATION OF THE `tiff` CRATE (0.10.3), not a bug in this
-        // module: the DEFLATE compressor is only ever engaged by
-        // `ImageEncoder::write_data()`, which internally toggles the
-        // encoder's compression state (`writer.set_compression` /
-        // `reset_compression`) around its own strip loop — and that
-        // toggle lives on a private field with no public accessor.
-        // `ImageEncoder::write_strip()` called directly never activates
-        // it, so bytes would be written raw while the TIFF tag still
-        // claims `Compression::Deflate`, producing a corrupt file. Since
-        // `write_data()` takes the whole image as one `&[f32]` slice,
-        // genuinely bounded-memory *compressed* streaming isn't reachable
-        // through this crate's public API — we fall back to buffering the
-        // full image here, same as the batch writer in `native.rs`.
-        let mut all_data: Vec<f32> = Vec::with_capacity(config.rows * config.cols);
-        for strip_idx in 0..num_strips {
-            let strip_rows = if strip_idx == num_strips - 1 {
-                config.rows - strip_idx * rps
-            } else {
-                rps
-            };
-            let data = produce_strip(strip_idx, strip_rows)?;
-            all_data.extend(data.iter().map(|&v| v as f32));
-        }
-        image
-            .write_data(&all_data)
-            .map_err(|e| Error::Other(format!("Cannot write image data: {}", e)))?;
+        write_compressed_streaming(&mut encoder, config, &mut produce_strip)?;
     } else {
-        // Uncompressed path: genuine bounded-memory streaming. The
-        // encoder's compressor defaults to `Uncompressed` and is never
-        // touched unless `write_data()` runs, so calling `write_strip()`
-        // directly, one strip at a time, is safe here and never holds
-        // more than one strip's worth of pixels in memory (plus whatever
-        // `produce_strip` itself allocates for that strip).
-        for strip_idx in 0..num_strips {
-            let strip_rows = if strip_idx == num_strips - 1 {
-                config.rows - strip_idx * rps
-            } else {
-                rps
-            };
-            let data = produce_strip(strip_idx, strip_rows)?;
-            let strip_f32: Vec<f32> = data.iter().map(|&v| v as f32).collect();
-            image
-                .write_strip(&strip_f32)
-                .map_err(|e| Error::Other(format!("Cannot write strip {}: {}", strip_idx, e)))?;
-        }
-        image
-            .finish()
-            .map_err(|e| Error::Other(format!("Cannot finish TIFF image: {}", e)))?;
+        write_uncompressed_streaming(&mut encoder, config, &mut produce_strip)?;
     }
 
     // Atomic rename: only appears at final path if write completed successfully
     std::fs::rename(&tmp_path, path)?;
+    Ok(())
+}
+
+/// Genuinely bounded-memory uncompressed path: the encoder's compressor
+/// defaults to `Uncompressed` and is never touched unless `ImageEncoder`'s
+/// own `write_data()` runs, so calling `write_strip()` directly, one strip
+/// at a time, is safe here and never holds more than one strip's worth of
+/// pixels in memory (plus whatever `produce_strip` itself allocates).
+fn write_uncompressed_streaming<W, F>(
+    encoder: &mut TiffEncoder<W, TiffKindStandard>,
+    config: &StripWriterConfig,
+    produce_strip: &mut F,
+) -> Result<()>
+where
+    W: std::io::Write + std::io::Seek,
+    F: FnMut(usize, usize) -> Result<Array2<f64>>,
+{
+    let mut image = encoder
+        .new_image::<Gray32Float>(config.cols as u32, config.rows as u32)
+        .map_err(|e| Error::Other(format!("Cannot create TIFF image: {}", e)))?;
+
+    image
+        .rows_per_strip(config.rows_per_strip)
+        .map_err(|e| Error::Other(format!("Cannot set rows_per_strip: {}", e)))?;
+
+    write_geo_metadata_tags(
+        image.encoder(),
+        &config.transform,
+        config.crs.as_ref(),
+        config.nodata,
+    )?;
+
+    let rps = config.rows_per_strip as usize;
+    let num_strips = (config.rows + rps - 1) / rps;
+    for strip_idx in 0..num_strips {
+        let strip_rows = if strip_idx == num_strips - 1 {
+            config.rows - strip_idx * rps
+        } else {
+            rps
+        };
+        let data = produce_strip(strip_idx, strip_rows)?;
+        let strip_f32: Vec<f32> = data.iter().map(|&v| v as f32).collect();
+        image
+            .write_strip(&strip_f32)
+            .map_err(|e| Error::Other(format!("Cannot write strip {}: {}", strip_idx, e)))?;
+    }
+    image
+        .finish()
+        .map_err(|e| Error::Other(format!("Cannot finish TIFF image: {}", e)))?;
+    Ok(())
+}
+
+/// Genuinely bounded-memory *compressed* streaming path.
+///
+/// `ImageEncoder::write_data()` is the only way to get `write_strip()` to
+/// actually engage DEFLATE (it toggles the encoder's compressor around
+/// its own strip loop), but it needs the whole image as one contiguous
+/// `&[f32]` slice — that's the one real `tiff` 0.10.3 API limitation
+/// here: there is no public hook to toggle the encoder's own compressor
+/// before a manual `write_strip()` loop. This function sidesteps
+/// `ImageEncoder` entirely instead of buffering: it drives the
+/// lower-level `DirectoryEncoder` API by hand —
+/// the same approach `write_geotiff_stack` (`native.rs`) and the COG
+/// writer (`cog_writer.rs`) use — compressing each strip's bytes itself
+/// with `flate2` (the identical wrapper the `tiff` crate uses internally,
+/// so the stream shape readers expect is unchanged) and writing the
+/// already-compressed bytes as opaque data. Since `DirectoryEncoder`'s
+/// low-level `write_data()` just writes bytes at the current offset
+/// without touching any compressor state, this never depends on the
+/// private toggle at all — only one strip's raw + compressed bytes are
+/// ever in memory at a time, on top of whatever `produce_strip` itself
+/// allocates for that strip.
+fn write_compressed_streaming<W, F>(
+    encoder: &mut TiffEncoder<W, TiffKindStandard>,
+    config: &StripWriterConfig,
+    produce_strip: &mut F,
+) -> Result<()>
+where
+    W: std::io::Write + std::io::Seek,
+    F: FnMut(usize, usize) -> Result<Array2<f64>>,
+{
+    let mut dir = encoder
+        .image_directory()
+        .map_err(|e| Error::Other(format!("Cannot create TIFF directory: {}", e)))?;
+
+    dir.write_tag(Tag::ImageWidth, config.cols as u32)
+        .map_err(|e| Error::Other(format!("Cannot write ImageWidth: {}", e)))?;
+    dir.write_tag(Tag::ImageLength, config.rows as u32)
+        .map_err(|e| Error::Other(format!("Cannot write ImageLength: {}", e)))?;
+    dir.write_tag(
+        Tag::BitsPerSample,
+        <Gray32Float as ColorType>::BITS_PER_SAMPLE[0],
+    )
+    .map_err(|e| Error::Other(format!("Cannot write BitsPerSample: {}", e)))?;
+    dir.write_tag(
+        Tag::SampleFormat,
+        <Gray32Float as ColorType>::SAMPLE_FORMAT[0].to_u16(),
+    )
+    .map_err(|e| Error::Other(format!("Cannot write SampleFormat: {}", e)))?;
+    dir.write_tag(
+        Tag::PhotometricInterpretation,
+        PhotometricInterpretation::BlackIsZero.to_u16(),
+    )
+    .map_err(|e| Error::Other(format!("Cannot write PhotometricInterpretation: {}", e)))?;
+    dir.write_tag(Tag::SamplesPerPixel, 1u16)
+        .map_err(|e| Error::Other(format!("Cannot write SamplesPerPixel: {}", e)))?;
+    dir.write_tag(Tag::Compression, CompressionMethod::Deflate.to_u16())
+        .map_err(|e| Error::Other(format!("Cannot write Compression: {}", e)))?;
+    dir.write_tag(Tag::RowsPerStrip, config.rows_per_strip)
+        .map_err(|e| Error::Other(format!("Cannot write RowsPerStrip: {}", e)))?;
+
+    let rps = config.rows_per_strip as usize;
+    let num_strips = (config.rows + rps - 1) / rps;
+
+    // Each strip is compressed as its own independent Deflate/zlib stream
+    // (matching what a multi-strip TIFF reader expects to decode
+    // per-strip) — never one stream spanning the whole image.
+    let mut strip_offsets: Vec<u32> = Vec::with_capacity(num_strips);
+    let mut strip_byte_counts: Vec<u32> = Vec::with_capacity(num_strips);
+    for strip_idx in 0..num_strips {
+        let strip_rows = if strip_idx == num_strips - 1 {
+            config.rows - strip_idx * rps
+        } else {
+            rps
+        };
+        let data = produce_strip(strip_idx, strip_rows)?;
+        let strip_f32: Vec<f32> = data.iter().map(|&v| v as f32).collect();
+        let raw_bytes = flatten_native_bytes(&strip_f32);
+        let compressed = deflate_compress_bytes(&raw_bytes, DeflateLevel::Balanced)?;
+
+        let offset = dir
+            .write_data(compressed.as_slice())
+            .map_err(|e| Error::Other(format!("Cannot write strip {}: {}", strip_idx, e)))?;
+        strip_offsets.push(
+            u32::try_from(offset)
+                .map_err(|_| Error::Other(format!("Strip {strip_idx} offset overflow")))?,
+        );
+        strip_byte_counts.push(
+            u32::try_from(compressed.len())
+                .map_err(|_| Error::Other(format!("Strip {strip_idx} byte count overflow")))?,
+        );
+    }
+
+    dir.write_tag(Tag::StripOffsets, strip_offsets.as_slice())
+        .map_err(|e| Error::Other(format!("Cannot write StripOffsets: {}", e)))?;
+    dir.write_tag(Tag::StripByteCounts, strip_byte_counts.as_slice())
+        .map_err(|e| Error::Other(format!("Cannot write StripByteCounts: {}", e)))?;
+
+    write_geo_metadata_tags(
+        &mut dir,
+        &config.transform,
+        config.crs.as_ref(),
+        config.nodata,
+    )?;
+
+    dir.finish()
+        .map_err(|e| Error::Other(format!("Cannot finish TIFF directory: {}", e)))?;
     Ok(())
 }
 
@@ -349,30 +351,27 @@ mod tests {
         }
     }
 
-    /// NOT a regression introduced by this module's streaming refactor —
-    /// this reproduces against the unmodified `compress: true` path,
-    /// which buffers the full image and hands it to the `tiff` crate's
-    /// own `ImageEncoder::write_data()` unchanged. Rows at/after the
-    /// second DEFLATE-compressed strip come back as zeros: with
-    /// `rows_per_strip = 40` on an 80-row image (2 strips), row 40
-    /// reads back as `0.0` instead of `2000.0`, confirmed both through
-    /// `StripReader` and the plain full-image `read_geotiff` path (so
-    /// it's a write-side corruption, not a `StripReader` bug). Single
-    /// strip (`rows_per_strip >= rows`) is unaffected — see
-    /// `test_write_and_read_back_compressed` above.
-    ///
-    /// Ignored rather than fixed: out of scope for the memory-bound
-    /// streaming work this module was touched for (P6/P7), and worth a
-    /// dedicated investigation/upstream report against `tiff` 0.10.3's
-    /// multi-strip `write_data`/`Compressor::Deflate` interaction.
+    /// Was filed as a "known bug" (multi-strip DEFLATE corrupts rows past
+    /// the first strip) but turned out to be a bug in *this test*, not in
+    /// `write_geotiff_streaming`, the native reader, or the `tiff` crate:
+    /// the original callback ignored `strip_idx` and always synthesized
+    /// values from a strip-local `r` starting at 0, so strip 1's "row 0"
+    /// (global row 40) collided with strip 0's row 0 pattern. Cross-checked
+    /// against `rasterio`/GDAL (an independent libtiff-based reader, not
+    /// just this crate's own `StripReader`): it read back exactly what the
+    /// buggy callback actually wrote — proof the file itself was
+    /// well-formed and the mismatch was purely in the test's expected
+    /// values. Fixed by offsetting `r` with `strip_idx * rows_per_strip`
+    /// so the callback produces (and the assertion expects) the same
+    /// global row numbering multi-strip or single-strip alike.
     #[test]
-    #[ignore = "pre-existing bug: multi-strip Deflate write_data corrupts rows past the first strip (see doc comment); unrelated to the streaming/memory-bound work done here"]
-    fn known_bug_multi_strip_deflate_corrupts_rows_after_first_strip() {
+    fn multi_strip_deflate_roundtrips_correctly() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("surtgis_strip_writer_multistrip_bug.tif");
+        let path = dir.path().join("surtgis_strip_writer_multistrip.tif");
         let path = path.as_path();
         let rows = 80;
         let cols = 40;
+        let rows_per_strip = 40u32;
         let config = StripWriterConfig {
             rows,
             cols,
@@ -380,14 +379,16 @@ mod tests {
             crs: Some(CRS::from_epsg(4326)),
             nodata: Some(f64::NAN),
             compress: true,
-            rows_per_strip: 40, // 2 strips over 80 rows
+            rows_per_strip, // 2 strips over 80 rows
         };
 
-        write_geotiff_streaming(path, &config, |_strip_idx, strip_rows| {
+        write_geotiff_streaming(path, &config, |strip_idx, strip_rows| {
             let mut data = Array2::<f64>::zeros((strip_rows, cols));
+            let row_offset = strip_idx * rows_per_strip as usize;
             for r in 0..strip_rows {
+                let global_r = row_offset + r;
                 for c in 0..cols {
-                    data[[r, c]] = (r * 100 + c) as f64 * 0.5;
+                    data[[r, c]] = (global_r * 100 + c) as f64 * 0.5;
                 }
             }
             Ok(data)
@@ -399,6 +400,54 @@ mod tests {
         for r in 0..rows {
             for c in 0..cols {
                 let expected = (r * 100 + c) as f64 * 0.5;
+                assert_eq!(block[[r, c]], expected, "mismatch at ({}, {})", r, c);
+            }
+        }
+    }
+
+    /// 5 strips (not 2), with a non-uniform last strip (97 rows / 20 per
+    /// strip = 4 full strips + 1 partial of 17) — the general case, not
+    /// just the smallest multi-strip example. Cross-checked with
+    /// `gdalinfo`/`rasterio` during development (external, independent of
+    /// this crate's own reader); this test uses `StripReader` since that's
+    /// what the rest of this file's tests use and gdal/rasterio aren't
+    /// guaranteed available in every CI job.
+    #[test]
+    fn multi_strip_deflate_five_strips_uneven_last() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("surtgis_strip_writer_5strips.tif");
+        let path = path.as_path();
+        let rows = 97;
+        let cols = 33;
+        let rows_per_strip = 20u32;
+        let config = StripWriterConfig {
+            rows,
+            cols,
+            transform: GeoTransform::new(10.0, 300.0, 3.0, -3.0),
+            crs: Some(CRS::from_epsg(32719)),
+            nodata: Some(-9999.0),
+            compress: true,
+            rows_per_strip,
+        };
+
+        write_geotiff_streaming(path, &config, |strip_idx, strip_rows| {
+            let mut data = Array2::<f64>::zeros((strip_rows, cols));
+            let row_offset = strip_idx * rows_per_strip as usize;
+            for r in 0..strip_rows {
+                let global_r = row_offset + r;
+                for c in 0..cols {
+                    data[[r, c]] = (global_r * 1000 + c) as f64 * 0.25;
+                }
+            }
+            Ok(data)
+        })
+        .unwrap();
+
+        let mut reader = StripReader::open(path).unwrap();
+        let block = reader.read_rows(0, rows).unwrap();
+        for r in 0..rows {
+            for c in 0..cols {
+                let expected = (r * 1000 + c) as f64 * 0.25;
                 assert_eq!(block[[r, c]], expected, "mismatch at ({}, {})", r, c);
             }
         }
