@@ -650,17 +650,12 @@ pub fn handle(
             let aspect_r = aspect(&dem, AspectOutput::Radians).context("Aspect failed")?;
             pb.finish_and_clear();
             let pb = spinner(&format!("Solar radiation (day={})...", day));
-            let result = solar_radiation(
-                &slope_r,
-                &aspect_r,
-                SolarParams {
-                    day,
-                    latitude,
-                    transmittance: 0.7,
-                    ..SolarParams::default()
-                },
-            )
-            .context("Solar radiation failed")?;
+            let mut sp = SolarParams::default();
+            sp.day = day;
+            sp.latitude = latitude;
+            sp.transmittance = 0.7;
+            let result =
+                solar_radiation(&slope_r, &aspect_r, sp).context("Solar radiation failed")?;
             pb.finish_and_clear();
             write_result(&result.total, &output, compress)?;
             done("Solar radiation", &output, start.elapsed());
@@ -688,17 +683,12 @@ pub fn handle(
             let pb = spinner("Annual solar radiation...");
             // Use annual_only: computes 12 months sequentially, drops each after accumulating.
             // For 45M cells: ~3 GB peak instead of ~17 GB.
-            let result = solar_radiation_annual_only(
-                &slope_r,
-                &aspect_r,
-                SolarParams {
-                    day: 1,
-                    latitude,
-                    transmittance: 0.7,
-                    ..SolarParams::default()
-                },
-            )
-            .context("Annual solar radiation failed")?;
+            let mut sp = SolarParams::default();
+            sp.day = 1;
+            sp.latitude = latitude;
+            sp.transmittance = 0.7;
+            let result = solar_radiation_annual_only(&slope_r, &aspect_r, sp)
+                .context("Annual solar radiation failed")?;
             pb.finish_and_clear();
             write_result(&result.total, &output, compress)?;
             done("Annual solar radiation", &output, start.elapsed());
