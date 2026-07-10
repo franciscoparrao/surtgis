@@ -1179,16 +1179,11 @@ pub fn dispatch_algorithm(
                         },
                     )?;
                     let aspect_rad = aspect(&input, AspectOutput::Radians)?;
-                    let result = solar_radiation(
-                        &slope_rad,
-                        &aspect_rad,
-                        SolarParams {
-                            day,
-                            latitude,
-                            transmittance,
-                            ..SolarParams::default()
-                        },
-                    )?;
+                    let mut sp = SolarParams::default();
+                    sp.day = day;
+                    sp.latitude = latitude;
+                    sp.transmittance = transmittance;
+                    let result = solar_radiation(&slope_rad, &aspect_rad, sp)?;
                     Ok(result.total)
                 })();
                 dispatch_f64(&tx, "Solar Radiation (total)", start, res);
