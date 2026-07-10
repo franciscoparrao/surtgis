@@ -197,12 +197,12 @@ pub fn geomorphons_compute(
     flatness: f64,
     radius: usize,
 ) -> Result<Vec<u8>, JsValue> {
+    let mut params = GeomorphonParams::default();
+    params.flatness_threshold = flatness;
+    params.radius = radius;
     dem_op!(tiff_bytes, |dem: &_| compute_geomorphons(
         dem,
-        GeomorphonParams {
-            flatness_threshold: flatness,
-            radius
-        }
+        params.clone()
     ))
 }
 

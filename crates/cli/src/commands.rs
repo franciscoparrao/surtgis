@@ -460,16 +460,23 @@ pub enum TerrainCommands {
         #[arg(long, default_value = "6.0")]
         slope_threshold: f64,
     },
-    /// Geomorphon landform classification (Jasiewicz & Stepinski 2013)
+    /// Geomorphon landform classification (Jasiewicz & Stepinski 2013,
+    /// GRASS r.geomorphon parity)
     Geomorphons {
         input: PathBuf,
         output: PathBuf,
-        /// Lookup radius in cells
+        /// Search radius in cells (circular; GRASS r.geomorphon `search`)
         #[arg(short, long, default_value = "10")]
         radius: usize,
         /// Flatness threshold in degrees
         #[arg(short, long, default_value = "1.0")]
         flatness: f64,
+        /// Inner skip radius in cells (GRASS `skip`); must be < radius
+        #[arg(long, default_value = "0")]
+        skip: usize,
+        /// Flatness distance in cells (GRASS `dist`), 0 = disabled
+        #[arg(long, default_value = "0")]
+        flat_dist: f64,
     },
     /// Northness: cos(aspect), north-facing = 1, south-facing = -1
     Northness { input: PathBuf, output: PathBuf },

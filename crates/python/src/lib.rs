@@ -464,27 +464,27 @@ fn tri_compute<'py>(
     Ok(raster_to_numpy(py, result))
 }
 
-/// Compute geomorphons landform classification. Returns u8 landform codes.
+/// Compute geomorphons landform classification (GRASS r.geomorphon parity).
+/// Returns u8 landform codes (1-10, GRASS categories; 0 = nodata/border).
 #[pyfunction]
-#[pyo3(signature = (dem, cell_size=1.0, flatness=1.0, radius=10))]
+#[pyo3(signature = (dem, cell_size=1.0, flatness=1.0, radius=10, skip=0, flatness_distance=0.0))]
 fn geomorphons_compute<'py>(
     py: Python<'py>,
     dem: PyReadonlyArray2<'py, f64>,
     cell_size: f64,
     flatness: f64,
     radius: usize,
+    skip: usize,
+    flatness_distance: f64,
 ) -> PyResult<Bound<'py, PyArray2<u8>>> {
     let raster = numpy_to_raster(&dem, cell_size)?;
+    let mut params = GeomorphonParams::default();
+    params.radius = radius;
+    params.flatness_threshold = flatness;
+    params.skip = skip;
+    params.flatness_distance = flatness_distance;
     let result = py
-        .allow_threads(|| {
-            compute_geomorphons(
-                &raster,
-                GeomorphonParams {
-                    flatness_threshold: flatness,
-                    radius,
-                },
-            )
-        })
+        .allow_threads(|| compute_geomorphons(&raster, params))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_u8_to_numpy(py, result))
 }
