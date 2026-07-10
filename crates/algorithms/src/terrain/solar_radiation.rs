@@ -3,6 +3,12 @@
 //! Computes direct (beam), diffuse, and total solar radiation considering
 //! terrain slope, aspect, and topographic shadows.
 //! Simplified model inspired by Hofierka & Šúri (2002) / r.sun.
+//!
+//! The extraterrestrial irradiance includes the Spencer (1971) eccentricity
+//! correction E₀ (±3.3% over the year), and the diffuse component is a fixed
+//! proportion of the *atmospherically attenuated* global irradiance
+//! (`ghi = beam_horizontal / (1 − diffuse_proportion)`), so beam and diffuse
+//! respond consistently to transmittance / Linke turbidity.
 
 use crate::maybe_rayon::*;
 use ndarray::Array2;
@@ -15,6 +21,7 @@ use super::horizon_angles::HorizonAngles;
 
 /// Diffuse radiation model
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[non_exhaustive]
 pub enum DiffuseModel {
     /// Isotropic sky model: uniform diffuse from all sky directions.
     /// Simple but underestimates near-sun and near-horizon brightness.
@@ -35,6 +42,7 @@ pub enum DiffuseModel {
 
 /// Parameters for solar radiation model
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct SolarParams {
     /// Day of year (1-365)
     pub day: u32,
@@ -43,9 +51,11 @@ pub struct SolarParams {
     /// Atmospheric transmittance (default 0.7, clear sky).
     /// Used when `linke_turbidity` is None.
     pub transmittance: f64,
-    /// Diffuse proportion of global radiation (default 0.3)
+    /// Diffuse proportion of the (attenuated) global radiation
+    /// (default 0.3). Must be in `[0, 1)`.
     pub diffuse_proportion: f64,
-    /// Solar constant in W/m² (default 1367.0)
+    /// Solar constant in W/m² (default 1367.0). The Spencer (1971)
+    /// eccentricity correction E₀ for the day of year is applied on top.
     pub solar_constant: f64,
     /// Time step in hours for daily integration (default 0.5)
     pub time_step: f64,
@@ -224,6 +234,11 @@ pub fn solar_radiation(
     if params.day == 0 || params.day > 365 {
         return Err(Error::Algorithm("Day must be 1-365".into()));
     }
+    if !(0.0..1.0).contains(&params.diffuse_proportion) {
+        return Err(Error::Algorithm(
+            "diffuse_proportion must be in [0, 1)".into(),
+        ));
+    }
 
     let rows = rows_s;
     let cols = cols_s;
@@ -235,6 +250,15 @@ pub fn solar_radiation(
         + 0.000907 * (2.0 * gamma).sin()
         - 0.002697 * (3.0 * gamma).cos()
         + 0.00148 * (3.0 * gamma).sin();
+
+    // Eccentricity correction of the Sun-Earth distance (Spencer 1971):
+    // the extraterrestrial irradiance varies by about +/-3.3% over the year.
+    let e0 = 1.000110
+        + 0.034221 * gamma.cos()
+        + 0.001280 * gamma.sin()
+        + 0.000719 * (2.0 * gamma).cos()
+        + 0.000077 * (2.0 * gamma).sin();
+    let g0 = params.solar_constant * e0;
 
     let lat_rad = params.latitude.to_radians();
 
@@ -270,15 +294,13 @@ pub fn solar_radiation(
         }
         let alt = sin_alt.asin();
         let air_mass = 1.0 / (sin_alt + 0.50572 * (alt.to_degrees() + 6.07995).powf(-1.6364));
-        let beam_n = beam_normal_irradiance(
-            params.solar_constant,
-            air_mass,
-            params.transmittance,
-            params.linke_turbidity,
-        );
+        let beam_n =
+            beam_normal_irradiance(g0, air_mass, params.transmittance, params.linke_turbidity);
         let beam_horiz = beam_n * sin_alt;
-        let dhi = params.solar_constant * sin_alt * params.diffuse_proportion;
-        ghi_flat_daily += (beam_horiz + dhi) * dt;
+        // Diffuse as a fixed proportion of the ATTENUATED global irradiance:
+        // ghi = beam_horiz / (1 - p) so that dhi = p * ghi.
+        let ghi = beam_horiz / (1.0 - params.diffuse_proportion);
+        ghi_flat_daily += ghi * dt;
     }
 
     // Pre-compute sun geometry per timestep ONCE (independent of cell).
@@ -340,15 +362,15 @@ pub fn solar_radiation(
             };
 
             let air_mass = 1.0 / (sin_alt + 0.50572 * (alt.to_degrees() + 6.07995).powf(-1.6364));
-            let beam_normal = beam_normal_irradiance(
-                params.solar_constant,
-                air_mass,
-                params.transmittance,
-                params.linke_turbidity,
-            );
+            let beam_normal =
+                beam_normal_irradiance(g0, air_mass, params.transmittance, params.linke_turbidity);
 
-            let i0 = params.solar_constant * sin_alt;
-            let ghi = i0;
+            // Diffuse as a fixed proportion of the ATTENUATED global
+            // irradiance (not the top-of-atmosphere value): the surface
+            // global is ghi = beam_horizontal / (1 - p), so dhi = p * ghi
+            // and the direct normal seen by Perez is exactly beam_normal.
+            let beam_horiz = beam_normal * sin_alt;
+            let ghi = beam_horiz / (1.0 - params.diffuse_proportion);
             let dhi = ghi * params.diffuse_proportion;
             let theta_z = (PI / 2.0) - alt;
             let sin3_tz = theta_z.sin().powi(3);
@@ -357,11 +379,7 @@ pub fn solar_radiation(
             } else {
                 0.0
             };
-            let dni = if sin_alt > 0.01 {
-                (ghi - dhi) / sin_alt
-            } else {
-                0.0
-            };
+            let dni = if sin_alt > 0.01 { beam_normal } else { 0.0 };
 
             Some(SunStep {
                 sin_alt,
@@ -434,7 +452,7 @@ pub fn solar_radiation(
                             cos_inc,
                             slp,
                             sun.air_mass,
-                            params.solar_constant,
+                            g0,
                         ),
                     };
 
@@ -541,6 +559,11 @@ pub fn solar_radiation_shadowed(
     if params.day == 0 || params.day > 365 {
         return Err(Error::Algorithm("Day must be 1-365".into()));
     }
+    if !(0.0..1.0).contains(&params.diffuse_proportion) {
+        return Err(Error::Algorithm(
+            "diffuse_proportion must be in [0, 1)".into(),
+        ));
+    }
 
     let rows = rows_s;
     let cols = cols_s;
@@ -552,6 +575,15 @@ pub fn solar_radiation_shadowed(
         + 0.000907 * (2.0 * gamma).sin()
         - 0.002697 * (3.0 * gamma).cos()
         + 0.00148 * (3.0 * gamma).sin();
+
+    // Eccentricity correction of the Sun-Earth distance (Spencer 1971):
+    // the extraterrestrial irradiance varies by about +/-3.3% over the year.
+    let e0 = 1.000110
+        + 0.034221 * gamma.cos()
+        + 0.001280 * gamma.sin()
+        + 0.000719 * (2.0 * gamma).cos()
+        + 0.000077 * (2.0 * gamma).sin();
+    let g0 = params.solar_constant * e0;
 
     let lat_rad = params.latitude.to_radians();
 
@@ -586,15 +618,13 @@ pub fn solar_radiation_shadowed(
         }
         let alt = sin_alt.asin();
         let air_mass = 1.0 / (sin_alt + 0.50572 * (alt.to_degrees() + 6.07995).powf(-1.6364));
-        let beam_n = beam_normal_irradiance(
-            params.solar_constant,
-            air_mass,
-            params.transmittance,
-            params.linke_turbidity,
-        );
+        let beam_n =
+            beam_normal_irradiance(g0, air_mass, params.transmittance, params.linke_turbidity);
         let beam_horiz = beam_n * sin_alt;
-        let dhi = params.solar_constant * sin_alt * params.diffuse_proportion;
-        ghi_flat_daily += (beam_horiz + dhi) * dt;
+        // Diffuse as a fixed proportion of the ATTENUATED global irradiance:
+        // ghi = beam_horiz / (1 - p) so that dhi = p * ghi.
+        let ghi = beam_horiz / (1.0 - params.diffuse_proportion);
+        ghi_flat_daily += ghi * dt;
     }
 
     let result_data: Vec<(f64, f64, f64)> = (0..rows)
@@ -652,7 +682,7 @@ pub fn solar_radiation_shadowed(
                         let air_mass =
                             1.0 / (sin_alt + 0.50572 * (alt.to_degrees() + 6.07995).powf(-1.6364));
                         let beam_normal = beam_normal_irradiance(
-                            params.solar_constant,
+                            g0,
                             air_mass,
                             params.transmittance,
                             params.linke_turbidity,
@@ -660,9 +690,18 @@ pub fn solar_radiation_shadowed(
                         beam_daily += beam_normal * cos_inc * dt;
                     }
 
-                    // Diffuse radiation (still received in shadow, reduced by SVF)
-                    let i0 = params.solar_constant * sin_alt;
-                    let ghi = i0;
+                    // Diffuse radiation (still received in shadow, reduced by
+                    // SVF), as a fixed proportion of the ATTENUATED global:
+                    // ghi = beam_horizontal / (1 - p), dhi = p * ghi.
+                    let air_mass_d =
+                        1.0 / (sin_alt + 0.50572 * (alt.to_degrees() + 6.07995).powf(-1.6364));
+                    let beam_normal_d = beam_normal_irradiance(
+                        g0,
+                        air_mass_d,
+                        params.transmittance,
+                        params.linke_turbidity,
+                    );
+                    let ghi = beam_normal_d * sin_alt / (1.0 - params.diffuse_proportion);
                     let dhi = ghi * params.diffuse_proportion;
                     let svf_approx = (1.0 + slp.cos()) / 2.0;
 
@@ -688,21 +727,8 @@ pub fn solar_radiation_shadowed(
                             let theta_z = (PI / 2.0) - alt;
                             let air_mass = 1.0
                                 / (sin_alt + 0.50572 * (alt.to_degrees() + 6.07995).powf(-1.6364));
-                            let dni = if sin_alt > 0.01 {
-                                (ghi - dhi) / sin_alt
-                            } else {
-                                0.0
-                            };
-                            perez_diffuse(
-                                dhi,
-                                ghi,
-                                dni,
-                                theta_z,
-                                cos_inc,
-                                slp,
-                                air_mass,
-                                params.solar_constant,
-                            )
+                            let dni = if sin_alt > 0.01 { beam_normal_d } else { 0.0 };
+                            perez_diffuse(dhi, ghi, dni, theta_z, cos_inc, slp, air_mass, g0)
                         }
                     };
 
@@ -1735,5 +1761,110 @@ mod tests {
             "Grazing sun on flat surface: cos_inc should be ~0, got {:.4}",
             ci
         );
+    }
+
+    /// D3 regression: the diffuse component must derive from the ATTENUATED
+    /// global irradiance. On flat terrain with the isotropic model the daily
+    /// diffuse fraction equals `diffuse_proportion` exactly by construction;
+    /// the old TOA-based diffuse gave a much larger fraction.
+    #[test]
+    fn test_diffuse_fraction_equals_proportion_on_flat() {
+        let mut slope_r = Raster::filled(5, 5, 0.0_f64);
+        slope_r.set_transform(GeoTransform::new(0.0, 5.0, 1.0, -1.0));
+        let mut aspect_r = Raster::filled(5, 5, 0.0_f64);
+        aspect_r.set_transform(GeoTransform::new(0.0, 5.0, 1.0, -1.0));
+
+        let p = 0.3;
+        let result = solar_radiation(&slope_r, &aspect_r, SolarParams::default()).unwrap();
+        let beam = result.beam.get(2, 2).unwrap();
+        let diffuse = result.diffuse.get(2, 2).unwrap();
+        let fraction = diffuse / (beam + diffuse);
+        assert!(
+            (fraction - p).abs() < 0.01,
+            "flat isotropic diffuse fraction should be ~{p}, got {fraction:.4}"
+        );
+    }
+
+    /// D3 regression: diffuse must respond to atmospheric attenuation. The
+    /// old TOA-based diffuse was independent of transmittance.
+    #[test]
+    fn test_diffuse_decreases_with_attenuation() {
+        let mut slope_r = Raster::filled(5, 5, 0.0_f64);
+        slope_r.set_transform(GeoTransform::new(0.0, 5.0, 1.0, -1.0));
+        let mut aspect_r = Raster::filled(5, 5, 0.0_f64);
+        aspect_r.set_transform(GeoTransform::new(0.0, 5.0, 1.0, -1.0));
+
+        let clear = solar_radiation(
+            &slope_r,
+            &aspect_r,
+            SolarParams {
+                transmittance: 0.8,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let turbid = solar_radiation(
+            &slope_r,
+            &aspect_r,
+            SolarParams {
+                transmittance: 0.5,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let d_clear = clear.diffuse.get(2, 2).unwrap();
+        let d_turbid = turbid.diffuse.get(2, 2).unwrap();
+        assert!(
+            d_turbid < d_clear * 0.7,
+            "diffuse must drop with attenuation: clear {d_clear:.1}, turbid {d_turbid:.1}"
+        );
+    }
+
+    /// D3: the eccentricity correction E0 makes early-January (perihelion)
+    /// irradiance ~6.9% higher than early-July (aphelion) for the same sun
+    /// geometry. At the equator days 3 and 185 have nearly mirror-image
+    /// declinations, so the total ratio isolates E0.
+    #[test]
+    fn test_eccentricity_perihelion_vs_aphelion() {
+        let mut slope_r = Raster::filled(5, 5, 0.0_f64);
+        slope_r.set_transform(GeoTransform::new(0.0, 5.0, 1.0, -1.0));
+        let mut aspect_r = Raster::filled(5, 5, 0.0_f64);
+        aspect_r.set_transform(GeoTransform::new(0.0, 5.0, 1.0, -1.0));
+
+        let base = SolarParams {
+            latitude: 0.0,
+            ..Default::default()
+        };
+        let perihelion = solar_radiation(
+            &slope_r,
+            &aspect_r,
+            SolarParams {
+                day: 3,
+                ..base.clone()
+            },
+        )
+        .unwrap();
+        let aphelion =
+            solar_radiation(&slope_r, &aspect_r, SolarParams { day: 185, ..base }).unwrap();
+        let ratio = perihelion.total.get(2, 2).unwrap() / aphelion.total.get(2, 2).unwrap();
+        assert!(
+            (1.04..1.10).contains(&ratio),
+            "perihelion/aphelion ratio should be ~1.07 (E0), got {ratio:.4}"
+        );
+    }
+
+    #[test]
+    fn test_invalid_diffuse_proportion_rejected() {
+        let mut slope_r = Raster::filled(5, 5, 0.0_f64);
+        slope_r.set_transform(GeoTransform::new(0.0, 5.0, 1.0, -1.0));
+        let mut aspect_r = Raster::filled(5, 5, 0.0_f64);
+        aspect_r.set_transform(GeoTransform::new(0.0, 5.0, 1.0, -1.0));
+        for bad in [1.0, 1.5, -0.1] {
+            let params = SolarParams {
+                diffuse_proportion: bad,
+                ..Default::default()
+            };
+            assert!(solar_radiation(&slope_r, &aspect_r, params).is_err());
+        }
     }
 }

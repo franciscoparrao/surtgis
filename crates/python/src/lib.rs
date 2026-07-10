@@ -1545,11 +1545,9 @@ fn solar_radiation_compute<'py>(
             *v = v.to_radians();
         }
     }
-    let params = SolarParams {
-        day,
-        latitude,
-        ..SolarParams::default()
-    };
+    let mut params = SolarParams::default();
+    params.day = day;
+    params.latitude = latitude;
     let result = py
         .allow_threads(|| compute_solar_radiation(&slope_rad, &aspect_rad, params))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;

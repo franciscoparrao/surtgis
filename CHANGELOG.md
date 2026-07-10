@@ -11,12 +11,31 @@ call them out under a `Breaking` heading when they happen.
 
 ### Breaking
 
+- `SolarParams` and `DiffuseModel` are now `#[non_exhaustive]` (pre-1.0
+  extensibility policy): construct the params via `SolarParams::default()`
+  and set fields.
+
 - `GeomorphonParams` gains `skip` and `flatness_distance` fields (GRASS
   `skip`/`dist`) and is now `#[non_exhaustive]` (pre-1.0 extensibility
   policy): construct it via `GeomorphonParams::default()` and set fields.
 
 ### Changed
 
+- **Solar radiation: diffuse now derives from the attenuated global
+  irradiance, plus the E₀ eccentricity correction** (audit divergence D3).
+  The diffuse component was computed as a fixed proportion of the
+  *top-of-atmosphere* irradiance — unattenuated, independent of
+  transmittance/Linke turbidity and inconsistent with the attenuated beam
+  (Perez received a TOA-based DNI different from the beam actually used).
+  Now `ghi = beam_horizontal / (1 − diffuse_proportion)`,
+  `dhi = diffuse_proportion × ghi`, and the DNI seen by Perez is exactly
+  the attenuated beam normal. The Spencer (1971) eccentricity correction
+  E₀ (±3.3% over the year) is applied to the extraterrestrial irradiance.
+  Affects `solar_radiation`, `solar_radiation_shadowed` and both annual
+  variants (which delegate). Diffuse (and slightly, total) values drop
+  relative to previous releases — the old diffuse was systematically
+  overestimated, most strongly at low sun angles.
+  `diffuse_proportion` is now validated to `[0, 1)`.
 - **Geomorphons rewritten for GRASS `r.geomorphon` parity** (audit
   divergence D2). The previous classification was an ad-hoc heuristic
   (segment counting); it now implements Jasiewicz & Stepinski (2013)
