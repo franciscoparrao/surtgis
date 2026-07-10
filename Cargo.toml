@@ -37,8 +37,13 @@ default-members = [
 [workspace.package]
 version = "0.17.0"
 edition = "2024"
-# MSRV: edition 2024 + let-chains require 1.88. Verified by the `msrv` CI job.
-rust-version = "1.88"
+# MSRV: edition 2024 + let-chains require 1.88, but the CLI's default
+# `zarr` feature transitively requires zarrs >=0.23, which requires 1.91
+# (true across the entire 0.23 line, not just the latest patch) — the
+# declared MSRV only became enforceable once the `msrv` CI job started
+# covering the CLI's default feature set (Sprint 5, engine audit R2).
+# Verified by the `msrv` CI job.
+rust-version = "1.91"
 authors = ["Francisco Parra"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/franciscoparrao/surtgis"

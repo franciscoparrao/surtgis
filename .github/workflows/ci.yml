@@ -194,13 +194,13 @@ jobs:
 
 
   msrv:
-    name: MSRV (1.88)
+    name: MSRV (1.91)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.88.0
+          toolchain: 1.91.0
       - uses: Swatinem/rust-cache@v2
         with:
           key: msrv
@@ -215,7 +215,7 @@ jobs:
       # 9 default-member (publishable) crates without dragging system libs
       # (gui, relief-3d) into the job.
       - name: Check with MSRV toolchain
-        run: cargo +1.88.0 check -p surtgis-core -p surtgis-algorithms -p surtgis-parallel -p surtgis-relief -p surtgis-colormap -p surtgis-cloud -p surtgis -p surtgis-wasm -p surtgis-python
+        run: cargo +1.91.0 check -p surtgis-core -p surtgis-algorithms -p surtgis-parallel -p surtgis-relief -p surtgis-colormap -p surtgis-cloud -p surtgis -p surtgis-wasm -p surtgis-python
 
   deny:
     name: cargo-deny (advisories, licenses, sources)
