@@ -2,6 +2,12 @@
 //!
 //! Determines which cells are visible from one or more observer points.
 //!
+//! Visibility is tested against the raised target (`target_height`) while
+//! the occlusion horizon grows only from the bare terrain, and an optional
+//! Earth-curvature + atmospheric-refraction correction
+//! (`(1 − k)·d²/(2R)`, GRASS r.viewshed / ArcGIS convention) lowers distant
+//! cells below the line of sight.
+//!
 //! Two algorithms are provided:
 //! - **Bresenham ray tracing** ([`viewshed`]): parallelizable, traces rays to
 //!   perimeter cells. Good on multi-core systems for small-to-medium DEMs.
@@ -23,6 +29,7 @@ use surtgis_core::{Error, Result};
 
 /// Parameters for viewshed analysis
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ViewshedParams {
     /// Observer row position
     pub observer_row: usize,
@@ -30,10 +37,20 @@ pub struct ViewshedParams {
     pub observer_col: usize,
     /// Observer height above ground (meters, default 1.7)
     pub observer_height: f64,
-    /// Target height above ground (meters, default 0.0)
+    /// Target height above ground (meters, default 0.0). Only affects the
+    /// visibility test at each cell — occlusion is always computed from the
+    /// bare terrain.
     pub target_height: f64,
     /// Maximum radius in cells (0 = unlimited)
     pub max_radius: usize,
+    /// Correct for Earth curvature and atmospheric refraction
+    /// (default false, like GRASS r.viewshed and ArcGIS): each cell's
+    /// elevation is lowered by `(1 − refraction_coeff) · d² / (2R)`.
+    /// Requires the DEM to be in metric units.
+    pub earth_curvature: bool,
+    /// Atmospheric refraction coefficient used when `earth_curvature` is on
+    /// (default 0.14286, the GRASS r.viewshed default; ArcGIS uses 0.13).
+    pub refraction_coeff: f64,
 }
 
 impl Default for ViewshedParams {
@@ -44,8 +61,20 @@ impl Default for ViewshedParams {
             observer_height: 1.7,
             target_height: 0.0,
             max_radius: 0,
+            earth_curvature: false,
+            refraction_coeff: 1.0 / 7.0,
         }
     }
+}
+
+/// Mean Earth radius in meters, for the curvature correction.
+const EARTH_RADIUS_M: f64 = 6_371_000.0;
+
+/// Elevation drop due to Earth curvature, partially compensated by
+/// atmospheric refraction: `(1 − k) · d² / (2R)`.
+#[inline]
+fn curvature_drop(dist: f64, refraction_coeff: f64) -> f64 {
+    (1.0 - refraction_coeff) * dist * dist / (2.0 * EARTH_RADIUS_M)
 }
 
 /// Compute viewshed from a single observer point
@@ -109,16 +138,7 @@ pub fn viewshed(dem: &Raster<f64>, params: ViewshedParams) -> Result<Raster<u8>>
         .into_par_iter()
         .map(|(tr, tc)| {
             trace_ray(
-                dem,
-                obs_r,
-                obs_c,
-                obs_z,
-                tr,
-                tc,
-                params.target_height,
-                cell_size,
-                rows,
-                cols,
+                dem, obs_r, obs_c, obs_z, tr, tc, &params, cell_size, rows, cols,
             )
         })
         .collect();
@@ -149,7 +169,7 @@ fn trace_ray(
     obs_z: f64,
     target_r: isize,
     target_c: isize,
-    target_height: f64,
+    params: &ViewshedParams,
     cell_size: f64,
     rows: usize,
     cols: usize,
@@ -193,12 +213,25 @@ fn trace_ray(
             continue;
         }
 
-        let target_z = z + target_height;
-        let angle = (target_z - obs_z) / dist;
+        // Earth curvature / refraction: lower the cell by the effective drop.
+        let z_eff = if params.earth_curvature {
+            z - curvature_drop(dist, params.refraction_coeff)
+        } else {
+            z
+        };
 
-        if angle >= max_angle {
+        // The visibility test looks at the raised target; the occlusion
+        // horizon only ever grows from the BARE terrain. Conflating the two
+        // (the old behaviour) made intermediate cells occlude as if each
+        // carried a raised target on top.
+        let target_angle = (z_eff + params.target_height - obs_z) / dist;
+        let terrain_angle = (z_eff - obs_z) / dist;
+
+        if target_angle >= max_angle {
             visible.push((r, c));
-            max_angle = angle;
+        }
+        if terrain_angle > max_angle {
+            max_angle = terrain_angle;
         }
     }
 
@@ -295,15 +328,24 @@ pub fn viewshed_xdraw(dem: &Raster<f64>, params: ViewshedParams) -> Result<Raste
             continue;
         }
 
-        let slope_angle = (z + params.target_height - obs_z) / dist;
+        let z_eff = if params.earth_curvature {
+            z - curvature_drop(dist, params.refraction_coeff)
+        } else {
+            z
+        };
+
+        // Visibility tests the raised target; the reference plane (occlusion)
+        // only ever grows from the bare terrain (see trace_ray).
+        let target_angle = (z_eff + params.target_height - obs_z) / dist;
+        let terrain_angle = (z_eff - obs_z) / dist;
 
         // Interpolate reference from the two parent cells
         let ref_interp = xdraw_interpolate_ref(&reference, obs_r, obs_c, dr, dc, rows, cols);
 
-        if slope_angle >= ref_interp {
+        if target_angle >= ref_interp {
             visible[(r, c)] = 1;
         }
-        reference[(r, c)] = slope_angle.max(ref_interp);
+        reference[(r, c)] = terrain_angle.max(ref_interp);
     }
 
     let mut output = dem.with_same_meta::<u8>(rows, cols);
@@ -428,6 +470,7 @@ pub fn viewshed_multiple(
             observer_height,
             target_height: 0.0,
             max_radius: 0,
+            ..Default::default()
         };
         let vs = viewshed(dem, params)?;
         for row in 0..rows {
@@ -585,6 +628,7 @@ pub fn viewshed_probabilistic(
             observer_height: params.observer_height,
             target_height: params.target_height,
             max_radius: params.max_radius,
+            ..Default::default()
         };
 
         let vs = viewshed(&perturbed, vs_params)?;
@@ -703,6 +747,7 @@ pub fn observer_optimization(
                 observer_height: params.observer_height,
                 target_height: params.target_height,
                 max_radius: params.max_radius,
+            ..Default::default()
             };
             viewshed(dem, vs_params).ok()
         })
@@ -980,6 +1025,7 @@ mod tests {
                 observer_height: 0.0,
                 target_height: 0.0,
                 max_radius: 6,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -1019,6 +1065,7 @@ mod tests {
                 observer_height: 0.0,
                 target_height: 0.0,
                 max_radius: 3,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -1286,5 +1333,65 @@ mod tests {
             (10, 10),
             "Center observer should be selected (less blocked)"
         );
+    }
+
+    /// D4 regression: the occlusion horizon must come from the BARE terrain.
+    /// A 2 m target on flat ground behind a 1 m bump is plainly visible to a
+    /// 1.7 m observer; the old code raised the horizon by target_height at
+    /// the bump and hid everything behind it.
+    #[test]
+    fn test_target_height_does_not_occlude() {
+        let mut dem = Raster::filled(3, 30, 0.0_f64);
+        dem.set_transform(GeoTransform::new(0.0, 3.0, 1.0, -1.0));
+        for r in 0..3 {
+            dem.set(r, 1, 1.0).unwrap(); // 1 m bump right next to the observer
+        }
+        let mut params = ViewshedParams::default();
+        params.observer_row = 1;
+        params.observer_col = 0;
+        params.observer_height = 1.7;
+        params.target_height = 2.0;
+
+        for result in [
+            viewshed(&dem, params.clone()).unwrap(),
+            viewshed_xdraw(&dem, params).unwrap(),
+        ] {
+            for c in 2..30 {
+                assert_eq!(
+                    result.get(1, c).unwrap(),
+                    1,
+                    "2 m target at col {c} behind a 1 m bump must be visible"
+                );
+            }
+        }
+    }
+
+    /// D4: with Earth curvature + refraction on, a flat plain disappears
+    /// below the horizon at d* = sqrt(2·R·h/(1−k)) ≈ 5.0 km for h = 1.7 m
+    /// and k = 1/7. Without the correction everything stays visible.
+    #[test]
+    fn test_earth_curvature_hides_beyond_horizon() {
+        // 3 × 200 cells at 100 m: a 20 km flat line
+        let mut dem = Raster::filled(3, 200, 0.0_f64);
+        dem.set_transform(GeoTransform::new(0.0, 300.0, 100.0, -100.0));
+
+        let mut flat = ViewshedParams::default();
+        flat.observer_row = 1;
+        flat.observer_col = 0;
+        flat.observer_height = 1.7;
+        let mut curved = flat.clone();
+        curved.earth_curvature = true;
+
+        type ViewshedFn = fn(&Raster<f64>, ViewshedParams) -> Result<Raster<u8>>;
+        for (make, name) in [
+            (viewshed as ViewshedFn, "bresenham"),
+            (viewshed_xdraw as ViewshedFn, "xdraw"),
+        ] {
+            let f = make(&dem, flat.clone()).unwrap();
+            let c = make(&dem, curved.clone()).unwrap();
+            assert_eq!(f.get(1, 150).unwrap(), 1, "{name}: flat Earth sees 15 km");
+            assert_eq!(c.get(1, 45).unwrap(), 1, "{name}: 4.5 km inside horizon");
+            assert_eq!(c.get(1, 60).unwrap(), 0, "{name}: 6 km beyond horizon");
+        }
     }
 }

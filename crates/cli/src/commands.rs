@@ -561,6 +561,12 @@ pub enum TerrainCommands {
         /// Maximum visibility radius in cells (0 = unlimited)
         #[arg(long, default_value = "0")]
         max_radius: usize,
+        /// Correct for Earth curvature and atmospheric refraction
+        #[arg(long)]
+        curvature: bool,
+        /// Refraction coefficient (used with --curvature; GRASS default)
+        #[arg(long, default_value = "0.14286")]
+        refraction: f64,
     },
     /// Convergence Index (-100=convergent, +100=divergent)
     Convergence {
@@ -778,6 +784,12 @@ pub enum TerrainCommands {
         /// Observer height above ground
         #[arg(long, default_value = "1.7")]
         height: f64,
+        /// Correct for Earth curvature and atmospheric refraction
+        #[arg(long)]
+        curvature: bool,
+        /// Refraction coefficient (used with --curvature; GRASS default)
+        #[arg(long, default_value = "0.14286")]
+        refraction: f64,
     },
     /// Multiple-observer cumulative viewshed
     ViewshedMultiple {

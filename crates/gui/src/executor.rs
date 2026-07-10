@@ -1105,16 +1105,15 @@ pub fn dispatch_algorithm(
                     &tx,
                     "Viewshed",
                     start,
-                    viewshed(
-                        &input,
-                        ViewshedParams {
-                            observer_row,
-                            observer_col,
-                            observer_height,
-                            target_height,
-                            max_radius,
-                        },
-                    ),
+                    {
+                        let mut vp = ViewshedParams::default();
+                        vp.observer_row = observer_row;
+                        vp.observer_col = observer_col;
+                        vp.observer_height = observer_height;
+                        vp.target_height = target_height;
+                        vp.max_radius = max_radius;
+                        viewshed(&input, vp)
+                    },
                 );
             }
 
