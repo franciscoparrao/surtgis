@@ -51,6 +51,13 @@ call them out under a `Breaking` heading when they happen.
 
 ### Added
 
+- **Honest `SigV4 not implemented` error** (audit A2-cloud): signing an S3
+  request with `AwsAuth` used to emit half-signed headers (no
+  `Authorization: AWS4-HMAC-SHA256`), so private buckets answered 403 with
+  valid credentials. It now returns an explicit `CloudError::Auth` pointing
+  to presigned URLs / VPC endpoints / public HTTPS access. Real SigV4 is
+  deferred until there is a concrete private-bucket use case.
+
 - **D8 flow direction now resolves flat surfaces** with the Garbrecht &
   Martz (1997) double-gradient method, in the O(n) formulation of Barnes,
   Lehman & Mulla (2014) — closing audit divergence D6 and matching the

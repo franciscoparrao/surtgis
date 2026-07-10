@@ -66,16 +66,14 @@ impl AwsCredentials {
     }
 }
 
-/// AWS S3 authentication using unsigned payload headers.
+/// AWS S3 credential holder. **SigV4 request signing is not implemented.**
 ///
-/// For public S3 buckets with requester-pays or buckets that need basic auth,
-/// this adds the required headers. For full SigV4 request signing, a more
-/// complete implementation or the `aws-sigv4` crate would be needed.
-///
-/// Current behavior: adds `x-amz-content-sha256: UNSIGNED-PAYLOAD` and
-/// optionally the session token header. This is sufficient for many S3
-/// configurations with IAM-based access when combined with VPC endpoints
-/// or presigned URLs.
+/// Signing a request with this type returns an explicit
+/// [`CloudError::Auth`] error instead of sending a half-signed request that
+/// S3 answers with a confusing 403. Until SigV4 lands, private S3 buckets
+/// are reachable through presigned URLs, VPC endpoints, or any proxy that
+/// injects the signature; public buckets need no auth object at all
+/// (`s3://` URLs are rewritten to plain HTTPS).
 pub struct AwsAuth {
     credentials: AwsCredentials,
 }
@@ -99,19 +97,37 @@ impl CloudAuth for AwsAuth {
         &self,
         _url: &str,
         _method: &str,
-        headers: &mut Vec<(String, String)>,
+        _headers: &mut Vec<(String, String)>,
     ) -> Result<()> {
-        // Add unsigned payload marker (required by S3)
-        headers.push((
-            "x-amz-content-sha256".to_string(),
-            "UNSIGNED-PAYLOAD".to_string(),
-        ));
+        // The old behavior pushed x-amz-content-sha256 / x-amz-security-token
+        // without ever building `Authorization: AWS4-HMAC-SHA256`, so S3
+        // rejected the request with a 403 even when the credentials were
+        // valid. Fail honestly until real SigV4 is implemented.
+        let _ = &self.credentials;
+        Err(CloudError::Auth(
+            "AWS SigV4 request signing is not implemented; use presigned URLs, \
+             a VPC endpoint, or public-bucket HTTPS access instead"
+                .to_string(),
+        ))
+    }
+}
 
-        // Add session token if present
-        if let Some(ref token) = self.credentials.session_token {
-            headers.push(("x-amz-security-token".to_string(), token.clone()));
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        Ok(())
+    #[test]
+    fn sign_request_fails_honestly_until_sigv4_exists() {
+        // A2-cloud: the old implementation half-signed the request (no
+        // Authorization header) and private buckets answered 403 with valid
+        // credentials. The contract until SigV4 lands is an explicit error.
+        let auth = AwsAuth::new(AwsCredentials::new("AKIA_TEST", "secret", "us-east-1"));
+        let mut headers = Vec::new();
+        let err = auth
+            .sign_request("https://bucket.s3.amazonaws.com/key", "GET", &mut headers)
+            .unwrap_err();
+        assert!(matches!(err, CloudError::Auth(_)));
+        assert!(err.to_string().contains("not implemented"));
+        assert!(headers.is_empty(), "no half-signed headers must be emitted");
     }
 }
