@@ -10,7 +10,8 @@
 //!   6  7  8
 //! ```
 //!
-//! - `0` = pit or flat cell (no outflow)
+//! - `0` = no outflow: pit, or flat with no outlet (drainable flats are
+//!   resolved with Garbrecht–Martz, see [`resolve_flats`](crate::hydrology::resolve_flats))
 //! - `1`–`8` = counter-clockwise from East: E, NE, N, NW, W, SW, S, SE
 //!
 //! Offsets are expressed as `(row_offset, col_offset)` in raster coordinates

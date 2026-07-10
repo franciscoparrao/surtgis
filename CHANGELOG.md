@@ -9,6 +9,39 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+### Added
+
+- **D8 flow direction now resolves flat surfaces** with the Garbrecht &
+  Martz (1997) double-gradient method, in the O(n) formulation of Barnes,
+  Lehman & Mulla (2014) — closing audit divergence D6 and matching the
+  behaviour of GRASS, WhiteboxTools and TauDEM. Flats (filled depressions,
+  lake surfaces, plains in integer-quantized DEMs) previously came out as
+  regions of code `0` that silently swallowed the drainage of every
+  downstream algorithm (flow accumulation, watershed, stream network, HAND).
+  Flats draining to the raster edge or to nodata (e.g. a coastal plain
+  against a masked sea) are routed toward it; the boundary-touching cells
+  themselves keep code `0` as terminal sinks — SurtGIS directions never
+  point off-grid or into nodata. Fully enclosed flats and true pits keep
+  code `0` as before. New public API:
+  `hydrology::resolve_flats(&dem, &mut directions) -> FlatResolutionStats`
+  for composing with custom D8 rasters; `flow_direction()` applies it
+  automatically (no signature change — CLI, Python and WASM inherit the
+  fix). Validated against WhiteboxTools and GRASS on quantized fractal
+  DEMs (`benchmarks/validate_flats_gm.py`): flat coverage 99.8% (WBT:
+  99.9%), and SurtGIS↔WBT agreement meets or exceeds the WBT↔GRASS
+  reference baseline on direction agreement, log-accumulation correlation
+  and stream-network IoU.
+
+### Fixed
+
+- CLI `hydrology fill-sinks --min-slope` default aligned with the library
+  default (`0.01` → `1e-5`, audit D7 — the library was fixed in the
+  Sprint-1 round but the CLI kept the old value, giving different results
+  by the two routes).
+- CLI `hydrology flow-direction` help no longer claims ESRI-style
+  power-of-two direction codes (`1,2,4,…,128`); SurtGIS writes `0` = no
+  outflow, `1`–`8` counter-clockwise from East.
+
 ## [0.17.0] - 2026-07-02
 
 Engine-audit release: Sprints 2–4 (performance, structural debt, process

@@ -142,6 +142,8 @@ Options:
           Rows per processing strip (larger = fewer HTTP requests but more RAM). Default: 512 [default: 512]
       --band-chunk-size <BAND_CHUNK_SIZE>
           Bands to download + process together per scene (RAM↔HTTP dial). Higher = fewer HTTP requests (less rate-limit pressure) but more RAM per strip. 1 = minimum RAM (default). For 38 GB hosts, 3-5 is comfortable with ES; for PC, up to n_bands is fine [default: 1]
+      --max-tile-failures <MAX_TILE_FAILURES>
+          Abort the composite if more than this many tiles fail after retries (0 = never abort; just print a summary of how many tiles/scenes were affected). Multi-band composites (--asset with commas) only [default: 0]
   -h, --help
           Print help
 ```

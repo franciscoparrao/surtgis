@@ -23,13 +23,20 @@ use super::d8::{D8_DISTANCE as D8_DIST, D8_OFFSETS};
 /// The input DEM should ideally be hydrologically conditioned (sinks filled)
 /// for meaningful results.
 ///
+/// Cells on flat surfaces (no *strictly* lower neighbor, but part of a
+/// connected equal-elevation region with an outlet) are drained with the
+/// double-gradient method of Garbrecht & Martz (1997) — see
+/// [`resolve_flats`](crate::hydrology::resolve_flats) — matching the behaviour
+/// of GRASS, WhiteboxTools and TauDEM. Only true pits and flats with no
+/// outlet keep code `0`.
+///
 /// # Direction Encoding
 /// ```text
 ///   4  3  2
 ///   5  0  1
 ///   6  7  8
 /// ```
-/// - `0` = pit or flat (no downslope neighbor)
+/// - `0` = pit, or flat with no outlet (no outflow)
 /// - `1`-`8` = direction to the steepest downslope neighbor
 ///
 /// # Arguments
@@ -92,6 +99,8 @@ pub fn flow_direction(dem: &Raster<f64>) -> Result<Raster<u8>> {
     output.set_nodata(Some(0));
     *output.data_mut() = Array2::from_shape_vec((rows, cols), output_data)
         .map_err(|e| Error::Other(e.to_string()))?;
+
+    super::flats::resolve_flats(dem, &mut output)?;
 
     Ok(output)
 }
