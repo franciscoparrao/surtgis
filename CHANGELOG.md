@@ -11,6 +11,9 @@ call them out under a `Breaking` heading when they happen.
 
 ### Breaking
 
+- `ViewshedParams` is now `#[non_exhaustive]` with two new fields
+  (`earth_curvature`, `refraction_coeff`): construct it via
+  `ViewshedParams::default()` and set fields.
 - `SolarParams` and `DiffuseModel` are now `#[non_exhaustive]` (pre-1.0
   extensibility policy): construct the params via `SolarParams::default()`
   and set fields.
@@ -21,6 +24,20 @@ call them out under a `Breaking` heading when they happen.
 
 ### Changed
 
+- **Viewshed: occlusion no longer includes `target_height`, and Earth
+  curvature / refraction correction added** (audit divergence D4). The
+  occlusion horizon was updated with `z + target_height`, making every
+  intermediate cell block the line of sight as if it carried a raised
+  target on top — with `target_height > 0`, cells that are plainly
+  visible (a 2 m antenna behind a 1 m bump) were reported hidden.
+  Visibility now tests the raised target against a horizon built from the
+  bare terrain only, in both the Bresenham (`viewshed`) and XDraw
+  (`viewshed_xdraw`) algorithms. New opt-in correction `earth_curvature`
+  (with `refraction_coeff`, default 1/7 like GRASS r.viewshed; ArcGIS
+  uses 0.13) lowers each cell by `(1 − k)·d²/(2R)` — on a flat plain the
+  horizon of a 1.7 m observer now falls at the physical ~5 km. CLI:
+  `--curvature` / `--refraction` on `viewshed` and `viewshed-xdraw`;
+  Python: kwargs `earth_curvature=False`, `refraction_coeff=0.14286`.
 - **Solar radiation: diffuse now derives from the attenuated global
   irradiance, plus the E₀ eccentricity correction** (audit divergence D3).
   The diffuse component was computed as a fixed proportion of the

@@ -747,7 +747,7 @@ pub fn observer_optimization(
                 observer_height: params.observer_height,
                 target_height: params.target_height,
                 max_radius: params.max_radius,
-            ..Default::default()
+                ..Default::default()
             };
             viewshed(dem, vs_params).ok()
         })
