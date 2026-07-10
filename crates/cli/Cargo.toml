@@ -32,12 +32,12 @@ ml = ["dep:smelt-ml"]
 relief-3d = ["dep:surtgis-relief-3d"]
 
 [dependencies]
-surtgis-core = { version = "0.17", path = "../core", features = ["shapefile", "geopackage"] }
-surtgis-algorithms = { version = "0.17", path = "../algorithms", features = ["unstable"] }
-surtgis-parallel = { version = "0.17", path = "../parallel" }
-surtgis-relief = { version = "0.17", path = "../relief" }
-surtgis-relief-3d = { version = "0.17", path = "../relief-3d", optional = true }
-surtgis-cloud = { version = "0.17", path = "../cloud", features = ["native"], optional = true }
+surtgis-core = { version = "0.18", path = "../core", features = ["shapefile", "geopackage"] }
+surtgis-algorithms = { version = "0.18", path = "../algorithms", features = ["unstable"] }
+surtgis-parallel = { version = "0.18", path = "../parallel" }
+surtgis-relief = { version = "0.18", path = "../relief" }
+surtgis-relief-3d = { version = "0.18", path = "../relief-3d", optional = true }
+surtgis-cloud = { version = "0.18", path = "../cloud", features = ["native"], optional = true }
 clap.workspace = true
 clap_complete.workspace = true
 anyhow.workspace = true

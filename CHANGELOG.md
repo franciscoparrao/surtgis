@@ -9,6 +9,20 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-07-10
+
+Scientific-parity release (engine audit R2, "Horizonte v1.0+" package):
+D8 flat resolution, geomorphons/solar/viewshed brought to reference-tool
+parity, each validated against GRASS/WhiteboxTools. **This is the
+1.0-candidate surface**: barring issues found in real-world use, 1.0.0 will
+promote this release unchanged once the EMS paper is published.
+**Contains breaking changes** — see below.
+
+> ⚠️ **Geomorphons, solar radiation and viewshed results change** relative
+> to ≤0.17.0 — in all three cases the old outputs were scientifically
+> divergent (ad-hoc classification, unattenuated diffuse, target-inflated
+> occlusion), not differently-conventioned. See the `Changed` entries.
+
 ### Breaking
 
 - `ViewshedParams` is now `#[non_exhaustive]` with two new fields
@@ -17,7 +31,6 @@ call them out under a `Breaking` heading when they happen.
 - `SolarParams` and `DiffuseModel` are now `#[non_exhaustive]` (pre-1.0
   extensibility policy): construct the params via `SolarParams::default()`
   and set fields.
-
 - `GeomorphonParams` gains `skip` and `flatness_distance` fields (GRASS
   `skip`/`dist`) and is now `#[non_exhaustive]` (pre-1.0 extensibility
   policy): construct it via `GeomorphonParams::default()` and set fields.
