@@ -928,14 +928,14 @@ pub enum HydrologyCommands {
         /// Output file
         output: PathBuf,
         /// Minimum slope to enforce
-        #[arg(long, default_value = "0.01")]
+        #[arg(long, default_value = "1e-5")]
         min_slope: f64,
     },
-    /// D8 flow direction from DEM
+    /// D8 flow direction from DEM (flats resolved with Garbrecht-Martz 1997)
     FlowDirection {
         /// Input DEM file
         input: PathBuf,
-        /// Output file (D8 codes: 1,2,4,8,16,32,64,128)
+        /// Output file (D8 codes: 0 = no outflow, 1-8 counter-clockwise from East)
         output: PathBuf,
     },
     /// Flow accumulation from flow direction raster

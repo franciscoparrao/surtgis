@@ -20,6 +20,7 @@ mod drainage_density;
 #[cfg(feature = "unstable")]
 mod energy_cone;
 pub(crate) mod fill_sinks;
+mod flats;
 pub(crate) mod flow_accumulation;
 pub(crate) mod flow_direction;
 mod flow_direction_dinf;
@@ -48,6 +49,7 @@ pub use drainage_density::{DrainageDensityParams, drainage_density};
 #[cfg(feature = "unstable")]
 pub use energy_cone::{EnergyConeParams, energy_cone};
 pub use fill_sinks::{FillSinksParams, fill_sinks};
+pub use flats::{FlatResolutionStats, resolve_flats};
 pub use flow_accumulation::flow_accumulation;
 pub use flow_direction::flow_direction;
 pub use flow_direction_dinf::{DinfResult, flow_accumulation_dinf, flow_dinf, flow_direction_dinf};

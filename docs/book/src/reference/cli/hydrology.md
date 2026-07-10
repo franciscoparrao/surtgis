@@ -11,7 +11,7 @@ Usage: surtgis hydrology [OPTIONS] <COMMAND>
 
 Commands:
   fill-sinks              Fill sinks / depressions in DEM (Planchon-Darboux 2001)
-  flow-direction          D8 flow direction from DEM
+  flow-direction          D8 flow direction from DEM (flats resolved with Garbrecht-Martz 1997)
   flow-accumulation       Flow accumulation from flow direction raster
   watershed               Watershed delineation from flow direction
   priority-flood          Priority-Flood depression filling (Barnes 2014, optimal O(n log n))
@@ -52,7 +52,7 @@ Arguments:
   <OUTPUT>  Output file
 
 Options:
-      --min-slope <MIN_SLOPE>    Minimum slope to enforce [default: 0.01]
+      --min-slope <MIN_SLOPE>    Minimum slope to enforce [default: 1e-5]
   -v, --verbose                  Verbose output
       --compress                 Compress output GeoTIFFs (deflate)
       --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
@@ -63,13 +63,13 @@ Options:
 ## `hydrology flow-direction` {#flow-direction}
 
 ```text
-D8 flow direction from DEM
+D8 flow direction from DEM (flats resolved with Garbrecht-Martz 1997)
 
 Usage: surtgis hydrology flow-direction [OPTIONS] <INPUT> <OUTPUT>
 
 Arguments:
   <INPUT>   Input DEM file
-  <OUTPUT>  Output file (D8 codes: 1,2,4,8,16,32,64,128)
+  <OUTPUT>  Output file (D8 codes: 0 = no outflow, 1-8 counter-clockwise from East)
 
 Options:
   -v, --verbose                  Verbose output
