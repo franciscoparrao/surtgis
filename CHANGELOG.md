@@ -11,6 +11,16 @@ call them out under a `Breaking` heading when they happen.
 
 ### Added
 
+- **`surtgis_cloud::composite::MemoryBudget` / `TrackedRaster`** (feature
+  `unstable`) — audit R9, step 1 of 3. A byte budget backed by a counting
+  semaphore: a caller acquires a permit for the bytes it is about to
+  allocate and the acquisition waits until that much is free, so peak RAM is
+  bounded *by construction* regardless of any size estimate (and concurrency
+  self-throttles). `TrackedRaster` ties a permit to a raster's lifetime.
+  This is the foundation that will retire the calibrated strip-sizing model
+  (`plan_strips` and its empirical inflation constants) in the next step;
+  it is not wired into the composite yet.
+
 - **Experimental `surtgis_cloud::composite` module** (feature `unstable`,
   exempt from the 1.x stability guarantee) — audit R8, step 1 of 3. The
   pure planning, per-tile and per-pixel logic of the STAC multiband
