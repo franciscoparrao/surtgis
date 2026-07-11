@@ -11,6 +11,20 @@ call them out under a `Breaking` heading when they happen.
 
 ### Changed
 
+- **CLI `stac composite` streams output to disk instead of buffering it in
+  RAM** (audit R9, step 3 of 3). The persistent output buffers
+  (`n_bands × rows × cols × 8` bytes held until the end — the dominant
+  memory term for large composites) are retired: each composited band strip
+  is streamed to a per-band scratch file on arrival, and the final GeoTIFFs
+  are assembled with the bounded-memory strip writer. Peak RAM is now
+  independent of the output size, so a composite can produce rasters larger
+  than RAM (trading the in-memory buffers for transient scratch on disk).
+  **The output GeoTIFFs are now `float32` instead of `float64`** — the
+  standard, ample precision for reflectance/index composites (files roughly
+  halve; real-data pixels are unchanged, interpolated gap-fill pixels differ
+  by at most ~5e-4, i.e. f32 rounding). Together with R9-PR2's byte-budgeted
+  decode this bounds the composite's whole memory footprint by construction.
+
 - **Composite RAM is now bounded by the byte budget, and the calibrated
   strip-sizing model is retired** (feature `unstable`) — audit R9, step 2
   of 3. Concurrent tile decode is bounded at runtime by a

@@ -2796,39 +2796,21 @@ fn handle_multiband_composite(
     };
     let mask_applier = CliMask(cloud_mask_strategy);
 
-    /// Collects composited band strips into per-band output buffers.
-    struct BandBufferSink {
-        n_bands: usize,
-        buffers: Vec<Vec<f64>>,
-        cols: usize,
-    }
-    impl StripSink for BandBufferSink {
-        fn begin(&mut self, grid: &OutputGrid) -> surtgis_cloud::Result<()> {
-            self.cols = grid.cols;
-            self.buffers = (0..self.n_bands)
-                .map(|_| vec![f64::NAN; grid.cols * grid.rows])
-                .collect();
-            Ok(())
-        }
-        fn accept(
-            &mut self,
-            band_idx: usize,
-            row_start: usize,
-            strip: ndarray::Array2<f64>,
-        ) -> surtgis_cloud::Result<()> {
-            let buf = &mut self.buffers[band_idx];
-            let offset = row_start * self.cols;
-            if let Some(slice) = strip.as_slice() {
-                buf[offset..offset + slice.len()].copy_from_slice(slice);
+    // Resolve the per-band output paths up front, then stream each band strip
+    // straight to disk (no persistent `n_bands × rows × cols × 8` RAM buffers).
+    let stem = output.file_stem().unwrap_or_default().to_string_lossy();
+    let use_asset_naming = naming.eq_ignore_ascii_case("asset");
+    let band_paths: Vec<std::path::PathBuf> = band_names
+        .iter()
+        .map(|band_name| {
+            if use_asset_naming {
+                output.with_file_name(format!("{}.tif", band_name))
+            } else {
+                output.with_file_name(format!("{}_{}.tif", stem, band_name))
             }
-            Ok(())
-        }
-    }
-    let mut sink = BandBufferSink {
-        n_bands,
-        buffers: Vec::new(),
-        cols: 0,
-    };
+        })
+        .collect();
+    let mut sink = crate::composite_sink::StreamingTiffSink::new(band_paths.clone(), compress);
 
     /// Bridges engine progress hooks to the CLI's existing stdout/stderr
     /// reporting and RAM diagnostics (RSS logging, intra-strip peak tracking,
@@ -2961,38 +2943,17 @@ fn handle_multiband_composite(
         );
     }
 
-    // --- Write N output GeoTIFFs from the collected band buffers ---
+    // --- Assemble the N output GeoTIFFs from the streamed scratch files ---
     let grid = &report.grid;
-    let stem = output.file_stem().unwrap_or_default().to_string_lossy();
-    let use_asset_naming = naming.eq_ignore_ascii_case("asset");
-    let opts = if compress {
-        Some(surtgis_core::io::GeoTiffOptions {
-            compression: "DEFLATE".into(),
-            ..Default::default()
-        })
-    } else {
-        None
-    };
-
+    let sizes = sink
+        .finish()
+        .context("Failed to assemble composite output files")?;
     for (bi, band_name) in band_names.iter().enumerate() {
-        let band_path = if use_asset_naming {
-            output.with_file_name(format!("{}.tif", band_name))
-        } else {
-            output.with_file_name(format!("{}_{}.tif", stem, band_name))
-        };
-        let buffer = std::mem::take(&mut sink.buffers[bi]);
-        let mut raster = surtgis_core::Raster::from_vec(buffer, grid.rows, grid.cols)
-            .context("Failed to create raster from buffer")?;
-        raster.set_transform(grid.transform);
-        raster.set_crs(grid.crs.clone());
-        surtgis_core::io::write_geotiff(&raster, &band_path, opts.clone())
-            .with_context(|| format!("Failed to write {}", band_path.display()))?;
-        let file_size = std::fs::metadata(&band_path).map(|m| m.len()).unwrap_or(0);
         println!(
             "  ✓ {} → {} ({:.1} MB)",
             band_name,
-            band_path.display(),
-            file_size as f64 / 1e6
+            band_paths[bi].display(),
+            sizes.get(bi).copied().unwrap_or(0) as f64 / 1e6
         );
     }
 
