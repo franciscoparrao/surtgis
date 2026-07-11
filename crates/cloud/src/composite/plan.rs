@@ -62,64 +62,32 @@ pub fn select_dates_by_coverage(
         .collect()
 }
 
-/// Catalog-specific memory-model constants.
-///
-/// Earth Search serves 1024² COG tiles and mixes UTM zones (reprojection
-/// doubles the working set); Planetary Computer serves 512² tiles in a
-/// single grid. `tile_concurrency` reflects HTTP/2 multiplexing limits.
-#[derive(Debug, Clone, Copy)]
-pub struct BudgetProfile {
-    /// Working-set inflation of the active band mosaic, in multiples of the
-    /// strip buffer.
-    pub band_inflation: usize,
-    /// Working-set inflation of a scene's cloud-mask mosaic.
-    pub mask_inflation: usize,
-    /// Concurrent tile downloads/decodes.
-    pub tile_concurrency: usize,
-    /// Decoded size of one tile in bytes (tile_px² × 8).
-    pub tile_internal_bytes: usize,
-    /// Human-readable label for budget reports.
-    pub label: &'static str,
-}
-
-/// The per-catalog constants of the calibrated budget model.
-pub fn budget_profile(catalog: &StacCatalog) -> BudgetProfile {
+/// Nominal decoded size of one COG tile for `catalog`, in bytes
+/// (`tile_px² × 8`). This is the servers' real internal tile dimension —
+/// Earth Search 1024², Planetary Computer 512² — **not** an empirical fudge
+/// factor. Used to size each tile's [`MemoryBudget`](super::MemoryBudget)
+/// acquisition, so concurrent-decode count emerges from the budget instead
+/// of a hard-coded limit.
+pub fn nominal_tile_bytes(catalog: &StacCatalog) -> usize {
     match catalog {
-        StacCatalog::EarthSearch => BudgetProfile {
-            band_inflation: 14,
-            mask_inflation: 4,
-            tile_concurrency: 32,
-            tile_internal_bytes: 1024 * 1024 * 8,
-            label: "Earth Search (1024² COGs, multi-UTM reprojection)",
-        },
-        StacCatalog::PlanetaryComputer => BudgetProfile {
-            band_inflation: 8,
-            mask_inflation: 2,
-            tile_concurrency: 48,
-            tile_internal_bytes: 512 * 512 * 8,
-            label: "Planetary Computer (512² COGs)",
-        },
-        StacCatalog::Custom(_) => BudgetProfile {
-            band_inflation: 14,
-            mask_inflation: 4,
-            tile_concurrency: 32,
-            tile_internal_bytes: 1024 * 1024 * 8,
-            label: "custom catalog",
-        },
+        StacCatalog::PlanetaryComputer => 512 * 512 * 8,
+        StacCatalog::EarthSearch | StacCatalog::Custom(_) => 1024 * 1024 * 8,
     }
 }
 
-/// Mask-cache calibration: observed footprint is ~1.8× the nominal term,
-/// from strip→strip double-tenancy and decoded-tile staging
-/// (BUG_RAM_V070_BUDGET_VS_REAL_MAULE_PC, v0.7.1).
-pub const MASK_INFLATION_CALIB: f64 = 1.8;
-/// mimalloc retains pages between strips: ~10% over the live working set.
-pub const ALLOC_OVERHEAD_FRAC: f64 = 0.10;
+/// Fraction of the non-output budget reserved for concurrent tile decode.
+const DECODE_BUDGET_FRAC: f64 = 0.25;
+/// Decode-budget floor and ceiling.
+const DECODE_BUDGET_MIN: usize = 128 * 1024 * 1024;
+const DECODE_BUDGET_MAX: usize = 1024 * 1024 * 1024;
+/// Strip-height clamp (rows).
+const STRIP_ROWS_MIN: usize = 8;
+const STRIP_ROWS_MAX: usize = 512;
 
 /// Inputs of [`plan_strips`].
 #[derive(Debug, Clone)]
 pub struct StripPlanInput {
-    /// Target STAC catalog (selects the [`BudgetProfile`]).
+    /// Target STAC catalog (selects the nominal tile size).
     pub catalog: StacCatalog,
     /// Number of output bands.
     pub n_bands: usize,
@@ -131,28 +99,24 @@ pub struct StripPlanInput {
     pub out_cols: usize,
     /// Requested `--band-chunk-size` (clamped into `[1, n_bands]`).
     pub band_chunk_size: usize,
-    /// Requested strip height in rows (upper bound; the model may cap it).
+    /// Requested strip height in rows (upper bound; the plan may cap it).
     pub strip_rows_cfg: usize,
     /// RAM budget in GB (caller resolves `SURTGIS_RAM_BUDGET_GB`).
     pub budget_gb: f64,
 }
 
-/// GB breakdown of the predicted peak, for budget reports.
+/// GB breakdown of the planned working set, for budget reports.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BudgetBreakdown {
     /// Persistent output buffers: `n_bands × cells × 8`.
     pub output_gb: f64,
-    /// Cloud-mask mosaics held for the whole strip (calibrated ×1.8).
-    pub mask_cache_gb: f64,
-    /// Per-band scene strips for the active band chunk.
-    pub scene_strips_gb: f64,
-    /// Active-band mosaic working set.
-    pub band_working_gb: f64,
-    /// Concurrent tile decode.
+    /// Per-strip held set: `strip_rows × n_scenes × (1 mask + k band strips)
+    /// × out_cols × 8`.
+    pub held_gb: f64,
+    /// Concurrent tile decode (the [`MemoryBudget`](super::MemoryBudget) size).
     pub decode_gb: f64,
-    /// Allocator retention (~10% of the variable set).
-    pub alloc_overhead_gb: f64,
-    /// Sum of all components.
+    /// Sum of the three (excludes allocator retention, which the byte budget
+    /// bounds at runtime rather than modelling).
     pub estimated_total_gb: f64,
 }
 
@@ -165,82 +129,73 @@ pub struct StripPlan {
     pub num_strips: usize,
     /// Effective band chunk size K (clamped).
     pub band_chunk: usize,
-    /// Concurrent tile downloads for this catalog.
-    pub tile_concurrency: usize,
-    /// Catalog label for reports.
-    pub catalog_label: &'static str,
-    /// `true` when the budget capped `strip_rows` below the requested value.
+    /// Bytes reserved for concurrent tile decode — the size of the
+    /// [`MemoryBudget`](super::MemoryBudget) the engine enforces at runtime.
+    pub decode_budget_bytes: usize,
+    /// Nominal decoded size of one tile, for per-tile budget acquisition.
+    pub tile_bytes: usize,
+    /// `true` when the honest sizing capped `strip_rows` below the request.
     pub capped: bool,
-    /// Predicted peak-RAM breakdown at the planned strip size.
+    /// GB breakdown of the planned working set.
     pub breakdown: BudgetBreakdown,
 }
 
-/// Solve for the strip height that keeps the predicted peak RSS within the
-/// budget (the calibrated v0.7.1 model; outer-band structure, so only one
-/// band chunk's tile cache is resident at a time).
+/// Size the strips and the concurrent-decode budget from honest byte
+/// accounting — no empirical inflation constants.
 ///
-/// Components: output buffers (persistent), per-scene mask mosaics
-/// (calibrated ×[`MASK_INFLATION_CALIB`]), per-scene band strips and the
-/// active mosaic working set (both scaled by the band chunk K), fixed
-/// concurrent-decode headroom, and ~10% allocator retention
-/// ([`ALLOC_OVERHEAD_FRAC`]). The solved strip height is clamped to
-/// `[8, 512]` rows and never exceeds `strip_rows_cfg`.
+/// The v0.7.1 calibrated model (mask ×1.8, +10% allocator, per-catalog
+/// band/mask inflation, fixed tile concurrency) is retired: concurrent tile
+/// decode is now bounded at runtime by a real [`MemoryBudget`](super::MemoryBudget)
+/// of [`decode_budget_bytes`](StripPlan::decode_budget_bytes) (so RAM can't
+/// overshoot however wrong an estimate is), and the strip height is chosen so
+/// the *held* working set — one mask mosaic per scene plus `k` band strips
+/// per scene, at their true `out_cols × 8` bytes per row — fits the remaining
+/// budget after the persistent output buffers and the decode reservation. The
+/// height is clamped to `[8, 512]` rows and never exceeds `strip_rows_cfg`.
 pub fn plan_strips(input: &StripPlanInput) -> StripPlan {
-    let profile = budget_profile(&input.catalog);
-    let n_bands = input.n_bands;
-    let n_scenes = input.n_scenes;
-    let out_cols = input.out_cols;
-    let total_cells = input.out_rows * out_cols;
+    let n_bands = input.n_bands.max(1);
+    let n_scenes = input.n_scenes.max(1);
+    let out_cols = input.out_cols.max(1);
+    let total_cells = input.out_rows.max(1) * out_cols;
+    let k = input.band_chunk_size.clamp(1, n_bands);
 
-    let k = input.band_chunk_size.clamp(1, n_bands.max(1));
-    let concurrent_decode_bytes = profile.tile_concurrency * (k + 1) * profile.tile_internal_bytes;
+    let total_budget = (input.budget_gb * 1e9) as usize;
+    let tile_bytes = nominal_tile_bytes(&input.catalog);
 
-    let global_budget_bytes = (input.budget_gb * 1e9) as usize;
-    let output_buffer_bytes = n_bands.max(1) * total_cells.max(1) * 8;
-
-    let per_row_calibrated_bytes = {
-        let mask_term = (n_scenes.max(1) * profile.mask_inflation) as f64 * MASK_INFLATION_CALIB;
-        let scene_term = (k * n_scenes.max(1)) as f64;
-        let band_term = (k * profile.band_inflation) as f64;
-        ((mask_term + scene_term + band_term) * (out_cols.max(1) * 8) as f64) as usize
-    };
-
-    let variable_budget = global_budget_bytes
-        .saturating_sub(output_buffer_bytes)
-        .saturating_sub(concurrent_decode_bytes)
+    // Persistent output buffers (retired in a later step by a streaming sink).
+    let output_bytes = n_bands * total_cells * 8;
+    let after_output = total_budget
+        .saturating_sub(output_bytes)
         .max(64 * 1024 * 1024);
-    let headroom_for_variable_bytes =
-        (variable_budget as f64 / (1.0 + ALLOC_OVERHEAD_FRAC)) as usize;
-    let auto_strip_rows =
-        (headroom_for_variable_bytes / per_row_calibrated_bytes.max(1)).clamp(8, 512);
-    let strip_rows = input.strip_rows_cfg.min(auto_strip_rows);
 
-    let output_gb = output_buffer_bytes as f64 / 1e9;
-    let decode_gb = concurrent_decode_bytes as f64 / 1e9;
-    let mask_cache_gb = (strip_rows * n_scenes * out_cols * 8 * profile.mask_inflation) as f64
-        * MASK_INFLATION_CALIB
-        / 1e9;
-    let scene_strips_gb = (strip_rows * n_scenes * out_cols * 8 * k) as f64 / 1e9;
-    let band_working_gb = (strip_rows * out_cols * 8 * profile.band_inflation * k) as f64 / 1e9;
-    let variable_gb = mask_cache_gb + scene_strips_gb + band_working_gb;
-    let alloc_overhead_gb = variable_gb * ALLOC_OVERHEAD_FRAC;
-    let estimated_total_gb = output_gb + decode_gb + variable_gb + alloc_overhead_gb;
+    // Reserve a slice for concurrent tile decode; the byte budget enforces it.
+    let decode_budget_bytes = ((after_output as f64 * DECODE_BUDGET_FRAC) as usize)
+        .clamp(DECODE_BUDGET_MIN.min(after_output), DECODE_BUDGET_MAX);
+
+    // Honest per-row held set: 1 mask mosaic + k band strips, per scene.
+    let per_row_held = n_scenes * (1 + k) * out_cols * 8;
+    let held_budget = after_output
+        .saturating_sub(decode_budget_bytes)
+        .max(STRIP_ROWS_MIN * per_row_held);
+    let auto_strip_rows = (held_budget / per_row_held.max(1)).clamp(STRIP_ROWS_MIN, STRIP_ROWS_MAX);
+    let strip_rows = input.strip_rows_cfg.min(auto_strip_rows).max(1);
+
+    let output_gb = output_bytes as f64 / 1e9;
+    let held_gb = (strip_rows * per_row_held) as f64 / 1e9;
+    let decode_gb = decode_budget_bytes as f64 / 1e9;
 
     StripPlan {
         strip_rows,
         num_strips: input.out_rows.div_ceil(strip_rows.max(1)),
         band_chunk: k,
-        tile_concurrency: profile.tile_concurrency,
-        catalog_label: profile.label,
+        decode_budget_bytes,
+        tile_bytes,
         capped: strip_rows < input.strip_rows_cfg,
         breakdown: BudgetBreakdown {
             output_gb,
-            mask_cache_gb,
-            scene_strips_gb,
-            band_working_gb,
+            held_gb,
             decode_gb,
-            alloc_overhead_gb,
-            estimated_total_gb,
+            estimated_total_gb: output_gb + held_gb + decode_gb,
         },
     }
 }
@@ -346,26 +301,30 @@ mod tests {
         // Maule-like: 10 bands, 8 scenes, wide grid, small budget.
         let input = StripPlanInput {
             catalog: StacCatalog::EarthSearch,
-            n_bands: 10,
+            n_bands: 1,
             n_scenes: 8,
             out_rows: 20_000,
             out_cols: 20_000,
             band_chunk_size: 1,
             strip_rows_cfg: 512,
-            budget_gb: 12.0,
+            budget_gb: 4.5,
         };
         let plan = plan_strips(&input);
-        assert!(plan.capped, "512-row strips cannot fit a 12 GB budget here");
+        assert!(
+            plan.capped,
+            "512-row strips cannot fit the held set in 4.5 GB here"
+        );
         assert!(plan.strip_rows >= 8, "clamped to at least 8 rows");
         assert!(plan.strip_rows < 512);
         assert_eq!(plan.num_strips, input.out_rows.div_ceil(plan.strip_rows));
-        // Predicted peak must respect the budget within the model's own
-        // ±10% tolerance (the output term is fixed, so allow the fixed
-        // floor of 8 rows to exceed it only when strip_rows hit the floor).
+        // The decode reservation is a real byte budget the engine enforces.
+        assert!(plan.decode_budget_bytes >= 128 * 1024 * 1024);
+        assert!(plan.decode_budget_bytes <= 1024 * 1024 * 1024);
+        // The held set fits the budget after output + decode (above the floor).
         if plan.strip_rows > 8 {
             assert!(
-                plan.breakdown.estimated_total_gb <= input.budget_gb * 1.1,
-                "estimated {:.1} GB exceeds budget {:.1} GB",
+                plan.breakdown.estimated_total_gb <= input.budget_gb * 1.05,
+                "planned {:.1} GB exceeds budget {:.1} GB",
                 plan.breakdown.estimated_total_gb,
                 input.budget_gb
             );
@@ -391,7 +350,7 @@ mod tests {
     }
 
     #[test]
-    fn band_chunk_is_clamped_and_scales_decode() {
+    fn band_chunk_is_clamped_and_shrinks_held_strip() {
         let mut input = StripPlanInput {
             catalog: StacCatalog::PlanetaryComputer,
             n_bands: 4,
@@ -399,26 +358,47 @@ mod tests {
             out_rows: 1_000,
             out_cols: 1_000,
             band_chunk_size: 99,
-            strip_rows_cfg: 128,
-            budget_gb: 16.0,
+            strip_rows_cfg: 512,
+            budget_gb: 2.0,
         };
         let plan_big = plan_strips(&input);
         assert_eq!(plan_big.band_chunk, 4, "K clamps to n_bands");
         input.band_chunk_size = 1;
         let plan_small = plan_strips(&input);
+        // More bands per chunk = a larger held set per row, so under budget
+        // pressure the strip height must shrink (not exceed) vs K=1.
         assert!(
-            plan_big.breakdown.decode_gb > plan_small.breakdown.decode_gb,
-            "concurrent decode must scale with K"
+            plan_big.strip_rows <= plan_small.strip_rows,
+            "larger band chunk should not give taller strips under budget pressure"
         );
     }
 
     #[test]
-    fn catalog_profiles_differ() {
-        let es = budget_profile(&StacCatalog::EarthSearch);
-        let pc = budget_profile(&StacCatalog::PlanetaryComputer);
-        assert!(es.band_inflation > pc.band_inflation);
-        assert!(es.tile_internal_bytes > pc.tile_internal_bytes);
-        assert!(pc.tile_concurrency > es.tile_concurrency);
+    fn nominal_tile_size_differs_by_catalog() {
+        assert_eq!(
+            nominal_tile_bytes(&StacCatalog::PlanetaryComputer),
+            512 * 512 * 8
+        );
+        assert_eq!(
+            nominal_tile_bytes(&StacCatalog::EarthSearch),
+            1024 * 1024 * 8
+        );
+    }
+
+    #[test]
+    fn decode_budget_reserved_within_bounds() {
+        let plan = plan_strips(&StripPlanInput {
+            catalog: StacCatalog::EarthSearch,
+            n_bands: 4,
+            n_scenes: 4,
+            out_rows: 4_000,
+            out_cols: 4_000,
+            band_chunk_size: 1,
+            strip_rows_cfg: 256,
+            budget_gb: 16.0,
+        });
+        assert!((128 * 1024 * 1024..=1024 * 1024 * 1024).contains(&plan.decode_budget_bytes));
+        assert_eq!(plan.tile_bytes, 1024 * 1024 * 8);
     }
 
     #[test]
