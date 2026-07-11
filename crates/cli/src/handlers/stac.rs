@@ -12,12 +12,10 @@ use surtgis_algorithms::imagery::{
 };
 use surtgis_cloud::blocking::{CogReaderBlocking, StacClientBlocking};
 use surtgis_cloud::composite::{
-    StripPlanInput, TileOutcome, classify_benign_tile_error, cog_cache_key, composite_scene_strips,
-    estimate_search_limit, mosaic_tile_rasters, overview_for_target_resolution, plan_strips,
-    retry_jitter_ms as compute_retry_jitter_ms, select_dates_by_coverage, strip_bounds,
+    cog_cache_key, overview_for_target_resolution, reproject_bbox_between_crs,
 };
 use surtgis_cloud::{
-    BBox, CloudError, CogReaderOptions, StacCatalog, StacClientOptions, StacItem, StacSearchParams,
+    BBox, CogReaderOptions, StacCatalog, StacClientOptions, StacItem, StacSearchParams,
 };
 
 use tracing::debug;
@@ -2607,29 +2605,6 @@ fn cog_cache_path(href: &str, bb: &BBox) -> std::path::PathBuf {
         .join(format!("{}.tif", &hex[4..]))
 }
 
-/// Try to read a cached COG tile from disk.
-fn cache_read(path: &std::path::Path) -> Option<surtgis_core::Raster<f64>> {
-    if !path.exists() {
-        return None;
-    }
-    surtgis_core::io::read_geotiff::<f64, _>(path, None).ok()
-}
-
-/// Write a raster to the cache.
-fn cache_write(path: &std::path::Path, raster: &surtgis_core::Raster<f64>) {
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let _ = surtgis_core::io::write_geotiff(
-        raster,
-        path,
-        Some(surtgis_core::io::GeoTiffOptions {
-            compression: "DEFLATE".into(),
-            ..Default::default()
-        }),
-    );
-}
-
 // ---------------------------------------------------------------------------
 // Multi-band composite: single-pass, shared STAC search + shared mask
 // ---------------------------------------------------------------------------
@@ -2702,165 +2677,6 @@ impl Drop for RssPeakTracker {
     }
 }
 
-/// Download a batch of COG tile rasters concurrently, bounded by chunking.
-///
-/// Only `tile_concurrency` tiles decode at a time, and each chunk fully
-/// drains before the next chunk starts. That way decoded f64 rasters don't
-/// accumulate across an entire scene in `JoinHandle`s.
-///
-/// - `tasks`: `(href, bbox_in_tile_crs)` per tile.
-/// - `zero_to_nan`: convert 0.0 / nodata → NaN for data bands. Masks (SCL,
-///   QA_PIXEL) keep raw categorical values.
-/// - `out_pixel_size`: target output grid resolution (same CRS units as the
-///   COG), if known. When the COG's native resolution is much finer than
-///   this (ratio > 1.5), an overview level is used instead of full
-///   resolution — avoids downloading/decoding ~(ratio²) more data than the
-///   output grid can ever use. `None` (or a ratio <= 1.5) reads at native
-///   resolution, matching the previous always-`None` behaviour.
-///
-/// # Retry policy
-///
-/// `surtgis-cloud`'s `HttpClient` (`crates/cloud/src/http.rs`) already
-/// retries retryable HTTP statuses (429/5xx) internally with its own
-/// jittered backoff. This function used to layer a *second*, independent
-/// 4-attempt retry loop with its own (broken — see below) jitter on top,
-/// classifying errors by substring-matching `.to_string()`. That meant a
-/// single stubbornly-failing tile could generate up to 4 × (http.rs's own
-/// retries) requests, and a benign 404 was distinguished from a real
-/// failure only by hoping the error message contained "404" or "NotFound".
-///
-/// This is now a single bounded retry (2 attempts total) at the CLI level:
-/// benign errors ([`classify_benign_tile_error`]) short-circuit immediately
-/// as `OutsideOrMissing`; anything else gets one retry (http.rs has already
-/// exhausted *its* retries by the time an error surfaces here), then is
-/// reported as `Failed` rather than silently swallowed.
-fn download_tile_rasters_chunked(
-    tasks: &[(String, BBox)],
-    use_cache: bool,
-    tile_concurrency: usize,
-    download_rt: &tokio::runtime::Runtime,
-    zero_to_nan: bool,
-    out_pixel_size: Option<f64>,
-) -> Vec<TileOutcome<surtgis_core::Raster<f64>>> {
-    if tasks.is_empty() {
-        return Vec::new();
-    }
-    download_rt.block_on(async {
-        use surtgis_cloud::{CogReader, CogReaderOptions};
-
-        let mut results: Vec<TileOutcome<surtgis_core::Raster<f64>>> = (0..tasks.len())
-            .map(|_| TileOutcome::OutsideOrMissing)
-            .collect();
-
-        let mut needs_download: Vec<usize> = Vec::with_capacity(tasks.len());
-        for (idx, (href, bb)) in tasks.iter().enumerate() {
-            if use_cache {
-                if let Some(r) = cache_read(&cog_cache_path(href, bb)) {
-                    results[idx] = TileOutcome::Data(r);
-                    continue;
-                }
-            }
-            needs_download.push(idx);
-        }
-
-        let chunk_size = tile_concurrency.max(1);
-        for chunk_indices in needs_download.chunks(chunk_size) {
-            let mut handles: Vec<(
-                usize,
-                tokio::task::JoinHandle<TileOutcome<surtgis_core::Raster<f64>>>,
-            )> = Vec::with_capacity(chunk_indices.len());
-            for &idx in chunk_indices {
-                let (href, bb) = tasks[idx].clone();
-                let do_cache = use_cache;
-                let zero_nan = zero_to_nan;
-                let href_cache = href.clone();
-                // Per-task salt so concurrent tiles in the same chunk don't
-                // compute identical jitter (see the jitter bug note below).
-                let task_salt = idx as u64;
-                handles.push((
-                    idx,
-                    tokio::spawn(async move {
-                        const MAX_ATTEMPTS: u8 = 2;
-                        let mut last_err: Option<String> = None;
-                        for attempt in 0..MAX_ATTEMPTS {
-                            if attempt > 0 {
-                                let base_ms: u64 = 500;
-                                let jitter_ms = compute_retry_jitter_ms(task_salt, base_ms);
-                                tokio::time::sleep(std::time::Duration::from_millis(
-                                    base_ms + jitter_ms,
-                                ))
-                                .await;
-                            }
-                            let mut reader =
-                                match CogReader::open(&href, CogReaderOptions::default()).await {
-                                    Ok(r) => r,
-                                    Err(e) => {
-                                        if let Some(outcome) = classify_benign_tile_error(&e) {
-                                            return outcome;
-                                        }
-                                        last_err = Some(e.to_string());
-                                        continue;
-                                    }
-                                };
-                            let nodata_val = reader.metadata().nodata.unwrap_or(0.0);
-
-                            // Use an overview when the output grid is
-                            // substantially coarser than the COG's native
-                            // resolution (ratio > 1.5) — see `select_overview`
-                            // fix in `crates/cloud/src/tile_index.rs`.
-                            let overview = out_pixel_size.and_then(|out_px| {
-                                let meta = reader.metadata();
-                                overview_for_target_resolution(
-                                    meta.width,
-                                    meta.height,
-                                    meta.geo_transform.pixel_width.abs(),
-                                    &reader.overviews(),
-                                    out_px,
-                                )
-                            });
-
-                            match reader.read_bbox::<f64>(&bb, overview).await {
-                                Ok(mut r) => {
-                                    if zero_nan {
-                                        for val in r.data_mut().iter_mut() {
-                                            if *val == nodata_val || *val == 0.0 {
-                                                *val = f64::NAN;
-                                            }
-                                        }
-                                    }
-                                    if do_cache {
-                                        cache_write(&cog_cache_path(&href_cache, &bb), &r);
-                                    }
-                                    return TileOutcome::Data(r);
-                                }
-                                Err(e) => {
-                                    if let Some(outcome) = classify_benign_tile_error(&e) {
-                                        return outcome;
-                                    }
-                                    last_err = Some(e.to_string());
-                                }
-                            }
-                        }
-                        let msg = last_err.unwrap_or_else(|| "unknown error".to_string());
-                        eprintln!(
-                            "    [cog] tile FAILED after {} attempts: {}",
-                            MAX_ATTEMPTS, msg
-                        );
-                        TileOutcome::Failed(msg)
-                    }),
-                ));
-            }
-            for (idx, h) in handles {
-                results[idx] = h.await.unwrap_or_else(|join_err| {
-                    TileOutcome::Failed(format!("task panicked: {join_err}"))
-                });
-            }
-        }
-
-        results
-    })
-}
-
 /// Handle multi-band `stac composite` in a single pass.
 ///
 /// Shares the STAC search and SCL mask download across all bands, avoiding
@@ -2882,7 +2698,10 @@ fn handle_multiband_composite(
     compress: bool,
     max_tile_failures: usize,
 ) -> Result<()> {
-    use surtgis_cloud::reproject;
+    use surtgis_cloud::composite::{
+        AssetResolver, CompositeEngine, CompositeProgress, CompositeSpec, MaskApplier, OutputGrid,
+        StripPlan, StripSink,
+    };
 
     let n_bands = band_names.len();
     println!(
@@ -2892,777 +2711,262 @@ fn handle_multiband_composite(
     );
 
     let profile = CollectionProfile::from_collection_name(collection)?;
-    let mask_asset_name = profile.mask_asset_name();
     eprintln!(
         "📷 Collection: {} (mask: {:?})",
         profile.description(),
-        mask_asset_name
+        profile.mask_asset_name()
     );
     if use_cache {
-        let sample_dir = cog_cache_path("sample", &BBox::new(0.0, 0.0, 1.0, 1.0));
-        eprintln!(
-            "📦 COG cache enabled: {}",
-            sample_dir
-                .parent()
-                .unwrap()
-                .parent()
-                .unwrap()
-                .parent()
-                .unwrap()
-                .display()
-        );
+        let sample = cog_cache_path("sample", &BBox::new(0.0, 0.0, 1.0, 1.0));
+        if let Some(root) = sample.ancestors().nth(3) {
+            eprintln!("📦 COG cache enabled: {}", root.display());
+        }
     }
 
-    let cat = StacCatalog::from_str_or_url(catalog);
+    // --- Build the spec ---
     let bb = parse_bbox(bbox_str)?;
-
-    // Estimate search limit (spatial_tiles × max_scenes × 5, floor 1000,
-    // cap 10000 — same as single-band path)
-    let est = estimate_search_limit(&bb, max_scenes);
-    let search_limit = est.limit;
-    eprintln!(
-        "  bbox: {:.1}°×{:.1}° (~{} spatial tiles), search_limit={}",
-        est.width_deg, est.height_deg, est.spatial_tiles, search_limit
-    );
-
-    // Page size capped per catalog (PC=1000, ES=250, custom=250)
-    let params = StacSearchParams::new()
-        .bbox(bb.min_x, bb.min_y, bb.max_x, bb.max_y)
-        .datetime(datetime)
-        .collections(&[collection])
-        .limit(search_limit.min(cat.max_page_size()));
-
-    let pb = spinner("Searching STAC catalog...");
-    let client_opts = StacClientOptions {
-        max_items: search_limit as usize, // total deseado (paginación automática)
-        ..StacClientOptions::default()
+    let align_grid = match align_to {
+        Some(path) => {
+            let reference: surtgis_core::Raster<f64> =
+                surtgis_core::io::read_geotiff(path, None)
+                    .context("Failed to read alignment reference raster")?;
+            eprintln!(
+                "  Using reference grid from --align-to: {}x{}",
+                reference.shape().1,
+                reference.shape().0
+            );
+            Some(OutputGrid::from_reference(&reference))
+        }
+        None => None,
     };
-    let client =
-        StacClientBlocking::new(cat, client_opts).context("Failed to create STAC client")?;
-    let items = client.search_all(&params).context("STAC search failed")?;
-    pb.finish_and_clear();
-
-    if items.is_empty() {
-        anyhow::bail!("No items found matching the search criteria");
-    }
-
-    // Group items by date
-    let mut by_date: BTreeMap<String, Vec<&StacItem>> = BTreeMap::new();
-    for item in &items {
-        let date = item
-            .properties
-            .datetime
-            .as_deref()
-            .unwrap_or("")
-            .get(..10)
-            .unwrap_or("unknown")
-            .to_string();
-        by_date.entry(date).or_default().push(item);
-    }
-    // Select dates by spatial coverage: prefer dates with more tiles.
-    // This ensures both S2 orbit columns are represented.
-    let date_coverage: Vec<(String, usize)> = by_date
-        .iter()
-        .map(|(d, items)| (d.clone(), items.len()))
-        .collect();
-    let dates = select_dates_by_coverage(date_coverage, max_scenes);
-
-    println!(
-        "Found {} items across {} dates (using {} dates)",
-        items.len(),
-        by_date.len(),
-        dates.len()
-    );
-
-    let start = Instant::now();
-
-    // -- Phase 1b: Resolve N band assets + 1 mask per item --
-
-    /// Per-tile: holds N band hrefs (signed + original) plus shared mask href.
-    struct MbTileRef {
-        /// (signed_href, original_href) per band, same order as band_names
-        band_hrefs: Vec<(String, String)>,
-        scl_href: String,
-        original_scl_href: String,
-        epsg: Option<u32>,
-        signed_at: Instant,
-    }
-
-    struct MbScene {
-        date: String,
-        tiles: Vec<MbTileRef>,
-        epsg: Option<u32>,
-    }
-
-    let mut scenes: Vec<MbScene> = Vec::new();
-
-    for date in &dates {
-        let group = &by_date[date];
-        let mut tiles = Vec::new();
-        let mut scene_epsg = None;
-
-        for item in group {
-            let tile_epsg = item.epsg();
-
-            // Resolve all band assets for this item
-            let mut resolved_bands: Vec<(String, String)> = Vec::with_capacity(n_bands);
-            let mut all_bands_ok = true;
-
-            for &band_name in band_names {
-                match crate::streaming::resolve_asset_key(item, band_name) {
-                    Some((_resolved_key, a)) => {
-                        let original = a.href.clone();
-                        match client
-                            .sign_asset_href(&a.href, item.collection.as_deref().unwrap_or(""))
-                        {
-                            Ok(signed) => resolved_bands.push((signed, original)),
-                            Err(_) => {
-                                all_bands_ok = false;
-                                break;
-                            }
-                        }
-                    }
-                    None => {
-                        all_bands_ok = false;
-                        break;
-                    }
-                }
-            }
-
-            if !all_bands_ok {
-                continue; // Skip item if ANY band is missing (spatial consistency)
-            }
-
-            // Resolve mask asset (shared across all bands)
-            let (scl_signed, scl_original) = mask_asset_name
-                .and_then(|mask_name| {
-                    crate::streaming::resolve_asset_key(item, mask_name).and_then(|(_, a)| {
-                        let orig = a.href.clone();
-                        client
-                            .sign_asset_href(&a.href, item.collection.as_deref().unwrap_or(""))
-                            .ok()
-                            .map(|signed| (signed, orig))
-                    })
-                })
-                .unwrap_or_default();
-
-            if scene_epsg.is_none() {
-                scene_epsg = tile_epsg;
-            }
-            tiles.push(MbTileRef {
-                band_hrefs: resolved_bands,
-                scl_href: scl_signed,
-                original_scl_href: scl_original,
-                epsg: tile_epsg,
-                signed_at: Instant::now(),
-            });
-        }
-
-        if !tiles.is_empty() {
-            scenes.push(MbScene {
-                date: date.clone(),
-                tiles,
-                epsg: scene_epsg,
-            });
-        }
-    }
-
-    if scenes.is_empty() {
-        anyhow::bail!("No valid scenes found (all bands must be present in each item)");
-    }
-
-    eprintln!(
-        "  Resolved {} scenes with {} bands each",
-        scenes.len(),
-        n_bands
-    );
-
-    // -- Phase 2: Determine output grid --
-    let first_href = &scenes[0].tiles[0].band_hrefs[0].0;
-    let opts = CogReaderOptions::default();
-    let probe_reader =
-        CogReaderBlocking::open(first_href, opts).context("Failed to probe first COG")?;
-    let probe_meta = probe_reader.metadata();
-
-    let (out_cols, out_rows, out_transform, out_crs, cog_bb);
-
-    if let Some(ref align_path) = align_to {
-        let reference: surtgis_core::Raster<f64> = surtgis_core::io::read_geotiff(align_path, None)
-            .context("Failed to read alignment reference raster")?;
-        let rgt = reference.transform();
-        let (rr, rc) = reference.shape();
-        out_rows = rr;
-        out_cols = rc;
-        out_transform = *rgt;
-        out_crs = reference.crs().cloned();
-        let min_x = rgt.origin_x;
-        let max_y = rgt.origin_y;
-        let max_x = min_x + rc as f64 * rgt.pixel_width;
-        let min_y = max_y + rr as f64 * rgt.pixel_height;
-        cog_bb = BBox::new(min_x, min_y, max_x, max_y);
-        eprintln!(
-            "  Using reference grid from --align-to: {}x{} px=({:.1},{:.1})",
-            rc, rr, rgt.pixel_width, rgt.pixel_height
-        );
-    } else {
-        let cog_bb_computed = if let Some(epsg) = scenes[0].epsg {
-            if !reproject::is_wgs84(epsg) {
-                reproject::reproject_bbox_to_cog(&bb, epsg)
-            } else {
-                bb
-            }
-        } else {
-            bb
-        };
-        cog_bb = cog_bb_computed;
-        let pixel_width = probe_meta.geo_transform.pixel_width.abs();
-        let pixel_height = probe_meta.geo_transform.pixel_height.abs();
-        out_cols = ((cog_bb.max_x - cog_bb.min_x) / pixel_width).round() as usize;
-        out_rows = ((cog_bb.max_y - cog_bb.min_y) / pixel_height).round() as usize;
-        out_transform =
-            surtgis_core::GeoTransform::new(cog_bb.min_x, cog_bb.max_y, pixel_width, -pixel_height);
-        out_crs = scenes[0].epsg.map(surtgis_core::CRS::from_epsg);
-    }
-
-    println!(
-        "Output grid: {} x {} ({:.1}M cells), {} dates, {} bands",
-        out_cols,
-        out_rows,
-        (out_cols * out_rows) as f64 / 1e6,
-        scenes.len(),
-        n_bands
-    );
-
-    // -- Phase 3: Strip-by-strip processing --
-    let n_scenes = scenes.len();
-    let out_epsg_for_tiles = out_crs.as_ref().and_then(|c| c.epsg());
-    let total_cells = out_rows * out_cols;
-
-    // Auto-cap strip_rows to keep peak RAM reasonable.
-    //
-    // With the outer-band structural refactor (v0.6.24), only ONE band's
-    // tile cache is resident at any moment, so peak RAM no longer scales
-    // with n_bands × per-tile cache. The components are:
-    //
-    //   A) Output buffers (persistent): n_bands × total_cells × 8
-    //   B) Cloud mask mosaics, one per scene held for the whole strip:
-    //        n_scenes × S × out_cols × 8 × mask_inflation
-    //   C) Per-band scene strips (just the active band):
-    //        n_scenes × S × out_cols × 8
-    //   D) Active-band mosaic working set (transient, one band mosaicked):
-    //        S × out_cols × 8 × band_inflation
-    //   E) Concurrent tile decode (fixed small):
-    //        tile_concurrency × tile_internal_bytes (only 1 asset in flight at a time)
-    //   F) Empirical calibration (BUG_RAM_V070_BUDGET_VS_REAL_MAULE_PC, v0.7.1):
-    //        - Mask cache observed footprint is ~1.8× the nominal B term, due to
-    //          strip→strip transition double-tenancy and decoded-tile staging
-    //          that are not separately budgeted.
-    //        - mimalloc retains pages between strips, adding ~10% over the live
-    //          working set on systems with abundant free RAM.
-    //      We fold both into the headroom calculation and the printed peak so
-    //      users get a realistic number instead of the optimistic steady-state.
-    //
-    // Override with `SURTGIS_RAM_BUDGET_GB` env var; default 16 GB.
     let budget_gb = std::env::var("SURTGIS_RAM_BUDGET_GB")
         .ok()
         .and_then(|s| s.parse::<f64>().ok())
         .filter(|gb| *gb > 0.5)
         .unwrap_or(16.0);
-    let plan = plan_strips(&StripPlanInput {
-        catalog: StacCatalog::from_str_or_url(catalog),
-        n_bands,
-        n_scenes,
-        out_rows,
-        out_cols,
+    let spec = CompositeSpec {
+        catalog: catalog.to_string(),
+        collection: collection.to_string(),
+        bbox_wgs84: bb,
+        band_keys: band_names.iter().map(|s| s.to_string()).collect(),
+        mask_key: profile.mask_asset_name().map(|s| s.to_string()),
+        datetime: datetime.to_string(),
+        max_scenes,
+        align_grid,
+        strip_rows: strip_rows_cfg,
         band_chunk_size,
-        strip_rows_cfg,
         budget_gb,
-    });
-    let strip_rows = plan.strip_rows;
-    let num_strips = plan.num_strips;
-    let k = plan.band_chunk;
-    let tile_concurrency = plan.tile_concurrency;
-    let bd = &plan.breakdown;
+        max_tile_failures,
+        use_cache,
+    };
 
-    if plan.capped {
-        eprintln!(
-            "⚠ strip_rows capped: {} → {} ({}): fitting within {:.1} GB budget",
-            strip_rows_cfg, strip_rows, plan.catalog_label, budget_gb,
-        );
+    // --- Injected collaborators (dependency inversion) ---
+
+    /// Resolves band/mask keys via the CLI's band-alias table.
+    struct CliResolver;
+    impl AssetResolver for CliResolver {
+        fn resolve(
+            &self,
+            item: &surtgis_cloud::stac_models::StacItem,
+            key: &str,
+        ) -> Option<String> {
+            resolve_asset_key(item, key).map(|(_, a)| a.href.clone())
+        }
     }
-    eprintln!(
-        "  RAM budget ({:.1} GB target, band_chunk_size={}) — output: {:.1} GB | mask cache: {:.1} GB | scene strips: {:.1} GB | band working: {:.1} GB | decode: {:.1} GB | allocator overhead: {:.1} GB (strip_rows={}) → ~{:.1} GB peak",
-        budget_gb,
-        k,
-        bd.output_gb,
-        bd.mask_cache_gb,
-        bd.scene_strips_gb,
-        bd.band_working_gb,
-        bd.decode_gb,
-        bd.alloc_overhead_gb,
-        strip_rows,
-        bd.estimated_total_gb,
-    );
-    eprintln!(
-        "  (outer-band, {}-band chunks; HTTP requests per scene = {}. Raise --band-chunk-size to reduce requests at higher RAM cost. Override budget with SURTGIS_RAM_BUDGET_GB=<N>)",
-        k,
-        n_bands.div_ceil(k),
-    );
-    eprintln!(
-        "  Note: actual peak may be ±10% of estimate depending on system pressure (mimalloc retains more pages with abundant free RAM; kernel throttles allocations under memory pressure).",
-    );
 
-    const TOKEN_REFRESH_THRESHOLD: Duration = Duration::from_secs(30 * 60);
-
+    /// Applies the collection's cloud-mask strategy.
+    struct CliMask(Arc<dyn CloudMaskStrategy>);
+    impl MaskApplier for CliMask {
+        fn apply(
+            &self,
+            data: &surtgis_core::Raster<f64>,
+            mask: &surtgis_core::Raster<f64>,
+        ) -> surtgis_core::Raster<f64> {
+            self.0.mask(data, mask).unwrap_or_else(|_| data.clone())
+        }
+    }
     let cloud_mask_strategy: Arc<dyn CloudMaskStrategy> = match &profile {
         CollectionProfile::Sentinel2L2A {
             cloud_mask_strategy,
-        } => cloud_mask_strategy.clone(),
-        CollectionProfile::LandsatC2L2 {
+        }
+        | CollectionProfile::LandsatC2L2 {
             cloud_mask_strategy,
         } => cloud_mask_strategy.clone(),
         CollectionProfile::Sentinel1RTC => Arc::new(NoCloudMask),
     };
+    let mask_applier = CliMask(cloud_mask_strategy);
 
-    // Shared tokio runtime for ALL downloads across ALL strips.
-    // Reusing one runtime (8 workers) instead of creating one per tile per strip
-    // eliminates ~3,200 runtime creations and preserves HTTP connection pools.
-    let download_rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(8)
-        .enable_all()
-        .build()
-        .context("Failed to create download runtime")?;
-
-    // Pre-allocate output buffers (one per band)
-    let mut band_buffers: Vec<Vec<f64>> =
-        (0..n_bands).map(|_| vec![f64::NAN; total_cells]).collect();
-
-    // Diagnostic: cumulative tile counter + initial RSS.
-    // Emits a `[ram]` line at every strip/phase/band-chunk transition so the
-    // owner can localise any linear RAM growth to a specific phase. The v0.6.24
-    // bug report described ~22 min stable then 1.3 GB/min linear growth; tagging
-    // transitions with RSS + tile counts lets us pinpoint where it starts.
-    let mut cumulative_tiles: usize = 0;
-    eprintln!("[ram] baseline before strip loop: RSS={} MB", read_rss_mb());
-
-    // Spawn a watchdog thread that samples RSS every 2 s so we can report the
-    // intra-chunk peak (not just the boundary RSS). Auto-stops on Drop at end
-    // of function. See BUG_RAM_V070_BUDGET_VS_REAL_MAULE_PC.md item #3.
-    let rss_peak = RssPeakTracker::start(Duration::from_secs(2));
-
-    // Target output resolution for overview selection (see `select_overview`
-    // in `crates/cloud/src/tile_index.rs`): when a COG's native resolution is
-    // much finer than the output grid (e.g. --align-to a coarse DEM), reading
-    // a reduced-resolution overview instead of full res avoids downloading
-    // and decoding far more data than the output grid can ever use.
-    let out_pixel_size = out_transform.pixel_width.abs();
-
-    // Tile-failure tracking (distinct from benign "outside bbox"/404 misses):
-    // a `Failed` tile leaves a real gap that gap-filling papers over silently
-    // unless we count and report it. See `TileOutcome`/`download_tile_rasters_chunked`.
-    let mut total_failed_tiles: usize = 0;
-    let mut failed_scene_dates: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
-    let mut last_failure_msg: Option<String> = None;
-
-    // === Strip loop ===
-    //
-    // Structural refactor (v0.6.24): outer-band loop eliminates the per-scene
-    // multi-band tile cache that dominated peak RAM in prior versions. Peak
-    // memory now scales with ONE band at a time, not n_bands together.
-    //
-    //   Phase A (per strip): Precompute cloud masks for each scene.
-    //       Masks are tiny after mosaic (~MB each) and reused across all
-    //       bands, so caching n_scenes mosaicked masks is cheap.
-    //   Phase B (per strip, per band): For each band, iterate scenes:
-    //       download band tiles → mosaic → apply cached mask → resample →
-    //       push into scene_strips. Compute median + fill + write to
-    //       output buffer. Drop scene_strips before next band.
-    //
-    // Trade: n_bands× more HTTP requests for data bands. With --cache on,
-    // these are disk reads after the first strip. Without cache, HTTP doubles
-    // but each transfer is much smaller (1 band vs 10 per tile).
-    for strip_idx in 0..num_strips {
-        let bounds = strip_bounds(
-            strip_idx,
-            strip_rows,
-            out_rows,
-            &out_transform,
-            &cog_bb,
-            100.0,
-        );
-        let (row_start, row_end, actual_rows) = (bounds.row_start, bounds.row_end, bounds.rows);
-        let strip_bb = bounds.bbox;
-        let tile_bb = bounds.padded_bbox;
-
-        print!(
-            "\r  Strip {}/{} (rows {}-{}, {} bands)...",
-            strip_idx + 1,
-            num_strips,
-            row_start,
-            row_end,
-            n_bands
-        );
-
-        let strip_ref = bounds.reference_raster(&out_transform, out_cols);
-
-        eprintln!(
-            "[ram] strip {}/{} start: RSS={} MB, tiles_cumulative={}",
-            strip_idx + 1,
-            num_strips,
-            read_rss_mb(),
-            cumulative_tiles
-        );
-
-        // --- Phase A: Precompute mosaicked cloud masks per scene ---
-        let mut scene_masks: Vec<Option<surtgis_core::Raster<f64>>> = Vec::with_capacity(n_scenes);
-        let mut phase_a_tiles = 0usize;
-
-        for scene in &mut scenes {
-            // Refresh SAS tokens if stale
-            let token_age = scene.tiles.first().map(|t| t.signed_at.elapsed());
-            if token_age
-                .map(|age| age > TOKEN_REFRESH_THRESHOLD)
-                .unwrap_or(false)
-            {
-                let age_secs = token_age.unwrap().as_secs();
-                for tile in &mut scene.tiles {
-                    for (signed, original) in &mut tile.band_hrefs {
-                        if let Ok(h) = client.sign_asset_href(original, "") {
-                            *signed = h;
-                        }
-                    }
-                    if !tile.original_scl_href.is_empty() {
-                        if let Ok(h) = client.sign_asset_href(&tile.original_scl_href, "") {
-                            tile.scl_href = h;
-                        }
-                    }
-                    tile.signed_at = Instant::now();
-                }
-                eprintln!(
-                    "    [token] Re-signed {} tiles for {} ({}s old)",
-                    scene.tiles.len(),
-                    scene.date,
-                    age_secs
-                );
-            }
-
-            // Build mask (href, bbox) tasks — one per tile that has an SCL href
-            let mask_tasks: Vec<(String, BBox)> = scene
-                .tiles
-                .iter()
-                .filter(|t| !t.scl_href.is_empty())
-                .map(|tile| {
-                    let bb = if let (Some(tepsg), Some(out_e)) = (tile.epsg, out_epsg_for_tiles) {
-                        if tepsg != out_e {
-                            reproject_bbox_between_crs(&tile_bb, out_e, tepsg)
-                        } else {
-                            tile_bb
-                        }
-                    } else {
-                        tile_bb
-                    };
-                    (tile.scl_href.clone(), bb)
-                })
+    /// Collects composited band strips into per-band output buffers.
+    struct BandBufferSink {
+        n_bands: usize,
+        buffers: Vec<Vec<f64>>,
+        cols: usize,
+    }
+    impl StripSink for BandBufferSink {
+        fn begin(&mut self, grid: &OutputGrid) -> surtgis_cloud::Result<()> {
+            self.cols = grid.cols;
+            self.buffers = (0..self.n_bands)
+                .map(|_| vec![f64::NAN; grid.cols * grid.rows])
                 .collect();
-
-            let mask_rasters = download_tile_rasters_chunked(
-                &mask_tasks,
-                use_cache,
-                tile_concurrency,
-                &download_rt,
-                /* zero_to_nan */ false,
-                Some(out_pixel_size),
-            );
-            phase_a_tiles += mask_tasks.len();
-            cumulative_tiles += mask_tasks.len();
-            let mut mask_tiles: Vec<surtgis_core::Raster<f64>> =
-                Vec::with_capacity(mask_rasters.len());
-            for outcome in mask_rasters {
-                match outcome {
-                    TileOutcome::Data(r) => mask_tiles.push(r),
-                    TileOutcome::Failed(msg) => {
-                        total_failed_tiles += 1;
-                        failed_scene_dates.insert(scene.date.clone());
-                        last_failure_msg = Some(msg);
-                    }
-                    TileOutcome::OutsideOrMissing => {}
-                }
-            }
-            scene_masks.push(mosaic_tile_rasters(mask_tiles));
+            Ok(())
         }
+        fn accept(
+            &mut self,
+            band_idx: usize,
+            row_start: usize,
+            strip: ndarray::Array2<f64>,
+        ) -> surtgis_cloud::Result<()> {
+            let buf = &mut self.buffers[band_idx];
+            let offset = row_start * self.cols;
+            if let Some(slice) = strip.as_slice() {
+                buf[offset..offset + slice.len()].copy_from_slice(slice);
+            }
+            Ok(())
+        }
+    }
+    let mut sink = BandBufferSink {
+        n_bands,
+        buffers: Vec::new(),
+        cols: 0,
+    };
 
-        eprintln!(
-            "[ram] strip {}/{} phase A masks loaded: RSS={} MB, phase_a_tiles={}, cumulative={}",
-            strip_idx + 1,
-            num_strips,
-            read_rss_mb(),
-            phase_a_tiles,
-            cumulative_tiles
-        );
-
-        // --- Phase B: Outer band-chunk loop (K bands processed per chunk) ---
-        //
-        // K bands' download tasks are concatenated into one download call so HTTP
-        // concurrency can pipeline across bands of the same scene. Results are split
-        // back out by band index before mosaicking. When K = n_bands this degenerates
-        // to the v0.6.19-style "all bands per scene" pattern but with the median/fill
-        // write happening inline per band chunk (so no per_band_tiles pile-up across
-        // the whole strip).
-        let mut chunk_start = 0usize;
-        while chunk_start < n_bands {
-            let chunk_end = (chunk_start + k).min(n_bands);
-            let chunk_bands: Vec<usize> = (chunk_start..chunk_end).collect();
-            let chunk_k = chunk_bands.len();
-
-            eprintln!(
-                "[ram] strip {}/{} chunk bands [{}..{}] start: RSS={} MB, cumulative={}",
-                strip_idx + 1,
-                num_strips,
-                chunk_start,
-                chunk_end,
-                read_rss_mb(),
-                cumulative_tiles
+    /// Bridges engine progress hooks to the CLI's existing stdout/stderr
+    /// reporting and RAM diagnostics (RSS logging, intra-strip peak tracking,
+    /// and mimalloc page reclamation at strip boundaries — allocator control
+    /// belongs to the binary, not the library).
+    struct CliProgress {
+        num_strips: usize,
+        n_bands: usize,
+        band_names: Vec<String>,
+        rss_peak: RssPeakTracker,
+    }
+    impl CompositeProgress for CliProgress {
+        fn search_done(&mut self, items: usize, dates_total: usize, dates_used: usize) {
+            println!(
+                "Found {} items across {} dates (using {} dates)",
+                items, dates_total, dates_used
             );
-
-            // K scene_strips accumulators, one per band in the chunk
-            let mut chunk_scene_strips: Vec<Vec<ndarray::Array2<f64>>> =
-                (0..chunk_k).map(|_| Vec::with_capacity(n_scenes)).collect();
-
-            for (si, scene) in scenes.iter_mut().enumerate() {
-                // Refresh tokens if stale (cheap if fresh)
-                let token_age = scene.tiles.first().map(|t| t.signed_at.elapsed());
-                if token_age
-                    .map(|age| age > TOKEN_REFRESH_THRESHOLD)
-                    .unwrap_or(false)
-                {
-                    for tile in &mut scene.tiles {
-                        for (signed, original) in &mut tile.band_hrefs {
-                            if let Ok(h) = client.sign_asset_href(original, "") {
-                                *signed = h;
-                            }
-                        }
-                        if !tile.original_scl_href.is_empty() {
-                            if let Ok(h) = client.sign_asset_href(&tile.original_scl_href, "") {
-                                tile.scl_href = h;
-                            }
-                        }
-                        tile.signed_at = Instant::now();
-                    }
-                }
-
-                // Build a flat download task list for the full chunk, plus a parallel
-                // index-into-chunk-bands vector so we can split results afterwards.
-                let mut all_tasks: Vec<(String, BBox)> = Vec::new();
-                let mut task_band_local: Vec<usize> = Vec::new();
-                for (bi_local, &bi) in chunk_bands.iter().enumerate() {
-                    for tile in &scene.tiles {
-                        let Some((signed, _)) = tile.band_hrefs.get(bi) else {
-                            continue;
-                        };
-                        if signed.is_empty() {
-                            continue;
-                        }
-                        let bb = if let (Some(tepsg), Some(out_e)) = (tile.epsg, out_epsg_for_tiles)
-                        {
-                            if tepsg != out_e {
-                                reproject_bbox_between_crs(&tile_bb, out_e, tepsg)
-                            } else {
-                                tile_bb
-                            }
-                        } else {
-                            tile_bb
-                        };
-                        all_tasks.push((signed.clone(), bb));
-                        task_band_local.push(bi_local);
-                    }
-                }
-
-                let all_rasters = download_tile_rasters_chunked(
-                    &all_tasks,
-                    use_cache,
-                    tile_concurrency,
-                    &download_rt,
-                    /* zero_to_nan */ true,
-                    Some(out_pixel_size),
+        }
+        fn scenes_resolved(&mut self, n_scenes: usize, n_bands: usize) {
+            eprintln!("  Resolved {} scenes with {} bands each", n_scenes, n_bands);
+        }
+        fn grid_ready(&mut self, grid: &OutputGrid, n_scenes: usize) {
+            println!(
+                "Output grid: {} x {} ({:.1}M cells), {} dates, {} bands",
+                grid.cols,
+                grid.rows,
+                (grid.cols * grid.rows) as f64 / 1e6,
+                n_scenes,
+                self.n_bands
+            );
+        }
+        fn plan_ready(&mut self, plan: &StripPlan, budget_gb: f64) {
+            self.num_strips = plan.num_strips;
+            let bd = &plan.breakdown;
+            if plan.capped {
+                eprintln!(
+                    "⚠ strip_rows capped → {} ({}): fitting within {:.1} GB budget",
+                    plan.strip_rows, plan.catalog_label, budget_gb
                 );
-                cumulative_tiles += all_tasks.len();
-
-                // Split results back by band index
-                let mut per_band: Vec<Vec<surtgis_core::Raster<f64>>> =
-                    (0..chunk_k).map(|_| Vec::new()).collect();
-                for (outcome, &bi_local) in all_rasters.into_iter().zip(task_band_local.iter()) {
-                    match outcome {
-                        TileOutcome::Data(r) => per_band[bi_local].push(r),
-                        TileOutcome::Failed(msg) => {
-                            total_failed_tiles += 1;
-                            failed_scene_dates.insert(scene.date.clone());
-                            last_failure_msg = Some(msg);
-                        }
-                        TileOutcome::OutsideOrMissing => {}
-                    }
-                }
-
-                for (bi_local, data_tiles) in per_band.into_iter().enumerate() {
-                    if data_tiles.is_empty() {
-                        continue;
-                    }
-                    let data_m = match mosaic_tile_rasters(data_tiles) {
-                        Some(m) => m,
-                        None => continue,
-                    };
-                    let clean = if let Some(ref scl) = scene_masks[si] {
-                        cloud_mask_strategy.mask(&data_m, scl).unwrap_or(data_m)
-                    } else {
-                        data_m
-                    };
-                    let resampled = surtgis_core::resample_to_grid(
-                        &clean,
-                        &strip_ref,
-                        surtgis_core::ResampleMethod::Bilinear,
-                    )
-                    .unwrap_or(clean);
-                    let valid = resampled.data().iter().filter(|v| v.is_finite()).count();
-                    if valid > 0 {
-                        chunk_scene_strips[bi_local].push(resampled.data().to_owned());
-                    }
-                }
-            } // end for scene
-
-            // --- Per-band median + fill + write (still inside the chunk loop) ---
-            for (bi_local, &bi) in chunk_bands.iter().enumerate() {
-                let band_name = band_names[bi];
-                let scene_strips = std::mem::take(&mut chunk_scene_strips[bi_local]);
-
-                if strip_idx == 0 && (bi == 0 || bi == n_bands - 1) {
-                    eprintln!(
-                        "  band '{}': {} / {} scenes contributed data",
-                        band_name,
-                        scene_strips.len(),
-                        n_scenes
-                    );
-                }
-
-                let strip_out = composite_scene_strips(&scene_strips, actual_rows, out_cols);
-
-                let buf = &mut band_buffers[bi];
-                let offset = row_start * out_cols;
-                if let Some(slice) = strip_out.as_slice() {
-                    buf[offset..offset + actual_rows * out_cols].copy_from_slice(slice);
-                }
-                // scene_strips for this band was already taken above and drops here
             }
-
-            let chunk_end_rss = read_rss_mb();
-            let chunk_peak = rss_peak.take_peak();
             eprintln!(
-                "[ram] strip {}/{} chunk bands [{}..{}] end: RSS={} MB, peak_intra={} MB (Δ={:+} MB), cumulative={}",
-                strip_idx + 1,
-                num_strips,
-                chunk_start,
-                chunk_end,
-                chunk_end_rss,
-                chunk_peak,
-                chunk_peak as isize - chunk_end_rss as isize,
-                cumulative_tiles,
+                "  RAM budget ({:.1} GB, band_chunk={}) — output {:.1} | mask {:.1} | scene {:.1} | band {:.1} | decode {:.1} | overhead {:.1} GB (strip_rows={}) → ~{:.1} GB peak",
+                budget_gb,
+                plan.band_chunk,
+                bd.output_gb,
+                bd.mask_cache_gb,
+                bd.scene_strips_gb,
+                bd.band_working_gb,
+                bd.decode_gb,
+                bd.alloc_overhead_gb,
+                plan.strip_rows,
+                bd.estimated_total_gb,
             );
-
-            chunk_start = chunk_end;
-            // chunk_scene_strips drops here — frees the K-band per-scene buffers
-        } // end while chunk
-
-        // Log strip completion
-        if strip_idx == 0 || strip_idx == num_strips - 1 {
             eprintln!(
-                "  Strip {}/{}: done ({} bands × {} scenes)",
-                strip_idx + 1,
-                num_strips,
-                n_bands,
-                n_scenes
+                "  (override budget with SURTGIS_RAM_BUDGET_GB=<N>; ±10% depending on system pressure)"
             );
         }
+        fn strip_started(&mut self, idx: usize, num: usize, row_start: usize, row_end: usize) {
+            print!(
+                "\r  Strip {}/{} (rows {}-{}, {} bands)...",
+                idx + 1,
+                num,
+                row_start,
+                row_end,
+                self.n_bands
+            );
+        }
+        fn strip_finished(&mut self, idx: usize, num: usize) {
+            // Force mimalloc to return idle segments to the OS at each strip
+            // boundary (BUG_RAM_V070 item #6: strip-pair peaks from retained
+            // free segments). No-op when mimalloc isn't the global allocator.
+            #[cfg(all(not(target_arch = "wasm32"), feature = "mimalloc"))]
+            {
+                // SAFETY: mi_collect is the public mimalloc API, safe from any
+                // thread when mimalloc is the global allocator.
+                unsafe { libmimalloc_sys::mi_collect(true) };
+            }
+            eprintln!(
+                "[ram] strip {}/{} finished: RSS={} MB",
+                idx + 1,
+                num,
+                read_rss_mb()
+            );
+        }
+        fn band_contribution(&mut self, band_idx: usize, contributed: usize, total: usize) {
+            if band_idx == 0 || band_idx == self.n_bands - 1 {
+                let name = self
+                    .band_names
+                    .get(band_idx)
+                    .map(|s| s.as_str())
+                    .unwrap_or("?");
+                eprintln!(
+                    "  band '{}': {} / {} scenes contributed data",
+                    name, contributed, total
+                );
+            }
+        }
+        fn ram_checkpoint(&mut self, label: &str) {
+            let peak = self.rss_peak.take_peak();
+            eprintln!(
+                "[ram] {}: RSS={} MB, peak_intra={} MB",
+                label,
+                read_rss_mb(),
+                peak
+            );
+        }
+        fn tile_failed(&mut self, msg: &str) {
+            eprintln!("    [cog] tile FAILED after retries: {}", msg);
+        }
+    }
+    let mut progress = CliProgress {
+        num_strips: 0,
+        n_bands,
+        band_names: band_names.iter().map(|s| s.to_string()).collect(),
+        rss_peak: RssPeakTracker::start(Duration::from_secs(2)),
+    };
 
-        // Explicit teardown of the per-strip mask cache so we can observe its
-        // contribution to the strip→strip transition delta. Without this
-        // explicit drop the mask cache lingers until the loop body's closing
-        // brace and the "after Phase A masks loaded" log line of the next
-        // strip captures the combined teardown+load behaviour, making it hard
-        // to tell which phase moved the RSS.
-        let rss_before_teardown = read_rss_mb();
-        drop(scene_masks);
-        let rss_after_teardown = read_rss_mb();
+    // --- Run the engine ---
+    let start = Instant::now();
+    eprintln!("[ram] baseline before composite: RSS={} MB", read_rss_mb());
+    let mut engine = CompositeEngine::new(spec).context("Failed to create composite engine")?;
+    let report = engine
+        .run(&CliResolver, &mask_applier, &mut sink, &mut progress)
+        .context("Composite run failed")?;
+    println!(); // newline after the \r strip progress
+
+    if report.failed_tiles > 0 {
         eprintln!(
-            "[ram] strip {}/{} phase A teardown: RSS={} MB → {} MB (Δ={:+} MB)",
-            strip_idx + 1,
-            num_strips,
-            rss_before_teardown,
-            rss_after_teardown,
-            rss_after_teardown as isize - rss_before_teardown as isize,
-        );
-
-        // Force mimalloc to return idle segments to the OS. Without this,
-        // pages free'd by the drop() above sit in mimalloc's per-thread free
-        // list and are not visible to /proc/self/status as freed RSS until
-        // the next decay tick OR until a large new allocation in the next
-        // strip triggers cleanup. The postdoc observed a strip-pair pattern
-        // (BUG_RAM_V070 item #6) where even-numbered strips peaked +2.5 GB
-        // higher than odd strips because the previous strip's pages were
-        // still retained as free segments. Forcing mi_collect on each strip
-        // boundary makes the steady-state per-strip baseline reset cleanly.
-        //
-        // Cost: the next strip's Phase A re-allocates from OS rather than
-        // reusing warm mimalloc segments. On a multi-hour-per-strip workload
-        // this overhead is negligible compared to the peak-RAM benefit.
-        // Only meaningful when mimalloc is the global allocator; with the
-        // feature off (e.g. no-cc / musl-static builds) the system allocator
-        // has no equivalent and this strip-boundary cleanup is skipped.
-        #[cfg(all(not(target_arch = "wasm32"), feature = "mimalloc"))]
-        {
-            // SAFETY: mi_collect is the public mimalloc API and is safe to
-            // call from any thread when mimalloc is the global allocator.
-            unsafe { libmimalloc_sys::mi_collect(true) };
-            let rss_after_collect = read_rss_mb();
-            eprintln!(
-                "[ram] strip {}/{} mi_collect(true): RSS={} MB → {} MB (Δ={:+} MB)",
-                strip_idx + 1,
-                num_strips,
-                rss_after_teardown,
-                rss_after_collect,
-                rss_after_collect as isize - rss_after_teardown as isize,
-            );
-        }
-
-        // Abort early if tile failures (real errors, not benign bbox/404
-        // misses — see `TileOutcome`) exceed the configured threshold. Checked
-        // per-strip so a systemic outage (e.g. the catalog is down) doesn't
-        // burn through the whole composite before the user finds out.
-        if max_tile_failures > 0 && total_failed_tiles > max_tile_failures {
-            println!();
-            anyhow::bail!(
-                "Aborting composite: {} tiles failed after retries (> --max-tile-failures={}), \
-                 {} scenes affected. Partial output was NOT written. Last error: {}",
-                total_failed_tiles,
-                max_tile_failures,
-                failed_scene_dates.len(),
-                last_failure_msg.as_deref().unwrap_or("(none)")
-            );
-        }
-    } // end for strip
-
-    println!(); // newline after \r progress
-
-    if total_failed_tiles > 0 {
-        eprintln!(
-            "⚠ {} tiles failed after retries ({} scenes affected); output quality may be \
-             degraded in those regions (gap-filled from neighbouring pixels/scenes instead \
-             of real data). Last error: {}",
-            total_failed_tiles,
-            failed_scene_dates.len(),
-            last_failure_msg.as_deref().unwrap_or("(none)")
+            "⚠ {} tiles failed after retries ({} scenes affected); those regions were \
+             gap-filled from neighbouring pixels/scenes. Last error: {}",
+            report.failed_tiles,
+            report.failed_dates,
+            report.last_error.as_deref().unwrap_or("(none)")
         );
     }
 
-    // -- Phase 4: Write N output files --
+    // --- Write N output GeoTIFFs from the collected band buffers ---
+    let grid = &report.grid;
     let stem = output.file_stem().unwrap_or_default().to_string_lossy();
     let use_asset_naming = naming.eq_ignore_ascii_case("asset");
     let opts = if compress {
@@ -3676,17 +2980,15 @@ fn handle_multiband_composite(
 
     for (bi, band_name) in band_names.iter().enumerate() {
         let band_path = if use_asset_naming {
-            // --naming=asset → {dir}/{band}.tif
             output.with_file_name(format!("{}.tif", band_name))
         } else {
-            // --naming=prefix (default) → {dir}/{stem}_{band}.tif
             output.with_file_name(format!("{}_{}.tif", stem, band_name))
         };
-        let buffer = std::mem::take(&mut band_buffers[bi]);
-        let mut raster = surtgis_core::Raster::from_vec(buffer, out_rows, out_cols)
+        let buffer = std::mem::take(&mut sink.buffers[bi]);
+        let mut raster = surtgis_core::Raster::from_vec(buffer, grid.rows, grid.cols)
             .context("Failed to create raster from buffer")?;
-        raster.set_transform(out_transform);
-        raster.set_crs(out_crs.clone());
+        raster.set_transform(grid.transform);
+        raster.set_crs(grid.crs.clone());
         surtgis_core::io::write_geotiff(&raster, &band_path, opts.clone())
             .with_context(|| format!("Failed to write {}", band_path.display()))?;
         let file_size = std::fs::metadata(&band_path).map(|m| m.len()).unwrap_or(0);
@@ -3698,17 +3000,15 @@ fn handle_multiband_composite(
         );
     }
 
-    let elapsed = start.elapsed();
-    let total_tiles: usize = scenes.iter().map(|s| s.tiles.len()).sum();
     println!(
         "Multi-band composite: {} dates × {} bands ({} tiles) → {} × {} ({:.1}M cells) in {:.1?}",
-        scenes.len(),
+        report.scenes_used,
         n_bands,
-        total_tiles,
-        out_cols,
-        out_rows,
-        (out_cols * out_rows) as f64 / 1e6,
-        elapsed
+        report.total_tiles,
+        grid.cols,
+        grid.rows,
+        (grid.cols * grid.rows) as f64 / 1e6,
+        start.elapsed()
     );
 
     Ok(())
@@ -4180,51 +3480,6 @@ mod tests {
 }
 
 // ─── Zarr time step parsing ─────────────────────────────────────────
-
-/// Reproject a bbox from one CRS to another using proj4rs.
-/// Falls back to identity if proj4rs is unavailable or CRS unknown.
-fn reproject_bbox_between_crs(
-    bbox: &surtgis_cloud::BBox,
-    from_epsg: u32,
-    to_epsg: u32,
-) -> surtgis_cloud::BBox {
-    #[cfg(feature = "projections")]
-    {
-        use proj4rs::Proj;
-        if let (Ok(src), Ok(dst)) = (
-            Proj::from_epsg_code(from_epsg as u16),
-            Proj::from_epsg_code(to_epsg as u16),
-        ) {
-            let corners = [
-                (bbox.min_x, bbox.min_y),
-                (bbox.min_x, bbox.max_y),
-                (bbox.max_x, bbox.min_y),
-                (bbox.max_x, bbox.max_y),
-            ];
-            let mut min_x = f64::MAX;
-            let mut min_y = f64::MAX;
-            let mut max_x = f64::MIN;
-            let mut max_y = f64::MIN;
-
-            for &(x, y) in &corners {
-                // proj4rs: projected CRS → projected CRS goes through internal geographic step
-                if let Ok((rx, ry)) = proj4rs::adaptors::transform_xy(&src, &dst, x, y) {
-                    min_x = min_x.min(rx);
-                    min_y = min_y.min(ry);
-                    max_x = max_x.max(rx);
-                    max_y = max_y.max(ry);
-                }
-            }
-
-            if min_x < max_x && min_y < max_y {
-                return surtgis_cloud::BBox::new(min_x, min_y, max_x, max_y);
-            }
-        }
-    }
-    // Fallback: try native UTM reprojection (WGS84 intermediary)
-    let wgs84 = surtgis_cloud::reproject::reproject_bbox_from_utm(bbox, from_epsg);
-    surtgis_cloud::reproject::reproject_bbox_to_cog(&wgs84, to_epsg)
-}
 
 #[cfg(feature = "zarr")]
 fn parse_time_step(s: &str) -> Result<surtgis_cloud::TimeReduction> {
