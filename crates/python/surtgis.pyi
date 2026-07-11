@@ -84,6 +84,33 @@ bits_per_sample.
     """
     ...
 
+def composite(catalog: str, collection: str, bbox: tuple[float, float, float, float], bands: list[str], datetime: str, max_scenes: int = 6, band_chunk_size: int = 1, budget_gb: float = 16.0, max_tile_failures: int = 0, use_cache: bool = False) -> tuple[dict[str, typing.Any], dict[str, typing.Any]]:
+    """Build a cloud-free multiband composite from a STAC catalog.
+
+Searches the catalog, downloads and mosaics each band across the selected
+scene dates, applies cloud masking, and reduces per pixel to a median
+composite (with coverage- and neighbour-based gap filling). Experimental
+(mirrors `surtgis stac composite`); the API may change in a minor release.
+
+Args:
+    catalog: "pc", "es", or a full STAC API URL.
+    collection: collection id (e.g. "sentinel-2-l2a").
+    bbox: (min_x, min_y, max_x, max_y) in WGS84 degrees.
+    bands: band/asset keys to composite (e.g. ["red", "nir"]).
+    datetime: STAC datetime query (instant or "start/end").
+    max_scenes: max scene dates to composite (default 6).
+    band_chunk_size: bands downloaded together per chunk (default 1 = min RAM).
+    budget_gb: RAM budget for strip sizing (default 16.0).
+    max_tile_failures: abort after this many failed tiles (0 = never).
+    use_cache: cache decoded tiles on disk between strips (default False).
+
+Returns:
+    (bands, meta): `bands` is a dict of band key → 2D float64 numpy array
+    (NaN = no data); `meta` is a dict with `transform` (GDAL 6-tuple),
+    `crs`, `width`, `height` shared by every band.
+    """
+    ...
+
 def concavity_compute(stream: npt.NDArray[np.uint8], flow_dir: npt.NDArray[np.uint8], flow_acc: npt.NDArray[np.float64], dem: npt.NDArray[np.float64], basins: npt.NDArray[np.float64], cell_size: float = 1.0) -> list[dict[str, typing.Any]]:
     """Best-fit channel concavity θ per basin (χ–elevation collinearity).
 
@@ -868,4 +895,5 @@ cells come back NaN) — the same convention as watershed/basin IDs
 elsewhere in this crate. Use positive zone ids only.
     """
     ...
+# Generated 125 function stubs
 

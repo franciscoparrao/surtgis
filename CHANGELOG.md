@@ -40,6 +40,20 @@ call them out under a `Breaking` heading when they happen.
   `stac.rs`); output is bit-for-bit unchanged, verified end-to-end against
   Planetary Computer. This unblocks driving composites from Python. New
   `CloudError::Composite` variant for engine-level failures.
+- **`surtgis.composite(...)` Python binding** (extra `cloud`) — audit R8,
+  step 3 of 3, and the payoff: STAC multiband composites can now be built
+  directly from Python, returning a dict of band → 2D `float64` numpy array
+  (NaN = no data) plus a georeferencing `meta` dict (GDAL transform + CRS),
+  ready for `rasterio`. Wraps the `CompositeEngine` with a numpy-collecting
+  sink and the collection's cloud-mask strategy; cloud masking and band
+  aliasing (`"red"` → `B04`/`SR_B4`) are handled automatically. Output
+  matches `surtgis stac composite` bit-for-bit (verified end-to-end against
+  Planetary Computer). Also adds `surtgis_cloud::composite::DefaultAssetResolver`
+  (the shared band-alias table) and `Default` for the `StacItem` /
+  `StacItemProperties` / `StacAsset` models. The serializable
+  checkpoint/resume manifest that R8 also envisioned is deferred to land
+  with R9's streaming sink, where a persistent output medium makes resume
+  meaningful (resuming into in-memory buffers saves nothing).
 
 ## [0.18.0] - 2026-07-10
 

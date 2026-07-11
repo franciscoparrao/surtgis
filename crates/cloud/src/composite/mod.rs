@@ -19,6 +19,8 @@ mod tiles;
 #[cfg(feature = "native")]
 mod engine;
 #[cfg(feature = "native")]
+mod resolver;
+#[cfg(feature = "native")]
 mod spec;
 
 pub use plan::{
@@ -40,5 +42,7 @@ pub use engine::{
     AssetResolver, CompositeEngine, CompositeProgress, CompositeReport, MaskApplier, NoProgress,
     StripSink,
 };
+#[cfg(feature = "native")]
+pub use resolver::DefaultAssetResolver;
 #[cfg(feature = "native")]
 pub use spec::{CompositeSpec, OutputGrid};

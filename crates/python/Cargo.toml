@@ -28,7 +28,7 @@ surtgis-algorithms = { version = "0.18", path = "../algorithms", default-feature
 ] }
 surtgis-relief = { version = "0.18", path = "../relief" }
 surtgis-colormap = { version = "0.18", path = "../colormap" }
-surtgis-cloud = { version = "0.18", path = "../cloud", features = ["native"], optional = true }
+surtgis-cloud = { version = "0.18", path = "../cloud", features = ["native", "unstable"], optional = true }
 # abi3-py39: build one stable-ABI wheel per platform instead of one per
 # CPython minor version. Matches `requires-python = ">=3.9"` in
 # pyproject.toml. Collapses the release matrix from 25 wheels to 5 (see
