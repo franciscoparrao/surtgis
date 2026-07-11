@@ -17,6 +17,8 @@ mod reduce;
 mod tiles;
 
 #[cfg(feature = "native")]
+mod budget;
+#[cfg(feature = "native")]
 mod engine;
 #[cfg(feature = "native")]
 mod resolver;
@@ -37,6 +39,8 @@ pub use tiles::{
     overview_for_target_resolution, reproject_bbox_between_crs, retry_jitter_ms, unify_tile_crs,
 };
 
+#[cfg(feature = "native")]
+pub use budget::{BudgetPermit, MemoryBudget, TrackedRaster, raster_bytes};
 #[cfg(feature = "native")]
 pub use engine::{
     AssetResolver, CompositeEngine, CompositeProgress, CompositeReport, MaskApplier, NoProgress,
