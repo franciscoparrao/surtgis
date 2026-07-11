@@ -138,6 +138,12 @@ pub enum CloudError {
         /// The range of times actually available.
         available: String,
     },
+
+    /// A composite run could not proceed (no items/scenes matched, all
+    /// bands missing, or the tile-failure threshold was exceeded).
+    #[cfg(feature = "unstable")]
+    #[error("composite error: {0}")]
+    Composite(String),
 }
 
 impl CloudError {

@@ -25,6 +25,21 @@ call them out under a `Breaking` heading when they happen.
   behaviour is unchanged, verified end-to-end against Planetary Computer.
   Later R8 steps add a `CompositeEngine`/`StripSink` orchestrator and a
   serializable checkpoint/resume manifest on top.
+- **`surtgis_cloud::composite::CompositeEngine`** (feature `unstable`) —
+  audit R8, step 2 of 3. The whole composite pipeline (STAC search → asset
+  resolution → output-grid determination → strip loop → sink) now lives in
+  the library, driven by a declarative `CompositeSpec`. Everything the
+  engine can't own is injected as a trait, keeping `surtgis-cloud`
+  decoupled from `surtgis-algorithms`, the CLI and the output medium:
+  `AssetResolver` (band→href), `MaskApplier` (cloud masking),
+  `StripSink` (where composited strips go — in-memory buffers today,
+  streaming COG tiles in a later step) and `CompositeProgress` (progress
+  and RAM-diagnostic hooks; the caller owns allocator control such as
+  `mi_collect`). The RAM-critical strip structure is preserved verbatim.
+  The CLI `stac composite` handler is now a thin caller (−970 lines net in
+  `stac.rs`); output is bit-for-bit unchanged, verified end-to-end against
+  Planetary Computer. This unblocks driving composites from Python. New
+  `CloudError::Composite` variant for engine-level failures.
 
 ## [0.18.0] - 2026-07-10
 

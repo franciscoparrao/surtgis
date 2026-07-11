@@ -144,6 +144,45 @@ pub fn cog_cache_key(href: &str, bb: &BBox) -> String {
     format!("{:016x}", hasher.finish())
 }
 
+/// Reproject a bbox between two projected CRSs.
+///
+/// With the `projections` feature, uses proj4rs corner-transform (accurate
+/// across UTM zones). Otherwise falls back to a WGS84 round-trip via the
+/// native UTM helpers. Used to translate an output-grid strip bbox into the
+/// CRS of a tile that lives in a different UTM zone.
+pub fn reproject_bbox_between_crs(bbox: &BBox, from_epsg: u32, to_epsg: u32) -> BBox {
+    #[cfg(feature = "projections")]
+    {
+        use proj4rs::Proj;
+        if let (Ok(src), Ok(dst)) = (
+            Proj::from_epsg_code(from_epsg as u16),
+            Proj::from_epsg_code(to_epsg as u16),
+        ) {
+            let corners = [
+                (bbox.min_x, bbox.min_y),
+                (bbox.min_x, bbox.max_y),
+                (bbox.max_x, bbox.min_y),
+                (bbox.max_x, bbox.max_y),
+            ];
+            let (mut min_x, mut min_y) = (f64::MAX, f64::MAX);
+            let (mut max_x, mut max_y) = (f64::MIN, f64::MIN);
+            for &(x, y) in &corners {
+                if let Ok((rx, ry)) = proj4rs::adaptors::transform_xy(&src, &dst, x, y) {
+                    min_x = min_x.min(rx);
+                    min_y = min_y.min(ry);
+                    max_x = max_x.max(rx);
+                    max_y = max_y.max(ry);
+                }
+            }
+            if min_x < max_x && min_y < max_y {
+                return BBox::new(min_x, min_y, max_x, max_y);
+            }
+        }
+    }
+    let wgs84 = crate::reproject::reproject_bbox_from_utm(bbox, from_epsg);
+    crate::reproject::reproject_bbox_to_cog(&wgs84, to_epsg)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

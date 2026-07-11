@@ -16,6 +16,11 @@ mod plan;
 mod reduce;
 mod tiles;
 
+#[cfg(feature = "native")]
+mod engine;
+#[cfg(feature = "native")]
+mod spec;
+
 pub use plan::{
     ALLOC_OVERHEAD_FRAC, BudgetBreakdown, BudgetProfile, MASK_INFLATION_CALIB, SearchEstimate,
     StripBounds, StripPlan, StripPlanInput, budget_profile, estimate_search_limit, plan_strips,
@@ -27,5 +32,13 @@ pub use reduce::{
 };
 pub use tiles::{
     TileOutcome, classify_benign_tile_error, cog_cache_key, mosaic_tile_rasters,
-    overview_for_target_resolution, retry_jitter_ms, unify_tile_crs,
+    overview_for_target_resolution, reproject_bbox_between_crs, retry_jitter_ms, unify_tile_crs,
 };
+
+#[cfg(feature = "native")]
+pub use engine::{
+    AssetResolver, CompositeEngine, CompositeProgress, CompositeReport, MaskApplier, NoProgress,
+    StripSink,
+};
+#[cfg(feature = "native")]
+pub use spec::{CompositeSpec, OutputGrid};
