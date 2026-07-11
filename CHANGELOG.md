@@ -9,6 +9,24 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+### Changed
+
+- **Composite RAM is now bounded by the byte budget, and the calibrated
+  strip-sizing model is retired** (feature `unstable`) — audit R9, step 2
+  of 3. Concurrent tile decode is bounded at runtime by a
+  [`MemoryBudget`](crate) (each tile acquires its nominal decoded size
+  before opening the COG and holds it through decode; all tiles spawn at
+  once, so the number decoding concurrently emerges from the budget and the
+  fixed-size chunk-drain "convoy" is gone). `plan_strips` now sizes strips
+  from honest byte accounting — the empirical constants `MASK_INFLATION_CALIB`
+  (1.8), `ALLOC_OVERHEAD_FRAC` (0.10), the per-catalog band/mask inflation
+  factors and the fixed `tile_concurrency` are deleted; strip height follows
+  the true held working set (one mask mosaic + `k` band strips per scene at
+  `out_cols × 8` bytes/row) and the byte budget is the runtime backstop, so
+  RAM can't overshoot however wrong the estimate is. Output is bit-for-bit
+  unchanged (verified end-to-end against Planetary Computer); the decode
+  budget scales with the RAM budget (498 MB at 2 GB, 1074 MB at 16 GB).
+
 ### Added
 
 - **`surtgis_cloud::composite::MemoryBudget` / `TrackedRaster`** (feature
