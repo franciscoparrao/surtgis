@@ -160,7 +160,7 @@ impl StacItemCollection {
 }
 
 /// A single STAC Item (GeoJSON Feature).
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct StacItem {
     /// GeoJSON type discriminator (`"Feature"`).
     #[serde(rename = "type")]
@@ -269,7 +269,7 @@ pub enum AssetFormat {
 }
 
 /// STAC Item properties.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct StacItemProperties {
     /// ISO 8601 datetime.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -297,7 +297,7 @@ pub struct StacItemProperties {
 }
 
 /// A single STAC Asset (file reference).
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct StacAsset {
     /// URL to the asset file.
     pub href: String,

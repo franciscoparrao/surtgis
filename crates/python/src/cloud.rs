@@ -251,6 +251,171 @@ fn stac_sign_href(py: Python<'_>, href: &str, collection: &str, catalog: &str) -
     .map_err(err)
 }
 
+// ── STAC multiband composite ────────────────────────────────────────────
+
+use std::sync::Arc;
+use surtgis_algorithms::imagery::{CloudMaskStrategy, LandsatQaMask, NoCloudMask, S2SclMask};
+use surtgis_cloud::composite::{
+    CompositeEngine, CompositeSpec, DefaultAssetResolver, MaskApplier, NoProgress, OutputGrid,
+    StripSink,
+};
+
+/// Wraps a cloud-mask strategy as a composite `MaskApplier`.
+struct StrategyMask(Arc<dyn CloudMaskStrategy>);
+impl MaskApplier for StrategyMask {
+    fn apply(&self, data: &Raster<f64>, mask: &Raster<f64>) -> Raster<f64> {
+        self.0.mask(data, mask).unwrap_or_else(|_| data.clone())
+    }
+}
+
+/// Collects composited band strips into per-band row-major buffers.
+struct BufferSink {
+    n_bands: usize,
+    cols: usize,
+    buffers: Vec<Vec<f64>>,
+}
+impl StripSink for BufferSink {
+    fn begin(&mut self, grid: &OutputGrid) -> surtgis_cloud::Result<()> {
+        self.cols = grid.cols;
+        self.buffers = (0..self.n_bands)
+            .map(|_| vec![f64::NAN; grid.cols * grid.rows])
+            .collect();
+        Ok(())
+    }
+    fn accept(
+        &mut self,
+        band_idx: usize,
+        row_start: usize,
+        strip: Array2<f64>,
+    ) -> surtgis_cloud::Result<()> {
+        let buf = &mut self.buffers[band_idx];
+        let offset = row_start * self.cols;
+        if let Some(slice) = strip.as_slice() {
+            buf[offset..offset + slice.len()].copy_from_slice(slice);
+        }
+        Ok(())
+    }
+}
+
+/// Map a collection id to (mask asset key, cloud-mask strategy), mirroring the
+/// CLI's `CollectionProfile`. Unknown collections get no masking.
+fn mask_for_collection(collection: &str) -> (Option<String>, Arc<dyn CloudMaskStrategy>) {
+    match collection {
+        "sentinel-2-l2a" => (Some("scl".into()), Arc::new(S2SclMask::new())),
+        "landsat-c2-l2" => (Some("QA_PIXEL".into()), Arc::new(LandsatQaMask::new())),
+        _ => (None, Arc::new(NoCloudMask)),
+    }
+}
+
+/// Build a cloud-free multiband composite from a STAC catalog.
+///
+/// Searches the catalog, downloads and mosaics each band across the selected
+/// scene dates, applies cloud masking, and reduces per pixel to a median
+/// composite (with coverage- and neighbour-based gap filling). Experimental
+/// (mirrors `surtgis stac composite`); the API may change in a minor release.
+///
+/// Args:
+///     catalog: "pc", "es", or a full STAC API URL.
+///     collection: collection id (e.g. "sentinel-2-l2a").
+///     bbox: (min_x, min_y, max_x, max_y) in WGS84 degrees.
+///     bands: band/asset keys to composite (e.g. ["red", "nir"]).
+///     datetime: STAC datetime query (instant or "start/end").
+///     max_scenes: max scene dates to composite (default 6).
+///     band_chunk_size: bands downloaded together per chunk (default 1 = min RAM).
+///     budget_gb: RAM budget for strip sizing (default 16.0).
+///     max_tile_failures: abort after this many failed tiles (0 = never).
+///     use_cache: cache decoded tiles on disk between strips (default False).
+///
+/// Returns:
+///     (bands, meta): `bands` is a dict of band key → 2D float64 numpy array
+///     (NaN = no data); `meta` is a dict with `transform` (GDAL 6-tuple),
+///     `crs`, `width`, `height` shared by every band.
+#[pyfunction]
+#[pyo3(signature = (
+    catalog, collection, bbox, bands, datetime, max_scenes=6,
+    band_chunk_size=1, budget_gb=16.0, max_tile_failures=0, use_cache=false
+))]
+#[allow(clippy::too_many_arguments)]
+fn composite<'py>(
+    py: Python<'py>,
+    catalog: &str,
+    collection: &str,
+    bbox: (f64, f64, f64, f64),
+    bands: Vec<String>,
+    datetime: &str,
+    max_scenes: usize,
+    band_chunk_size: usize,
+    budget_gb: f64,
+    max_tile_failures: usize,
+    use_cache: bool,
+) -> PyResult<(Bound<'py, PyDict>, Bound<'py, PyDict>)> {
+    if bands.is_empty() {
+        return Err(PyValueError::new_err("bands must not be empty"));
+    }
+    let (mask_key, strategy) = mask_for_collection(collection);
+    let spec = CompositeSpec {
+        catalog: catalog.to_string(),
+        collection: collection.to_string(),
+        bbox_wgs84: BBox::new(bbox.0, bbox.1, bbox.2, bbox.3),
+        band_keys: bands.clone(),
+        mask_key,
+        datetime: datetime.to_string(),
+        max_scenes,
+        align_grid: None,
+        strip_rows: 512,
+        band_chunk_size,
+        budget_gb,
+        max_tile_failures,
+        use_cache,
+    };
+
+    let n_bands = bands.len();
+    let mask = StrategyMask(strategy);
+    let mut sink = BufferSink {
+        n_bands,
+        cols: 0,
+        buffers: Vec::new(),
+    };
+
+    let report = py
+        .allow_threads(|| {
+            let mut engine = CompositeEngine::new(spec)?;
+            engine
+                .run(&DefaultAssetResolver, &mask, &mut sink, &mut NoProgress)
+                .map(|r| r.grid)
+        })
+        .map_err(err)?;
+
+    // Assemble the per-band numpy arrays.
+    let bands_out = PyDict::new(py);
+    for (bi, name) in bands.iter().enumerate() {
+        let buf = std::mem::take(&mut sink.buffers[bi]);
+        let arr = Array2::from_shape_vec((report.rows, report.cols), buf).map_err(err)?;
+        bands_out.set_item(name, arr.into_pyarray(py))?;
+    }
+
+    let meta = PyDict::new(py);
+    let t = &report.transform;
+    meta.set_item(
+        "transform",
+        (
+            t.origin_x,
+            t.pixel_width,
+            t.row_rotation,
+            t.origin_y,
+            t.col_rotation,
+            t.pixel_height,
+        ),
+    )?;
+    match report.epsg() {
+        Some(code) => meta.set_item("crs", format!("EPSG:{code}"))?,
+        None => meta.set_item("crs", py.None())?,
+    }
+    meta.set_item("width", report.cols)?;
+    meta.set_item("height", report.rows)?;
+    Ok((bands_out, meta))
+}
+
 /// Register the cloud functions on the module.
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cog_fetch, m)?)?;
@@ -258,5 +423,6 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cog_info, m)?)?;
     m.add_function(wrap_pyfunction!(stac_search, m)?)?;
     m.add_function(wrap_pyfunction!(stac_sign_href, m)?)?;
+    m.add_function(wrap_pyfunction!(composite, m)?)?;
     Ok(())
 }
