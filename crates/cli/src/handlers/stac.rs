@@ -11,6 +11,11 @@ use surtgis_algorithms::imagery::{
     CloudMaskStrategy, HlsFmask, LandsatQaMask, NoCloudMask, S2SclMask,
 };
 use surtgis_cloud::blocking::{CogReaderBlocking, StacClientBlocking};
+use surtgis_cloud::composite::{
+    StripPlanInput, TileOutcome, classify_benign_tile_error, cog_cache_key, composite_scene_strips,
+    estimate_search_limit, mosaic_tile_rasters, overview_for_target_resolution, plan_strips,
+    retry_jitter_ms as compute_retry_jitter_ms, select_dates_by_coverage, strip_bounds,
+};
 use surtgis_cloud::{
     BBox, CloudError, CogReaderOptions, StacCatalog, StacClientOptions, StacItem, StacSearchParams,
 };
@@ -2587,20 +2592,7 @@ pub fn fetch_stac_band(
 
 /// Compute a cache path for a COG tile, based on the base URL (without SAS query params) and bbox.
 fn cog_cache_path(href: &str, bb: &BBox) -> std::path::PathBuf {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    // Strip SAS query params (they change on every signing)
-    let base_url = href.split('?').next().unwrap_or(href);
-    // Include bbox in key (same COG, different strip = different cache entry)
-    let key = format!(
-        "{}__{:.2}_{:.2}_{:.2}_{:.2}",
-        base_url, bb.min_x, bb.min_y, bb.max_x, bb.max_y
-    );
-    let mut hasher = DefaultHasher::new();
-    key.hash(&mut hasher);
-    let hash = hasher.finish();
-    let hex = format!("{:016x}", hash);
+    let hex = cog_cache_key(href, bb);
 
     let cache_dir = std::env::var("XDG_CACHE_HOME")
         .map(std::path::PathBuf::from)
@@ -2708,106 +2700,6 @@ impl Drop for RssPeakTracker {
     fn drop(&mut self) {
         self.inner.stop.store(true, Ordering::Relaxed);
     }
-}
-
-/// Outcome of attempting to fetch and decode a single COG tile.
-///
-/// Distinguishes benign "nothing here" results — the tile is outside the
-/// bbox of interest, or the asset legitimately doesn't exist (404), both
-/// expected in mosaics built from irregular STAC tile grids — from a real
-/// failure that survived retries. Historically both collapsed into the same
-/// `None`, so a run of real download failures (rate limiting, transient
-/// network errors, auth issues) looked identical to "this tile just isn't
-/// part of the scene" and silently degraded the composite (gap-filled with
-/// no diagnostic). Callers should count `Failed` separately and report it.
-enum TileOutcome<T> {
-    /// Tile fetched and decoded successfully.
-    Data(T),
-    /// Expected, benign absence: bbox doesn't intersect this tile, or the
-    /// server returned 404 for the asset.
-    OutsideOrMissing,
-    /// The download failed after exhausting retries. Carries a short error
-    /// description for diagnostics.
-    Failed(String),
-}
-
-/// Compute the jitter (in ms, `< base_ms`) to add to a retry backoff.
-///
-/// Uses wall-clock nanoseconds XORed with a per-task salt (e.g. the tile's
-/// index within the current chunk) so concurrently retrying tasks disperse
-/// instead of synchronizing.
-///
-/// This replaces a bug where jitter was computed as
-/// `Instant::now().elapsed().subsec_nanos()` on an `Instant` created moments
-/// earlier on the *same* line — that elapsed duration is ~0ns essentially
-/// always, so every retrying task computed the same (zero) "jitter" and all
-/// retries after a 429 woke up in the same instant, recreating exactly the
-/// thundering-herd problem jitter exists to avoid. `SystemTime::now()` gives
-/// real wall-clock entropy that isn't tautologically zero, and XOR-ing in
-/// the task's own salt disperses same-instant wakeups across different
-/// tiles further.
-fn compute_retry_jitter_ms(task_salt: u64, base_ms: u64) -> u64 {
-    let base_ms = base_ms.max(1);
-    let now_nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.subsec_nanos() as u64)
-        .unwrap_or(0);
-    (now_nanos ^ task_salt) % base_ms
-}
-
-/// Classify a [`CloudError`] from a tile open/read as benign ("no data here")
-/// or not, matching on the *typed* error variants (see
-/// `crates/cloud/src/error.rs`) instead of substring-matching
-/// `.to_string()` output. The substring approach was fragile (tied to the
-/// exact `Display` wording) and meant a benign 404 and a real, retried-out
-/// 429/5xx were classified by parsing the same kind of string.
-///
-/// Returns `Some(TileOutcome::OutsideOrMissing)` for a benign miss, or `None`
-/// if the error is a real failure the caller should count/report (and, on
-/// the first attempt, retry once).
-fn classify_benign_tile_error<T>(e: &CloudError) -> Option<TileOutcome<T>> {
-    match e {
-        CloudError::BBoxOutside => Some(TileOutcome::OutsideOrMissing),
-        CloudError::HttpStatus { status, .. }
-            if *status == reqwest::StatusCode::NOT_FOUND.as_u16() =>
-        {
-            Some(TileOutcome::OutsideOrMissing)
-        }
-        _ => None,
-    }
-}
-
-/// Decide which overview level (if any) to read a COG at, given its own
-/// native pixel size and a target output-grid pixel size.
-///
-/// Returns `None` (meaning: read at full native resolution) unless the
-/// output grid is substantially coarser than native (`ratio =
-/// out_pixel_size / native_pixel_size > 1.5`) — reading full-res tiles just
-/// to immediately downsample them to a much coarser output grid wastes
-/// network transfer and decode time proportional to `ratio²`. When an
-/// overview is used, [`select_overview_by_ratio`] picks the *coarsest*
-/// overview whose scale still does not exceed `ratio` (see the fix to that
-/// function in `crates/cloud/src/tile_index.rs` — it used to return the
-/// first/finest qualifying overview instead, e.g. scale=2 instead of
-/// scale=8 for `ratio=8`, wasting ~4x the intended saving).
-fn overview_for_target_resolution(
-    native_width: u32,
-    native_height: u32,
-    native_pixel_size: f64,
-    overviews: &[surtgis_cloud::OverviewInfo],
-    out_pixel_size: f64,
-) -> Option<usize> {
-    if native_pixel_size <= 0.0 || out_pixel_size <= 0.0 {
-        return None;
-    }
-    let ratio = out_pixel_size / native_pixel_size;
-    if ratio <= 1.5 {
-        return None;
-    }
-    let mut ifd_dims = vec![(native_width, native_height)];
-    ifd_dims.extend(overviews.iter().map(|o| (o.width, o.height)));
-    let idx = surtgis_cloud::tile_index::select_overview_by_ratio(&ifd_dims, ratio);
-    if idx > 0 { Some(idx) } else { None }
 }
 
 /// Download a batch of COG tile rasters concurrently, bounded by chunking.
@@ -2969,43 +2861,6 @@ fn download_tile_rasters_chunked(
     })
 }
 
-/// Reproject tiles that don't match the first tile's EPSG so mosaic() can
-/// stitch them. No-op for single-tile or already-consistent sets.
-fn unify_tile_crs(tiles: &mut Vec<surtgis_core::Raster<f64>>) {
-    if tiles.len() <= 1 {
-        return;
-    }
-    let target_epsg = tiles[0].crs().and_then(|c| c.epsg());
-    if let Some(target) = target_epsg {
-        for i in 1..tiles.len() {
-            if let Some(src_epsg) = tiles[i].crs().and_then(|c| c.epsg()) {
-                if src_epsg != target {
-                    if let Some(reprojected) =
-                        surtgis_cloud::reproject::reproject_raster_utm(&tiles[i], src_epsg, target)
-                    {
-                        tiles[i] = reprojected;
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Mosaic tiles into a single raster. None if empty. Unifies CRS first.
-fn mosaic_tile_rasters(
-    mut tiles: Vec<surtgis_core::Raster<f64>>,
-) -> Option<surtgis_core::Raster<f64>> {
-    if tiles.is_empty() {
-        return None;
-    }
-    if tiles.len() == 1 {
-        return Some(tiles.into_iter().next().unwrap());
-    }
-    unify_tile_crs(&mut tiles);
-    let refs: Vec<&surtgis_core::Raster<f64>> = tiles.iter().collect();
-    surtgis_core::mosaic(&refs, None).ok()
-}
-
 /// Handle multi-band `stac composite` in a single pass.
 ///
 /// Shares the STAC search and SCL mask download across all bands, avoiding
@@ -3061,18 +2916,13 @@ fn handle_multiband_composite(
     let cat = StacCatalog::from_str_or_url(catalog);
     let bb = parse_bbox(bbox_str)?;
 
-    // Estimate search limit
-    let bbox_width_deg = (bb.max_x - bb.min_x).abs();
-    let bbox_height_deg = (bb.max_y - bb.min_y).abs();
-    let tiles_x = ((bbox_width_deg * 111.0) / 60.0).ceil().max(1.0) as usize;
-    let tiles_y = ((bbox_height_deg * 111.0) / 60.0).ceil().max(1.0) as usize;
-    let est_tiles = tiles_x * tiles_y;
-    // Need spatial_tiles × max_scenes × 5 safety margin (S2 has ~73 dates/year per tile).
-    // Floor 1000, cap 10000 — same as single-band path.
-    let search_limit = ((est_tiles * max_scenes * 5).max(1000) as u32).min(10000);
+    // Estimate search limit (spatial_tiles × max_scenes × 5, floor 1000,
+    // cap 10000 — same as single-band path)
+    let est = estimate_search_limit(&bb, max_scenes);
+    let search_limit = est.limit;
     eprintln!(
         "  bbox: {:.1}°×{:.1}° (~{} spatial tiles), search_limit={}",
-        bbox_width_deg, bbox_height_deg, est_tiles, search_limit
+        est.width_deg, est.height_deg, est.spatial_tiles, search_limit
     );
 
     // Page size capped per catalog (PC=1000, ES=250, custom=250)
@@ -3111,16 +2961,11 @@ fn handle_multiband_composite(
     }
     // Select dates by spatial coverage: prefer dates with more tiles.
     // This ensures both S2 orbit columns are represented.
-    let mut date_coverage: Vec<(String, usize)> = by_date
+    let date_coverage: Vec<(String, usize)> = by_date
         .iter()
         .map(|(d, items)| (d.clone(), items.len()))
         .collect();
-    date_coverage.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    let dates: Vec<String> = date_coverage
-        .into_iter()
-        .take(max_scenes)
-        .map(|(d, _)| d)
-        .collect();
+    let dates = select_dates_by_coverage(date_coverage, max_scenes);
 
     println!(
         "Found {} items across {} dates (using {} dates)",
@@ -3318,97 +3163,45 @@ fn handle_multiband_composite(
     //      users get a realistic number instead of the optimistic steady-state.
     //
     // Override with `SURTGIS_RAM_BUDGET_GB` env var; default 16 GB.
-    let stac_cat_for_budget = StacCatalog::from_str_or_url(catalog);
-    // tile_concurrency bumped in v0.7.2: HTTP/2 multiplexing now reuses one TCP
-    // connection per host across many parallel streams, so the old 8/16 limit
-    // was leaving network bandwidth on the table. Pool size in HttpClient is
-    // 64 idle per host, so 48 in-flight tiles fits comfortably with headroom.
-    let (band_inflation, mask_inflation, tile_concurrency, catalog_label) =
-        match stac_cat_for_budget {
-            StacCatalog::EarthSearch => (
-                14_usize,
-                4_usize,
-                32_usize,
-                "Earth Search (1024² COGs, multi-UTM reprojection)",
-            ),
-            StacCatalog::PlanetaryComputer => {
-                (8_usize, 2_usize, 48_usize, "Planetary Computer (512² COGs)")
-            }
-            StacCatalog::Custom(_) => (14_usize, 4_usize, 32_usize, "custom catalog"),
-        };
-    let tile_internal_bytes = match stac_cat_for_budget {
-        StacCatalog::EarthSearch | StacCatalog::Custom(_) => 1024_usize * 1024 * 8,
-        StacCatalog::PlanetaryComputer => 512_usize * 512 * 8,
-    };
-    // Clamp band_chunk_size into [1, n_bands]. K=1 is minimum RAM; K=n_bands is minimum HTTP.
-    let k = band_chunk_size.clamp(1, n_bands.max(1));
-    // Concurrent decode now scales with K (we download K bands' assets per scene concurrently).
-    let concurrent_decode_bytes = tile_concurrency * (k + 1) * tile_internal_bytes;
-
-    // Empirical calibration constants from Maule v0.7.0 corrida
-    // (predicted 8.1 GB vs observed 12.6 GB → +56% delta).
-    const MASK_INFLATION_CALIB: f64 = 1.8;
-    const ALLOC_OVERHEAD_FRAC: f64 = 0.10;
-
     let budget_gb = std::env::var("SURTGIS_RAM_BUDGET_GB")
         .ok()
         .and_then(|s| s.parse::<f64>().ok())
         .filter(|gb| *gb > 0.5)
         .unwrap_or(16.0);
-    let global_budget_bytes = (budget_gb * 1e9) as usize;
-    let output_buffer_bytes = n_bands.max(1) * total_cells.max(1) * 8;
+    let plan = plan_strips(&StripPlanInput {
+        catalog: StacCatalog::from_str_or_url(catalog),
+        n_bands,
+        n_scenes,
+        out_rows,
+        out_cols,
+        band_chunk_size,
+        strip_rows_cfg,
+        budget_gb,
+    });
+    let strip_rows = plan.strip_rows;
+    let num_strips = plan.num_strips;
+    let k = plan.band_chunk;
+    let tile_concurrency = plan.tile_concurrency;
+    let bd = &plan.breakdown;
 
-    // Calibrated per-row coefficient: mask cache term inflated by 1.8 to match
-    // observed footprint; scene-strip and band-working terms remain at nominal
-    // (they match observation per the postdoc analysis).
-    let per_row_calibrated_bytes = {
-        let mask_term = (n_scenes.max(1) * mask_inflation) as f64 * MASK_INFLATION_CALIB;
-        let scene_term = (k * n_scenes.max(1)) as f64;
-        let band_term = (k * band_inflation) as f64;
-        ((mask_term + scene_term + band_term) * (out_cols.max(1) * 8) as f64) as usize
-    };
-
-    // Solve for S, accounting also for the allocator overhead that scales with
-    // the variable working set.
-    let variable_budget = global_budget_bytes
-        .saturating_sub(output_buffer_bytes)
-        .saturating_sub(concurrent_decode_bytes)
-        .max(64 * 1024 * 1024);
-    // headroom_after_alloc_overhead = variable_budget / (1 + ALLOC_OVERHEAD_FRAC)
-    let headroom_for_variable_bytes =
-        (variable_budget as f64 / (1.0 + ALLOC_OVERHEAD_FRAC)) as usize;
-    let auto_strip_rows =
-        (headroom_for_variable_bytes / per_row_calibrated_bytes.max(1)).clamp(8, 512);
-    let strip_rows = strip_rows_cfg.min(auto_strip_rows);
-
-    let output_gb = output_buffer_bytes as f64 / 1e9;
-    let concurrent_gb = concurrent_decode_bytes as f64 / 1e9;
-    let mask_cache_gb =
-        (strip_rows * n_scenes * out_cols * 8 * mask_inflation) as f64 * MASK_INFLATION_CALIB / 1e9;
-    let scene_strips_gb = (strip_rows * n_scenes * out_cols * 8 * k) as f64 / 1e9;
-    let band_working_gb = (strip_rows * out_cols * 8 * band_inflation * k) as f64 / 1e9;
-    let variable_gb = mask_cache_gb + scene_strips_gb + band_working_gb;
-    let alloc_overhead_gb = variable_gb * ALLOC_OVERHEAD_FRAC;
-    let estimated_total_gb = output_gb + concurrent_gb + variable_gb + alloc_overhead_gb;
-
-    if strip_rows < strip_rows_cfg {
+    if plan.capped {
         eprintln!(
             "⚠ strip_rows capped: {} → {} ({}): fitting within {:.1} GB budget",
-            strip_rows_cfg, strip_rows, catalog_label, budget_gb,
+            strip_rows_cfg, strip_rows, plan.catalog_label, budget_gb,
         );
     }
     eprintln!(
         "  RAM budget ({:.1} GB target, band_chunk_size={}) — output: {:.1} GB | mask cache: {:.1} GB | scene strips: {:.1} GB | band working: {:.1} GB | decode: {:.1} GB | allocator overhead: {:.1} GB (strip_rows={}) → ~{:.1} GB peak",
         budget_gb,
         k,
-        output_gb,
-        mask_cache_gb,
-        scene_strips_gb,
-        band_working_gb,
-        concurrent_gb,
-        alloc_overhead_gb,
+        bd.output_gb,
+        bd.mask_cache_gb,
+        bd.scene_strips_gb,
+        bd.band_working_gb,
+        bd.decode_gb,
+        bd.alloc_overhead_gb,
         strip_rows,
-        estimated_total_gb,
+        bd.estimated_total_gb,
     );
     eprintln!(
         "  (outer-band, {}-band chunks; HTTP requests per scene = {}. Raise --band-chunk-size to reduce requests at higher RAM cost. Override budget with SURTGIS_RAM_BUDGET_GB=<N>)",
@@ -3418,7 +3211,6 @@ fn handle_multiband_composite(
     eprintln!(
         "  Note: actual peak may be ±10% of estimate depending on system pressure (mimalloc retains more pages with abundant free RAM; kernel throttles allocations under memory pressure).",
     );
-    let num_strips = (out_rows + strip_rows - 1) / strip_rows;
 
     const TOKEN_REFRESH_THRESHOLD: Duration = Duration::from_secs(30 * 60);
 
@@ -3491,14 +3283,17 @@ fn handle_multiband_composite(
     // these are disk reads after the first strip. Without cache, HTTP doubles
     // but each transfer is much smaller (1 band vs 10 per tile).
     for strip_idx in 0..num_strips {
-        let row_start = strip_idx * strip_rows;
-        let row_end = (row_start + strip_rows).min(out_rows);
-        let actual_rows = row_end - row_start;
-
-        let ph = out_transform.pixel_height.abs();
-        let strip_min_y = cog_bb.max_y - (row_end as f64 * ph);
-        let strip_max_y = cog_bb.max_y - (row_start as f64 * ph);
-        let strip_bb = BBox::new(cog_bb.min_x, strip_min_y, cog_bb.max_x, strip_max_y);
+        let bounds = strip_bounds(
+            strip_idx,
+            strip_rows,
+            out_rows,
+            &out_transform,
+            &cog_bb,
+            100.0,
+        );
+        let (row_start, row_end, actual_rows) = (bounds.row_start, bounds.row_end, bounds.rows);
+        let strip_bb = bounds.bbox;
+        let tile_bb = bounds.padded_bbox;
 
         print!(
             "\r  Strip {}/{} (rows {}-{}, {} bands)...",
@@ -3509,25 +3304,7 @@ fn handle_multiband_composite(
             n_bands
         );
 
-        let strip_ref = {
-            let mut r = surtgis_core::Raster::<f64>::new(actual_rows, out_cols);
-            r.set_transform(surtgis_core::GeoTransform::new(
-                strip_bb.min_x,
-                strip_bb.max_y,
-                out_transform.pixel_width,
-                out_transform.pixel_height,
-            ));
-            r
-        };
-
-        // Strip bbox padded for tile overlap
-        let pad = 100.0;
-        let tile_bb = BBox::new(
-            strip_bb.min_x - pad,
-            strip_bb.min_y - pad,
-            strip_bb.max_x + pad,
-            strip_bb.max_y + pad,
-        );
+        let strip_ref = bounds.reference_raster(&out_transform, out_cols);
 
         eprintln!(
             "[ram] strip {}/{} start: RSS={} MB, tiles_cumulative={}",
@@ -3766,112 +3543,7 @@ fn handle_multiband_composite(
                     );
                 }
 
-                let mut strip_out =
-                    ndarray::Array2::<f64>::from_elem((actual_rows, out_cols), f64::NAN);
-
-                if !scene_strips.is_empty() {
-                    let n = scene_strips.len();
-
-                    let mut coverage: Vec<(usize, usize)> = scene_strips
-                        .iter()
-                        .enumerate()
-                        .map(|(i, s)| (i, s.iter().filter(|v| v.is_finite()).count()))
-                        .collect();
-                    coverage.sort_by(|a, b| b.1.cmp(&a.1));
-
-                    for r in 0..actual_rows {
-                        for c in 0..out_cols {
-                            let mut values: Vec<f64> = Vec::with_capacity(n);
-                            for strip in &scene_strips {
-                                if r < strip.nrows() && c < strip.ncols() {
-                                    let v = strip[[r, c]];
-                                    if v.is_finite() {
-                                        values.push(v);
-                                    }
-                                }
-                            }
-                            if !values.is_empty() {
-                                values.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
-                                let mid = values.len() / 2;
-                                strip_out[[r, c]] = if values.len() % 2 == 0 {
-                                    (values[mid - 1] + values[mid]) / 2.0
-                                } else {
-                                    values[mid]
-                                };
-                            }
-                        }
-                    }
-
-                    let nan_before = strip_out.iter().filter(|v| !v.is_finite()).count();
-                    if nan_before > 0 {
-                        for &(scene_idx, _) in &coverage {
-                            let strip = &scene_strips[scene_idx];
-                            for r in 0..actual_rows {
-                                for c in 0..out_cols {
-                                    if !strip_out[[r, c]].is_finite()
-                                        && r < strip.nrows()
-                                        && c < strip.ncols()
-                                    {
-                                        let v = strip[[r, c]];
-                                        if v.is_finite() {
-                                            strip_out[[r, c]] = v;
-                                        }
-                                    }
-                                }
-                            }
-                            let remaining = strip_out.iter().filter(|v| !v.is_finite()).count();
-                            if remaining == 0 {
-                                break;
-                            }
-                        }
-                    }
-
-                    let mut nan_remaining = strip_out.iter().filter(|v| !v.is_finite()).count();
-                    if nan_remaining > 0 && nan_remaining < strip_out.len() {
-                        let mut prev_buf = strip_out.clone();
-                        for _pass in 0..20 {
-                            prev_buf.assign(&strip_out);
-                            let mut filled = 0usize;
-                            for r in 0..actual_rows {
-                                for c in 0..out_cols {
-                                    if prev_buf[[r, c]].is_finite() {
-                                        continue;
-                                    }
-                                    let mut sum = 0.0;
-                                    let mut cnt = 0u32;
-                                    for dr in -1i32..=1 {
-                                        for dc in -1i32..=1 {
-                                            let nr = r as i32 + dr;
-                                            let nc = c as i32 + dc;
-                                            if nr >= 0
-                                                && nr < actual_rows as i32
-                                                && nc >= 0
-                                                && nc < out_cols as i32
-                                            {
-                                                let v = prev_buf[[nr as usize, nc as usize]];
-                                                if v.is_finite() {
-                                                    sum += v;
-                                                    cnt += 1;
-                                                }
-                                            }
-                                        }
-                                    }
-                                    if cnt >= 2 {
-                                        strip_out[[r, c]] = sum / cnt as f64;
-                                        filled += 1;
-                                    }
-                                }
-                            }
-                            if filled == 0 {
-                                break;
-                            }
-                            nan_remaining = strip_out.iter().filter(|v| !v.is_finite()).count();
-                            if nan_remaining == 0 {
-                                break;
-                            }
-                        }
-                    }
-                }
+                let strip_out = composite_scene_strips(&scene_strips, actual_rows, out_cols);
 
                 let buf = &mut band_buffers[bi];
                 let offset = row_start * out_cols;
@@ -4504,147 +4176,6 @@ mod tests {
         let s2_profile = CollectionProfile::from_collection_name("sentinel-2-l2a").unwrap();
         let debug_str = format!("{:?}", s2_profile);
         assert!(debug_str.contains("Sentinel2L2A"));
-    }
-
-    // --- Retry/jitter/TileOutcome reliability fixes (composite download) ---
-
-    /// Regression test for the jitter bug: the previous implementation used
-    /// `Instant::now().elapsed().subsec_nanos()`, which is ~0ns essentially
-    /// always (elapsed time since an `Instant` created moments earlier on
-    /// the same line), so distinct tasks always computed the same "jitter".
-    /// `compute_retry_jitter_ms` must vary across different task salts.
-    #[test]
-    fn jitter_varies_across_tasks_not_always_zero() {
-        let base_ms = 500;
-        let samples: Vec<u64> = (0..64u64)
-            .map(|salt| compute_retry_jitter_ms(salt, base_ms))
-            .collect();
-        let distinct: std::collections::HashSet<u64> = samples.iter().copied().collect();
-        assert!(
-            distinct.len() > 1,
-            "expected jitter to differ across tasks, got all-identical values: {:?}",
-            samples
-        );
-        // The old bug's specific symptom: jitter was always exactly 0.
-        assert!(
-            samples.iter().any(|&j| j != 0),
-            "jitter was always 0 — reproduces the Instant::now().elapsed() bug"
-        );
-    }
-
-    #[test]
-    fn jitter_is_bounded_by_base_ms() {
-        for salt in 0..32u64 {
-            let j = compute_retry_jitter_ms(salt, 500);
-            assert!(j < 500, "jitter {} not < base_ms 500", j);
-        }
-    }
-
-    #[test]
-    fn jitter_handles_zero_base_ms_without_panicking() {
-        // Division/modulo by zero would panic; base_ms is clamped to >= 1.
-        let _ = compute_retry_jitter_ms(42, 0);
-    }
-
-    /// 404 and BBoxOutside are benign ("nothing here") — typed classification
-    /// via `CloudError`, not `.to_string()` substring matching.
-    #[test]
-    fn classify_benign_tile_error_treats_404_and_bbox_outside_as_benign() {
-        let bbox_outside = CloudError::BBoxOutside;
-        assert!(matches!(
-            classify_benign_tile_error::<()>(&bbox_outside),
-            Some(TileOutcome::OutsideOrMissing)
-        ));
-
-        let not_found = CloudError::HttpStatus {
-            status: reqwest::StatusCode::NOT_FOUND.as_u16(),
-            url: "https://example.com/cog.tif".into(),
-        };
-        assert!(matches!(
-            classify_benign_tile_error::<()>(&not_found),
-            Some(TileOutcome::OutsideOrMissing)
-        ));
-    }
-
-    /// A 429/5xx that already exhausted http.rs's own retries, or any other
-    /// error, is NOT benign — the caller must count/report it as `Failed`,
-    /// not silently treat it the same as a benign miss.
-    #[test]
-    fn classify_benign_tile_error_treats_persistent_errors_as_not_benign() {
-        let rate_limited = CloudError::HttpStatus {
-            status: reqwest::StatusCode::TOO_MANY_REQUESTS.as_u16(),
-            url: "https://example.com/cog.tif".into(),
-        };
-        assert!(classify_benign_tile_error::<()>(&rate_limited).is_none());
-
-        let server_error = CloudError::HttpStatus {
-            status: reqwest::StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
-            url: "https://example.com/cog.tif".into(),
-        };
-        assert!(classify_benign_tile_error::<()>(&server_error).is_none());
-
-        let network = CloudError::Network("connection reset".into());
-        assert!(classify_benign_tile_error::<()>(&network).is_none());
-    }
-
-    // --- select_overview wiring (overview_for_target_resolution) ---
-
-    #[test]
-    fn overview_for_target_resolution_stays_full_res_when_ratio_at_or_below_threshold() {
-        let overviews = vec![
-            surtgis_cloud::OverviewInfo {
-                index: 1,
-                width: 5000,
-                height: 5000,
-            },
-            surtgis_cloud::OverviewInfo {
-                index: 2,
-                width: 2500,
-                height: 2500,
-            },
-        ];
-        // native 10m, output 10m → ratio 1.0 → full res.
-        assert_eq!(
-            overview_for_target_resolution(10_000, 10_000, 10.0, &overviews, 10.0),
-            None
-        );
-        // native 10m, output 15m → ratio 1.5 → still full res (threshold is
-        // "> 1.5", not ">=").
-        assert_eq!(
-            overview_for_target_resolution(10_000, 10_000, 10.0, &overviews, 15.0),
-            None
-        );
-    }
-
-    #[test]
-    fn overview_for_target_resolution_uses_coarsest_overview_above_threshold() {
-        let overviews = vec![
-            surtgis_cloud::OverviewInfo {
-                index: 1,
-                width: 5000,
-                height: 5000,
-            }, // scale 2
-            surtgis_cloud::OverviewInfo {
-                index: 2,
-                width: 1250,
-                height: 1250,
-            }, // scale 8
-        ];
-        // native 10m, output 90m → ratio 9 → coarsest overview whose scale
-        // (8) doesn't exceed 9 → index 2 (NOT index 1 / scale 2).
-        assert_eq!(
-            overview_for_target_resolution(10_000, 10_000, 10.0, &overviews, 90.0),
-            Some(2)
-        );
-    }
-
-    #[test]
-    fn overview_for_target_resolution_handles_degenerate_native_pixel_size() {
-        let overviews: Vec<surtgis_cloud::OverviewInfo> = Vec::new();
-        assert_eq!(
-            overview_for_target_resolution(100, 100, 0.0, &overviews, 10.0),
-            None
-        );
     }
 }
 

@@ -20,6 +20,9 @@ zarr = ["dep:zarrs", "dep:zarrs_object_store", "dep:zarrs_storage", "dep:object_
 netcdf = ["dep:netcdf", "dep:chrono"]
 grib = ["dep:grib"]
 projections = ["dep:proj4rs"]
+# Experimental composite building blocks (audit R8) — exempt from the 1.x
+# stability guarantee; API may change in minor releases.
+unstable = []
 
 [dependencies]
 surtgis-core = { version = "0.18", path = "../core", default-features = false }

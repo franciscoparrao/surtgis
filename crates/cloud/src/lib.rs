@@ -31,6 +31,9 @@ pub mod stac_models;
 pub mod stac_reader;
 pub mod tile_index;
 
+#[cfg(feature = "unstable")]
+pub mod composite;
+
 pub mod sync_api;
 pub mod wasm_api;
 
