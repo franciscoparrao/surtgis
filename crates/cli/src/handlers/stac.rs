@@ -2865,26 +2865,22 @@ fn handle_multiband_composite(
             let bd = &plan.breakdown;
             if plan.capped {
                 eprintln!(
-                    "⚠ strip_rows capped → {} ({}): fitting within {:.1} GB budget",
-                    plan.strip_rows, plan.catalog_label, budget_gb
+                    "⚠ strip_rows capped → {}: fitting the held set within {:.1} GB budget",
+                    plan.strip_rows, budget_gb
                 );
             }
             eprintln!(
-                "  RAM budget ({:.1} GB, band_chunk={}) — output {:.1} | mask {:.1} | scene {:.1} | band {:.1} | decode {:.1} | overhead {:.1} GB (strip_rows={}) → ~{:.1} GB peak",
+                "  RAM budget ({:.1} GB, band_chunk={}) — output {:.1} | held {:.1} | decode {:.1} GB (strip_rows={}) → ~{:.1} GB planned; decode bounded at runtime by a {:.0} MB byte budget",
                 budget_gb,
                 plan.band_chunk,
                 bd.output_gb,
-                bd.mask_cache_gb,
-                bd.scene_strips_gb,
-                bd.band_working_gb,
+                bd.held_gb,
                 bd.decode_gb,
-                bd.alloc_overhead_gb,
                 plan.strip_rows,
                 bd.estimated_total_gb,
+                plan.decode_budget_bytes as f64 / 1e6,
             );
-            eprintln!(
-                "  (override budget with SURTGIS_RAM_BUDGET_GB=<N>; ±10% depending on system pressure)"
-            );
+            eprintln!("  (override budget with SURTGIS_RAM_BUDGET_GB=<N>)");
         }
         fn strip_started(&mut self, idx: usize, num: usize, row_start: usize, row_end: usize) {
             print!(

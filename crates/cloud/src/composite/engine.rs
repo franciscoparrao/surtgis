@@ -26,6 +26,7 @@ use std::time::{Duration, Instant};
 use ndarray::Array2;
 use surtgis_core::{CRS, GeoTransform, Raster};
 
+use super::budget::MemoryBudget;
 use super::plan::{StripPlan, StripPlanInput, plan_strips, strip_bounds};
 use super::reduce::composite_scene_strips;
 use super::spec::{CompositeSpec, OutputGrid};
@@ -384,12 +385,13 @@ impl CompositeEngine {
             budget_gb: spec.budget_gb,
         });
         progress.plan_ready(&plan, spec.budget_gb);
-        let (strip_rows, num_strips, k, tile_concurrency) = (
-            plan.strip_rows,
-            plan.num_strips,
-            plan.band_chunk,
-            plan.tile_concurrency,
-        );
+        let (strip_rows, num_strips, k) = (plan.strip_rows, plan.num_strips, plan.band_chunk);
+        // Bound concurrent tile decode by bytes, not a fixed count: each tile
+        // acquires `tile_bytes` before decoding, so the number decoding at
+        // once emerges from the budget (RAM can't overshoot regardless of any
+        // size estimate) and the fixed-count chunk convoy is gone.
+        let decode_budget = MemoryBudget::new(plan.decode_budget_bytes);
+        let tile_bytes = plan.tile_bytes;
 
         let mut failed_tiles = 0usize;
         let mut failed_dates: HashSet<String> = HashSet::new();
@@ -428,7 +430,8 @@ impl CompositeEngine {
                     .collect();
                 let outcomes = self.download_tiles(
                     &mask_tasks,
-                    tile_concurrency,
+                    &decode_budget,
+                    tile_bytes,
                     /* zero_to_nan */ false,
                     out_pixel_size,
                     progress,
@@ -488,7 +491,8 @@ impl CompositeEngine {
 
                     let all_rasters = self.download_tiles(
                         &all_tasks,
-                        tile_concurrency,
+                        &decode_budget,
+                        tile_bytes,
                         /* zero_to_nan */ true,
                         out_pixel_size,
                         progress,
@@ -605,13 +609,22 @@ impl CompositeEngine {
         }
     }
 
-    /// Download a batch of COG tiles concurrently, bounded by chunking, with
-    /// an on-disk cache and one bounded retry per tile (the cloud HTTP client
-    /// has already exhausted its own retries by the time an error surfaces).
+    /// Download a batch of COG tiles, bounding concurrent decode by a byte
+    /// budget instead of a fixed count, with an on-disk cache and one bounded
+    /// retry per tile (the cloud HTTP client has already exhausted its own
+    /// retries by the time an error surfaces).
+    ///
+    /// Every tile task acquires `tile_bytes` of `budget` before opening the
+    /// COG and holds it until the decoded raster is handed back, so the number
+    /// of tiles decoding (and fetching) at once emerges from the budget — a
+    /// bigger budget decodes more in parallel, and RAM can never overshoot.
+    /// All tasks are spawned at once; those beyond the budget park on
+    /// `acquire`, so there is no fixed-size chunk barrier (the old "convoy").
     fn download_tiles(
         &self,
         tasks: &[(String, BBox)],
-        tile_concurrency: usize,
+        budget: &MemoryBudget,
+        tile_bytes: usize,
         zero_to_nan: bool,
         out_pixel_size: f64,
         progress: &mut dyn CompositeProgress,
@@ -637,19 +650,24 @@ impl CompositeEngine {
                 needs_download.push(idx);
             }
 
-            let chunk_size = tile_concurrency.max(1);
-            for chunk_indices in needs_download.chunks(chunk_size) {
-                let mut handles: Vec<(usize, tokio::task::JoinHandle<TileOutcome<Raster<f64>>>)> =
-                    Vec::with_capacity(chunk_indices.len());
-                for &idx in chunk_indices {
+            // Spawn every tile at once; the byte budget throttles how many
+            // actually decode concurrently (no fixed-count chunk barrier).
+            let mut handles: Vec<(usize, tokio::task::JoinHandle<TileOutcome<Raster<f64>>>)> =
+                Vec::with_capacity(needs_download.len());
+            {
+                for &idx in &needs_download {
                     let (href, bb) = tasks[idx].clone();
                     let do_cache = use_cache;
                     let zero_nan = zero_to_nan;
                     let href_cache = href.clone();
                     let task_salt = idx as u64;
+                    let budget = budget.clone();
                     handles.push((
                         idx,
                         tokio::spawn(async move {
+                            // Hold decode budget for this tile's whole
+                            // open+read; released when the task returns.
+                            let _permit = budget.acquire(tile_bytes).await;
                             const MAX_ATTEMPTS: u8 = 2;
                             let mut last_err: Option<String> = None;
                             for attempt in 0..MAX_ATTEMPTS {

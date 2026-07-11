@@ -26,9 +26,8 @@ mod resolver;
 mod spec;
 
 pub use plan::{
-    ALLOC_OVERHEAD_FRAC, BudgetBreakdown, BudgetProfile, MASK_INFLATION_CALIB, SearchEstimate,
-    StripBounds, StripPlan, StripPlanInput, budget_profile, estimate_search_limit, plan_strips,
-    select_dates_by_coverage, strip_bounds,
+    BudgetBreakdown, SearchEstimate, StripBounds, StripPlan, StripPlanInput, estimate_search_limit,
+    nominal_tile_bytes, plan_strips, select_dates_by_coverage, strip_bounds,
 };
 pub use reduce::{
     GAP_FILL_PASSES, composite_scene_strips, coverage_order, fill_from_scenes_by_coverage,
