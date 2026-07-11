@@ -37,7 +37,7 @@ surtgis-algorithms = { version = "0.18", path = "../algorithms", features = ["un
 surtgis-parallel = { version = "0.18", path = "../parallel" }
 surtgis-relief = { version = "0.18", path = "../relief" }
 surtgis-relief-3d = { version = "0.18", path = "../relief-3d", optional = true }
-surtgis-cloud = { version = "0.18", path = "../cloud", features = ["native"], optional = true }
+surtgis-cloud = { version = "0.18", path = "../cloud", features = ["native", "unstable"], optional = true }
 clap.workspace = true
 clap_complete.workspace = true
 anyhow.workspace = true

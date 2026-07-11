@@ -9,6 +9,23 @@ call them out under a `Breaking` heading when they happen.
 
 ## [Unreleased]
 
+### Added
+
+- **Experimental `surtgis_cloud::composite` module** (feature `unstable`,
+  exempt from the 1.x stability guarantee) — audit R8, step 1 of 3. The
+  pure planning, per-tile and per-pixel logic of the STAC multiband
+  composite is extracted from the CLI into `surtgis-cloud` with its own
+  test suite (26 tests where there were none): search sizing and
+  coverage-based scene-date selection, the calibrated memory-budget model
+  that caps `strip_rows` (`plan_strips`), per-strip geometry, tile-outcome
+  classification / retry jitter / overview selection / CRS unification /
+  mosaicking / cache keys, and the median → coverage-fill → neighbor-mean
+  gap-fill compositing kernel (`composite_scene_strips`). The CLI now calls
+  these instead of carrying private copies (net −520 lines in the handler);
+  behaviour is unchanged, verified end-to-end against Planetary Computer.
+  Later R8 steps add a `CompositeEngine`/`StripSink` orchestrator and a
+  serializable checkpoint/resume manifest on top.
+
 ## [0.18.0] - 2026-07-10
 
 Scientific-parity release (engine audit R2, "Horizonte v1.0+" package):
