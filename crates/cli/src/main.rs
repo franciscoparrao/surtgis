@@ -8,6 +8,8 @@ mod memory;
 // and are consumed only by the cog/stac handlers (both cloud-gated).
 // Gate them too so --no-default-features builds cleanly.
 #[cfg(feature = "cloud")]
+mod composite_sink;
+#[cfg(feature = "cloud")]
 mod stac_introspect;
 #[cfg(feature = "cloud")]
 mod streaming;
