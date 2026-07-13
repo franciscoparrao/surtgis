@@ -44,6 +44,7 @@ pub mod classification;
 pub mod fluvial;
 pub mod hydrology;
 pub mod imagery;
+pub mod inference;
 pub mod interpolation;
 pub mod landscape;
 pub mod morphology;
