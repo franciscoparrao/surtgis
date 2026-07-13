@@ -357,6 +357,43 @@ pub enum Commands {
         #[command(subcommand)]
         action: MlCommands,
     },
+    /// Tiled ONNX model inference over one or more aligned rasters
+    /// (SPEC_SURTGIS_ONNX_INFERENCE.md — scaffold: the orchestration
+    /// (tiling/halo/stitching) is real; loading and running the ONNX
+    /// graph itself is not yet implemented and this command currently
+    /// errors past that point). Not the same as `ml predict`
+    /// (smelt-ml): that is pixel-wise tabular inference with no spatial
+    /// context; this is for models with a spatial receptive field
+    /// (CNNs, segmentation networks) that need to see a neighbourhood.
+    #[cfg(feature = "onnx")]
+    Infer {
+        /// Path to the `.onnx` model graph
+        #[arg(long)]
+        model: PathBuf,
+        /// Input rasters, one per model input band, in the order the
+        /// model expects (all must be on the same grid)
+        #[arg(long, num_args = 1.., required = true)]
+        features: Vec<PathBuf>,
+        /// Output raster (one band per model output; multi-band if the
+        /// model produces more than one). Named rather than positional:
+        /// a positional here would be ambiguous with the variadic
+        /// `--features` list.
+        #[arg(long)]
+        out: PathBuf,
+        /// Core tile side length in pixels — the RAM↔overhead dial
+        #[arg(long, default_value = "512")]
+        tile_size: usize,
+        /// Halo (cells) the model needs on every side of its core —
+        /// declared explicitly rather than inferred from the graph
+        /// (see SPEC §7: reliable receptive-field introspection from an
+        /// arbitrary ONNX graph isn't solved yet)
+        #[arg(long, default_value = "0")]
+        halo: usize,
+        /// Collapse multi-band logits output to a single argmax class
+        /// raster instead of writing the raw per-class bands
+        #[arg(long)]
+        argmax: bool,
+    },
     /// Generate shell completion scripts (write to a file in your shell's
     /// completion directory, e.g. `surtgis completions bash > /etc/bash_completion.d/surtgis`)
     Completions {

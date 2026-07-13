@@ -39,3 +39,6 @@ pub mod reproject;
 
 #[cfg(feature = "ml")]
 pub mod ml;
+
+#[cfg(feature = "onnx")]
+pub mod infer;

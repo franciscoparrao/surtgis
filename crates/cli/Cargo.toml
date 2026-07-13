@@ -30,6 +30,11 @@ ml = ["dep:smelt-ml"]
 # the 2D CLI workflows. Enable explicitly to get the `relief-3d`
 # subcommand.
 relief-3d = ["dep:surtgis-relief-3d"]
+# `surtgis infer` — tiled ONNX model inference (tract-onnx backend, pure
+# Rust). Off by default: heavy dependency, and per
+# SPEC_SURTGIS_ONNX_INFERENCE.md still a scaffold upstream
+# (`OnnxModel::load`/`infer` are stubs in surtgis-algorithms).
+onnx = ["surtgis-algorithms/onnx"]
 
 [dependencies]
 surtgis-core = { version = "0.18", path = "../core", features = ["shapefile", "geopackage"] }

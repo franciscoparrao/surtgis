@@ -244,6 +244,15 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Statistics { algorithm } => handlers::statistics::handle(algorithm, compress)?,
         #[cfg(feature = "ml")]
         Commands::Ml { action } => handlers::ml::handle(action, compress)?,
+        #[cfg(feature = "onnx")]
+        Commands::Infer {
+            model,
+            features,
+            out,
+            tile_size,
+            halo,
+            argmax,
+        } => handlers::infer::run(&model, &features, &out, tile_size, halo, argmax, compress)?,
     }
 
     Ok(())

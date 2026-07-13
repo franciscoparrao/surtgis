@@ -18,6 +18,13 @@ shapefile = ["surtgis-core/shapefile"]
 # and exotic terrain algorithms. Off by default for external consumers of
 # this crate; internal workspace members that use them enable it explicitly.
 unstable = []
+# `tract-onnx` (pure-Rust ONNX runtime — no C++/CUDA/onnxruntime, keeping
+# the single-binary property) backing `inference::onnx::OnnxModel`. Off by
+# default: it is a heavy dependency and, per SPEC_SURTGIS_ONNX_INFERENCE.md,
+# still a scaffold (`OnnxModel::load`/`infer` are stubs). The tiling/halo/
+# stitching orchestration in `inference::run_tiled` needs no feature and is
+# fully implemented and tested without it.
+onnx = ["dep:tract-onnx"]
 
 [dependencies]
 surtgis-core = { version = "0.18", path = "../core", default-features = false }
@@ -33,6 +40,7 @@ serde_json.workspace = true
 csv.workspace = true
 geo.workspace = true
 geo-types.workspace = true
+tract-onnx = { version = "0.23", optional = true }
 
 [dev-dependencies]
 approx.workspace = true
