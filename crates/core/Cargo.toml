@@ -46,3 +46,7 @@ flate2.workspace = true
 [dev-dependencies]
 approx.workspace = true
 tempfile.workspace = true
+
+[[example]]
+name = "insar_conjugate_product"
+required-features = ["complex"]
