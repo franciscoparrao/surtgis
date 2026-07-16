@@ -6,8 +6,8 @@ use std::time::Instant;
 
 use surtgis_algorithms::imagery::{RasterDiffParams, raster_difference};
 use surtgis_algorithms::temporal::{
-    AnomalyMethod, PhenologyParams, linear_trend, mann_kendall, sens_slope, temporal_anomaly,
-    temporal_percentile, temporal_stats, vegetation_phenology,
+    AnomalyMethod, PhenologyParams, TheilSenTrend, linear_trend, mann_kendall, reduce_temporal,
+    sens_slope, temporal_anomaly, temporal_percentile, temporal_stats, vegetation_phenology,
 };
 
 use crate::commands::TemporalCommands;
@@ -144,8 +144,6 @@ fn handle_trend(
     compress: bool,
 ) -> Result<()> {
     let rasters = load_raster_stack(&input)?;
-    let refs: Vec<&surtgis_core::Raster<f64>> = rasters.iter().collect();
-
     let times = times_str.as_ref().map(|s| parse_times(s)).transpose()?;
 
     std::fs::create_dir_all(&outdir)?;
@@ -153,6 +151,7 @@ fn handle_trend(
 
     match method.as_str() {
         "linear" | "ols" => {
+            let refs: Vec<&surtgis_core::Raster<f64>> = rasters.iter().collect();
             println!("Computing linear trend (OLS)...");
             let result = linear_trend(&refs, times.as_deref()).context("linear_trend failed")?;
 
@@ -172,6 +171,7 @@ fn handle_trend(
             println!("  p-value   → {}", pval_path.display());
         }
         "mann-kendall" | "mk" => {
+            let refs: Vec<&surtgis_core::Raster<f64>> = rasters.iter().collect();
             println!("Computing Mann-Kendall trend test...");
             let result = mann_kendall(&refs).context("mann_kendall failed")?;
 
@@ -194,14 +194,38 @@ fn handle_trend(
             println!("  Sen's slope → {}", sens_path.display());
         }
         "sens" | "sens-slope" => {
+            let refs: Vec<&surtgis_core::Raster<f64>> = rasters.iter().collect();
             println!("Computing Sen's slope...");
             let result = sens_slope(&refs).context("sens_slope failed")?;
             let path = outdir.join("sens_slope.tif");
             write_result(&result, &path, compress)?;
             println!("  Sen's slope → {}", path.display());
         }
+        "theil-sen" | "streaming" => {
+            // Demonstrates the streaming CubeSource reducer end-to-end over
+            // a local dated GeoTIFF stack — no STAC needed (SPEC_SURTGIS_
+            // TEMPORAL_STREAMING.md §6: it runs over any CubeSource). RAM is
+            // bounded by chunk_rows, not by the number of input rasters.
+            let n = rasters.len();
+            let time_ticks: Vec<i64> = match &times {
+                Some(t) => t
+                    .iter()
+                    .map(|&v| (v * 1_000_000.0).round() as i64)
+                    .collect(),
+                None => (0..n as i64).collect(),
+            };
+            println!("Computing Theil-Sen trend (streaming reducer, chunked)...");
+            let cube =
+                surtgis_core::Cube::from_slices(time_ticks, vec!["value".to_string()], rasters)
+                    .map_err(|e| anyhow::anyhow!("{}", e))?;
+            let outputs = reduce_temporal(&cube, &TheilSenTrend, 256)
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
+            let slope_path = outdir.join("slope.tif");
+            write_result(&outputs[0], &slope_path, compress)?;
+            println!("  slope (Theil-Sen) → {}", slope_path.display());
+        }
         _ => anyhow::bail!(
-            "unknown trend method: '{}'. Use: linear, mann-kendall, sens",
+            "unknown trend method: '{}'. Use: linear, mann-kendall, sens, theil-sen",
             method
         ),
     }

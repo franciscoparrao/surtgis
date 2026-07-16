@@ -33,6 +33,8 @@ pub mod tile_index;
 
 #[cfg(feature = "unstable")]
 pub mod composite;
+#[cfg(feature = "unstable")]
+pub mod stac_cube_source;
 
 pub mod sync_api;
 pub mod wasm_api;
@@ -56,6 +58,9 @@ pub use error::{CloudError, Result};
 pub use stac_client::{StacCatalog, StacClient, StacClientOptions};
 pub use stac_models::{AssetFormat, StacItem, StacItemCollection, StacSearchParams};
 pub use tile_index::BBox;
+
+#[cfg(feature = "unstable")]
+pub use stac_cube_source::StacCubeSource;
 
 #[cfg(feature = "zarr")]
 pub use zarr_reader::{

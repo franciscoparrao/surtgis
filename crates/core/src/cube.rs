@@ -278,6 +278,70 @@ impl<'a, T: RasterElement> CubeChunk<'a, T> {
     }
 }
 
+/// A lazy, possibly out-of-core source of a single-band aligned cube.
+///
+/// [`Cube`] holds every slice in memory; `CubeSource` is the streaming
+/// counterpart consumers (e.g. `surtgis_algorithms::temporal::reduce_temporal`)
+/// drive row-range by row-range, so RAM scales with the requested range, not
+/// with the total grid or the number of timestamps. `Cube<f64>` implements
+/// this trait trivially by slicing its own in-memory data, so small/test
+/// workloads and out-of-core workloads (e.g. a STAC-backed source) share the
+/// same consumer code. Restricted to one band: temporal reducers operate on
+/// a single time series per pixel, so a source with several bands should be
+/// split into one `CubeSource` per band upstream.
+pub trait CubeSource {
+    /// Grid shape `(rows, cols)` shared by every timestamp.
+    fn shape(&self) -> (usize, usize);
+    /// Shared geotransform, so consumers can georeference their output.
+    fn transform(&self) -> GeoTransform;
+    /// Timestamps (Unix epoch seconds), strictly increasing.
+    fn times(&self) -> &[i64];
+    /// The row range `[row0, row0 + rows)`, aligned across every timestamp.
+    /// `rows` is clamped to the remaining grid rows.
+    fn chunk(&self, row0: usize, rows: usize) -> Result<CubeChunk<'_, f64>>;
+}
+
+impl CubeSource for Cube<f64> {
+    fn shape(&self) -> (usize, usize) {
+        Cube::shape(self)
+    }
+
+    fn transform(&self) -> GeoTransform {
+        *Cube::transform(self)
+    }
+
+    fn times(&self) -> &[i64] {
+        Cube::times(self)
+    }
+
+    fn chunk(&self, row0: usize, rows: usize) -> Result<CubeChunk<'_, f64>> {
+        if self.n_bands() != 1 {
+            return Err(Error::Other(format!(
+                "CubeSource::chunk: cube has {} bands, but CubeSource only supports \
+                 single-band cubes (split by band upstream)",
+                self.n_bands()
+            )));
+        }
+        let (total_rows, _) = self.shape();
+        if row0 >= total_rows {
+            return Err(Error::Other(format!(
+                "CubeSource::chunk: row0={} out of range ({} rows)",
+                row0, total_rows
+            )));
+        }
+        let n = rows.max(1).min(total_rows - row0);
+        Ok(CubeChunk {
+            row0,
+            rows: n,
+            views: self
+                .slices
+                .iter()
+                .map(|s| s.data().slice(ndarray::s![row0..row0 + n, ..]))
+                .collect(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -396,6 +460,40 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn cube_source_chunk_matches_chunks() {
+        let slices = vec![slice(10, 6, 0.0), slice(10, 6, 100.0), slice(10, 6, 200.0)];
+        let cube = Cube::from_slices(vec![0, 1, 2], vec!["b".into()], slices).unwrap();
+
+        assert_eq!(CubeSource::shape(&cube), cube.shape());
+        assert_eq!(CubeSource::times(&cube), cube.times());
+        assert_eq!(CubeSource::transform(&cube), *cube.transform());
+
+        let chunk = CubeSource::chunk(&cube, 4, 4).unwrap();
+        assert_eq!(chunk.row0, 4);
+        assert_eq!(chunk.rows, 4);
+        assert_eq!(chunk.views.len(), 3);
+        assert_eq!(chunk.views[1][[0, 2]] - chunk.views[0][[0, 2]], 100.0);
+
+        // Clamped at the grid edge.
+        let last = CubeSource::chunk(&cube, 9, 4).unwrap();
+        assert_eq!(last.rows, 1);
+
+        assert!(CubeSource::chunk(&cube, 10, 1).is_err());
+    }
+
+    #[test]
+    fn cube_source_rejects_multiband() {
+        let slices = vec![
+            slice(3, 3, 0.0),
+            slice(3, 3, 0.0),
+            slice(3, 3, 1.0),
+            slice(3, 3, 1.0),
+        ];
+        let cube = Cube::from_slices(vec![0, 1], vec!["a".into(), "b".into()], slices).unwrap();
+        assert!(CubeSource::chunk(&cube, 0, 2).is_err());
     }
 
     #[test]

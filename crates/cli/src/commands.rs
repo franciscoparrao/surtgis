@@ -2262,7 +2262,10 @@ pub enum TemporalCommands {
         /// Output directory for trend rasters (slope, intercept, r2, pvalue)
         #[arg(short, long)]
         outdir: PathBuf,
-        /// Method: "linear" (OLS) or "mann-kendall" (non-parametric)
+        /// Method: "linear" (OLS), "mann-kendall" (non-parametric), "sens"
+        /// (Theil-Sen slope, in-memory), or "theil-sen" (same Theil-Sen
+        /// slope computed via the streaming `CubeSource` reducer in row
+        /// chunks — see SPEC_SURTGIS_TEMPORAL_STREAMING.md)
         #[arg(long, default_value = "linear")]
         method: String,
         /// Time values (comma-separated, e.g. fractional years). If omitted, uses 0,1,2,...

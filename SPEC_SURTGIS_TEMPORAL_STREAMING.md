@@ -5,7 +5,11 @@
 > que consuma una **serie temporal STAC completa por chunks**, con la RAM
 > acotada por construcción (patrón R9), y la exponga como un comando de una línea:
 > "dame el mapa de tendencia de NDVI de esta cuenca en 5 años".
-> **Estado:** propuesta de diseño (2026-07-12). **Baseline objetivo:** SurtGIS
+> **Estado:** propuesta de diseño (2026-07-12), **verificada contra código real
+> y corregida el 2026-07-16** (§1, §2.1, §2.3 — ver notas inline). Supuestos
+> corregidos: los reducers usan `f64` (no `f32`) y convención NaN (no máscara
+> `bool`); el trait opera per-pixel sobre un núcleo que hay que extraer de los
+> reducers actuales (no son wrappers gratis). **Baseline objetivo:** SurtGIS
 > v0.19.0. **NO es implementación** — es el contrato para el trait
 > `TemporalReducer` + `CubeStreamer`.
 
@@ -29,50 +33,93 @@ temporal nunca se materialice entera. Es la diferencia entre "cabe si tienes
 
 ---
 
-## 1. Verificar primero (no asumir)
+## 1. Verificar primero (no asumir) — ✅ verificado 2026-07-16 contra el código real
 
-- [ ] Firma real de cada reducer en `temporal/*.rs`: ¿operan sobre
-      `&[f32]` (serie de un pixel), sobre `ArrayView`, o sobre `Raster`
-      completos? Esto decide si el trait envuelve *serie-por-pixel* o
-      *reduce-de-chunk*.
-- [ ] `Cube::pixel_series(row, col, band)` — ¿devuelve la serie temporal de un
-      pixel ya alineada? Si sí, el trait natural es `reduce(&[f32], &[i64]) -> T`
-      (valores + timestamps).
-- [ ] `Cube::chunks(chunk_rows)` — ¿cada `CubeChunk` trae **todas las fechas**
-      de una franja de filas? Confirmar el orden de iteración (t externo vs
-      franja externa) para no romper el budget.
-- [ ] ¿El cliente STAC del crate `cloud` puede entregar una **lista de escenas
-      fechadas** (no solo un composite colapsado)? Si hoy solo compone, hace
-      falta un modo "serie" que preserve el eje t.
-- [ ] Manejo de nodata / nubes por fecha: ¿los reducers reciben una máscara o un
-      `Option<f32>` por muestra? El contrato debe ser explícito (gaps son la regla
-      en series ópticas).
+- [x] Firma real de cada reducer en `temporal/*.rs`: **NO** operan sobre
+      `&[f32]` de un pixel. Operan sobre **stacks completos de rasters**,
+      `&[&Raster<f64>]` (ej. `linear_trend`, `mann_kendall`, `sens_slope` en
+      `trend.rs`; `temporal_mean`/`std`/`min`/`max`/`percentile` en
+      `statistics.rs`; `temporal_anomaly` en `anomaly.rs`;
+      `vegetation_phenology` en `phenology.rs`). Internamente cada uno
+      itera pixel a pixel y arma la serie con un helper interno tipo
+      `collect_valid(rasters, row, col) -> Vec<f64>` — ese núcleo per-pixel
+      existe pero no está expuesto como API pública. **Decisión (2026-07-16):
+      se refactorizan los reducers para exponer ese núcleo per-pixel en
+      `f64`**, y el trait streaming envuelve ese núcleo (no los wrappers
+      "delgados" que asumía la v1 de esta SPEC — ver §2.1 corregida).
+- [x] `Cube::pixel_series(row, col, band)` — confirmado, existe en
+      `core/src/cube.rs:197`, devuelve un iterador de la serie alineada en
+      orden temporal. **Ojo**: deja pasar `NaN` sin filtrar (no hace su propio
+      manejo de nodata), igual que el resto del código.
+- [x] `Cube::chunks(chunk_rows)` — confirmado, cada `CubeChunk` trae **todas
+      las fechas/bandas** de una franja de filas (franja externa, tiempo
+      interno). Test `chunks_cover_all_rows_aligned` en `cube.rs` lo verifica.
+      Orden correcto para el budget: se puede descartar la franja completa
+      (todas las fechas) antes de pasar a la siguiente.
+- [x] Cliente STAC (`cloud/src/stac_client.rs`) — `search_all()` **sí** entrega
+      `Vec<StacItem>` con `datetime` preservado por escena. Pero el único
+      orquestador productivo (`CompositeEngine::run`) colapsa todo a un
+      raster compuesto por banda; no existe hoy nada que entregue un `Cube`
+      con el eje temporal intacto. Confirma que `StacCubeSource` es trabajo
+      nuevo real, no un rewire.
+- [x] Manejo de nodata / nubes por fecha: **NO** hay máscara `bool` explícita
+      ni `Option<f32>` en ningún reducer actual. El patrón uniforme en todo
+      el código es **`f64::NAN` + `.is_finite()`** para descartar muestras
+      inválidas (`collect_valid` en `statistics.rs`/`anomaly.rs`,
+      `Cube::pixel_series` deja pasar NaN tal cual). El trait streaming debe
+      seguir esta convención en vez de introducir un `mask: &[bool]` nuevo
+      (ver §2.1 corregida) — máscaras de nube, si existen, se aplican aguas
+      arriba (en `MaskApplier` del pipeline de composite) escribiendo NaN,
+      no se pasan como parámetro separado al reducer.
+
+Nota adicional no prevista en la v1: el doc-comment de `core/src/cube.rs`
+declara explícitamente que el análisis temporal (regresiones, detección de
+quiebres) *no* debe vivir en `core` — debe vivir en un crate consumidor. Esto
+**no** contradice esta SPEC: `TemporalReducer`/`reduce_temporal` ya estaban
+planeados para `crates/algorithms` (no `core`), que es justamente ese
+consumidor dentro del propio motor SurtGIS. Sin conflicto, solo se deja
+registrado para no reabrir la pregunta más adelante.
 
 ---
 
 ## 2. Modelo de datos y API propuesta
 
-### 2.1 Trait — `TemporalReducer`
+### 2.1 Trait — `TemporalReducer` — ⚠️ corregida 2026-07-16 (v1 asumía series `f32` + máscara `bool`; el código real usa `f64` + convención NaN, ver §1)
 
 En `crates/algorithms/src/temporal/mod.rs`:
 
 ```rust
 /// Reduce la serie temporal de UN pixel a uno o varios valores de salida.
-/// El orquestador provee la serie ya alineada (valores + timestamps + máscara).
+/// El orquestador provee valores + timestamps ya alineados; las muestras
+/// inválidas llegan como NaN (misma convención que el resto de `temporal/*.rs`
+/// y de `Cube::pixel_series`) — NO se pasa una máscara `bool` separada.
 pub trait TemporalReducer: Send + Sync {
     /// Nombres de las bandas de salida (ej. ["slope", "intercept", "pvalue"]).
     fn outputs(&self) -> &[&str];
-    /// Reduce una serie de un pixel. `mask[i] == false` ⇒ muestra inválida.
-    fn reduce(&self, values: &[f32], times: &[i64], mask: &[bool]) -> SmallVec<[f32; 4]>;
+    /// Reduce una serie de un pixel. `values[i].is_nan()` ⇒ muestra inválida;
+    /// el reducer es responsable de filtrar (mismo patrón que `collect_valid`
+    /// en `statistics.rs`/`anomaly.rs` hoy).
+    fn reduce(&self, values: &[f64], times: &[i64]) -> SmallVec<[f64; 4]>;
     /// Nº mínimo de muestras válidas para producir salida (si no, nodata).
     fn min_valid(&self) -> usize { 3 }
 }
 ```
 
-Adaptadores delgados que envuelven lo ya escrito:
+**Precondición de refactor (no es trabajo gratis, corrige el "wrapping delgado"
+de la v1 de esta SPEC)**: los reducers actuales (`linear_trend`, `mann_kendall`,
+`sens_slope` en `trend.rs`; `temporal_mean`/`std`/`min`/`max`/`percentile` en
+`statistics.rs`; `temporal_anomaly` en `anomaly.rs`; `vegetation_phenology` en
+`phenology.rs`) toman `&[&Raster<f64>]` completos, no series de un pixel. Cada
+uno ya tiene internamente un núcleo per-pixel (tipo `collect_valid` +
+matemática sobre `Vec<f64>`) pero no está expuesto. Antes de escribir los
+adaptadores hay que **extraer ese núcleo a una función pública `f64`-en
+`f64`-out** por reducer, y que tanto la función de stack completo (API actual,
+sin romperla) como el nuevo adaptador `TemporalReducer` la reusen.
+
+Adaptadores delgados (ahora sí delgados, una vez hecha la extracción):
 `TheilSenTrend`, `MannKendall`, `PhenologyMetrics` (SOS/EOS/peak), `ZScoreAnomaly`,
-`HarmonicFit` (amplitud/fase estacional). Cada uno = wrapper sobre la función
-existente en `temporal/*.rs`, sin reimplementar la matemática.
+`HarmonicFit` (amplitud/fase estacional). Cada uno = wrapper sobre el núcleo
+per-pixel extraído, sin reimplementar la matemática.
 
 ### 2.2 Orquestador — `CubeStreamer`
 
@@ -81,10 +128,11 @@ existente en `temporal/*.rs`, sin reimplementar la matemática.
 /// raster multibanda (una banda por output del reducer). RAM acotada por
 /// `chunk_rows`, no por el nº de fechas ni el tamaño total.
 pub fn reduce_temporal<R: TemporalReducer>(
-    cube: &Cube<f32>,        // o un CubeSource streaming (ver 2.3)
+    cube: &Cube<f64>,        // f64, no f32 — matchea el dtype real de todos
+                              // los reducers existentes en temporal/*.rs (ver §1)
     reducer: &R,
     chunk_rows: usize,
-) -> Result<Vec<Raster<f32>>>;
+) -> Result<Vec<Raster<f64>>>;
 ```
 
 Paraleliza filas dentro del chunk con `maybe_rayon`. Salida vía
@@ -99,16 +147,23 @@ reusando el decode byte-budget de R9:
 ```rust
 pub trait CubeSource {
     fn shape(&self) -> (usize, usize);
+    /// Añadido en la implementación (2026-07-16, no estaba en la v1 de esta
+    /// SPEC): sin esto `reduce_temporal` no puede georreferenciar su salida
+    /// a partir de un `CubeSource` genérico.
+    fn transform(&self) -> GeoTransform;
     fn times(&self) -> &[i64];
     /// Entrega la franja [row0, row0+rows) con TODAS las fechas alineadas.
-    fn chunk(&self, row0: usize, rows: usize) -> Result<CubeChunk<'_, f32>>;
+    fn chunk(&self, row0: usize, rows: usize) -> Result<CubeChunk<'_, f64>>;
 }
 ```
 
-Impl `StacCubeSource` en `cloud`: resuelve escenas fechadas por bbox+colección,
-reproyecta/alinea a la grilla objetivo, aplica máscara de nubes por fecha, y
-decodifica solo la franja pedida dentro del `MemoryBudget`. `Cube` en memoria
-implementa el mismo trait trivialmente.
+Impl `StacCubeSource` en `cloud`: resuelve escenas fechadas vía
+`StacClient::search_all()` (ya existe y preserva `datetime` por item, ver §1)
+por bbox+colección, reproyecta/alinea a la grilla objetivo, aplica el
+enmascarado de nubes por fecha escribiendo NaN (mismo mecanismo que
+`MaskApplier` en el pipeline de composite hoy — no una máscara `bool`
+separada), y decodifica solo la franja pedida dentro del `MemoryBudget`.
+`Cube` en memoria implementa el mismo trait trivialmente.
 
 ---
 
@@ -131,16 +186,38 @@ implementa el mismo trait trivialmente.
 - Documentar el pico y un test nightly (como `stac-ram-bench`) que asserte
   ausencia de crecimiento monótono sobre una serie larga.
 
-## 5. Criterios de aceptación (Definition of Done del scaffold)
+## 5. Criterios de aceptación (Definition of Done del scaffold) — ✅ scaffold completo 2026-07-16
 
-- [ ] `TemporalReducer` + `reduce_temporal` (cuerpo real, in-memory `Cube`) +
-      al menos `TheilSenTrend` adaptando la función existente.
-- [ ] `CubeSource` trait definido; `Cube` lo implementa; `StacCubeSource` = stub
-      documentado (`todo!()`) en `cloud`.
-- [ ] Test analítico: cube sintético con tendencia lineal conocida → Theil-Sen
-      recupera la pendiente exacta; comparar streaming vs in-memory (bit-idéntico).
-- [ ] Test de gaps: serie con nodata/nubes → respeta `min_valid` y máscara.
-- [ ] CLI `surtgis temporal trend` registrada (handler stub). CI verde.
+- [x] `TemporalReducer` + `reduce_temporal` (cuerpo real, genérico sobre
+      `CubeSource` — no solo in-memory `Cube`) + `TheilSenTrend` adaptando
+      `sens_slope_series`, el núcleo per-pixel extraído de `sens_slope`
+      (`crates/algorithms/src/temporal/streaming.rs`, `trend.rs`).
+- [x] `CubeSource` trait definido en `core::cube` (con `transform()`
+      añadido, ver §2.3); `Cube<f64>` lo implementa (rechaza cubos
+      multibanda); `StacCubeSource` = stub documentado (`todo!()`) en
+      `crates/cloud/src/stac_cube_source.rs`, gateado tras `unstable`.
+- [x] Test analítico: cube sintético con tendencia lineal conocida → Theil-Sen
+      recupera la pendiente exacta (`theil_sen_recovers_exact_slope`);
+      streaming (chunk_rows=1) vs in-memory `sens_slope` comparado bit a bit
+      vía `to_bits()` (`streaming_matches_in_memory_bit_identical`) — también
+      verificado a nivel CLI end-to-end (`temporal trend --method theil-sen`
+      vs `--method sens`, `np.array_equal` sobre los GeoTIFF de salida).
+- [x] Test de gaps: `gaps_respect_min_valid` (1 muestra válida → NaN, no hay
+      par para pendiente) y `gaps_still_recover_slope_with_enough_valid_samples`
+      (2 fechas con nube/NaN de 6 → pendiente exacta igual) — convención NaN,
+      no máscara `bool` (ver corrección §1/§2.1).
+- [x] CLI: `surtgis temporal trend --method theil-sen` (alias `streaming`)
+      registrado y funcional sobre un stack local de GeoTIFFs fechados
+      (construye un `Cube`, llama `reduce_temporal`) — no solo un stub,
+      valida end-to-end el criterio "corre sobre cualquier `CubeSource`,
+      incluido GeoTIFFs locales" del §6. CI verde: `cargo fmt --check` limpio,
+      853 tests `algorithms` + 160 `core` en verde, `cargo build --all-features`
+      en `cloud` compila el stub `StacCubeSource` sin warnings nuevos.
+
+**Fuera del scaffold** (siguiente iteración, no bloquea este cierre):
+`StacCubeSource::new`/`chunk` siguen siendo `todo!()` — la superficie CLI/Python
+con `--collection`/`--bbox`/`--start`/`--end` de §3 depende de esa
+implementación real y no se construyó todavía.
 
 ## 6. No-objetivos
 
