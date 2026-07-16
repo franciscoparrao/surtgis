@@ -65,7 +65,7 @@ pub use geo_types;
 pub use ndarray;
 
 pub use crs::CRS;
-pub use cube::{Cube, CubeChunk};
+pub use cube::{Cube, CubeChunk, CubeSource};
 pub use error::{Error, Result};
 pub use mosaic::{MosaicOptions, mosaic};
 pub use raster::{AnyRaster, DataType, GeoTransform, Raster, RasterCell, RasterElement};

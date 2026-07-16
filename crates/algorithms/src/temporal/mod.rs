@@ -9,6 +9,7 @@
 mod anomaly;
 mod phenology;
 mod statistics;
+mod streaming;
 mod trend;
 
 pub use anomaly::{AnomalyMethod, temporal_anomaly};
@@ -17,4 +18,7 @@ pub use statistics::{
     TemporalStats, temporal_count, temporal_max, temporal_mean, temporal_min, temporal_percentile,
     temporal_stats, temporal_std,
 };
-pub use trend::{LinearTrendResult, MannKendallResult, linear_trend, mann_kendall, sens_slope};
+pub use streaming::{TemporalReducer, TheilSenTrend, reduce_temporal};
+pub use trend::{
+    LinearTrendResult, MannKendallResult, linear_trend, mann_kendall, sens_slope, sens_slope_series,
+};

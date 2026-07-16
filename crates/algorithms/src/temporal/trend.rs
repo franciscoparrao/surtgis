@@ -337,12 +337,53 @@ pub fn mann_kendall(rasters: &[&Raster<f64>]) -> Result<MannKendallResult> {
     })
 }
 
+/// Theil–Sen slope of one pixel's series: the median of all pairwise slopes
+/// `(values[j] - values[i]) / (times[j] - times[i])` for `j > i`. `NaN`
+/// entries in `values` are dropped before pairing (same convention as the
+/// rest of `temporal/*.rs`). `times` must be the same length as `values`;
+/// differences need not be evenly spaced, so real (e.g. STAC scene) dates
+/// work as-is. Returns `None` if fewer than 2 valid samples remain.
+///
+/// This is the per-pixel core shared by the raster-stack [`sens_slope`] and
+/// the streaming `TheilSenTrend` reducer, so both paths compute bit-identical
+/// results.
+pub fn sens_slope_series(values: &[f64], times: &[f64]) -> Option<f64> {
+    debug_assert_eq!(values.len(), times.len());
+    let idx: Vec<usize> = (0..values.len())
+        .filter(|&i| values[i].is_finite())
+        .collect();
+    if idx.len() < 2 {
+        return None;
+    }
+    let mut slopes = Vec::with_capacity(idx.len() * (idx.len() - 1) / 2);
+    for a in 0..idx.len() {
+        for b in (a + 1)..idx.len() {
+            let (i, j) = (idx[a], idx[b]);
+            let dt = times[j] - times[i];
+            if dt != 0.0 {
+                slopes.push((values[j] - values[i]) / dt);
+            }
+        }
+    }
+    if slopes.is_empty() {
+        return None;
+    }
+    slopes.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+    let mid = slopes.len() / 2;
+    Some(if slopes.len() % 2 == 0 {
+        (slopes[mid - 1] + slopes[mid]) / 2.0
+    } else {
+        slopes[mid]
+    })
+}
+
 /// Per-pixel Sen's slope estimator (standalone, without full Mann-Kendall test).
 ///
 /// Returns the median of all pairwise slopes: (y_j - y_i) / (j - i) for j > i.
 pub fn sens_slope(rasters: &[&Raster<f64>]) -> Result<Raster<f64>> {
     let (rows, cols) = validate_series(rasters)?;
     let n = rasters.len();
+    let times: Vec<f64> = (0..n).map(|i| i as f64).collect();
     let mut out = Array2::<f64>::from_elem((rows, cols), f64::NAN);
 
     out.as_slice_mut()
@@ -350,30 +391,13 @@ pub fn sens_slope(rasters: &[&Raster<f64>]) -> Result<Raster<f64>> {
         .par_chunks_mut(cols)
         .enumerate()
         .for_each(|(row, out_row)| {
-            let mut slopes = Vec::new();
+            let mut values = vec![0.0; n];
             for col in 0..cols {
-                slopes.clear();
-                for i in 0..n {
-                    let vi = unsafe { rasters[i].get_unchecked(row, col) };
-                    if !vi.is_finite() {
-                        continue;
-                    }
-                    for j in (i + 1)..n {
-                        let vj = unsafe { rasters[j].get_unchecked(row, col) };
-                        if !vj.is_finite() {
-                            continue;
-                        }
-                        slopes.push((vj - vi) / (j - i) as f64);
-                    }
+                for (i, v) in values.iter_mut().enumerate() {
+                    *v = unsafe { rasters[i].get_unchecked(row, col) };
                 }
-                if !slopes.is_empty() {
-                    slopes.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
-                    let mid = slopes.len() / 2;
-                    out_row[col] = if slopes.len() % 2 == 0 {
-                        (slopes[mid - 1] + slopes[mid]) / 2.0
-                    } else {
-                        slopes[mid]
-                    };
+                if let Some(s) = sens_slope_series(&values, &times) {
+                    out_row[col] = s;
                 }
             }
         });
