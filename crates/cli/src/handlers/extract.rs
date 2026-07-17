@@ -145,11 +145,16 @@ pub fn handle(
     // 4. Collect point coordinates + target values
     let mut points: Vec<(f64, f64)> = Vec::new();
     let mut targets: Vec<String> = Vec::new();
-    let mut skipped = 0usize;
+    // Kept apart rather than one aggregate counter: "missing target" and
+    // "not a point" mean very different things to someone debugging a
+    // low extraction rate, and conflating them with the geometric skips
+    // below (out of bounds / NaN) hides which stage is actually at fault.
+    let mut skipped_not_point = 0usize;
+    let mut skipped_missing_target = 0usize;
 
     for feature in fc.iter() {
         let Some(geo::Geometry::Point(p)) = &feature.geometry else {
-            skipped += 1;
+            skipped_not_point += 1;
             continue;
         };
 
@@ -161,7 +166,7 @@ pub fn handle(
                 format!("{}", if *v { 1 } else { 0 })
             }
             _ => {
-                skipped += 1;
+                skipped_missing_target += 1;
                 continue;
             }
         };
@@ -187,10 +192,14 @@ pub fn handle(
         .context("Failed to write CSV header")?;
 
     let mut extracted = 0usize;
+    // `sample_at_points` collapses "outside the raster grid" and "a band
+    // is non-finite there" into one `None` — it doesn't distinguish them
+    // internally, so neither can this counter.
+    let mut skipped_out_of_bounds_or_nan = 0usize;
 
     for (sample, target_val) in samples.into_iter().zip(targets) {
         let Some(values) = sample else {
-            skipped += 1;
+            skipped_out_of_bounds_or_nan += 1;
             continue;
         };
 
@@ -204,14 +213,19 @@ pub fn handle(
 
     csv_writer.flush().context("Failed to flush CSV")?;
 
+    let total_skipped = skipped_not_point + skipped_missing_target + skipped_out_of_bounds_or_nan;
+
     println!();
     println!("=========================================");
     println!("EXTRACTION COMPLETE");
     println!("=========================================");
     println!("  Extracted: {} samples", extracted);
+    println!("  Skipped:   {} total", total_skipped);
+    println!("    Not a point geometry:    {}", skipped_not_point);
+    println!("    Missing/invalid target:  {}", skipped_missing_target);
     println!(
-        "  Skipped:   {} (out of bounds, NaN, missing target)",
-        skipped
+        "    Out of bounds or NaN:    {}",
+        skipped_out_of_bounds_or_nan
     );
     println!("  Features:  {}", feature_names.len());
     println!("  Output:    {}", output.display());
