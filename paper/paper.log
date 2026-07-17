@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.25 (TeX Live 2023/Debian) (preloaded format=pdflatex 2026.1.12)  24 FEB 2026 10:51
+This is pdfTeX, Version 3.141592653-2.6-1.40.25 (TeX Live 2023/Debian) (preloaded format=pdflatex 2026.3.9)  17 JUL 2026 16:07
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -86,7 +86,7 @@ File: pdftex.def 2022/09/22 v1.2b Graphics/color driver for pdftex
 \@sep=\skip50
 \@@sep=\skip51
 
-(./paper.spl) (/usr/share/texlive/texmf-dist/tex/latex/natbib/natbib.sty
+(/usr/share/texlive/texmf-dist/tex/latex/natbib/natbib.sty
 Package: natbib 2010/09/13 8.31b (PWD, AO)
 \bibhang=\skip52
 \bibsep=\skip53
@@ -423,43 +423,339 @@ Package: array 2023/10/16 v2.5g Tabular extension package (FMi)
 \backup@length=\skip61
 \ar@cellbox=\box70
 ))
+(/usr/share/texlive/texmf-dist/tex/latex/pgf/frontendlayer/tikz.sty
+(/usr/share/texlive/texmf-dist/tex/latex/pgf/basiclayer/pgf.sty
+(/usr/share/texlive/texmf-dist/tex/latex/pgf/utilities/pgfrcs.sty
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/utilities/pgfutil-common.tex
+\pgfutil@everybye=\toks28
+\pgfutil@tempdima=\dimen187
+\pgfutil@tempdimb=\dimen188
+)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/utilities/pgfutil-latex.def
+\pgfutil@abb=\box71
+)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/utilities/pgfrcs.code.tex
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/pgf.revision.tex)
+Package: pgfrcs 2023-01-15 v3.1.10 (3.1.10)
+))
+Package: pgf 2023-01-15 v3.1.10 (3.1.10)
+
+(/usr/share/texlive/texmf-dist/tex/latex/pgf/basiclayer/pgfcore.sty
+(/usr/share/texlive/texmf-dist/tex/latex/pgf/systemlayer/pgfsys.sty
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/systemlayer/pgfsys.code.tex
+Package: pgfsys 2023-01-15 v3.1.10 (3.1.10)
+
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/utilities/pgfkeys.code.tex
+\pgfkeys@pathtoks=\toks29
+\pgfkeys@temptoks=\toks30
+
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/utilities/pgfkeyslibraryfiltered
+.code.tex
+\pgfkeys@tmptoks=\toks31
+))
+\pgf@x=\dimen189
+\pgf@y=\dimen190
+\pgf@xa=\dimen191
+\pgf@ya=\dimen192
+\pgf@xb=\dimen193
+\pgf@yb=\dimen194
+\pgf@xc=\dimen195
+\pgf@yc=\dimen196
+\pgf@xd=\dimen197
+\pgf@yd=\dimen198
+\w@pgf@writea=\write4
+\r@pgf@reada=\read2
+\c@pgf@counta=\count320
+\c@pgf@countb=\count321
+\c@pgf@countc=\count322
+\c@pgf@countd=\count323
+\t@pgf@toka=\toks32
+\t@pgf@tokb=\toks33
+\t@pgf@tokc=\toks34
+\pgf@sys@id@count=\count324
+ (/usr/share/texlive/texmf-dist/tex/generic/pgf/systemlayer/pgf.cfg
+File: pgf.cfg 2023-01-15 v3.1.10 (3.1.10)
+)
+Driver file for pgf: pgfsys-pdftex.def
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/systemlayer/pgfsys-pdftex.def
+File: pgfsys-pdftex.def 2023-01-15 v3.1.10 (3.1.10)
+
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/systemlayer/pgfsys-common-pdf.de
+f
+File: pgfsys-common-pdf.def 2023-01-15 v3.1.10 (3.1.10)
+)))
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/systemlayer/pgfsyssoftpath.code.
+tex
+File: pgfsyssoftpath.code.tex 2023-01-15 v3.1.10 (3.1.10)
+\pgfsyssoftpath@smallbuffer@items=\count325
+\pgfsyssoftpath@bigbuffer@items=\count326
+)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/systemlayer/pgfsysprotocol.code.
+tex
+File: pgfsysprotocol.code.tex 2023-01-15 v3.1.10 (3.1.10)
+))
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/basiclayer/pgfcore.code.tex
+Package: pgfcore 2023-01-15 v3.1.10 (3.1.10)
+
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/math/pgfmath.code.tex
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/math/pgfmathutil.code.tex)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/math/pgfmathparser.code.tex
+\pgfmath@dimen=\dimen199
+\pgfmath@count=\count327
+\pgfmath@box=\box72
+\pgfmath@toks=\toks35
+\pgfmath@stack@operand=\toks36
+\pgfmath@stack@operation=\toks37
+)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/math/pgfmathfunctions.code.tex)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/math/pgfmathfunctions.basic.code
+.tex)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/math/pgfmathfunctions.trigonomet
+ric.code.tex)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/math/pgfmathfunctions.random.cod
+e.tex)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/math/pgfmathfunctions.comparison
+.code.tex)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/math/pgfmathfunctions.base.code.
+tex)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/math/pgfmathfunctions.round.code
+.tex)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/math/pgfmathfunctions.misc.code.
+tex)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/math/pgfmathfunctions.integerari
+thmetics.code.tex)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/math/pgfmathcalc.code.tex)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/math/pgfmathfloat.code.tex
+\c@pgfmathroundto@lastzeros=\count328
+))
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/math/pgfint.code.tex)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/basiclayer/pgfcorepoints.code.te
+x
+File: pgfcorepoints.code.tex 2023-01-15 v3.1.10 (3.1.10)
+\pgf@picminx=\dimen256
+\pgf@picmaxx=\dimen257
+\pgf@picminy=\dimen258
+\pgf@picmaxy=\dimen259
+\pgf@pathminx=\dimen260
+\pgf@pathmaxx=\dimen261
+\pgf@pathminy=\dimen262
+\pgf@pathmaxy=\dimen263
+\pgf@xx=\dimen264
+\pgf@xy=\dimen265
+\pgf@yx=\dimen266
+\pgf@yy=\dimen267
+\pgf@zx=\dimen268
+\pgf@zy=\dimen269
+)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/basiclayer/pgfcorepathconstruct.
+code.tex
+File: pgfcorepathconstruct.code.tex 2023-01-15 v3.1.10 (3.1.10)
+\pgf@path@lastx=\dimen270
+\pgf@path@lasty=\dimen271
+)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/basiclayer/pgfcorepathusage.code
+.tex
+File: pgfcorepathusage.code.tex 2023-01-15 v3.1.10 (3.1.10)
+\pgf@shorten@end@additional=\dimen272
+\pgf@shorten@start@additional=\dimen273
+)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/basiclayer/pgfcorescopes.code.te
+x
+File: pgfcorescopes.code.tex 2023-01-15 v3.1.10 (3.1.10)
+\pgfpic=\box73
+\pgf@hbox=\box74
+\pgf@layerbox@main=\box75
+\pgf@picture@serial@count=\count329
+)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/basiclayer/pgfcoregraphicstate.c
+ode.tex
+File: pgfcoregraphicstate.code.tex 2023-01-15 v3.1.10 (3.1.10)
+\pgflinewidth=\dimen274
+)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/basiclayer/pgfcoretransformation
+s.code.tex
+File: pgfcoretransformations.code.tex 2023-01-15 v3.1.10 (3.1.10)
+\pgf@pt@x=\dimen275
+\pgf@pt@y=\dimen276
+\pgf@pt@temp=\dimen277
+)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/basiclayer/pgfcorequick.code.tex
+File: pgfcorequick.code.tex 2023-01-15 v3.1.10 (3.1.10)
+)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/basiclayer/pgfcoreobjects.code.t
+ex
+File: pgfcoreobjects.code.tex 2023-01-15 v3.1.10 (3.1.10)
+)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/basiclayer/pgfcorepathprocessing
+.code.tex
+File: pgfcorepathprocessing.code.tex 2023-01-15 v3.1.10 (3.1.10)
+)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/basiclayer/pgfcorearrows.code.te
+x
+File: pgfcorearrows.code.tex 2023-01-15 v3.1.10 (3.1.10)
+\pgfarrowsep=\dimen278
+)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/basiclayer/pgfcoreshade.code.tex
+File: pgfcoreshade.code.tex 2023-01-15 v3.1.10 (3.1.10)
+\pgf@max=\dimen279
+\pgf@sys@shading@range@num=\count330
+\pgf@shadingcount=\count331
+)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/basiclayer/pgfcoreimage.code.tex
+File: pgfcoreimage.code.tex 2023-01-15 v3.1.10 (3.1.10)
+)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/basiclayer/pgfcoreexternal.code.
+tex
+File: pgfcoreexternal.code.tex 2023-01-15 v3.1.10 (3.1.10)
+\pgfexternal@startupbox=\box76
+)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/basiclayer/pgfcorelayers.code.te
+x
+File: pgfcorelayers.code.tex 2023-01-15 v3.1.10 (3.1.10)
+)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/basiclayer/pgfcoretransparency.c
+ode.tex
+File: pgfcoretransparency.code.tex 2023-01-15 v3.1.10 (3.1.10)
+)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/basiclayer/pgfcorepatterns.code.
+tex
+File: pgfcorepatterns.code.tex 2023-01-15 v3.1.10 (3.1.10)
+)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/basiclayer/pgfcorerdf.code.tex
+File: pgfcorerdf.code.tex 2023-01-15 v3.1.10 (3.1.10)
+)))
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/modules/pgfmoduleshapes.code.tex
+File: pgfmoduleshapes.code.tex 2023-01-15 v3.1.10 (3.1.10)
+\pgfnodeparttextbox=\box77
+) (/usr/share/texlive/texmf-dist/tex/generic/pgf/modules/pgfmoduleplot.code.tex
+File: pgfmoduleplot.code.tex 2023-01-15 v3.1.10 (3.1.10)
+)
+(/usr/share/texlive/texmf-dist/tex/latex/pgf/compatibility/pgfcomp-version-0-65
+.sty
+Package: pgfcomp-version-0-65 2023-01-15 v3.1.10 (3.1.10)
+\pgf@nodesepstart=\dimen280
+\pgf@nodesepend=\dimen281
+)
+(/usr/share/texlive/texmf-dist/tex/latex/pgf/compatibility/pgfcomp-version-1-18
+.sty
+Package: pgfcomp-version-1-18 2023-01-15 v3.1.10 (3.1.10)
+)) (/usr/share/texlive/texmf-dist/tex/latex/pgf/utilities/pgffor.sty
+(/usr/share/texlive/texmf-dist/tex/latex/pgf/utilities/pgfkeys.sty
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/utilities/pgfkeys.code.tex))
+(/usr/share/texlive/texmf-dist/tex/latex/pgf/math/pgfmath.sty
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/math/pgfmath.code.tex))
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/utilities/pgffor.code.tex
+Package: pgffor 2023-01-15 v3.1.10 (3.1.10)
+\pgffor@iter=\dimen282
+\pgffor@skip=\dimen283
+\pgffor@stack=\toks38
+\pgffor@toks=\toks39
+))
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/frontendlayer/tikz/tikz.code.tex
+Package: tikz 2023-01-15 v3.1.10 (3.1.10)
+
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/libraries/pgflibraryplothandlers
+.code.tex
+File: pgflibraryplothandlers.code.tex 2023-01-15 v3.1.10 (3.1.10)
+\pgf@plot@mark@count=\count332
+\pgfplotmarksize=\dimen284
+)
+\tikz@lastx=\dimen285
+\tikz@lasty=\dimen286
+\tikz@lastxsaved=\dimen287
+\tikz@lastysaved=\dimen288
+\tikz@lastmovetox=\dimen289
+\tikz@lastmovetoy=\dimen290
+\tikzleveldistance=\dimen291
+\tikzsiblingdistance=\dimen292
+\tikz@figbox=\box78
+\tikz@figbox@bg=\box79
+\tikz@tempbox=\box80
+\tikz@tempbox@bg=\box81
+\tikztreelevel=\count333
+\tikznumberofchildren=\count334
+\tikznumberofcurrentchild=\count335
+\tikz@fig@count=\count336
+
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/modules/pgfmodulematrix.code.tex
+File: pgfmodulematrix.code.tex 2023-01-15 v3.1.10 (3.1.10)
+\pgfmatrixcurrentrow=\count337
+\pgfmatrixcurrentcolumn=\count338
+\pgf@matrix@numberofcolumns=\count339
+)
+\tikz@expandcount=\count340
+
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/frontendlayer/tikz/libraries/tik
+zlibrarytopaths.code.tex
+File: tikzlibrarytopaths.code.tex 2023-01-15 v3.1.10 (3.1.10)
+)))
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/frontendlayer/tikz/libraries/tik
+zlibrarypositioning.code.tex
+File: tikzlibrarypositioning.code.tex 2023-01-15 v3.1.10 (3.1.10)
+)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/frontendlayer/tikz/libraries/tik
+zlibraryshapes.geometric.code.tex
+File: tikzlibraryshapes.geometric.code.tex 2023-01-15 v3.1.10 (3.1.10)
+
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/libraries/shapes/pgflibraryshape
+s.geometric.code.tex
+File: pgflibraryshapes.geometric.code.tex 2023-01-15 v3.1.10 (3.1.10)
+))
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/libraries/pgflibraryarrows.meta.
+code.tex
+File: pgflibraryarrows.meta.code.tex 2023-01-15 v3.1.10 (3.1.10)
+\pgfarrowinset=\dimen293
+\pgfarrowlength=\dimen294
+\pgfarrowwidth=\dimen295
+\pgfarrowlinewidth=\dimen296
+)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/frontendlayer/tikz/libraries/tik
+zlibraryfit.code.tex
+File: tikzlibraryfit.code.tex 2023-01-15 v3.1.10 (3.1.10)
+)
+(/usr/share/texlive/texmf-dist/tex/generic/pgf/frontendlayer/tikz/libraries/tik
+zlibrarybackgrounds.code.tex
+File: tikzlibrarybackgrounds.code.tex 2023-01-15 v3.1.10 (3.1.10)
+\pgf@layerbox@background=\box82
+\pgf@layerboxsaved@background=\box83
+)
 Package translations Info: No language package found. I am going to use `englis
-h' as default language. on input line 18.
+h' as default language. on input line 27.
  (./paper.aux)
 \openout1 = `paper.aux'.
 
-LaTeX Font Info:    Checking defaults for OML/cmm/m/it on input line 18.
-LaTeX Font Info:    ... okay on input line 18.
-LaTeX Font Info:    Checking defaults for OMS/cmsy/m/n on input line 18.
-LaTeX Font Info:    ... okay on input line 18.
-LaTeX Font Info:    Checking defaults for OT1/cmr/m/n on input line 18.
-LaTeX Font Info:    ... okay on input line 18.
-LaTeX Font Info:    Checking defaults for T1/cmr/m/n on input line 18.
-LaTeX Font Info:    ... okay on input line 18.
-LaTeX Font Info:    Checking defaults for TS1/cmr/m/n on input line 18.
-LaTeX Font Info:    ... okay on input line 18.
-LaTeX Font Info:    Checking defaults for OMX/cmex/m/n on input line 18.
-LaTeX Font Info:    ... okay on input line 18.
-LaTeX Font Info:    Checking defaults for U/cmr/m/n on input line 18.
-LaTeX Font Info:    ... okay on input line 18.
-LaTeX Font Info:    Checking defaults for PD1/pdf/m/n on input line 18.
-LaTeX Font Info:    ... okay on input line 18.
-LaTeX Font Info:    Checking defaults for PU/pdf/m/n on input line 18.
-LaTeX Font Info:    ... okay on input line 18.
+LaTeX Font Info:    Checking defaults for OML/cmm/m/it on input line 27.
+LaTeX Font Info:    ... okay on input line 27.
+LaTeX Font Info:    Checking defaults for OMS/cmsy/m/n on input line 27.
+LaTeX Font Info:    ... okay on input line 27.
+LaTeX Font Info:    Checking defaults for OT1/cmr/m/n on input line 27.
+LaTeX Font Info:    ... okay on input line 27.
+LaTeX Font Info:    Checking defaults for T1/cmr/m/n on input line 27.
+LaTeX Font Info:    ... okay on input line 27.
+LaTeX Font Info:    Checking defaults for TS1/cmr/m/n on input line 27.
+LaTeX Font Info:    ... okay on input line 27.
+LaTeX Font Info:    Checking defaults for OMX/cmex/m/n on input line 27.
+LaTeX Font Info:    ... okay on input line 27.
+LaTeX Font Info:    Checking defaults for U/cmr/m/n on input line 27.
+LaTeX Font Info:    ... okay on input line 27.
+LaTeX Font Info:    Checking defaults for PD1/pdf/m/n on input line 27.
+LaTeX Font Info:    ... okay on input line 27.
+LaTeX Font Info:    Checking defaults for PU/pdf/m/n on input line 27.
+LaTeX Font Info:    ... okay on input line 27.
 
 (/usr/share/texlive/texmf-dist/tex/context/base/mkii/supp-pdf.mkii
 [Loading MPS to PDF converter (version 2006.09.02).]
-\scratchcounter=\count320
-\scratchdimen=\dimen187
-\scratchbox=\box71
-\nofMPsegments=\count321
-\nofMParguments=\count322
-\everyMPshowfont=\toks28
-\MPscratchCnt=\count323
-\MPscratchDim=\dimen188
-\MPnumerator=\count324
-\makeMPintoPDFobject=\count325
-\everyMPtoPDFconversion=\toks29
+\scratchcounter=\count341
+\scratchdimen=\dimen297
+\scratchbox=\box84
+\nofMPsegments=\count342
+\nofMParguments=\count343
+\everyMPshowfont=\toks40
+\MPscratchCnt=\count344
+\MPscratchDim=\dimen298
+\MPnumerator=\count345
+\makeMPintoPDFobject=\count346
+\everyMPtoPDFconversion=\toks41
 ) (/usr/share/texlive/texmf-dist/tex/latex/epstopdf-pkg/epstopdf-base.sty
 Package: epstopdf-base 2020-01-24 v2.11 Base part for package epstopdf
 Package epstopdf-base Info: Redefining graphics rule for `.eps' on input line 4
@@ -469,11 +765,11 @@ Package epstopdf-base Info: Redefining graphics rule for `.eps' on input line 4
 File: epstopdf-sys.cfg 2010/07/13 v1.3 Configuration of (r)epstopdf for TeX Liv
 e
 ))
-Package hyperref Info: Link coloring OFF on input line 18.
+Package hyperref Info: Link coloring OFF on input line 27.
 
 (./paper.out) (./paper.out)
-\@outlinefile=\write4
-\openout4 = `paper.out'.
+\@outlinefile=\write5
+\openout5 = `paper.out'.
 
 
 (/usr/share/texlive/texmf-dist/tex/latex/translations/translations-basic-dictio
@@ -482,42 +778,42 @@ File: translations-basic-dictionary-english.trsl (english translation file `tra
 nslations-basic-dictionary')
 )
 Package translations Info: loading dictionary `translations-basic-dictionary' f
-or `english'. on input line 18.
-LaTeX Font Info:    Trying to load font information for U+msa on input line 33.
+or `english'. on input line 27.
+LaTeX Font Info:    Trying to load font information for U+msa on input line 42.
 
  (/usr/share/texlive/texmf-dist/tex/latex/amsfonts/umsa.fd
 File: umsa.fd 2013/01/14 v3.01 AMS symbols A
 )
-LaTeX Font Info:    Trying to load font information for U+msb on input line 33.
+LaTeX Font Info:    Trying to load font information for U+msb on input line 42.
 
 
 (/usr/share/texlive/texmf-dist/tex/latex/amsfonts/umsb.fd
 File: umsb.fd 2013/01/14 v3.01 AMS symbols B
 )
-<../benchmarks/results/figures/graphical_abstract.pdf, id=100, 1156.32pt x 650.
+<../benchmarks/results/figures/graphical_abstract.pdf, id=123, 1156.32pt x 650.
 43pt>
 File: ../benchmarks/results/figures/graphical_abstract.pdf Graphic file (type p
 df)
 <use ../benchmarks/results/figures/graphical_abstract.pdf>
 Package pdftex.def Info: ../benchmarks/results/figures/graphical_abstract.pdf  
-used on input line 38.
+used on input line 47.
 (pdftex.def)             Requested size: 390.0pt x 219.36674pt.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `\<def>-command' on input line 53.
+(hyperref)                removing `\<def>-command' on input line 62.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `\cnotenum' on input line 53.
+(hyperref)                removing `\cnotenum' on input line 62.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `\<def>-command' on input line 53.
+(hyperref)                removing `\<def>-command' on input line 62.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `\@corref' on input line 53.
+(hyperref)                removing `\@corref' on input line 62.
 
 [1
 
@@ -534,7 +830,7 @@ pdfTeX warning (ext4): destination with the same identifier (name{page.1}) has
 been already used, duplicate ignored
 <to be read again> 
                    \relax 
-l.53 \end{frontmatter}
+l.62 \end{frontmatter}
                        [1
 
 
@@ -543,228 +839,445 @@ pdfTeX warning (ext4): destination with the same identifier (name{page.2}) has
 been already used, duplicate ignored
 <to be read again> 
                    \relax 
-l.64 
+l.73 
       [2]
-Overfull \hbox (3.31133pt too wide) in paragraph at lines 65--66
-\OT1/cmr/m/n/12 and formats---Cloud-Optimized Geo-TIFF (COG), Spa-tioTem-po-ral
- As-set Cat-
+Overfull \hbox (6.84045pt too wide) in paragraph at lines 74--75
+[]\OT1/cmr/m/n/12 Cloud-native geospa-tial formats---Cloud-Optimized Geo-TIFF (
+COG), Spa-
  []
 
 [3]
-Overfull \hbox (38.26869pt too wide) in paragraph at lines 85--86
-[]\OT1/cmr/m/n/12 SurtGIS is or-ga-nized as a Rust workspace com-pris-ing seven
- crates: \OT1/cmtt/m/n/12 surtgis-core
- []
-
-
-Overfull \hbox (48.15096pt too wide) in paragraph at lines 85--86
-\OT1/cmr/m/n/12 (raster data struc-tures, na-tive Geo-TIFF I/O, No-Data han-dli
-ng), \OT1/cmtt/m/n/12 surtgis-algorithms
- []
-
-
-Overfull \hbox (14.00105pt too wide) in paragraph at lines 85--86
-\OT1/cmr/m/n/12 (all geospa-tial al-go-rithms), \OT1/cmtt/m/n/12 surtgis-parall
-el \OT1/cmr/m/n/12 (Rayon-based par-al-lel adapters),
- []
-
-
-Overfull \hbox (11.40585pt too wide) in paragraph at lines 85--86
-\OT1/cmr/m/n/12 (We-bAssem-bly bind-ings), \OT1/cmtt/m/n/12 surtgis-python \OT1
-/cmr/m/n/12 (PyO3 bind-ings), and \OT1/cmtt/m/n/12 surtgis-cli
- []
-
-
-Overfull \hbox (1.23622pt too wide) in paragraph at lines 87--88
-\OT1/cmr/m/n/12 fea-ture flag se-lects be-tween Rayon's par-al-lel iterators---
-based on work-stealing
+Overfull \hbox (7.85237pt too wide) in paragraph at lines 94--95
+\OT1/cmr/m/n/12 only on the lay-ers they need: a Python note-book user pulls in
+ \OT1/cmtt/m/n/12 surtgis-python\OT1/cmr/m/n/12 ,
  []
 
 [4]
-Underfull \hbox (badness 10000) in paragraph at lines 110--111
+Overfull \hbox (19.53114pt too wide) in paragraph at lines 138--139
+ [][] 
+ []
+
+[5]
+Underfull \hbox (badness 10000) in paragraph at lines 151--151
+[]|\OT1/cmr/m/n/12 Representative al-go-
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 154--154
+[]|\OT1/cmr/m/n/12 Planchon--Darboux
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 154--154
+\OT1/cmr/m/n/12 / Priority-Flood /
+ []
+
+
+Underfull \hbox (badness 4156) in paragraph at lines 154--154
+\OT1/cmr/m/n/12 breach de-pres-sion han-
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 154--154
+\OT1/cmr/m/n/12 dling, D8/MFD/D-
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 154--154
+\OT1/cmr/m/n/12 infinity/TFGA flow
+ []
+
+
+Underfull \hbox (badness 1983) in paragraph at lines 155--155
+\OT1/cmr/m/n/12 sify, thresh-old, change-
+ []
+
+
+Underfull \hbox (badness 4713) in paragraph at lines 157--157
+\OT1/cmr/m/n/12 thin-plate spline, or-di-
+ []
+
+
+Underfull \hbox (badness 2368) in paragraph at lines 157--157
+\OT1/cmr/m/n/12 sion krig-ing, var-i-ogram
+ []
+
+
+Underfull \hbox (badness 7814) in paragraph at lines 161--161
+[]|\OT1/cmr/m/n/12 GLCM (Har-al-ick) fea-
+ []
+
+
+Overfull \hbox (67.40874pt too wide) in paragraph at lines 149--167
+ [][] 
+ []
+
+
+LaTeX Warning: Float too large for page by 533.163pt on input line 169.
+
+[6] [7] [8]
+Underfull \hbox (badness 4543) in paragraph at lines 190--190
+[]|\OT1/cmr/m/n/12 Representative al-
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 193--193
+\OT1/cmr/m/n/12 shade, Florin-sky
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 193--193
+\OT1/cmr/m/n/12 cur-va-tures, TPI,
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 194--194
+[]|\OT1/cmr/m/n/12 Twelve ter-rain
+ []
+
+
+Underfull \hbox (badness 2318) in paragraph at lines 195--195
+[]|\OT1/cmr/m/n/12 Priority-Flood fill,
+ []
+
+
+Underfull \hbox (badness 1067) in paragraph at lines 196--196
+[]|\OT1/cmr/m/n/12 Focal/zonal statis-
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 196--196
+\OT1/cmr/m/n/12 tics, Moran's $\OML/cmm/m/it/12 I$\OT1/cmr/m/n/12 ,
+ []
+
+
+Overfull \hbox (26.86528pt too wide) in paragraph at lines 188--199
+ [][] 
+ []
+
+
+Overfull \hbox (12.42665pt too wide) in paragraph at lines 201--202
+ []\OT1/cmr/m/it/12 Domain de-com-po-si-tion.[] \OT1/cmr/m/n/12 The de-fault pa
+r-ti-tion is by row strip: a Rayon \OT1/cmtt/m/n/12 par[]iter
+ []
+
+[9] [10] [11]
+Overfull \hbox (9.56113pt too wide) in paragraph at lines 211--212
+\OT1/cmr/m/n/12 strategies---spatially co-her-ent ag-gre-ga-tion of ad-ja-cent 
+sub-tasks and complexity-
+ []
+
+[12] [13]
+Underfull \hbox (badness 10000) in paragraph at lines 232--233
 []|\OT1/cmr/m/n/12 TPI, TRI, DEV, VRM, ge-o-mor-phons,
  []
 
 
-Underfull \hbox (badness 1436) in paragraph at lines 111--112
+Underfull \hbox (badness 1436) in paragraph at lines 233--234
 []|\OT1/cmr/m/n/12 Viewshed (R2, XDraw, PDERL), SVF, pos-i-
  []
 
-
-Overfull \hbox (2.93475pt too wide) in paragraph at lines 131--133
+[14]
+Overfull \hbox (2.93475pt too wide) in paragraph at lines 253--255
 \OT1/cmr/m/n/12 (and anal-o-gously for $\OML/cmm/m/it/12 @z=@y$\OT1/cmr/m/n/12 
 ), us-ing weights $[1\OML/cmm/m/it/12 ; \OT1/cmr/m/n/12 2\OML/cmm/m/it/12 ; \OT
 1/cmr/m/n/12 1]$ for the cen-tral row/column.
  []
 
-[5] [6] [7] [8]
-Underfull \hbox (badness 1454) in paragraph at lines 167--168
+[15] [16]
+Underfull \hbox (badness 1454) in paragraph at lines 289--290
 []|\OT1/cmr/m/n/12 Planchon--Darboux fill-ing ([]Plan-chon and Dar-
  []
 
 
-Underfull \hbox (badness 1540) in paragraph at lines 170--171
+Underfull \hbox (badness 1540) in paragraph at lines 292--293
 \OT1/cmr/m/n/12 STI ($= (\OML/cmm/m/it/12 A[]=\OT1/cmr/m/n/12 22\OML/cmm/m/it/1
 2 :\OT1/cmr/m/n/12 13)[]([] \OML/cmm/m/it/12 ^^L=\OT1/cmr/m/n/12 0\OML/cmm/m/it
 /12 :\OT1/cmr/m/n/12 0896)[]$) ([]Wil-son
  []
 
-[9] [10] [11] [12] [13] [14]
-Overfull \hbox (2.33641pt too wide) in paragraph at lines 249--250
- []\OT1/cmr/m/it/12 Flood sus-cep-ti-bil-ity map-ping..[] \OT1/cmr/m/n/12 To de
-mon-strate an ap-plied en-vi-ron-men-tal anal-
+[17] [18]
+Overfull \hbox (4.50183pt too wide) in paragraph at lines 317--318
+\OT1/cmtt/m/n/12 install surtgis\OT1/cmr/m/n/12 . Pre-built wheels are pro-duce
+d by the \OT1/cmtt/m/n/12 python-release.yml
  []
 
-[15]
-<../benchmarks/results/figures/fig5_casestudy.pdf, id=540, 1011.78pt x 686.565p
+[19] [20] [21]
+Overfull \hbox (17.22815pt too wide) in paragraph at lines 406--407
+ [][] 
+ []
+
+[22] [23] [24] [25]
+<../benchmarks/results/figures/fig5_casestudy.pdf, id=656, 1011.78pt x 686.565p
 t>
 File: ../benchmarks/results/figures/fig5_casestudy.pdf Graphic file (type pdf)
 <use ../benchmarks/results/figures/fig5_casestudy.pdf>
 Package pdftex.def Info: ../benchmarks/results/figures/fig5_casestudy.pdf  used
- on input line 255.
+ on input line 431.
 (pdftex.def)             Requested size: 390.0pt x 264.64786pt.
-<../benchmarks/results/figures/fig_flood_zones.pdf, id=541, 1011.78pt x 469.755
+<../benchmarks/results/figures/fig_flood_zones.pdf, id=657, 1011.78pt x 469.755
 pt>
 File: ../benchmarks/results/figures/fig_flood_zones.pdf Graphic file (type pdf)
 
 <use ../benchmarks/results/figures/fig_flood_zones.pdf>
 Package pdftex.def Info: ../benchmarks/results/figures/fig_flood_zones.pdf  use
-d on input line 262.
+d on input line 438.
 (pdftex.def)             Requested size: 390.0pt x 181.07486pt.
-
-Overfull \hbox (44.33641pt too wide) in paragraph at lines 273--274
+ [26 <../benchmarks/results/figures/fig5_casestudy.pdf>]
+Overfull \hbox (44.33641pt too wide) in paragraph at lines 449--450
 \OT1/cmr/m/n/12 mit \OT1/cmtt/m/n/12 7493bc1\OT1/cmr/m/n/12 ). The bench-mark a
 u-toma-tion script (\OT1/cmtt/m/n/12 benchmarks/run[]benchmarks.py\OT1/cmr/m/n/
 12 ),
  []
 
 
-Overfull \hbox (9.54597pt too wide) in paragraph at lines 273--274
+Overfull \hbox (9.54597pt too wide) in paragraph at lines 449--450
 \OT1/cmr/m/n/12 ma-te-rial. DEM gen-er-a-tion uses NumPy 2.4 with a fixed ran-d
 om seed (\OT1/cmtt/m/n/12 seed=42\OT1/cmr/m/n/12 )
  []
 
-[16] [17 <../benchmarks/results/figures/fig5_casestudy.pdf>]
-Overfull \hbox (38.22359pt too wide) in paragraph at lines 277--278
+[27 <../benchmarks/results/figures/fig_flood_zones.pdf>]
+Overfull \hbox (22.41832pt too wide) in paragraph at lines 451--452
+ []\OT1/cmr/m/it/12 Versioning.[] \OT1/cmr/m/n/12 Ex-per-i-ments 1--3 were per-
+formed on Surt-GIS 0.1.1 (com-mit \OT1/cmtt/m/n/12 7493bc1\OT1/cmr/m/n/12 )
+ []
+
+[28]
+Overfull \hbox (38.22359pt too wide) in paragraph at lines 455--456
 []\OT1/cmr/bx/n/12 SurtGIS\OT1/cmr/m/n/12 : \OT1/cmtt/m/n/12 cargo run --exampl
 e bench[]comparison --release -- --size
  []
 
 
-Overfull \hbox (9.56065pt too wide) in paragraph at lines 278--279
+Overfull \hbox (9.56065pt too wide) in paragraph at lines 456--457
 []\OT1/cmr/bx/n/12 GDAL\OT1/cmr/m/n/12 : \OT1/cmtt/m/n/12 gdaldem slope input.t
 if output.tif -of GTiff -b 1 \OT1/cmr/m/n/12 (de-
  []
 
-[18 <../benchmarks/results/figures/fig_flood_zones.pdf>]
-Overfull \hbox (43.09981pt too wide) in paragraph at lines 279--280
+
+Overfull \hbox (43.09981pt too wide) in paragraph at lines 457--458
 []\OT1/cmr/bx/n/12 GRASS\OT1/cmr/m/n/12 : \OT1/cmtt/m/n/12 grass --tmp-location
  EPSG:32719 --exec bash -c "r.in.gdal
  []
 
 
-Overfull \hbox (22.22488pt too wide) in paragraph at lines 279--280
+Overfull \hbox (22.22488pt too wide) in paragraph at lines 457--458
 \OT1/cmtt/m/n/12 input=... output=dem; r.slope.aspect elevation=dem slope=out;
  []
 
 
-Overfull \hbox (22.25134pt too wide) in paragraph at lines 280--281
+Overfull \hbox (22.25134pt too wide) in paragraph at lines 458--459
 []\OT1/cmr/bx/n/12 WBT\OT1/cmr/m/n/12 : \OT1/cmtt/m/n/12 whitebox[]tools -r=Slo
 pe -v --dem=input.tif -o=output.tif 
  []
 
 
-Overfull \hbox (18.57217pt too wide) in paragraph at lines 286--287
+Overfull \hbox (18.57217pt too wide) in paragraph at lines 464--465
 []\OT1/cmr/m/n/12 We com-pared wall-clock ex-e-cu-tion time for six al-go-rithm
 s against GDAL 3.11,
  []
 
-[19] [20]
-Overfull \hbox (46.18584pt too wide) in paragraph at lines 325--349
+[29] [30] [31] [32]
+Overfull \hbox (46.18584pt too wide) in paragraph at lines 525--549
  [][] 
  []
 
-<../benchmarks/results/figures/fig1_scalability.pdf, id=825, 1004.72557pt x 316
+<../benchmarks/results/figures/fig1_scalability.pdf, id=963, 1004.72557pt x 316
 .88515pt>
 File: ../benchmarks/results/figures/fig1_scalability.pdf Graphic file (type pdf
 )
 <use ../benchmarks/results/figures/fig1_scalability.pdf>
 Package pdftex.def Info: ../benchmarks/results/figures/fig1_scalability.pdf  us
-ed on input line 357.
+ed on input line 557.
 (pdftex.def)             Requested size: 390.0pt x 122.99963pt.
-[21] [22]
-<../benchmarks/results/figures/fig2_speedup.pdf, id=840, 491.1295pt x 353.3018p
+<../benchmarks/results/figures/fig2_speedup.pdf, id=965, 491.1295pt x 353.3018p
 t>
 File: ../benchmarks/results/figures/fig2_speedup.pdf Graphic file (type pdf)
 <use ../benchmarks/results/figures/fig2_speedup.pdf>
 Package pdftex.def Info: ../benchmarks/results/figures/fig2_speedup.pdf  used o
-n input line 366.
+n input line 566.
 (pdftex.def)             Requested size: 272.99881pt x 196.3867pt.
- [23 <../benchmarks/results/figures/fig1_scalability.pdf>] [24 <../benchmarks/r
-esults/figures/fig2_speedup.pdf>]
-Overfull \hbox (7.0969pt too wide) in paragraph at lines 379--380
+[33] [34 <../benchmarks/results/figures/fig1_scalability.pdf>] [35] [36 <../ben
+chmarks/results/figures/fig2_speedup.pdf>]
+Overfull \hbox (7.0969pt too wide) in paragraph at lines 579--580
 \OT1/cmr/m/n/12 I/O that over-laps read-ing, com-pu-ta-tion, and writ-ing. The 
 ``Com-pute'' columns
  []
 
-[25] [26] [27] [28] [29]
-<../benchmarks/results/figures/fig_hydro_validation.pdf, id=1041, 1084.05pt x 9
+[37]
+Overfull \hbox (3.3598pt too wide) in paragraph at lines 589--590
+\OT1/cmr/m/n/12 regimes by al-go-rithm class, and dis-cusses par-al-lel ef-fi-c
+iency and load-balancing
+ []
+
+[38] [39] [40] [41]
+<../benchmarks/results/figures/fig_hydro_validation.pdf, id=1179, 1084.05pt x 9
 39.51pt>
 File: ../benchmarks/results/figures/fig_hydro_validation.pdf Graphic file (type
  pdf)
 <use ../benchmarks/results/figures/fig_hydro_validation.pdf>
 Package pdftex.def Info: ../benchmarks/results/figures/fig_hydro_validation.pdf
-  used on input line 461.
+  used on input line 661.
 (pdftex.def)             Requested size: 390.0pt x 337.99397pt.
 
-Overfull \hbox (29.74565pt too wide) in paragraph at lines 469--470
+Overfull \hbox (29.74565pt too wide) in paragraph at lines 669--670
 \OT1/cmr/m/n/12 bind-ings via PyO3, and (d) We-bAssem-bly ex-e-cuted in the V8 
 en-gine (Node.js 22.19,
  []
 
-[30] [31 <../benchmarks/results/figures/fig_hydro_validation.pdf>] [32]
-<../benchmarks/results/figures/fig3_crossplatform.pdf, id=1202, 498.80981pt x 2
+[42] [43 <../benchmarks/results/figures/fig_hydro_validation.pdf>] [44]
+[45]
+<../benchmarks/results/figures/fig3_crossplatform.pdf, id=1346, 498.80981pt x 2
 80.95967pt>
 File: ../benchmarks/results/figures/fig3_crossplatform.pdf Graphic file (type p
 df)
 <use ../benchmarks/results/figures/fig3_crossplatform.pdf>
 Package pdftex.def Info: ../benchmarks/results/figures/fig3_crossplatform.pdf  
-used on input line 515.
+used on input line 715.
 (pdftex.def)             Requested size: 312.00119pt x 175.7451pt.
+ [46 <../benchmarks/results/figures/fig3_crossplatform.pdf>]
+Underfull \hbox (badness 10000) in paragraph at lines 732--732
+[]|$\OML/cmm/m/it/12 T[]$ \OT1/cmr/m/n/12 (single-threaded
+ []
 
-Overfull \hbox (66.66556pt too wide) in paragraph at lines 530--545
+
+Underfull \hbox (badness 10000) in paragraph at lines 733--734
+[]|$\OML/cmm/m/it/12 M$ \OT1/cmr/m/n/12 bytes down-loaded
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 736--736
+\OT1/cmr/m/n/12 ory ($\OMS/cmsy/m/n/12 ^^X$\OT1/cmr/m/n/12 2K$[]$ in 32-bit
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 738--738
+[]|\OT1/cmr/m/n/12 yes (Pro-gres-sive Web
+ []
+
+
+Overfull \hbox (8.3948pt too wide) in paragraph at lines 726--741
  [][] 
  []
 
-[33] [34] [35 <../benchmarks/results/figures/fig3_crossplatform.pdf>] [36]
-[37] [38] [39] [40]
-Overfull \hbox (2.60477pt too wide) in paragraph at lines 608--609
+[47] [48]
+Overfull \hbox (28.37318pt too wide) in paragraph at lines 751--752
+\OT1/cmr/m/n/12 fBm DEMs (same gen-er-a-tor as Ex-per-i-ment 1). Thread counts 
+$\OML/cmm/m/it/12 p \OMS/cmsy/m/n/12 2 f\OT1/cmr/m/n/12 1\OML/cmm/m/it/12 ; \OT
+1/cmr/m/n/12 2\OML/cmm/m/it/12 ; \OT1/cmr/m/n/12 4\OML/cmm/m/it/12 ; \OT1/cmr/m
+/n/12 8\OML/cmm/m/it/12 ; \OT1/cmr/m/n/12 12\OML/cmm/m/it/12 ; \OT1/cmr/m/n/12 
+16\OMS/cmsy/m/n/12 g$
+ []
+
+
+Overfull \hbox (30.19777pt too wide) in paragraph at lines 751--752
+\OT1/cmr/m/n/12 are im-posed via Rayon's \OT1/cmtt/m/n/12 ThreadPoolBuilder::nu
+m[]threads(p).build[]global()\OT1/cmr/m/n/12 .
+ []
+
+<figures/scaling_speedup.pdf, id=1405, 714.93852pt x 280.09642pt>
+File: figures/scaling_speedup.pdf Graphic file (type pdf)
+<use figures/scaling_speedup.pdf>
+Package pdftex.def Info: figures/scaling_speedup.pdf  used on input line 780.
+(pdftex.def)             Requested size: 390.0pt x 152.79697pt.
+<figures/scaling_efficiency.pdf, id=1406, 715.0257pt x 280.09642pt>
+File: figures/scaling_efficiency.pdf Graphic file (type pdf)
+<use figures/scaling_efficiency.pdf>
+Package pdftex.def Info: figures/scaling_efficiency.pdf  used on input line 787
+.
+(pdftex.def)             Requested size: 390.0pt x 152.7756pt.
+[49] [50 <./figures/scaling_speedup.pdf> <./figures/scaling_efficiency.pdf>]
+[51] [52] [53] [54]
+Overfull \hbox (26.72604pt too wide) in paragraph at lines 834--835
+ []\OT1/cmr/m/it/12 Protocol.[] \OT1/cmr/m/n/12 A method-olog-i-cal asym-me-try
+ must be con-trolled. Tau-DEM's \OT1/cmtt/m/n/12 pitremove
+ []
+
+[55] [56] [57]
+Overfull \hbox (4.34454pt too wide) in paragraph at lines 862--863
+ []\OT1/cmr/m/it/12 Cross-platform ro-bust-ness.[] \OT1/cmr/m/n/12 We re-peated
+ this com-par-i-son on the homogeneous-
+ []
+
+[58]
+Overfull \hbox (66.66556pt too wide) in paragraph at lines 874--889
+ [][] 
+ []
+
+[59] [60]
+Underfull \hbox (badness 10000) in paragraph at lines 905--906
+[]|\OT1/cmr/m/n/12 System li-
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 907--908
+[]|\OT1/cmr/m/n/12 none (static-
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 909--910
+[]|\OT1/cmr/m/n/12 libgdal,
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 910--911
+[]|\OT1/cmr/m/n/12 GDAL,
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 910--911
+\OT1/cmr/m/n/12 FFTW,
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 910--911
+\OT1/cmr/m/n/12 NetCDF,
+ []
+
+
+Underfull \hbox (badness 10000) in paragraph at lines 911--912
+[]|\OT1/cmr/m/n/12 python3-pip,
+ []
+
+
+Overfull \hbox (82.28094pt too wide) in paragraph at lines 903--915
+ [][] 
+ []
+
+[61] [62] [63] [64] [65]
+Overfull \hbox (0.10265pt too wide) in paragraph at lines 939--940
+\OT1/cmr/m/n/12 GRASS GIS (ac-tive since 1982). To mit-i-gate the single-develo
+per risk: (a) the
+ []
+
+[66] [67] [68]
+Overfull \hbox (2.60477pt too wide) in paragraph at lines 976--977
 \OT1/cmr/m/n/12 syn-thetic DEM gen-er-a-tion code are avail-able in the project
  repos-i-tory ([]$\OT1/cmtt/m/n/12 https :
  []
 
-[41]
-Overfull \hbox (8.1903pt too wide) in paragraph at lines 618--619
+[69]
+Overfull \hbox (8.1903pt too wide) in paragraph at lines 986--987
 \OT1/cmr/m/n/12 di-rec-tion meth-ods, de-pres-sion han-dling) and ar-chi-tec-tu
 ral de-ci-sions (workspace
  []
 
-(./paper.bbl [42] [43] [44] [45] [46]) [47] (./paper.aux)
+[70] [71] [72] [73] [74] [75] [76] [77] (./paper.aux)
  ***********
 LaTeX2e <2023-11-01> patch level 1
 L3 programming layer <2024-01-22>
  ***********
 Package rerunfilecheck Info: File `paper.out' has not changed.
-(rerunfilecheck)             Checksum: 1059EF365D2F7B797BE7D8B56A777C7F;4288.
+(rerunfilecheck)             Checksum: 8E97C176E38B3F3F93DD0E58AED2F2BA;5579.
  ) 
 Here is how much of TeX's memory you used:
- 15406 strings out of 476106
- 295628 string characters out of 5793933
- 1940975 words of memory out of 5000000
- 37096 multiletter control sequences out of 15000+600000
- 567370 words of font info for 72 fonts, out of 8000000 for 9000
- 59 hyphenation exceptions out of 8191
- 72i,15n,79p,1540b,1150s stack positions out of 10000i,1000n,20000p,200000b,200000s
+ 26659 strings out of 476047
+ 545241 string characters out of 5792076
+ 1943975 words of memory out of 5000000
+ 48053 multiletter control sequences out of 15000+600000
+ 568352 words of font info for 76 fonts, out of 8000000 for 9000
+ 85 hyphenation exceptions out of 8191
+ 84i,15n,87p,2303b,1150s stack positions out of 10000i,1000n,20000p,200000b,200000s
 </usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx12.pfb></us
 r/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmex10.pfb></usr/shar
 e/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi10.pfb></usr/share/texl
@@ -783,12 +1296,14 @@ exmf-dist/fonts/type1/public/amsfonts/cm/cmti10.pfb></usr/share/texlive/texmf-d
 ist/fonts/type1/public/amsfonts/cm/cmti12.pfb></usr/share/texlive/texmf-dist/fo
 nts/type1/public/amsfonts/cm/cmti7.pfb></usr/share/texlive/texmf-dist/fonts/typ
 e1/public/amsfonts/cm/cmtt10.pfb></usr/share/texlive/texmf-dist/fonts/type1/pub
-lic/amsfonts/cm/cmtt12.pfb></usr/share/texmf/fonts/type1/public/cm-super/sfrm10
-00.pfb></usr/share/texmf/fonts/type1/public/cm-super/sfrm1200.pfb>
-Output written on paper.pdf (49 pages, 23625275 bytes).
+lic/amsfonts/cm/cmtt12.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/am
+sfonts/cm/cmtt8.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/
+symbols/msam10.pfb></usr/share/texmf/fonts/type1/public/cm-super/sfrm1000.pfb><
+/usr/share/texmf/fonts/type1/public/cm-super/sfrm1200.pfb>
+Output written on paper.pdf (79 pages, 23764185 bytes).
 PDF statistics:
- 1521 PDF objects out of 1728 (max. 8388607)
- 807 compressed objects within 9 object streams
- 153 named destinations out of 1000 (max. 500000)
- 228 words of extra memory for PDF output out of 10000 (max. 10000000)
+ 2009 PDF objects out of 2073 (max. 8388607)
+ 1145 compressed objects within 12 object streams
+ 236 named destinations out of 1000 (max. 500000)
+ 290 words of extra memory for PDF output out of 10000 (max. 10000000)
 
