@@ -71,6 +71,18 @@ pub trait StripSink {
     /// `strip_row_start` on the output grid.
     fn accept(&mut self, band_idx: usize, strip_row_start: usize, strip: Array2<f64>)
     -> Result<()>;
+
+    /// Whether the full output is held in RAM (`n_bands × rows × cols × 8`)
+    /// for the sink's lifetime, or streamed to disk strip by strip.
+    ///
+    /// Governs whether strip planning must reserve budget for the output
+    /// buffers: a streaming sink holds nothing, so subtracting the output
+    /// size (tens of GB for a large grid) would drive strips to the 8-row
+    /// floor and produce a needless storm of tiny HTTP reads. Default `true`
+    /// (the conservative in-RAM assumption).
+    fn holds_output_in_ram(&self) -> bool {
+        true
+    }
 }
 
 /// Progress and RAM-diagnostic callbacks. Every method has a no-op default,
@@ -383,6 +395,7 @@ impl CompositeEngine {
             band_chunk_size: spec.band_chunk_size,
             strip_rows_cfg: spec.strip_rows,
             budget_gb: spec.budget_gb,
+            output_in_ram: sink.holds_output_in_ram(),
         });
         progress.plan_ready(&plan, spec.budget_gb);
         let (strip_rows, num_strips, k) = (plan.strip_rows, plan.num_strips, plan.band_chunk);
@@ -614,12 +627,19 @@ impl CompositeEngine {
     /// retry per tile (the cloud HTTP client has already exhausted its own
     /// retries by the time an error surfaces).
     ///
-    /// Every tile task acquires `tile_bytes` of `budget` before opening the
-    /// COG and holds it until the decoded raster is handed back, so the number
-    /// of tiles decoding (and fetching) at once emerges from the budget — a
-    /// bigger budget decodes more in parallel, and RAM can never overshoot.
-    /// All tasks are spawned at once; those beyond the budget park on
-    /// `acquire`, so there is no fixed-size chunk barrier (the old "convoy").
+    /// Every tile task opens the COG (cheap: IFD only), then acquires the
+    /// window's *real* decoded size (`rows×cols×8`, from the chosen overview's
+    /// geometry) before reading pixels, and holds it through the decode. The
+    /// number of tiles decoding at once therefore emerges from the budget at
+    /// their true size — a bigger budget decodes more in parallel. All tasks
+    /// spawn at once; those beyond the budget park on `acquire`, so there is
+    /// no fixed-size chunk barrier (the old "convoy"). `tile_bytes` is only a
+    /// fallback for a window whose size can't be computed (bbox outside).
+    ///
+    /// The permit is released when the task returns the decoded raster, so it
+    /// bounds *concurrent decode*, not the tiles subsequently accumulated for
+    /// the mosaic (that resident set is the mosaic's inherent floor). Tying
+    /// the permit to the raster's whole lifetime is a further step.
     fn download_tiles(
         &self,
         tasks: &[(String, BBox)],
@@ -665,9 +685,6 @@ impl CompositeEngine {
                     handles.push((
                         idx,
                         tokio::spawn(async move {
-                            // Hold decode budget for this tile's whole
-                            // open+read; released when the task returns.
-                            let _permit = budget.acquire(tile_bytes).await;
                             const MAX_ATTEMPTS: u8 = 2;
                             let mut last_err: Option<String> = None;
                             for attempt in 0..MAX_ATTEMPTS {
@@ -700,6 +717,18 @@ impl CompositeEngine {
                                         out_px,
                                     )
                                 };
+                                // Reserve the *real* decoded size of this
+                                // window (rows×cols×8), computed from the
+                                // chosen overview's geometry before any pixels
+                                // are read — not the server's nominal tile
+                                // size, which undercounts a strip×granule read
+                                // several-fold. Held across the read, released
+                                // when the task returns the decoded tile.
+                                let read_bytes = reader
+                                    .output_shape_for(&bb, overview)
+                                    .map(|(r, c)| r * c * std::mem::size_of::<f64>())
+                                    .unwrap_or(tile_bytes);
+                                let _permit = budget.acquire(read_bytes).await;
                                 match reader.read_bbox::<f64>(&bb, overview).await {
                                     Ok(mut r) => {
                                         if zero_nan {

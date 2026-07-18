@@ -42,6 +42,9 @@ pub struct StreamingTiffSink {
     transform: GeoTransform,
     crs: Option<CRS>,
     compress: bool,
+    /// Rows appended to each band's scratch so far; guards the top-to-bottom
+    /// append assumption against an out-of-order strip.
+    rows_written: Vec<usize>,
 }
 
 impl StreamingTiffSink {
@@ -57,6 +60,7 @@ impl StreamingTiffSink {
             transform: GeoTransform::new(0.0, 0.0, 1.0, -1.0),
             crs: None,
             compress,
+            rows_written: Vec::new(),
         }
     }
 
@@ -105,6 +109,7 @@ impl StripSink for StreamingTiffSink {
         self.transform = grid.transform;
         self.crs = grid.crs.clone();
         self.scratch_paths = self.band_paths.iter().map(|p| scratch_path(p)).collect();
+        self.rows_written = vec![0; self.band_paths.len()];
         self.scratch = Vec::with_capacity(self.scratch_paths.len());
         for sp in &self.scratch_paths {
             let f = File::create(sp).map_err(|e| {
@@ -118,14 +123,29 @@ impl StripSink for StreamingTiffSink {
         Ok(())
     }
 
+    fn holds_output_in_ram(&self) -> bool {
+        false
+    }
+
     fn accept(
         &mut self,
         band_idx: usize,
-        _row_start: usize,
+        row_start: usize,
         strip: Array2<f64>,
     ) -> surtgis_cloud::Result<()> {
         // Strips arrive top-to-bottom per band, so appending row-major f32
-        // reproduces the full image. Cast to f32 (the output dtype).
+        // reproduces the full image. An out-of-order strip would silently
+        // corrupt the file, so assert the contiguous top-to-bottom order the
+        // scratch append relies on.
+        if row_start != self.rows_written[band_idx] {
+            return Err(surtgis_cloud::CloudError::Composite(format!(
+                "composite strip for band {band_idx} arrived at row {row_start}, expected {} \
+                 (strips must be appended top-to-bottom)",
+                self.rows_written[band_idx]
+            )));
+        }
+        self.rows_written[band_idx] += strip.nrows();
+        // Cast to f32 (the output dtype).
         let w = &mut self.scratch[band_idx];
         let mut bytes: Vec<u8> = Vec::with_capacity(strip.len() * 4);
         for &v in strip.iter() {

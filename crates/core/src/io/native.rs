@@ -182,6 +182,26 @@ where
         .unwrap_or(1)
         .max(1);
 
+    // PlanarConfiguration (tag 284): 2 = separate planes (GDAL's
+    // INTERLEAVE=BAND). The `tiff` crate's `read_image()` returns only the
+    // first plane for planar multi-band TIFFs, so `spp` stays > 1 while the
+    // buffer holds just `rows*cols` samples. The interleaved band selection
+    // downstream (`buf[i*spp + b]`) would then index out of bounds and
+    // panic. A planar TIFF is perfectly valid GDAL output, so reject it with
+    // an actionable message rather than crashing or mis-sizing.
+    if spp > 1
+        && decoder
+            .get_tag_u32(Tag::PlanarConfiguration)
+            .map(|v| v == 2)
+            .unwrap_or(false)
+    {
+        return Err(Error::Other(
+            "planar (PlanarConfiguration=2, INTERLEAVE=BAND) multi-band TIFFs are not \
+             supported; convert with `gdal_translate -co INTERLEAVE=PIXEL in.tif out.tif`"
+                .to_string(),
+        ));
+    }
+
     // Read geo-tags before the pixel body: tag lookups are independent of
     // `read_image()` (the decoder parsed the IFD at construction), and
     // having `nodata` in hand lets the cast below fuse the nodata->NaN

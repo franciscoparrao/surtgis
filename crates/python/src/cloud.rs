@@ -329,7 +329,10 @@ fn mask_for_collection(collection: &str) -> (Option<String>, Arc<dyn CloudMaskSt
 /// Returns:
 ///     (bands, meta): `bands` is a dict of band key → 2D float64 numpy array
 ///     (NaN = no data); `meta` is a dict with `transform` (GDAL 6-tuple),
-///     `crs`, `width`, `height` shared by every band.
+///     `crs`, `width`, `height` shared by every band, plus a quality report
+///     (`scenes_used`, `total_tiles`, `failed_tiles`, `failed_dates`,
+///     `last_error`) so degraded output from failed tiles is visible rather
+///     than silently gap-filled.
 #[pyfunction]
 #[pyo3(signature = (
     catalog, collection, bbox, bands, datetime, max_scenes=6,
@@ -380,22 +383,21 @@ fn composite<'py>(
     let report = py
         .allow_threads(|| {
             let mut engine = CompositeEngine::new(spec)?;
-            engine
-                .run(&DefaultAssetResolver, &mask, &mut sink, &mut NoProgress)
-                .map(|r| r.grid)
+            engine.run(&DefaultAssetResolver, &mask, &mut sink, &mut NoProgress)
         })
         .map_err(err)?;
+    let grid = &report.grid;
 
     // Assemble the per-band numpy arrays.
     let bands_out = PyDict::new(py);
     for (bi, name) in bands.iter().enumerate() {
         let buf = std::mem::take(&mut sink.buffers[bi]);
-        let arr = Array2::from_shape_vec((report.rows, report.cols), buf).map_err(err)?;
+        let arr = Array2::from_shape_vec((grid.rows, grid.cols), buf).map_err(err)?;
         bands_out.set_item(name, arr.into_pyarray(py))?;
     }
 
     let meta = PyDict::new(py);
-    let t = &report.transform;
+    let t = &grid.transform;
     meta.set_item(
         "transform",
         (
@@ -407,12 +409,23 @@ fn composite<'py>(
             t.pixel_height,
         ),
     )?;
-    match report.epsg() {
+    match grid.epsg() {
         Some(code) => meta.set_item("crs", format!("EPSG:{code}"))?,
         None => meta.set_item("crs", py.None())?,
     }
-    meta.set_item("width", report.cols)?;
-    meta.set_item("height", report.rows)?;
+    meta.set_item("width", grid.cols)?;
+    meta.set_item("height", grid.rows)?;
+    // Quality report: with the default `max_tile_failures=0` the composite
+    // does not abort on failed tiles, so surface the counts instead of
+    // silently returning gap-filled data as if it were complete.
+    meta.set_item("scenes_used", report.scenes_used)?;
+    meta.set_item("total_tiles", report.total_tiles)?;
+    meta.set_item("failed_tiles", report.failed_tiles)?;
+    meta.set_item("failed_dates", report.failed_dates)?;
+    match &report.last_error {
+        Some(e) => meta.set_item("last_error", e)?,
+        None => meta.set_item("last_error", py.None())?,
+    }
     Ok((bands_out, meta))
 }
 
