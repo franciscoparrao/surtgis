@@ -368,7 +368,7 @@ struct S2Bands {
 
 /// Fetch a single S2 band from STAC catalog (Planetary Computer)
 ///
-/// Delegates to stac::fetch_s2_band_from_stac() which:
+/// Delegates to stac::fetch_stac_band() which:
 /// - Searches for Sentinel-2 L2A scenes in bbox + datetime
 /// - Downloads multiple scenes and composites (cloud-free)
 /// - Aligns to DEM grid
