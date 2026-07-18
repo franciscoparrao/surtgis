@@ -149,3 +149,10 @@ opt-level = 3
 [profile.bench]
 lto = "thin"
 codegen-units = 1
+
+# The surtgis-flow validation gates (T1-T7) integrate thousands of substeps
+# over full grids; at opt-level 0 they take minutes in CI. Optimizing just
+# this package keeps `cargo test --workspace` fast without touching the debug
+# profile of the rest of the workspace (debug assertions stay on).
+[profile.test.package.surtgis-flow]
+opt-level = 2
