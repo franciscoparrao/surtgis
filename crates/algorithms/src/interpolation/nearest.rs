@@ -11,6 +11,7 @@ use super::SamplePoint;
 
 /// Parameters for Nearest Neighbor interpolation
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct NearestNeighborParams {
     /// Maximum search radius. Cells beyond this distance from all
     /// sample points are set to NaN. `None` for unlimited.

@@ -153,6 +153,13 @@ fn perez_bin(epsilon: f64) -> usize {
     0
 }
 
+/// Clearness index ε (Perez et al. 1990, eq. 1): κ = 1.041 for `theta_z`
+/// in **radians**. (5.535e-6 is the same constant for θz in degrees —
+/// using it with radians collapsed the θz³ term and picked the wrong bin.)
+fn perez_epsilon(dhi: f64, dni: f64, theta_z: f64) -> f64 {
+    ((dhi + dni) / dhi + 1.041 * theta_z.powi(3)) / (1.0 + 1.041 * theta_z.powi(3))
+}
+
 /// Compute Perez anisotropic diffuse radiation on a tilted surface.
 ///
 /// Returns diffuse irradiance on tilted surface.
@@ -171,9 +178,7 @@ fn perez_diffuse(
         return 0.0;
     }
 
-    // Clearness index ε
-    let epsilon =
-        ((dhi + dni) / dhi + 5.535e-6 * theta_z.powi(3)) / (1.0 + 5.535e-6 * theta_z.powi(3));
+    let epsilon = perez_epsilon(dhi, dni, theta_z);
 
     // Sky brightness Δ
     let i0_ext = solar_constant; // extraterrestrial on horizontal
@@ -1623,6 +1628,20 @@ mod tests {
     // ===================================================================
     // P3-SO1: Perez anisotropic diffuse model
     // ===================================================================
+
+    /// Regression (audit R3): the ε clearness term must use κ = 1.041 for
+    /// θz in radians. The old 5.535e-6 (degrees form) made κ·θz³ ≈ 0, so
+    /// ε collapsed to (dhi+dni)/dhi and selected too-clear bins.
+    #[test]
+    fn test_perez_epsilon_uses_radians_constant() {
+        // dhi=200, dni=200, θz=60°: κ·θz³ = 1.041·(π/3)³ = 1.19588…
+        // ε = (2 + 1.19588) / (1 + 1.19588) = 1.45540… → index 2 (1.23–1.5).
+        let eps = perez_epsilon(200.0, 200.0, 60.0_f64.to_radians());
+        assert!((eps - 1.4554).abs() < 1e-3, "ε must be ~1.4554, got {eps}");
+        // The degrees-constant bug gave ε ≈ 2.0 → index 4 (1.95–2.8).
+        assert!(eps < 1.5, "buggy degrees constant would give ε ≈ 2.0");
+        assert_eq!(perez_bin(eps), 2);
+    }
 
     #[test]
     fn test_perez_vs_isotropic() {

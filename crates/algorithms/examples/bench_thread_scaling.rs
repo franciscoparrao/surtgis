@@ -126,7 +126,12 @@ fn bench_one(dem: &Raster<f64>, algorithm: &str, out_dir: &Path) -> (f64, f64, f
         "slope" => slope(dem, SlopeParams::default()).unwrap(),
         "aspect" => aspect(dem, AspectOutput::Degrees).unwrap(),
         "hillshade" => hillshade(dem, HillshadeParams::default()).unwrap(),
-        "tpi" => tpi(dem, TpiParams { radius: 10 }).unwrap(),
+        "tpi" => tpi(dem, {
+            let mut p = TpiParams::default();
+            p.radius = 10;
+            p
+        })
+        .unwrap(),
         "fill" => priority_flood(dem, PriorityFloodParams::default()).unwrap(),
         "flow_acc" => {
             let fdir = flow_direction(dem).unwrap();

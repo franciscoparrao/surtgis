@@ -143,7 +143,12 @@ fn assert_interior_match(batch: &Raster<f64>, streaming: &Array2<f64>, border: u
 #[test]
 fn tpi_parity() {
     let dem = synthetic_dem();
-    let batch = tpi(&dem, TpiParams { radius: 2 }).unwrap();
+    let batch = tpi(&dem, {
+        let mut p = TpiParams::default();
+        p.radius = 2;
+        p
+    })
+    .unwrap();
     let stream = run_streaming(&TpiStreaming { radius: 2 }, &dem);
     assert_interior_match(&batch, &stream, 2, 0.0);
 }
@@ -151,7 +156,12 @@ fn tpi_parity() {
 #[test]
 fn tri_parity() {
     let dem = synthetic_dem();
-    let batch = tri(&dem, TriParams { radius: 2 }).unwrap();
+    let batch = tri(&dem, {
+        let mut p = TriParams::default();
+        p.radius = 2;
+        p
+    })
+    .unwrap();
     let stream = run_streaming(&TriStreaming { radius: 2 }, &dem);
     assert_interior_match(&batch, &stream, 2, 0.0);
 }

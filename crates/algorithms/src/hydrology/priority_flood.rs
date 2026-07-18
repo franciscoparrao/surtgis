@@ -59,6 +59,7 @@ use super::d8::SCAN_OFFSETS as D8_OFFSETS;
 
 /// Parameters for Priority-Flood filling
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct PriorityFloodParams {
     /// Minimum elevation increment to enforce between cells.
     /// Use a small epsilon (e.g., 1e-5) to break ties and create

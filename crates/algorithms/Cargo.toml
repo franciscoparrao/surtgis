@@ -22,9 +22,9 @@ unstable = []
 # the single-binary property) backing `inference::onnx::OnnxModel`. Off by
 # default: it is a heavy dependency and, per SPEC_SURTGIS_ONNX_INFERENCE.md,
 # still a scaffold (`OnnxModel::load`/`infer` are stubs). The tiling/halo/
-# stitching orchestration in `inference::run_tiled` needs no feature and is
-# fully implemented and tested without it.
-onnx = ["dep:tract-onnx"]
+# stitching orchestration in `inference::run_tiled` needs no ONNX runtime
+# but lives under the `unstable` module, which `onnx` therefore enables.
+onnx = ["dep:tract-onnx", "unstable"]
 
 [dependencies]
 surtgis-core = { version = "0.18", path = "../core", default-features = false }

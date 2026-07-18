@@ -10,6 +10,7 @@ use surtgis_core::{Error, Result};
 
 /// Parameters for hillshade calculation
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct HillshadeParams {
     /// Sun azimuth in degrees (0 = North, clockwise)
     pub azimuth: f64,

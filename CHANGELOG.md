@@ -113,6 +113,45 @@ promote this release unchanged once the EMS paper is published.
 
 ### Breaking
 
+#### API 1.0 breaking window (engine audit R2, Sprint 5, #76)
+
+This release batches the API-shape changes deferred through the earlier
+sprints, since 0.18.0 is the 1.0 candidate.
+
+- **`Algorithm` / `ParallelAlgorithm` traits removed** (20 impls, 20 empty
+  marker structs, zero real consumers — the CLI, Python, WASM and GUI all
+  call free functions or their own registry). Call the free functions
+  directly (e.g. `slope(&dem, params)`), which is what every interface
+  already did.
+- **`algorithms` prelude curated 260 → ~70 symbols** (core prelude stays
+  ~13). Everything dropped from the prelude remains reachable via its
+  module path (`crate::<module>::*`); only the glob convenience set
+  shrank. See the documented admission criterion in the prelude module doc.
+- **New `unstable` feature gates the volatile modules** — the v0.16 hazard
+  family (`energy_cone`, `laharz`, `excess_topography`, `sar`) and the
+  exotic terrain algorithms (`msv`, `pderl_viewshed`, `rea`, `ssa_2d`,
+  `chebyshev_spectral`, `gaussian_scale_space`). They are exempt from the
+  1.x stability guarantee. Off by default for external consumers of the
+  `algorithms` crate; the CLI/Python/WASM enable it, so their shipped
+  commands are unchanged.
+- **`default_nodata()` for unsigned types changed from `MIN` (0) to `MAX`**
+  (`u8`→255, `u16`→65535, `u32`/`u64`→their MAX). `0` is frequently valid
+  data (counts, class 0, masks), so `MAX` is a safer default sentinel.
+  6 call sites audited.
+- **`CloudError` no longer exposes `reqwest::Error` / `StatusCode`** in its
+  public shape: HTTP failures are now the opaque
+  `Http { status: Option<u16>, msg: String }` (with a hand-written `From`
+  so `?` keeps working). Prevents a `reqwest` major from forcing a SurtGIS
+  major.
+- **`ndarray` / `geo` / `geo-types` are re-exported with a written policy**:
+  a major bump of any of them is now a documented major bump of this crate.
+- **Python: `abi3-py39` wheels** — one wheel per platform instead of five.
+  Requires Python ≥ 3.9.
+- **CLI: differentiated exit codes** (0 success, 1 generic, 2 usage/clap,
+  3 not-found) instead of a single generic failure code.
+
+#### Scientific-parity breaking changes (audit D2/D3/D4, #79–#81)
+
 - `ViewshedParams` is now `#[non_exhaustive]` with two new fields
   (`earth_curvature`, `refraction_coeff`): construct it via
   `ViewshedParams::default()` and set fields.
@@ -167,7 +206,69 @@ promote this release unchanged once the EMS paper is published.
   `flatness_distance=0.0` keyword arguments. Validated cell by cell against
   GRASS (`benchmarks/validate_geomorphons_grass.py`).
 
+#### Internal (engine audit R2, Sprints 2–5, #73/#77)
+
+- **The five hot terrain kernels (slope, aspect, hillshade, multidirectional
+  hillshade, curvature) are unified between the batch and streaming paths**,
+  removing the divergence class that produced the C1 hillshade bug; a
+  batch/streaming parity test suite (17 algorithms) guards them (#73).
+- **Real bounded-memory DEFLATE GeoTIFF streaming**: the compressed write
+  path streams one strip at a time via a hand-driven `DirectoryEncoder`
+  instead of buffering the whole image (#77).
+- WASM export-count CI guard corrected (stale threshold 29 vs an actual 57),
+  plus `wasm-pack test --node` and CLI `assert_cmd` smoke tests added (#76).
+
 ### Added
+
+#### I/O capabilities (engine audit R2, Sprint 4, #75)
+
+- **Native COG writer** (`surtgis_core::io::write_cog`): tiled GeoTIFF with
+  internal overviews, nodata-aware 2×2 downsampling, and optional DEFLATE.
+  (Available in the library; a CLI/Python entry point is still pending — see
+  the R3 audit follow-up.)
+- **`AnyRaster` + `read_geotiff_any`**: a 7-variant enum (U8/U16/I16/U32/
+  I32/F32/F64) that preserves a GeoTIFF's native dtype instead of collapsing
+  every type to `f64` (up to 4× less memory for a u16 DEM the caller only
+  inspects). `AnyRaster::to_f64()` is the explicit opt-in back to the old
+  behaviour. The CLI `info` command is the first caller. Native types
+  without an exact variant are widened losslessly (i8→i16, f16→f32,
+  u64/i64→f64).
+- **`Average` and `Cubic` resampling** (`ResampleMethod`): area-weighted
+  mean (exact overlap fraction, nodata-excluded, falls back to bilinear when
+  upsampling) and Catmull-Rom bicubic (a=-0.5, GDAL's default, falls back to
+  bilinear on a nodata window). Fixes aliasing when downsampling to a coarser
+  composite grid. `Average` cross-validated against `gdal_translate -r
+  average`.
+
+#### Performance (engine audit R2, Sprint 3, #74)
+
+- **Focal statistics are now O(1)/O(r) per cell** instead of O(k²): a
+  summed-area table for mean/std/sum/count over square windows (centered on
+  the global mean to avoid catastrophic cancellation in the variance), van
+  Herk–Gil-Werman separable min/max, and an exact Huang/Fenwick sliding
+  window for median/percentile (no histogram quantization). Every fast path
+  is tested against the brute-force reference (square and circular, with
+  NaN). Inverts the one benchmark 0.17.0 lost (TPI-family focal cost).
+- **Shared HTTP client + URL-keyed IFD cache** for COG access: a STAC
+  composite reopening the same COG dozens of times now pays the
+  `reqwest::Client` build, TLS handshake and IFD parse once. The cache key
+  strips the query string so re-signed SAS/presigned URLs for the same asset
+  still hit.
+
+#### Python (engine audit R2, Sprint 5, #76)
+
+- **7 new Python functions (124 total)** binding categories the audit found
+  present in Rust but unbound: zonal statistics, kriging (auto-fit
+  variogram), temporal trend / Mann-Kendall, SLIC and Felzenszwalb
+  segmentation, and pansharpening.
+- **`py.typed` + `surtgis.pyi` type stubs** (generated from the
+  `#[pyfunction]` signatures via `gen_stubs.py`), so `mypy`/IDEs see the API.
+- **Output-buffer copy eliminated** on every raster-returning binding
+  (`Raster::into_array()` moves instead of cloning, 102 call sites).
+- pytest coverage grew 17 → 75 cases across the previously untested
+  categories.
+
+#### Cloud / parity
 
 - **Honest `SigV4 not implemented` error** (audit A2-cloud): signing an S3
   request with `AwsAuth` used to emit half-signed headers (no
@@ -198,6 +299,72 @@ promote this release unchanged once the EMS paper is published.
   and stream-network IoU.
 
 ### Fixed
+
+#### 10 silent-wrong-data bugs (engine audit R2, Sprint 1, #72)
+
+Correctness fixes across modules the R2 audit read for the first time.
+Each produced plausible-but-wrong output with no error — **outputs from
+≤0.17.0 for the affected algorithms should be regenerated**:
+
+- **Vector `clip`** now handles `MultiPolygon`/`MultiLineString`/
+  `MultiPoint`/`GeometryCollection` (the shapefile reader converts every
+  ESRI polygon to a `MultiPolygon`, so real shapefiles were passed through
+  unclipped, CR-5), preserves and clips interior rings/holes instead of
+  filling them in (CR-6), and emits a `MultiLineString` for a line that
+  exits and re-enters the window instead of bridging it with a fabricated
+  segment (CR-9).
+- **Vector `overlay`**: `difference`/`union`/`symmetric_difference` with an
+  empty operand now return the non-empty side instead of silently emptying
+  (CR-7); `union`/`symmetric_difference` merge A and B once each instead of
+  looping per A-polygon and inflating area (CR-8). `overlay.rs` gained its
+  first test suite.
+- **Fluvial geometry**: removed a systematic ½-pixel shift in every
+  exported coordinate (ksn segments, long-profile nodes, divide midpoints,
+  χ CSV — CR-1); drainage area is now `(flow_acc + 1)·cell²` so headwaters
+  no longer get area 0 → χ=NaN (A-1); χ integration switched to the
+  trapezoidal rule it claimed to use (A-3). This module feeds the Ñuble
+  hazard maps.
+- **Zonal `Majority`/`Minority`/`Variety`** now compute real categorical
+  statistics instead of silently returning the zone mean (CR-4).
+- **`KdTree::within_radius`** near/far pruning branches were swapped
+  (explored the far side, pruned the near) — restored (CR-3).
+- **SLIC** default compactness (`m=10`, calibrated for CIELAB ~100) is now
+  `0.1` for the `[0,1]`-normalized bands SurtGIS uses, so superpixels
+  follow the image instead of a geometric grid (CR-10).
+- **Kriging**: ordinary/universal kriging deduplicate near-coincident
+  samples instead of silently falling back to IDW on the resulting singular
+  matrix (A-8), and universal kriging evaluates drift at sample-centroid-
+  centered coordinates instead of absolute ones (condition number
+  ~1e28 → ~1e9, A-9).
+- **Mann-Kendall** now uses tau-b with the tie-corrected variance (A-4/A-5),
+  and **Moran's I** uses the standard Cliff & Ord randomization variance
+  instead of a hardcoded kurtosis (A-6).
+- **Vector readers propagate CRS** through `FeatureCollection`, and
+  `rasterize` validates a CRS mismatch instead of silently producing an
+  empty raster (A-13).
+- **REG-1 regression**: the spheroidal latitude correction for geographic
+  DEMs, added to the batch path in 0.17.0, was missing from the streaming
+  path the CLI actually uses — so the same EPSG:4326 DEM gave correct slopes
+  by one route and wrong by the other. The streaming kernels now receive
+  per-row cell sizes; a batch/streaming parity test suite guards it.
+
+#### Loose correctness findings (#73, #77)
+
+- **`aspect()` batch used `-1.0` for flat/invalid cells while streaming
+  used `NaN`** (#77). Since `solar_radiation()` only filters invalid aspect
+  via `is_nan()`, the `-1.0` (~-57.3°) leaked in as a real aspect on every
+  flat cell wherever slope+aspect+solar were computed together. Unified to
+  `NaN`.
+- **~113 approximate nodata comparisons** (`(v - nd).abs() < EPSILON`)
+  across terrain/hydrology/imagery/landscape/morphology tightened to exact
+  bit equality (#73), consistent with `RasterElement::is_nodata` — the
+  tolerance form both false-positived valid values near the sentinel and
+  false-negatived sentinels 1 ULP off after a round-trip.
+- **`check_aligned` gap closed** in the multi-raster algorithms that combine
+  different element types (zonal, watershed_parallel, hand,
+  sediment_connectivity): they checked shape but not geotransform/CRS (#73).
+
+#### Other fixes (audit D7, parity sprint)
 
 - CLI `hydrology fill-sinks --min-slope` default aligned with the library
   default (`0.01` → `1e-5`, audit D7 — the library was fixed in the

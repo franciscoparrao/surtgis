@@ -73,10 +73,14 @@ pub use resample::{ResampleMethod, resample_to_grid};
 pub use streaming::{GeoRowContext, StripProcessor, WindowAlgorithm};
 pub use tiling::{Tile, TileGrid};
 
-/// Prelude for convenient imports
+/// Prelude for convenient imports.
+///
+/// The `dispatch_any!` macro is intentionally **not** re-exported here:
+/// freezing a macro in the 1.0 prelude would freeze its internal match
+/// syntax. It remains reachable at its crate-root path
+/// `surtgis_core::dispatch_any!` (via `#[macro_export]`).
 pub mod prelude {
     pub use crate::crs::CRS;
-    pub use crate::dispatch_any;
     pub use crate::error::{Error, Result};
     pub use crate::raster::{
         AnyRaster, DataType, GeoTransform, Raster, RasterCell, RasterElement, check_aligned,

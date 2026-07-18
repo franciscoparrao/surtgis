@@ -69,12 +69,11 @@ pub fn handle(
             }
             let flow_dir = read_u8(&input)?;
             let start = Instant::now();
-            let result = watershed(
-                &flow_dir,
-                WatershedParams {
-                    pour_points: points,
-                },
-            )
+            let result = watershed(&flow_dir, {
+                let mut p = WatershedParams::default();
+                p.pour_points = points;
+                p
+            })
             .context("Failed to delineate watersheds")?;
             let elapsed = start.elapsed();
             write_result_i32(&result, &output, compress)?;
@@ -88,8 +87,12 @@ pub fn handle(
         } => {
             let dem = read_dem(&input)?;
             let start = Instant::now();
-            let result = priority_flood(&dem, PriorityFloodParams { epsilon })
-                .context("Failed to run priority flood")?;
+            let result = priority_flood(&dem, {
+                let mut p = PriorityFloodParams::default();
+                p.epsilon = epsilon;
+                p
+            })
+            .context("Failed to run priority flood")?;
             let elapsed = start.elapsed();
             write_result(&result, &output, compress)?;
             done("Priority flood", &output, elapsed);
@@ -160,8 +163,12 @@ pub fn handle(
             let dem = read_dem(&input)?;
             let start = Instant::now();
             // Internal pipeline: fill -> flow_dir -> flow_acc -> slope -> twi
-            let filled = priority_flood(&dem, PriorityFloodParams { epsilon: 0.0001 })
-                .context("Failed to fill depressions")?;
+            let filled = priority_flood(&dem, {
+                let mut p = PriorityFloodParams::default();
+                p.epsilon = 0.0001;
+                p
+            })
+            .context("Failed to fill depressions")?;
             let facc = match method.as_str() {
                 "dinf" => {
                     let angles = flow_direction_dinf(&filled)
@@ -177,13 +184,12 @@ pub fn handle(
                     flow_accumulation(&fdir).context("Failed to compute flow accumulation")?
                 }
             };
-            let slope_rad = slope(
-                &filled,
-                SlopeParams {
-                    units: SlopeUnits::Radians,
-                    z_factor: 1.0,
-                },
-            )
+            let slope_rad = slope(&filled, {
+                let mut p = SlopeParams::default();
+                p.units = SlopeUnits::Radians;
+                p.z_factor = 1.0;
+                p
+            })
             .context("Failed to compute slope")?;
             let result = twi(&facc, &slope_rad).context("Failed to compute TWI")?;
             let elapsed = start.elapsed();
@@ -198,18 +204,19 @@ pub fn handle(
         } => {
             let dem = read_dem(&input)?;
             let start = Instant::now();
-            let filled = priority_flood(&dem, PriorityFloodParams { epsilon: 0.0001 })
-                .context("Failed to fill depressions")?;
+            let filled = priority_flood(&dem, {
+                let mut p = PriorityFloodParams::default();
+                p.epsilon = 0.0001;
+                p
+            })
+            .context("Failed to fill depressions")?;
             let fdir = flow_direction(&filled).context("Failed to compute flow direction")?;
             let facc = flow_accumulation(&fdir).context("Failed to compute flow accumulation")?;
-            let result = hand(
-                &dem,
-                &fdir,
-                &facc,
-                HandParams {
-                    stream_threshold: threshold,
-                },
-            )
+            let result = hand(&dem, &fdir, &facc, {
+                let mut p = HandParams::default();
+                p.stream_threshold = threshold;
+                p
+            })
             .context("Failed to compute HAND")?;
             let elapsed = start.elapsed();
             write_result(&result, &output, compress)?;
@@ -238,8 +245,12 @@ pub fn handle(
                 read_dem(&input)? // read_dem reads a Float64 raster from disk; semantically OK here
             } else {
                 let dem = read_dem(&input)?;
-                let filled = priority_flood(&dem, PriorityFloodParams { epsilon: 0.0001 })
-                    .context("Failed to fill depressions")?;
+                let filled = priority_flood(&dem, {
+                    let mut p = PriorityFloodParams::default();
+                    p.epsilon = 0.0001;
+                    p
+                })
+                .context("Failed to fill depressions")?;
                 let fdir = flow_direction(&filled).context("Failed to compute flow direction")?;
                 flow_accumulation(&fdir).context("Failed to compute flow accumulation")?
             };
@@ -478,8 +489,12 @@ pub fn handle(
 
             println!("Computing full hydrology pipeline...");
 
-            let filled =
-                priority_flood(&dem, PriorityFloodParams { epsilon: 0.0001 }).context("fill")?;
+            let filled = priority_flood(&dem, {
+                let mut p = PriorityFloodParams::default();
+                p.epsilon = 0.0001;
+                p
+            })
+            .context("fill")?;
             write_result(&filled, &outdir.join("filled.tif"), compress)?;
             println!("  filled.tif");
 
@@ -508,13 +523,12 @@ pub fn handle(
             )?;
             println!("  flow_accumulation_mfd.tif");
 
-            let slope_rad = slope(
-                &filled,
-                SlopeParams {
-                    units: SlopeUnits::Radians,
-                    z_factor: 1.0,
-                },
-            )
+            let slope_rad = slope(&filled, {
+                let mut p = SlopeParams::default();
+                p.units = SlopeUnits::Radians;
+                p.z_factor = 1.0;
+                p
+            })
             .context("slope")?;
             let twi_r = twi(&facc, &slope_rad).context("twi")?;
             write_result(&twi_r, &outdir.join("twi.tif"), compress)?;
@@ -525,14 +539,11 @@ pub fn handle(
             write_result_u8(&streams, &outdir.join("stream_network.tif"), compress)?;
             println!("  stream_network.tif");
 
-            let hand_r = hand(
-                &dem,
-                &fdir,
-                &facc,
-                HandParams {
-                    stream_threshold: threshold,
-                },
-            )
+            let hand_r = hand(&dem, &fdir, &facc, {
+                let mut p = HandParams::default();
+                p.stream_threshold = threshold;
+                p
+            })
             .context("hand")?;
             write_result(&hand_r, &outdir.join("hand.tif"), compress)?;
             println!("  hand.tif");
@@ -574,7 +585,12 @@ pub fn handle_hydrology_all(
 
     println!("Computing full hydrology pipeline...");
 
-    let filled = priority_flood(&dem, PriorityFloodParams { epsilon: 0.0001 }).context("fill")?;
+    let filled = priority_flood(&dem, {
+        let mut p = PriorityFloodParams::default();
+        p.epsilon = 0.0001;
+        p
+    })
+    .context("fill")?;
     write_result(&filled, &outdir.join("filled.tif"), compress)?;
     println!("  filled.tif");
 
@@ -603,13 +619,12 @@ pub fn handle_hydrology_all(
     )?;
     println!("  flow_accumulation_mfd.tif");
 
-    let slope_rad = slope(
-        &filled,
-        SlopeParams {
-            units: SlopeUnits::Radians,
-            z_factor: 1.0,
-        },
-    )
+    let slope_rad = slope(&filled, {
+        let mut p = SlopeParams::default();
+        p.units = SlopeUnits::Radians;
+        p.z_factor = 1.0;
+        p
+    })
     .context("slope")?;
     let twi_r = twi(&facc, &slope_rad).context("twi")?;
     write_result(&twi_r, &outdir.join("twi.tif"), compress)?;
@@ -620,14 +635,11 @@ pub fn handle_hydrology_all(
     write_result_u8(&streams, &outdir.join("stream_network.tif"), compress)?;
     println!("  stream_network.tif");
 
-    let hand_r = hand(
-        &dem,
-        &fdir,
-        &facc,
-        HandParams {
-            stream_threshold: 1000.0,
-        },
-    )
+    let hand_r = hand(&dem, &fdir, &facc, {
+        let mut p = HandParams::default();
+        p.stream_threshold = 1000.0;
+        p
+    })
     .context("hand")?;
     write_result(&hand_r, &outdir.join("hand.tif"), compress)?;
     println!("  hand.tif");

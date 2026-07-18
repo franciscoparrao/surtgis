@@ -16,6 +16,7 @@ use super::d8::opposite as opposite_dir;
 
 /// Parameters for watershed delineation
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct WatershedParams {
     /// Pour points as (row, col) coordinates.
     /// If empty, all independent basins are delineated.

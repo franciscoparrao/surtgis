@@ -230,4 +230,22 @@ mod tests {
         assert_eq!(i32::default_nodata(), i32::MIN);
         assert_eq!(i64::default_nodata(), i64::MIN);
     }
+
+    /// Freeze the u64 nodata contract before 1.0. `u64::MAX` is not
+    /// representable in f64 (it rounds to 2^64), and so does `u64::MAX - 1`
+    /// — both map to the same f64. Nodata detection therefore MUST stay in
+    /// the native integer domain (`is_nodata` compares `u64` exactly), never
+    /// via `to_f64()`. This test guards both facts so a future refactor that
+    /// routes u64 nodata through f64 fails loudly here.
+    #[test]
+    fn test_u64_nodata_stays_in_native_domain() {
+        // Exact integer comparison: the sentinel matches, its neighbour does
+        // not — even though both collapse to the same f64.
+        assert!(u64::MAX.is_nodata(Some(u64::MAX)));
+        assert!(!(u64::MAX - 1).is_nodata(Some(u64::MAX)));
+
+        // Document the lossy f64 conversion that makes the native-domain
+        // rule necessary: MAX and MAX-1 are indistinguishable as f64.
+        assert_eq!(u64::MAX.to_f64(), (u64::MAX - 1).to_f64());
+    }
 }

@@ -168,13 +168,12 @@ fn slope_vs_gdal() {
     let dem = require!(DEM_UTM);
     let gdal_ref = require!(GDAL_SLOPE);
 
-    let surtgis_out = slope(
-        &dem,
-        SlopeParams {
-            units: SlopeUnits::Degrees,
-            z_factor: 1.0,
-        },
-    )
+    let surtgis_out = slope(&dem, {
+        let mut p = SlopeParams::default();
+        p.units = SlopeUnits::Degrees;
+        p.z_factor = 1.0;
+        p
+    })
     .expect("surtgis slope failed");
 
     eprintln!("\n── Slope: SurtGIS vs GDAL (Horn, UTM) ──");
@@ -200,13 +199,12 @@ fn slope_vs_grass() {
     let dem = require!(DEM_UTM);
     let grass_ref = require!(GRASS_SLOPE);
 
-    let surtgis_out = slope(
-        &dem,
-        SlopeParams {
-            units: SlopeUnits::Degrees,
-            z_factor: 1.0,
-        },
-    )
+    let surtgis_out = slope(&dem, {
+        let mut p = SlopeParams::default();
+        p.units = SlopeUnits::Degrees;
+        p.z_factor = 1.0;
+        p
+    })
     .expect("surtgis slope failed");
 
     eprintln!("\n── Slope: SurtGIS vs GRASS (Horn, UTM) ──");

@@ -1,7 +1,9 @@
 //! AWS S3 authentication for COG access.
 //!
 //! Provides a simple Bearer-token or query-string auth mechanism for S3.
-//! For full SigV4, enable the `aws` feature and use `AwsAuth`.
+//! Full SigV4 request signing is **not implemented**: [`AwsAuth`] returns
+//! an explicit error instead of sending half-signed requests (audit
+//! A2-cloud). Use presigned URLs, a VPC endpoint, or public-bucket HTTPS.
 //!
 //! This implementation reads credentials from environment variables:
 //! - `AWS_ACCESS_KEY_ID`

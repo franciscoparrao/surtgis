@@ -42,15 +42,14 @@ pub fn handle(
     let (rows, cols) = dem.shape();
 
     // 2D recipe — same as `surtgis relief`.
-    let sphere = sphere_shade(
-        &dem,
-        HillshadeParams {
-            azimuth: sun_azimuth,
-            altitude: sun_altitude,
-            z_factor: 1.0,
-            normalized: true,
-        },
-    )
+    let sphere = sphere_shade(&dem, {
+        let mut p = HillshadeParams::default();
+        p.azimuth = sun_azimuth;
+        p.altitude = sun_altitude;
+        p.z_factor = 1.0;
+        p.normalized = true;
+        p
+    })
     .context("sphere_shade failed")?;
 
     let mut builder = ReliefBuilder::new(&dem)

@@ -1,11 +1,11 @@
-//! Composite planning: search sizing, scene-date selection, the calibrated
-//! memory-budget model that caps `strip_rows`, and per-strip geometry.
+//! Composite planning: search sizing, scene-date selection, the memory
+//! model that caps `strip_rows`, and per-strip geometry.
 //!
-//! The budget model is the empirically calibrated one from the v0.6.22 →
-//! v0.7.1 RAM saga (see `docs/postmortems/2026-04-stac-composite-ram.md`);
-//! it is expected to be *replaced* by `MemoryBudget` (audit R9), at which
-//! point the calibration constants disappear. Extracting it here first
-//! gives the current behaviour a seam and a test suite.
+//! The calibrated model from the v0.6.22 → v0.7.1 RAM saga (see
+//! `docs/postmortems/2026-04-stac-composite-ram.md`) was retired in audit
+//! R9-PR2: [`plan_strips`] now sizes strips from plain arithmetic
+//! (output + held + decode bytes) with no calibration constants, and the
+//! decode phase is additionally bounded at runtime by `MemoryBudget`.
 
 use crate::{BBox, StacCatalog};
 use surtgis_core::{GeoTransform, Raster};

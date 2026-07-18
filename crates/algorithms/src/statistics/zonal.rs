@@ -9,6 +9,7 @@ use surtgis_core::{Error, Result};
 
 /// Available zonal statistics
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ZonalStatistic {
     /// Arithmetic mean of the zone's values.
     Mean,
@@ -36,6 +37,7 @@ pub enum ZonalStatistic {
 
 /// Result of zonal statistics for one zone
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ZonalResult {
     /// Integer identifier of the zone.
     pub zone_id: i32,

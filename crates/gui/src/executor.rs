@@ -91,7 +91,12 @@ pub fn dispatch_algorithm(
                     &tx,
                     "Slope",
                     start,
-                    slope(&input, SlopeParams { units, z_factor }),
+                    slope(&input, {
+                        let mut p = SlopeParams::default();
+                        p.units = units;
+                        p.z_factor = z_factor;
+                        p
+                    }),
                 );
             }
 
@@ -108,15 +113,14 @@ pub fn dispatch_algorithm(
                     &tx,
                     "Hillshade",
                     start,
-                    hillshade(
-                        &input,
-                        HillshadeParams {
-                            azimuth: get_f64(&params, "azimuth", 315.0),
-                            altitude: get_f64(&params, "altitude", 45.0),
-                            z_factor: get_f64(&params, "z_factor", 1.0),
-                            normalized: false,
-                        },
-                    ),
+                    hillshade(&input, {
+                        let mut p = HillshadeParams::default();
+                        p.azimuth = get_f64(&params, "azimuth", 315.0);
+                        p.altitude = get_f64(&params, "altitude", 45.0);
+                        p.z_factor = get_f64(&params, "z_factor", 1.0);
+                        p.normalized = false;
+                        p
+                    }),
                 );
             }
 
@@ -139,14 +143,12 @@ pub fn dispatch_algorithm(
                     &tx,
                     "Curvature",
                     start,
-                    curvature(
-                        &input,
-                        CurvatureParams {
-                            curvature_type: ct,
-                            z_factor: get_f64(&params, "z_factor", 1.0),
-                            ..Default::default()
-                        },
-                    ),
+                    curvature(&input, {
+                        let mut p = CurvatureParams::default();
+                        p.curvature_type = ct;
+                        p.z_factor = get_f64(&params, "z_factor", 1.0);
+                        p
+                    }),
                 );
             }
 
@@ -155,12 +157,11 @@ pub fn dispatch_algorithm(
                     &tx,
                     "TPI",
                     start,
-                    tpi(
-                        &input,
-                        TpiParams {
-                            radius: get_usize(&params, "radius", 3),
-                        },
-                    ),
+                    tpi(&input, {
+                        let mut p = TpiParams::default();
+                        p.radius = get_usize(&params, "radius", 3);
+                        p
+                    }),
                 );
             }
 
@@ -169,12 +170,11 @@ pub fn dispatch_algorithm(
                     &tx,
                     "TRI",
                     start,
-                    tri(
-                        &input,
-                        TriParams {
-                            radius: get_usize(&params, "radius", 1),
-                        },
-                    ),
+                    tri(&input, {
+                        let mut p = TriParams::default();
+                        p.radius = get_usize(&params, "radius", 1);
+                        p
+                    }),
                 );
             }
 
@@ -186,13 +186,12 @@ pub fn dispatch_algorithm(
                     let filled = fill_sinks(&input, FillSinksParams { min_slope: 0.01 })?;
                     let fdir = flow_direction(&filled)?;
                     let facc = flow_accumulation(&fdir)?;
-                    let slope_rad = slope(
-                        &filled,
-                        SlopeParams {
-                            units: SlopeUnits::Radians,
-                            z_factor: 1.0,
-                        },
-                    )?;
+                    let slope_rad = slope(&filled, {
+                        let mut p = SlopeParams::default();
+                        p.units = SlopeUnits::Radians;
+                        p.z_factor = 1.0;
+                        p
+                    })?;
                     Ok(surtgis_algorithms::terrain::twi(&facc, &slope_rad)?)
                 })();
                 dispatch_f64(&tx, "TWI", start, res);
@@ -227,15 +226,14 @@ pub fn dispatch_algorithm(
                     &tx,
                     "Landform",
                     start,
-                    landform_classification(
-                        &input,
-                        LandformParams {
-                            small_radius: get_usize(&params, "small_radius", 3),
-                            large_radius: get_usize(&params, "large_radius", 10),
-                            tpi_threshold: get_f64(&params, "threshold", 1.0),
-                            slope_threshold: get_f64(&params, "slope_threshold", 6.0),
-                        },
-                    ),
+                    landform_classification(&input, {
+                        let mut p = LandformParams::default();
+                        p.small_radius = get_usize(&params, "small_radius", 3);
+                        p.large_radius = get_usize(&params, "large_radius", 10);
+                        p.tpi_threshold = get_f64(&params, "threshold", 1.0);
+                        p.slope_threshold = get_f64(&params, "slope_threshold", 6.0);
+                        p
+                    }),
                 );
             }
 
@@ -369,14 +367,11 @@ pub fn dispatch_algorithm(
                     let filled = fill_sinks(&input, FillSinksParams { min_slope: 0.01 })?;
                     let fdir = flow_direction(&filled)?;
                     let facc = flow_accumulation(&fdir)?;
-                    Ok(hand(
-                        &filled,
-                        &fdir,
-                        &facc,
-                        HandParams {
-                            stream_threshold: threshold,
-                        },
-                    )?)
+                    Ok(hand(&filled, &fdir, &facc, {
+                        let mut p = HandParams::default();
+                        p.stream_threshold = threshold;
+                        p
+                    })?)
                 })();
                 dispatch_f64(&tx, "HAND", start, res);
             }
@@ -1061,13 +1056,12 @@ pub fn dispatch_algorithm(
                     let filled = fill_sinks(&input, FillSinksParams { min_slope: 0.01 })?;
                     let fdir = flow_direction(&filled)?;
                     let facc = flow_accumulation(&fdir)?;
-                    let slope_rad = slope(
-                        &filled,
-                        SlopeParams {
-                            units: SlopeUnits::Radians,
-                            z_factor: 1.0,
-                        },
-                    )?;
+                    let slope_rad = slope(&filled, {
+                        let mut p = SlopeParams::default();
+                        p.units = SlopeUnits::Radians;
+                        p.z_factor = 1.0;
+                        p
+                    })?;
                     Ok(spi(&facc, &slope_rad)?)
                 })();
                 dispatch_f64(&tx, "SPI", start, res);
@@ -1083,13 +1077,12 @@ pub fn dispatch_algorithm(
                     let filled = fill_sinks(&input, FillSinksParams { min_slope: 0.01 })?;
                     let fdir = flow_direction(&filled)?;
                     let facc = flow_accumulation(&fdir)?;
-                    let slope_rad = slope(
-                        &filled,
-                        SlopeParams {
-                            units: SlopeUnits::Radians,
-                            z_factor: 1.0,
-                        },
-                    )?;
+                    let slope_rad = slope(&filled, {
+                        let mut p = SlopeParams::default();
+                        p.units = SlopeUnits::Radians;
+                        p.z_factor = 1.0;
+                        p
+                    })?;
                     Ok(sti(&facc, &slope_rad, StiParams { m, n })?)
                 })();
                 dispatch_f64(&tx, "STI", start, res);
@@ -1166,13 +1159,12 @@ pub fn dispatch_algorithm(
                     "Computing slope + aspect for solar radiation...",
                 )));
                 let res = (|| -> anyhow::Result<Raster<f64>> {
-                    let slope_rad = slope(
-                        &input,
-                        SlopeParams {
-                            units: SlopeUnits::Radians,
-                            z_factor: 1.0,
-                        },
-                    )?;
+                    let slope_rad = slope(&input, {
+                        let mut p = SlopeParams::default();
+                        p.units = SlopeUnits::Radians;
+                        p.z_factor = 1.0;
+                        p
+                    })?;
                     let aspect_rad = aspect(&input, AspectOutput::Radians)?;
                     let mut sp = SolarParams::default();
                     sp.day = day;
@@ -1190,20 +1182,16 @@ pub fn dispatch_algorithm(
                     "Computing curvatures for lineament detection...",
                 )));
                 let res = (|| -> anyhow::Result<Raster<u8>> {
-                    let plan = curvature(
-                        &input,
-                        CurvatureParams {
-                            curvature_type: CurvatureType::Plan,
-                            ..Default::default()
-                        },
-                    )?;
-                    let profile = curvature(
-                        &input,
-                        CurvatureParams {
-                            curvature_type: CurvatureType::Profile,
-                            ..Default::default()
-                        },
-                    )?;
+                    let plan = curvature(&input, {
+                        let mut p = CurvatureParams::default();
+                        p.curvature_type = CurvatureType::Plan;
+                        p
+                    })?;
+                    let profile = curvature(&input, {
+                        let mut p = CurvatureParams::default();
+                        p.curvature_type = CurvatureType::Profile;
+                        p
+                    })?;
                     let result =
                         lineament_detection(&plan, &profile, LineamentParams { min_length })?;
                     Ok(result.classified)
@@ -1558,17 +1546,15 @@ pub fn dispatch_algorithm(
                     start,
                     &input,
                     |points, params_grid| {
-                        Ok(idw(
-                            &points,
-                            IdwParams {
-                                power,
-                                max_points: Some(max_points),
-                                rows: params_grid.0,
-                                cols: params_grid.1,
-                                transform: params_grid.2,
-                                ..IdwParams::default()
-                            },
-                        )?)
+                        Ok(idw(&points, {
+                            let mut p = IdwParams::default();
+                            p.power = power;
+                            p.max_points = Some(max_points);
+                            p.rows = params_grid.0;
+                            p.cols = params_grid.1;
+                            p.transform = params_grid.2;
+                            p
+                        })?)
                     },
                 );
             }
@@ -1580,15 +1566,14 @@ pub fn dispatch_algorithm(
                     start,
                     &input,
                     |points, params_grid| {
-                        Ok(nearest_neighbor(
-                            &points,
-                            NearestNeighborParams {
-                                max_radius: None,
-                                rows: params_grid.0,
-                                cols: params_grid.1,
-                                transform: params_grid.2,
-                            },
-                        )?)
+                        Ok(nearest_neighbor(&points, {
+                            let mut p = NearestNeighborParams::default();
+                            p.max_radius = None;
+                            p.rows = params_grid.0;
+                            p.cols = params_grid.1;
+                            p.transform = params_grid.2;
+                            p
+                        })?)
                     },
                 );
             }
@@ -1666,17 +1651,14 @@ pub fn dispatch_algorithm(
                         };
                         let variogram = empirical_variogram(&points, VariogramParams::default())?;
                         let fitted = fit_best_variogram(&variogram)?;
-                        let result = ordinary_kriging(
-                            &points,
-                            &fitted,
-                            OrdinaryKrigingParams {
-                                rows: params_grid.0,
-                                cols: params_grid.1,
-                                transform: params_grid.2,
-                                max_points,
-                                ..OrdinaryKrigingParams::default()
-                            },
-                        )?;
+                        let result = ordinary_kriging(&points, &fitted, {
+                            let mut p = OrdinaryKrigingParams::default();
+                            p.rows = params_grid.0;
+                            p.cols = params_grid.1;
+                            p.transform = params_grid.2;
+                            p.max_points = max_points;
+                            p
+                        })?;
                         Ok(result.estimate)
                     },
                 );
@@ -1775,14 +1757,13 @@ fn dispatch_focal(
         tx,
         name,
         start,
-        focal_statistics(
-            input,
-            FocalParams {
-                radius: get_usize(params, "radius", 3),
-                statistic,
-                circular: false,
-            },
-        ),
+        focal_statistics(input, {
+            let mut p = FocalParams::default();
+            p.radius = get_usize(params, "radius", 3);
+            p.statistic = statistic;
+            p.circular = false;
+            p
+        }),
     );
 }
 

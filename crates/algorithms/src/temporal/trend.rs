@@ -10,6 +10,7 @@ use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
 /// Result of per-pixel linear trend analysis.
+#[non_exhaustive]
 pub struct LinearTrendResult {
     /// Slope (change per time step)
     pub slope: Raster<f64>,
@@ -22,6 +23,7 @@ pub struct LinearTrendResult {
 }
 
 /// Result of Mann-Kendall trend test.
+#[non_exhaustive]
 pub struct MannKendallResult {
     /// Kendall's tau-b (-1 to 1), corrected for tied values (Kendall, 1945/1975).
     /// Unlike tau-a (`S / n(n-1)/2`), tau-b normalizes by the tie-adjusted

@@ -113,13 +113,15 @@ pub fn handle(action: InterpolationCommands, compress: bool) -> Result<()> {
             };
 
             let pb = spinner("Kriging...");
-            let params = OrdinaryKrigingParams {
-                rows,
-                cols,
-                transform: ref_raster.transform().clone(),
-                max_points: max_neighbors,
-                max_radius: None,
-                compute_variance: false,
+            let params = {
+                let mut p = OrdinaryKrigingParams::default();
+                p.rows = rows;
+                p.cols = cols;
+                p.transform = ref_raster.transform().clone();
+                p.max_points = max_neighbors;
+                p.max_radius = None;
+                p.compute_variance = false;
+                p
             };
             let result =
                 ordinary_kriging(&samples, &variogram, params).context("Kriging failed")?;
@@ -241,18 +243,16 @@ pub fn handle(action: InterpolationCommands, compress: bool) -> Result<()> {
 
             let start = Instant::now();
             let pb = spinner(&format!("IDW (power={})...", power));
-            let result = idw(
-                &samples,
-                IdwParams {
-                    power,
-                    max_radius,
-                    max_points,
-                    rows,
-                    cols,
-                    transform: ref_raster.transform().clone(),
-                    ..IdwParams::default()
-                },
-            )
+            let result = idw(&samples, {
+                let mut p = IdwParams::default();
+                p.power = power;
+                p.max_radius = max_radius;
+                p.max_points = max_points;
+                p.rows = rows;
+                p.cols = cols;
+                p.transform = ref_raster.transform().clone();
+                p
+            })
             .context("IDW failed")?;
             pb.finish_and_clear();
 
@@ -278,15 +278,14 @@ pub fn handle(action: InterpolationCommands, compress: bool) -> Result<()> {
 
             let start = Instant::now();
             let pb = spinner("Nearest Neighbor...");
-            let result = nearest_neighbor(
-                &samples,
-                NearestNeighborParams {
-                    max_radius,
-                    rows,
-                    cols,
-                    transform: ref_raster.transform().clone(),
-                },
-            )
+            let result = nearest_neighbor(&samples, {
+                let mut p = NearestNeighborParams::default();
+                p.max_radius = max_radius;
+                p.rows = rows;
+                p.cols = cols;
+                p.transform = ref_raster.transform().clone();
+                p
+            })
             .context("Nearest Neighbor failed")?;
             pb.finish_and_clear();
 

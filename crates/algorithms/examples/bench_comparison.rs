@@ -272,7 +272,12 @@ fn bench_surtgis_io(algorithm: &str, dem_path: &Path, out_dir: &Path) -> (f64, f
             (t_read + t_compute + t_write, t_read, t_compute, t_write)
         }
         "tpi" => {
-            let r = tpi(&dem, TpiParams { radius: 10 }).unwrap();
+            let r = tpi(&dem, {
+                let mut p = TpiParams::default();
+                p.radius = 10;
+                p
+            })
+            .unwrap();
             let t_compute = t1.elapsed().as_secs_f64() * 1000.0;
             let t2 = Instant::now();
             let path = out_dir.join("surtgis_tpi.tif");

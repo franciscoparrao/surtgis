@@ -70,8 +70,13 @@ pub fn handle(
             } else {
                 let dem = read_dem(&input)?;
                 let start = Instant::now();
-                let result = slope(&dem, SlopeParams { units, z_factor })
-                    .context("Failed to calculate slope")?;
+                let result = slope(&dem, {
+                    let mut p = SlopeParams::default();
+                    p.units = units;
+                    p.z_factor = z_factor;
+                    p
+                })
+                .context("Failed to calculate slope")?;
                 let elapsed = start.elapsed();
                 write_result(&result, &output, compress)?;
                 done("Slope", &output, elapsed);
@@ -141,15 +146,14 @@ pub fn handle(
             } else {
                 let dem = read_dem(&input)?;
                 let start = Instant::now();
-                let result = hillshade(
-                    &dem,
-                    HillshadeParams {
-                        azimuth,
-                        altitude,
-                        z_factor,
-                        normalized: false,
-                    },
-                )
+                let result = hillshade(&dem, {
+                    let mut p = HillshadeParams::default();
+                    p.azimuth = azimuth;
+                    p.altitude = altitude;
+                    p.z_factor = z_factor;
+                    p.normalized = false;
+                    p
+                })
                 .context("Failed to calculate hillshade")?;
                 let elapsed = start.elapsed();
                 write_result(&result, &output, compress)?;
@@ -191,14 +195,12 @@ pub fn handle(
             } else {
                 let dem = read_dem(&input)?;
                 let start = Instant::now();
-                let result = curvature(
-                    &dem,
-                    CurvatureParams {
-                        curvature_type: ct,
-                        z_factor,
-                        ..Default::default()
-                    },
-                )
+                let result = curvature(&dem, {
+                    let mut p = CurvatureParams::default();
+                    p.curvature_type = ct;
+                    p.z_factor = z_factor;
+                    p
+                })
                 .context("Failed to calculate curvature")?;
                 let elapsed = start.elapsed();
                 write_result(&result, &output, compress)?;
@@ -226,7 +228,12 @@ pub fn handle(
             } else {
                 let dem = read_dem(&input)?;
                 let start = Instant::now();
-                let result = tpi(&dem, TpiParams { radius }).context("Failed to calculate TPI")?;
+                let result = tpi(&dem, {
+                    let mut p = TpiParams::default();
+                    p.radius = radius;
+                    p
+                })
+                .context("Failed to calculate TPI")?;
                 let elapsed = start.elapsed();
                 write_result(&result, &output, compress)?;
                 done("TPI", &output, elapsed);
@@ -253,7 +260,12 @@ pub fn handle(
             } else {
                 let dem = read_dem(&input)?;
                 let start = Instant::now();
-                let result = tri(&dem, TriParams { radius }).context("Failed to calculate TRI")?;
+                let result = tri(&dem, {
+                    let mut p = TriParams::default();
+                    p.radius = radius;
+                    p
+                })
+                .context("Failed to calculate TRI")?;
                 let elapsed = start.elapsed();
                 write_result(&result, &output, compress)?;
                 done("TRI", &output, elapsed);
@@ -270,15 +282,14 @@ pub fn handle(
         } => {
             let dem = read_dem(&input)?;
             let start = Instant::now();
-            let result = landform_classification(
-                &dem,
-                LandformParams {
-                    small_radius,
-                    large_radius,
-                    tpi_threshold: threshold,
-                    slope_threshold,
-                },
-            )
+            let result = landform_classification(&dem, {
+                let mut p = LandformParams::default();
+                p.small_radius = small_radius;
+                p.large_radius = large_radius;
+                p.tpi_threshold = threshold;
+                p.slope_threshold = slope_threshold;
+                p
+            })
             .context("Failed to classify landforms")?;
             let elapsed = start.elapsed();
             write_result(&result, &output, compress)?;
@@ -639,13 +650,12 @@ pub fn handle(
             let dem = read_dem(&input)?;
             let start = Instant::now();
             let pb = spinner("Computing slope+aspect for solar...");
-            let slope_r = slope(
-                &dem,
-                SlopeParams {
-                    units: SlopeUnits::Radians,
-                    z_factor: 1.0,
-                },
-            )
+            let slope_r = slope(&dem, {
+                let mut p = SlopeParams::default();
+                p.units = SlopeUnits::Radians;
+                p.z_factor = 1.0;
+                p
+            })
             .context("Slope failed")?;
             let aspect_r = aspect(&dem, AspectOutput::Radians).context("Aspect failed")?;
             pb.finish_and_clear();
@@ -670,13 +680,12 @@ pub fn handle(
             let dem = read_dem(&input)?;
             let start = Instant::now();
             let pb = spinner("Computing slope+aspect...");
-            let slope_r = slope(
-                &dem,
-                SlopeParams {
-                    units: SlopeUnits::Radians,
-                    z_factor: 1.0,
-                },
-            )
+            let slope_r = slope(&dem, {
+                let mut p = SlopeParams::default();
+                p.units = SlopeUnits::Radians;
+                p.z_factor = 1.0;
+                p
+            })
             .context("Slope failed")?;
             let aspect_r = aspect(&dem, AspectOutput::Radians).context("Aspect failed")?;
             pb.finish_and_clear();
@@ -1038,15 +1047,14 @@ pub fn handle(
         } => {
             let dem = read_dem(&input)?;
             let start = Instant::now();
-            let result = hypsometric_hillshade(
-                &dem,
-                HillshadeParams {
-                    azimuth,
-                    altitude,
-                    z_factor,
-                    normalized: true,
-                },
-            )
+            let result = hypsometric_hillshade(&dem, {
+                let mut p = HillshadeParams::default();
+                p.azimuth = azimuth;
+                p.altitude = altitude;
+                p.z_factor = z_factor;
+                p.normalized = true;
+                p
+            })
             .context("Failed to compute hypsometric hillshade")?;
             write_result(&result, &output, compress)?;
             done("Hypsometric Hillshade", &output, start.elapsed());
@@ -1380,13 +1388,12 @@ pub fn handle(
 
             println!("Computing all terrain factors...");
 
-            let s = slope(
-                &dem,
-                SlopeParams {
-                    units: SlopeUnits::Degrees,
-                    z_factor: 1.0,
-                },
-            )
+            let s = slope(&dem, {
+                let mut p = SlopeParams::default();
+                p.units = SlopeUnits::Degrees;
+                p.z_factor = 1.0;
+                p
+            })
             .context("slope")?;
             write_result(&s, &outdir.join("slope.tif"), compress)?;
             println!("  slope.tif");
@@ -1395,15 +1402,14 @@ pub fn handle(
             write_result(&a, &outdir.join("aspect.tif"), compress)?;
             println!("  aspect.tif");
 
-            let h = hillshade(
-                &dem,
-                HillshadeParams {
-                    azimuth: 315.0,
-                    altitude: 45.0,
-                    z_factor: 1.0,
-                    normalized: false,
-                },
-            )
+            let h = hillshade(&dem, {
+                let mut p = HillshadeParams::default();
+                p.azimuth = 315.0;
+                p.altitude = 45.0;
+                p.z_factor = 1.0;
+                p.normalized = false;
+                p
+            })
             .context("hillshade")?;
             write_result(&h, &outdir.join("hillshade.tif"), compress)?;
             println!("  hillshade.tif");
@@ -1416,23 +1422,31 @@ pub fn handle(
             write_result(&e, &outdir.join("eastness.tif"), compress)?;
             println!("  eastness.tif");
 
-            let c = curvature(
-                &dem,
-                CurvatureParams {
-                    curvature_type: CurvatureType::General,
-                    z_factor: 1.0,
-                    ..Default::default()
-                },
-            )
+            let c = curvature(&dem, {
+                let mut p = CurvatureParams::default();
+                p.curvature_type = CurvatureType::General;
+                p.z_factor = 1.0;
+                p
+            })
             .context("curvature")?;
             write_result(&c, &outdir.join("curvature.tif"), compress)?;
             println!("  curvature.tif");
 
-            let t = tpi(&dem, TpiParams { radius: 10 }).context("tpi")?;
+            let t = tpi(&dem, {
+                let mut p = TpiParams::default();
+                p.radius = 10;
+                p
+            })
+            .context("tpi")?;
             write_result(&t, &outdir.join("tpi.tif"), compress)?;
             println!("  tpi.tif");
 
-            let tr = tri(&dem, TriParams { radius: 1 }).context("tri")?;
+            let tr = tri(&dem, {
+                let mut p = TriParams::default();
+                p.radius = 1;
+                p
+            })
+            .context("tri")?;
             write_result(&tr, &outdir.join("tri.tif"), compress)?;
             println!("  tri.tif");
 
@@ -1512,13 +1526,12 @@ pub fn handle_terrain_all(
 
     println!("Computing all terrain factors...");
 
-    let s = slope(
-        &dem,
-        SlopeParams {
-            units: SlopeUnits::Degrees,
-            z_factor: 1.0,
-        },
-    )
+    let s = slope(&dem, {
+        let mut p = SlopeParams::default();
+        p.units = SlopeUnits::Degrees;
+        p.z_factor = 1.0;
+        p
+    })
     .context("slope")?;
     write_result(&s, &outdir.join("slope.tif"), compress)?;
     println!("  slope.tif");
@@ -1527,15 +1540,14 @@ pub fn handle_terrain_all(
     write_result(&a, &outdir.join("aspect.tif"), compress)?;
     println!("  aspect.tif");
 
-    let h = hillshade(
-        &dem,
-        HillshadeParams {
-            azimuth: 315.0,
-            altitude: 45.0,
-            z_factor: 1.0,
-            normalized: false,
-        },
-    )
+    let h = hillshade(&dem, {
+        let mut p = HillshadeParams::default();
+        p.azimuth = 315.0;
+        p.altitude = 45.0;
+        p.z_factor = 1.0;
+        p.normalized = false;
+        p
+    })
     .context("hillshade")?;
     write_result(&h, &outdir.join("hillshade.tif"), compress)?;
     println!("  hillshade.tif");
@@ -1548,23 +1560,31 @@ pub fn handle_terrain_all(
     write_result(&e, &outdir.join("eastness.tif"), compress)?;
     println!("  eastness.tif");
 
-    let c = curvature(
-        &dem,
-        CurvatureParams {
-            curvature_type: CurvatureType::General,
-            z_factor: 1.0,
-            ..Default::default()
-        },
-    )
+    let c = curvature(&dem, {
+        let mut p = CurvatureParams::default();
+        p.curvature_type = CurvatureType::General;
+        p.z_factor = 1.0;
+        p
+    })
     .context("curvature")?;
     write_result(&c, &outdir.join("curvature.tif"), compress)?;
     println!("  curvature.tif");
 
-    let t = tpi(&dem, TpiParams { radius: 10 }).context("tpi")?;
+    let t = tpi(&dem, {
+        let mut p = TpiParams::default();
+        p.radius = 10;
+        p
+    })
+    .context("tpi")?;
     write_result(&t, &outdir.join("tpi.tif"), compress)?;
     println!("  tpi.tif");
 
-    let tr = tri(&dem, TriParams { radius: 1 }).context("tri")?;
+    let tr = tri(&dem, {
+        let mut p = TriParams::default();
+        p.radius = 1;
+        p
+    })
+    .context("tri")?;
     write_result(&tr, &outdir.join("tri.tif"), compress)?;
     println!("  tri.tif");
 
