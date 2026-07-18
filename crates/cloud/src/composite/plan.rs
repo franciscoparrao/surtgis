@@ -65,9 +65,9 @@ pub fn select_dates_by_coverage(
 /// Nominal decoded size of one COG tile for `catalog`, in bytes
 /// (`tile_px² × 8`). This is the servers' real internal tile dimension —
 /// Earth Search 1024², Planetary Computer 512² — **not** an empirical fudge
-/// factor. Used to size each tile's [`MemoryBudget`](super::MemoryBudget)
-/// acquisition, so concurrent-decode count emerges from the budget instead
-/// of a hard-coded limit.
+/// factor. Used only as the [`MemoryBudget`](super::MemoryBudget) fallback
+/// for a window whose real size can't be computed (bbox outside the granule);
+/// the engine otherwise reserves the true `rows×cols×8` of the read.
 pub fn nominal_tile_bytes(catalog: &StacCatalog) -> usize {
     match catalog {
         StacCatalog::PlanetaryComputer => 512 * 512 * 8,
@@ -103,6 +103,10 @@ pub struct StripPlanInput {
     pub strip_rows_cfg: usize,
     /// RAM budget in GB (caller resolves `SURTGIS_RAM_BUDGET_GB`).
     pub budget_gb: f64,
+    /// Whether the sink holds the whole output in RAM (`true`) or streams it
+    /// to disk (`false`). When streaming, the output buffers don't exist, so
+    /// their bytes are not reserved and strips aren't needlessly shrunk.
+    pub output_in_ram: bool,
 }
 
 /// GB breakdown of the planned working set, for budget reports.
@@ -132,7 +136,8 @@ pub struct StripPlan {
     /// Bytes reserved for concurrent tile decode — the size of the
     /// [`MemoryBudget`](super::MemoryBudget) the engine enforces at runtime.
     pub decode_budget_bytes: usize,
-    /// Nominal decoded size of one tile, for per-tile budget acquisition.
+    /// Nominal decoded size of one tile — the budget-acquisition fallback
+    /// when a window's real size can't be computed (see [`nominal_tile_bytes`]).
     pub tile_bytes: usize,
     /// `true` when the honest sizing capped `strip_rows` below the request.
     pub capped: bool,
@@ -162,10 +167,14 @@ pub fn plan_strips(input: &StripPlanInput) -> StripPlan {
     let total_budget = (input.budget_gb * 1e9) as usize;
     let tile_bytes = nominal_tile_bytes(&input.catalog);
 
-    // Persistent output buffers (retired in a later step by a streaming sink).
+    // Persistent output buffers, only when the sink holds them in RAM. A
+    // streaming sink writes each strip to disk on arrival and holds nothing,
+    // so reserving the full output (tens of GB for a large grid) would drive
+    // strips to the floor and cause a storm of tiny reads.
     let output_bytes = n_bands * total_cells * 8;
+    let output_held = if input.output_in_ram { output_bytes } else { 0 };
     let after_output = total_budget
-        .saturating_sub(output_bytes)
+        .saturating_sub(output_held)
         .max(64 * 1024 * 1024);
 
     // Reserve a slice for concurrent tile decode; the byte budget enforces it.
@@ -180,7 +189,7 @@ pub fn plan_strips(input: &StripPlanInput) -> StripPlan {
     let auto_strip_rows = (held_budget / per_row_held.max(1)).clamp(STRIP_ROWS_MIN, STRIP_ROWS_MAX);
     let strip_rows = input.strip_rows_cfg.min(auto_strip_rows).max(1);
 
-    let output_gb = output_bytes as f64 / 1e9;
+    let output_gb = output_held as f64 / 1e9;
     let held_gb = (strip_rows * per_row_held) as f64 / 1e9;
     let decode_gb = decode_budget_bytes as f64 / 1e9;
 
@@ -308,6 +317,7 @@ mod tests {
             band_chunk_size: 1,
             strip_rows_cfg: 512,
             budget_gb: 4.5,
+            output_in_ram: true,
         };
         let plan = plan_strips(&input);
         assert!(
@@ -332,6 +342,45 @@ mod tests {
     }
 
     #[test]
+    fn streaming_sink_does_not_reserve_phantom_output_bytes() {
+        // A 20k×20k×10-band output is ~32 GB. In RAM it swamps a 4 GB budget
+        // and drives strips to the floor; streamed to disk it holds nothing,
+        // so the same budget must plan taller strips.
+        let base = StripPlanInput {
+            catalog: StacCatalog::EarthSearch,
+            n_bands: 10,
+            n_scenes: 8,
+            out_rows: 20_000,
+            out_cols: 20_000,
+            band_chunk_size: 1,
+            strip_rows_cfg: 512,
+            budget_gb: 4.0,
+            output_in_ram: true,
+        };
+        let in_ram = plan_strips(&base);
+        let streaming = plan_strips(&StripPlanInput {
+            output_in_ram: false,
+            ..base
+        });
+        assert_eq!(
+            in_ram.breakdown.output_gb,
+            0.0_f64.max(in_ram.breakdown.output_gb),
+            "sanity"
+        );
+        assert!(
+            streaming.strip_rows > in_ram.strip_rows,
+            "streaming ({}) should plan taller strips than in-RAM ({})",
+            streaming.strip_rows,
+            in_ram.strip_rows
+        );
+        assert_eq!(
+            streaming.breakdown.output_gb, 0.0,
+            "streaming sink reserves no output bytes"
+        );
+        assert!(in_ram.breakdown.output_gb > 0.0);
+    }
+
+    #[test]
     fn plan_respects_requested_strip_rows_when_budget_allows() {
         let input = StripPlanInput {
             catalog: StacCatalog::PlanetaryComputer,
@@ -342,6 +391,7 @@ mod tests {
             band_chunk_size: 1,
             strip_rows_cfg: 256,
             budget_gb: 16.0,
+            output_in_ram: true,
         };
         let plan = plan_strips(&input);
         assert!(!plan.capped);
@@ -360,6 +410,7 @@ mod tests {
             band_chunk_size: 99,
             strip_rows_cfg: 512,
             budget_gb: 2.0,
+            output_in_ram: true,
         };
         let plan_big = plan_strips(&input);
         assert_eq!(plan_big.band_chunk, 4, "K clamps to n_bands");
@@ -396,6 +447,7 @@ mod tests {
             band_chunk_size: 1,
             strip_rows_cfg: 256,
             budget_gb: 16.0,
+            output_in_ram: true,
         });
         assert!((128 * 1024 * 1024..=1024 * 1024 * 1024).contains(&plan.decode_budget_bytes));
         assert_eq!(plan.tile_bytes, 1024 * 1024 * 8);

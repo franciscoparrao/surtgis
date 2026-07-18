@@ -397,6 +397,32 @@ impl CogReader {
         }
     }
 
+    /// Output pixel dimensions `(rows, cols)` that [`read_bbox`] would
+    /// produce for `bbox` at `overview`, without fetching or decoding any
+    /// pixels. `None` if the bbox does not intersect the raster.
+    ///
+    /// Lets a caller reserve the exact decoded-raster size *before* the
+    /// allocation happens, instead of a nominal guess — the composite's
+    /// [`MemoryBudget`](crate::composite::MemoryBudget) uses this so its
+    /// reservation matches the strip×granule window actually read, not the
+    /// server's internal tile size (which undercounts it several-fold).
+    ///
+    /// [`read_bbox`]: Self::read_bbox
+    pub fn output_shape_for(&self, bbox: &BBox, overview: Option<usize>) -> Option<(usize, usize)> {
+        let ifd_idx = overview.unwrap_or(0);
+        let ifd = self.ifds.get(ifd_idx)?;
+        let gt = self.geo_transform_for(ifd_idx);
+        let mapping = tile_index::tiles_for_bbox(
+            bbox,
+            &gt,
+            ifd.width,
+            ifd.height,
+            ifd.tile_width,
+            ifd.tile_height,
+        )?;
+        Some(mapping.output_shape)
+    }
+
     /// Return overview information.
     pub fn overviews(&self) -> Vec<OverviewInfo> {
         self.ifds
@@ -731,8 +757,11 @@ async fn ensure_data(
         let have = header_bytes.len() - offset;
         let extra_offset = header_bytes.len() as u64;
         let extra_len = (need - have) as u64;
+        // A malformed IFD can put `extra_offset` past `file_size`; clamp with
+        // checked_sub so the range shrinks to 0 instead of underflowing u64
+        // into an absurd length (audit M9).
         let extra_len = if file_size > 0 {
-            extra_len.min(file_size - extra_offset)
+            extra_len.min(file_size.saturating_sub(extra_offset))
         } else {
             extra_len
         };
@@ -745,8 +774,9 @@ async fn ensure_data(
     } else {
         // Entirely outside initial fetch.
         let fetch_len = need as u64;
+        // Guard against a malformed offset beyond EOF (audit M9).
         let fetch_len = if file_size > 0 {
-            fetch_len.min(file_size - offset as u64)
+            fetch_len.min(file_size.saturating_sub(offset as u64))
         } else {
             fetch_len
         };
@@ -892,8 +922,9 @@ async fn fetch_or_slice(
     if end <= header_bytes.len() {
         Ok(header_bytes[start..end].to_vec())
     } else {
+        // Guard against a malformed offset beyond EOF (audit M9).
         let fetch_size = if file_size > 0 {
-            size.min(file_size - offset)
+            size.min(file_size.saturating_sub(offset))
         } else {
             size
         };

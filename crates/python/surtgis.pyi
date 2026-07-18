@@ -107,7 +107,10 @@ Args:
 Returns:
     (bands, meta): `bands` is a dict of band key → 2D float64 numpy array
     (NaN = no data); `meta` is a dict with `transform` (GDAL 6-tuple),
-    `crs`, `width`, `height` shared by every band.
+    `crs`, `width`, `height` shared by every band, plus a quality report
+    (`scenes_used`, `total_tiles`, `failed_tiles`, `failed_dates`,
+    `last_error`) so degraded output from failed tiles is visible rather
+    than silently gap-filled.
     """
     ...
 

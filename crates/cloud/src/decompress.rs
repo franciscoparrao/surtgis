@@ -28,7 +28,25 @@ pub mod sample_format {
     pub const FLOAT: u16 = 3;
 }
 
+/// Upper bound on a decompressed tile, above which the input is treated as
+/// malformed / a decompression bomb and rejected instead of allocated.
+///
+/// A well-formed COG tile decompresses to exactly `expected_raw_size`
+/// (`tile_w × tile_h × bytes_per_pixel`). We allow a little slack for
+/// encoder padding; anything beyond it is refused. Without this, a crafted
+/// DEFLATE stream inflates unbounded, entirely outside the composite's
+/// `MemoryBudget` (which reserved only the tile's nominal size). The v0.17
+/// fuzzing hardened `core`'s parsers, not this network-facing path.
+fn decompress_cap(expected_raw_size: usize) -> usize {
+    expected_raw_size
+        .saturating_add(expected_raw_size / 16)
+        .saturating_add(4096)
+}
+
 /// Decompress raw tile bytes according to the compression method.
+///
+/// The decompressed output is bounded by [`decompress_cap`]; a stream that
+/// would expand past it is rejected before the excess is allocated.
 pub fn decompress_tile(
     data: &[u8],
     compression_code: u16,
@@ -39,21 +57,19 @@ pub fn decompress_tile(
 
         #[cfg(feature = "deflate")]
         compression::DEFLATE | compression::ADOBE_DEFLATE => {
-            use std::io::Read;
             // TIFF DEFLATE tiles use zlib format (with 2-byte header),
             // not raw deflate. Try zlib first, fall back to raw deflate.
-            let mut decoder = flate2::read::ZlibDecoder::new(data);
-            let mut out = Vec::with_capacity(expected_raw_size);
-            match decoder.read_to_end(&mut out) {
-                Ok(_) => Ok(out),
+            let cap = decompress_cap(expected_raw_size);
+            match inflate_capped(flate2::read::ZlibDecoder::new(data), expected_raw_size, cap) {
+                Ok(out) => Ok(out),
                 Err(_) => {
-                    // Fallback: raw deflate (no zlib header)
-                    out.clear();
-                    let mut decoder = flate2::read::DeflateDecoder::new(data);
-                    decoder
-                        .read_to_end(&mut out)
-                        .map_err(|e| CloudError::Decompress(format!("DEFLATE: {}", e)))?;
-                    Ok(out)
+                    // Fallback: raw deflate (no zlib header).
+                    inflate_capped(
+                        flate2::read::DeflateDecoder::new(data),
+                        expected_raw_size,
+                        cap,
+                    )
+                    .map_err(|e| CloudError::Decompress(format!("DEFLATE: {}", e)))
                 }
             }
         }
@@ -65,11 +81,23 @@ pub fn decompress_tile(
 
         #[cfg(feature = "lzw")]
         compression::LZW => {
+            // weezl `decode_bytes` writes into a fixed buffer, so the bomb
+            // is never allocated: if the output fills the cap before the
+            // input is fully consumed, the tile is malformed/oversized.
+            let cap = decompress_cap(expected_raw_size);
             let mut decoder =
                 weezl::decode::Decoder::with_tiff_size_switch(weezl::BitOrder::Msb, 8);
-            let out = decoder
-                .decode(data)
+            let mut out = vec![0u8; cap];
+            let result = decoder.decode_bytes(data, &mut out);
+            result
+                .status
                 .map_err(|e| CloudError::Decompress(format!("LZW: {}", e)))?;
+            if result.consumed_in < data.len() {
+                return Err(CloudError::Decompress(format!(
+                    "LZW: decompressed tile exceeds {cap} bytes (expected {expected_raw_size}); malformed input"
+                )));
+            }
+            out.truncate(result.consumed_out);
             Ok(out)
         }
 
@@ -78,6 +106,29 @@ pub fn decompress_tile(
 
         _ => Err(CloudError::UnsupportedCompression(compression_code)),
     }
+}
+
+/// Inflate `reader` into a buffer, refusing to allocate past `cap` bytes.
+///
+/// Reads at most `cap + 1` bytes: if the extra byte materializes the stream
+/// expanded past the cap and is rejected as malformed.
+#[cfg(feature = "deflate")]
+fn inflate_capped(
+    reader: impl std::io::Read,
+    expected_raw_size: usize,
+    cap: usize,
+) -> std::result::Result<Vec<u8>, std::io::Error> {
+    use std::io::Read;
+    let mut out = Vec::with_capacity(expected_raw_size.min(cap));
+    let mut limited = reader.take(cap as u64 + 1);
+    limited.read_to_end(&mut out)?;
+    if out.len() > cap {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("decompressed tile exceeds {cap} bytes; malformed input"),
+        ));
+    }
+    Ok(out)
 }
 
 /// Undo horizontal differencing predictor (TIFF Predictor=2).
@@ -455,6 +506,45 @@ mod tests {
         let decompressed =
             decompress_tile(&compressed, compression::DEFLATE, original.len()).unwrap();
         assert_eq!(decompressed, original);
+    }
+
+    /// A DEFLATE stream that inflates far past the expected tile size must be
+    /// rejected, not allocated — the decompression-bomb guard (audit S2.3).
+    #[cfg(feature = "deflate")]
+    #[test]
+    fn test_decompress_deflate_bomb_is_rejected() {
+        use std::io::Write;
+        // 8 MiB of zeros compresses to a tiny stream but claims a 1 KiB tile.
+        let bomb_plain = vec![0u8; 8 * 1024 * 1024];
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+        encoder.write_all(&bomb_plain).unwrap();
+        let compressed = encoder.finish().unwrap();
+        assert!(
+            compressed.len() < 64 * 1024,
+            "bomb should be tiny compressed"
+        );
+
+        let expected_tile = 1024; // pretend the tile is only 1 KiB
+        let err = decompress_tile(&compressed, compression::DEFLATE, expected_tile);
+        assert!(
+            err.is_err(),
+            "an 8 MiB expansion against a 1 KiB tile must be refused"
+        );
+    }
+
+    /// A tile that decompresses to exactly its expected size still works
+    /// (the cap has slack and does not clip well-formed tiles).
+    #[cfg(feature = "deflate")]
+    #[test]
+    fn test_decompress_deflate_exact_size_ok() {
+        use std::io::Write;
+        let original = vec![7u8; 4096];
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&original).unwrap();
+        let compressed = encoder.finish().unwrap();
+        let out = decompress_tile(&compressed, compression::DEFLATE, original.len()).unwrap();
+        assert_eq!(out, original);
     }
 
     #[test]

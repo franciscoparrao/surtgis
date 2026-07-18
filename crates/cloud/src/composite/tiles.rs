@@ -89,25 +89,28 @@ pub fn overview_for_target_resolution(
     if idx > 0 { Some(idx) } else { None }
 }
 
-/// Reproject every tile to the CRS of the first tile (in place), so a
-/// multi-UTM scene can be mosaicked on a single grid. Tiles whose CRS is
-/// unknown or already matches are left untouched.
+/// Reproject every tile to a single target CRS (in place), so a multi-UTM
+/// scene can be mosaicked on one grid. The target is the first tile that
+/// *has* a known EPSG (not necessarily `tiles[0]`, which may lack one — in
+/// which case using its unknown CRS as target left every other tile
+/// untouched and silently mixed CRSs on the mosaic). Tiles whose CRS is
+/// unknown or already matches the target are left untouched.
 pub fn unify_tile_crs(tiles: &mut [Raster<f64>]) {
     if tiles.len() <= 1 {
         return;
     }
-    let target_epsg = tiles[0].crs().and_then(|c| c.epsg());
-    if let Some(target) = target_epsg {
-        for tile in tiles.iter_mut().skip(1) {
-            let Some(src_epsg) = tile.crs().and_then(|c| c.epsg()) else {
-                continue;
-            };
-            if src_epsg != target
-                && let Some(reprojected) =
-                    crate::reproject::reproject_raster_utm(tile, src_epsg, target)
-            {
-                *tile = reprojected;
-            }
+    let Some(target) = tiles.iter().find_map(|t| t.crs().and_then(|c| c.epsg())) else {
+        return; // no tile has a known EPSG; nothing to unify against
+    };
+    for tile in tiles.iter_mut() {
+        let Some(src_epsg) = tile.crs().and_then(|c| c.epsg()) else {
+            continue;
+        };
+        if src_epsg != target
+            && let Some(reprojected) =
+                crate::reproject::reproject_raster_utm(tile, src_epsg, target)
+        {
+            *tile = reprojected;
         }
     }
 }

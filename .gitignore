@@ -16,6 +16,9 @@ Thumbs.db
 *.tif
 *.tiff
 !tests/data/*.tif
+# Small committed regression fixtures (hostile/planar TIFFs) needed by
+# include_bytes! at compile time — keep them out of the *.tif ignore.
+!crates/core/tests/fixtures/*.tif
 
 # Benchmark results
 /target/criterion/
