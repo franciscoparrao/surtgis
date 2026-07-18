@@ -333,13 +333,12 @@ fn slope<'py>(
     };
     let result = py
         .allow_threads(|| {
-            compute_slope(
-                &raster,
-                SlopeParams {
-                    units: slope_units,
-                    z_factor: 1.0,
-                },
-            )
+            compute_slope(&raster, {
+                let mut p = SlopeParams::default();
+                p.units = slope_units;
+                p.z_factor = 1.0;
+                p
+            })
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, result))
@@ -373,15 +372,14 @@ fn hillshade_compute<'py>(
     let raster = numpy_to_raster(&dem, cell_size)?;
     let result = py
         .allow_threads(|| {
-            hillshade(
-                &raster,
-                HillshadeParams {
-                    azimuth,
-                    altitude,
-                    z_factor: 1.0,
-                    normalized: false,
-                },
-            )
+            hillshade(&raster, {
+                let mut p = HillshadeParams::default();
+                p.azimuth = azimuth;
+                p.altitude = altitude;
+                p.z_factor = 1.0;
+                p.normalized = false;
+                p
+            })
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, result))
@@ -419,15 +417,14 @@ fn curvature_compute<'py>(
     };
     let result = py
         .allow_threads(|| {
-            curvature(
-                &raster,
-                CurvatureParams {
-                    curvature_type: ct,
-                    method: DerivativeMethod::EvansYoung,
-                    formula: CurvatureFormula::Full,
-                    z_factor: 1.0,
-                },
-            )
+            curvature(&raster, {
+                let mut p = CurvatureParams::default();
+                p.curvature_type = ct;
+                p.method = DerivativeMethod::EvansYoung;
+                p.formula = CurvatureFormula::Full;
+                p.z_factor = 1.0;
+                p
+            })
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, result))
@@ -444,7 +441,13 @@ fn tpi_compute<'py>(
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_to_raster(&dem, cell_size)?;
     let result = py
-        .allow_threads(|| compute_tpi(&raster, TpiParams { radius }))
+        .allow_threads(|| {
+            compute_tpi(&raster, {
+                let mut p = TpiParams::default();
+                p.radius = radius;
+                p
+            })
+        })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, result))
 }
@@ -838,13 +841,12 @@ fn twi_compute<'py>(
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     let slp = py
         .allow_threads(|| {
-            compute_slope(
-                &raster,
-                SlopeParams {
-                    units: SlopeUnits::Degrees,
-                    z_factor: 1.0,
-                },
-            )
+            compute_slope(&raster, {
+                let mut p = SlopeParams::default();
+                p.units = SlopeUnits::Degrees;
+                p.z_factor = 1.0;
+                p
+            })
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     let result = py
@@ -873,7 +875,13 @@ fn hand_compute<'py>(
         .allow_threads(|| flow_accumulation(&fdir))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     let result = py
-        .allow_threads(|| compute_hand(&raster, &fdir, &facc, HandParams { stream_threshold }))
+        .allow_threads(|| {
+            compute_hand(&raster, &fdir, &facc, {
+                let mut p = HandParams::default();
+                p.stream_threshold = stream_threshold;
+                p
+            })
+        })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, result))
 }
@@ -1341,14 +1349,13 @@ fn focal_mean<'py>(
     let raster = numpy_to_raster(&data, 1.0)?;
     let result = py
         .allow_threads(|| {
-            focal_statistics(
-                &raster,
-                FocalParams {
-                    statistic: FocalStatistic::Mean,
-                    radius,
-                    circular,
-                },
-            )
+            focal_statistics(&raster, {
+                let mut p = FocalParams::default();
+                p.statistic = FocalStatistic::Mean;
+                p.radius = radius;
+                p.circular = circular;
+                p
+            })
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, result))
@@ -1366,14 +1373,13 @@ fn focal_std<'py>(
     let raster = numpy_to_raster(&data, 1.0)?;
     let result = py
         .allow_threads(|| {
-            focal_statistics(
-                &raster,
-                FocalParams {
-                    statistic: FocalStatistic::StdDev,
-                    radius,
-                    circular,
-                },
-            )
+            focal_statistics(&raster, {
+                let mut p = FocalParams::default();
+                p.statistic = FocalStatistic::StdDev;
+                p.radius = radius;
+                p.circular = circular;
+                p
+            })
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, result))
@@ -1391,14 +1397,13 @@ fn focal_range<'py>(
     let raster = numpy_to_raster(&data, 1.0)?;
     let result = py
         .allow_threads(|| {
-            focal_statistics(
-                &raster,
-                FocalParams {
-                    statistic: FocalStatistic::Range,
-                    radius,
-                    circular,
-                },
-            )
+            focal_statistics(&raster, {
+                let mut p = FocalParams::default();
+                p.statistic = FocalStatistic::Range;
+                p.radius = radius;
+                p.circular = circular;
+                p
+            })
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, result))
@@ -1416,14 +1421,13 @@ fn focal_min<'py>(
     let raster = numpy_to_raster(&data, 1.0)?;
     let result = py
         .allow_threads(|| {
-            focal_statistics(
-                &raster,
-                FocalParams {
-                    statistic: FocalStatistic::Min,
-                    radius,
-                    circular,
-                },
-            )
+            focal_statistics(&raster, {
+                let mut p = FocalParams::default();
+                p.statistic = FocalStatistic::Min;
+                p.radius = radius;
+                p.circular = circular;
+                p
+            })
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, result))
@@ -1441,14 +1445,13 @@ fn focal_max<'py>(
     let raster = numpy_to_raster(&data, 1.0)?;
     let result = py
         .allow_threads(|| {
-            focal_statistics(
-                &raster,
-                FocalParams {
-                    statistic: FocalStatistic::Max,
-                    radius,
-                    circular,
-                },
-            )
+            focal_statistics(&raster, {
+                let mut p = FocalParams::default();
+                p.statistic = FocalStatistic::Max;
+                p.radius = radius;
+                p.circular = circular;
+                p
+            })
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, result))
@@ -1466,14 +1469,13 @@ fn focal_sum<'py>(
     let raster = numpy_to_raster(&data, 1.0)?;
     let result = py
         .allow_threads(|| {
-            focal_statistics(
-                &raster,
-                FocalParams {
-                    statistic: FocalStatistic::Sum,
-                    radius,
-                    circular,
-                },
-            )
+            focal_statistics(&raster, {
+                let mut p = FocalParams::default();
+                p.statistic = FocalStatistic::Sum;
+                p.radius = radius;
+                p.circular = circular;
+                p
+            })
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, result))
@@ -1491,14 +1493,13 @@ fn focal_median<'py>(
     let raster = numpy_to_raster(&data, 1.0)?;
     let result = py
         .allow_threads(|| {
-            focal_statistics(
-                &raster,
-                FocalParams {
-                    statistic: FocalStatistic::Median,
-                    radius,
-                    circular,
-                },
-            )
+            focal_statistics(&raster, {
+                let mut p = FocalParams::default();
+                p.statistic = FocalStatistic::Median;
+                p.radius = radius;
+                p.circular = circular;
+                p
+            })
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(raster_to_numpy(py, result))
@@ -1522,13 +1523,12 @@ fn solar_radiation_compute<'py>(
     // Compute slope and aspect in degrees, then convert to radians
     let slope_deg = py
         .allow_threads(|| {
-            compute_slope(
-                &raster,
-                SlopeParams {
-                    units: SlopeUnits::Degrees,
-                    z_factor: 1.0,
-                },
-            )
+            compute_slope(&raster, {
+                let mut p = SlopeParams::default();
+                p.units = SlopeUnits::Degrees;
+                p.z_factor = 1.0;
+                p
+            })
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     let aspect_deg = py
@@ -1830,12 +1830,16 @@ fn watershed_compute<'py>(
 ) -> PyResult<Bound<'py, PyArray2<f64>>> {
     let raster = numpy_u8_to_raster(&fdir, cell_size)?;
     let params = if pour_row == 0 && pour_col == 0 {
-        WatershedParams {
-            pour_points: vec![],
+        {
+            let mut p = WatershedParams::default();
+            p.pour_points = vec![];
+            p
         }
     } else {
-        WatershedParams {
-            pour_points: vec![(pour_row, pour_col)],
+        {
+            let mut p = WatershedParams::default();
+            p.pour_points = vec![(pour_row, pour_col)];
+            p
         }
     };
     let result = py
@@ -2031,12 +2035,13 @@ fn idw_interpolation<'py>(
         ));
     }
     let transform = GeoTransform::new(0.0, grid_rows as f64 * cellsize, cellsize, -cellsize);
-    let params = IdwParams {
-        power,
-        rows: grid_rows,
-        cols: grid_cols,
-        transform,
-        ..IdwParams::default()
+    let params = {
+        let mut p = IdwParams::default();
+        p.power = power;
+        p.rows = grid_rows;
+        p.cols = grid_cols;
+        p.transform = transform;
+        p
     };
     let result = py
         .allow_threads(|| compute_idw(&sample_points, params))
@@ -2079,11 +2084,12 @@ fn nearest_neighbor_interpolation<'py>(
         ));
     }
     let transform = GeoTransform::new(0.0, grid_rows as f64 * cellsize, cellsize, -cellsize);
-    let params = NearestNeighborParams {
-        rows: grid_rows,
-        cols: grid_cols,
-        transform,
-        ..NearestNeighborParams::default()
+    let params = {
+        let mut p = NearestNeighborParams::default();
+        p.rows = grid_rows;
+        p.cols = grid_cols;
+        p.transform = transform;
+        p
     };
     let result = py
         .allow_threads(|| compute_nearest_neighbor(&sample_points, params))
@@ -2641,12 +2647,13 @@ fn ordinary_kriging_interpolation<'py>(
             let empirical =
                 compute_empirical_variogram(&sample_points, VariogramParams::default())?;
             let fitted = compute_fit_best_variogram(&empirical)?;
-            let params = OrdinaryKrigingParams {
-                rows: grid_rows,
-                cols: grid_cols,
-                transform,
-                max_points,
-                ..OrdinaryKrigingParams::default()
+            let params = {
+                let mut p = OrdinaryKrigingParams::default();
+                p.rows = grid_rows;
+                p.cols = grid_cols;
+                p.transform = transform;
+                p.max_points = max_points;
+                p
             };
             compute_ordinary_kriging(&sample_points, &fitted, params)
         })
@@ -2863,15 +2870,14 @@ fn relief_compute<'py>(
 
     let sphere = py
         .allow_threads(|| {
-            sphere_shade(
-                &raster,
-                HillshadeParams {
-                    azimuth: sun_azimuth,
-                    altitude: sun_altitude,
-                    z_factor: 1.0,
-                    normalized: true,
-                },
-            )
+            sphere_shade(&raster, {
+                let mut p = HillshadeParams::default();
+                p.azimuth = sun_azimuth;
+                p.altitude = sun_altitude;
+                p.z_factor = 1.0;
+                p.normalized = true;
+                p
+            })
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
 

@@ -19,6 +19,7 @@ use surtgis_core::raster::Raster;
 
 /// Parameters for TPI calculation
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct TpiParams {
     /// Neighborhood radius in cells (default 1 → 3x3 window)
     /// Radius 2 → 5x5, radius 5 → 11x11, etc.

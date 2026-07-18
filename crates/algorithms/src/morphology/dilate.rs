@@ -13,6 +13,7 @@ use super::element::StructuringElement;
 
 /// Parameters for morphological dilation
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct DilateParams {
     /// Structuring element shape
     pub element: StructuringElement,

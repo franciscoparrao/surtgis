@@ -44,6 +44,11 @@ pub mod classification;
 pub mod fluvial;
 pub mod hydrology;
 pub mod imagery;
+/// Tiled model inference (ONNX). **Experimental** (feature `unstable`):
+/// `TileModel`/`TileInput` are scaffold types that will change as the
+/// nodata/normalization contract lands (audit E-5/E-6); gated out of the
+/// 1.0 stability guarantee until stabilized.
+#[cfg(feature = "unstable")]
 pub mod inference;
 pub mod interpolation;
 pub mod landscape;
@@ -62,9 +67,19 @@ pub mod vector;
 /// This is a convenience subset, not the full API surface — every module
 /// (`terrain`, `hydrology`, `imagery`, `interpolation`, `morphology`,
 /// `statistics`, `temporal`, `vector`, plus `classification`, `fluvial`,
-/// `landscape`, `pansharmening`, `sampling`, `segmentation`, `texture`)
+/// `landscape`, `pansharpening`, `sampling`, `segmentation`, `texture`)
 /// exposes its complete set of algorithms via `crate::<module>::*`
 /// regardless of whether a given symbol is re-exported here.
+///
+/// ## Admission criterion (frozen for 1.0)
+///
+/// A symbol is admitted to the prelude when it is (a) a stable, non-`unstable`
+/// algorithm, (b) in broad, cross-domain use, and (c) validated against a
+/// reference implementation. The set is deliberately small (~70 symbols);
+/// membership is a maintainer judgment, and being reachable via the module
+/// path is the norm, not the exception. New members are added conservatively
+/// — the prelude is part of the 1.0 stability surface, so it grows by
+/// deliberate addition, never by accident.
 pub mod prelude {
     pub use crate::hydrology::{
         HandParams, PriorityFloodParams, WatershedParams, fill_sinks, flow_accumulation,

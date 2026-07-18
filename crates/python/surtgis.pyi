@@ -895,5 +895,4 @@ cells come back NaN) — the same convention as watershed/basin IDs
 elsewhere in this crate. Use positive zone ids only.
     """
     ...
-# Generated 125 function stubs
 

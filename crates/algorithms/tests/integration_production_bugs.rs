@@ -115,7 +115,12 @@ fn test_crs_propagates_through_hillshade() {
 #[test]
 fn test_crs_propagates_through_hydrology_pipeline() {
     let dem = require_dem!();
-    let filled = priority_flood(&dem, PriorityFloodParams { epsilon: 0.0001 }).unwrap();
+    let filled = priority_flood(&dem, {
+        let mut p = PriorityFloodParams::default();
+        p.epsilon = 0.0001;
+        p
+    })
+    .unwrap();
     let fdir = flow_direction(&filled).unwrap();
     let facc = flow_accumulation(&fdir).unwrap();
 
@@ -374,39 +379,39 @@ fn test_full_terrain_hydrology_pipeline() {
     let input_crs = dem.crs().and_then(|c| c.epsg());
 
     // Terrain
-    let slp = slope(
-        &dem,
-        SlopeParams {
-            units: SlopeUnits::Radians,
-            z_factor: 1.0,
-        },
-    )
+    let slp = slope(&dem, {
+        let mut p = SlopeParams::default();
+        p.units = SlopeUnits::Radians;
+        p.z_factor = 1.0;
+        p
+    })
     .unwrap();
     let asp = aspect(&dem, AspectOutput::Degrees).unwrap();
     let hs = hillshade(&dem, HillshadeParams::default()).unwrap();
 
     // Hydrology pipeline
-    let filled = priority_flood(&dem, PriorityFloodParams { epsilon: 0.0001 }).unwrap();
+    let filled = priority_flood(&dem, {
+        let mut p = PriorityFloodParams::default();
+        p.epsilon = 0.0001;
+        p
+    })
+    .unwrap();
     let fdir = flow_direction(&filled).unwrap();
     let facc = flow_accumulation(&fdir).unwrap();
-    let slope_rad = slope(
-        &filled,
-        SlopeParams {
-            units: SlopeUnits::Radians,
-            z_factor: 1.0,
-        },
-    )
+    let slope_rad = slope(&filled, {
+        let mut p = SlopeParams::default();
+        p.units = SlopeUnits::Radians;
+        p.z_factor = 1.0;
+        p
+    })
     .unwrap();
     let twi_result = twi(&facc, &slope_rad).unwrap();
     let _streams = stream_network(&facc, StreamNetworkParams { threshold: 500.0 }).unwrap();
-    let hand_result = hand(
-        &dem,
-        &fdir,
-        &facc,
-        HandParams {
-            stream_threshold: 500.0,
-        },
-    )
+    let hand_result = hand(&dem, &fdir, &facc, {
+        let mut p = HandParams::default();
+        p.stream_threshold = 500.0;
+        p
+    })
     .unwrap();
 
     // All outputs should have same dimensions as input
@@ -548,13 +553,12 @@ fn test_salado_dem_slope_with_streaming() {
     );
 
     // Compute slope normally (in-memory)
-    let slope_result = slope(
-        &dem,
-        SlopeParams {
-            units: SlopeUnits::Degrees,
-            z_factor: 1.0,
-        },
-    )
+    let slope_result = slope(&dem, {
+        let mut p = SlopeParams::default();
+        p.units = SlopeUnits::Degrees;
+        p.z_factor = 1.0;
+        p
+    })
     .expect("slope computation failed");
 
     // Verify basic properties
@@ -690,13 +694,12 @@ fn test_salado_edge_cases_utm_coords() {
     );
 
     // Compute slope (tests that internal calculations handle large coordinates)
-    let slope_result = slope(
-        &dem,
-        SlopeParams {
-            units: SlopeUnits::Degrees,
-            z_factor: 1.0,
-        },
-    )
+    let slope_result = slope(&dem, {
+        let mut p = SlopeParams::default();
+        p.units = SlopeUnits::Degrees;
+        p.z_factor = 1.0;
+        p
+    })
     .expect("slope failed");
 
     // Compute aspect (also uses local coordinates)
@@ -771,13 +774,12 @@ fn test_pipeline_susceptibility_end_to_end() {
         AspectOutput, HillshadeParams, SlopeParams, SlopeUnits, aspect, hillshade, slope,
     };
 
-    let slope_result = slope(
-        &dem,
-        SlopeParams {
-            units: SlopeUnits::Degrees,
-            z_factor: 1.0,
-        },
-    )
+    let slope_result = slope(&dem, {
+        let mut p = SlopeParams::default();
+        p.units = SlopeUnits::Degrees;
+        p.z_factor = 1.0;
+        p
+    })
     .expect("slope should compute");
     assert_eq!(slope_result.rows(), dem.rows(), "slope output rows");
     assert_eq!(slope_result.cols(), dem.cols(), "slope output cols");
@@ -795,15 +797,14 @@ fn test_pipeline_susceptibility_end_to_end() {
         aspect_result.cols()
     );
 
-    let hillshade_result = hillshade(
-        &dem,
-        HillshadeParams {
-            azimuth: 315.0,
-            altitude: 45.0,
-            z_factor: 1.0,
-            normalized: false,
-        },
-    )
+    let hillshade_result = hillshade(&dem, {
+        let mut p = HillshadeParams::default();
+        p.azimuth = 315.0;
+        p.altitude = 45.0;
+        p.z_factor = 1.0;
+        p.normalized = false;
+        p
+    })
     .expect("hillshade should compute");
     assert_eq!(hillshade_result.rows(), dem.rows(), "hillshade output rows");
     eprintln!(
@@ -818,8 +819,12 @@ fn test_pipeline_susceptibility_end_to_end() {
         priority_flood, stream_network,
     };
 
-    let filled = priority_flood(&dem, PriorityFloodParams { epsilon: 0.0001 })
-        .expect("fill sinks should work");
+    let filled = priority_flood(&dem, {
+        let mut p = PriorityFloodParams::default();
+        p.epsilon = 0.0001;
+        p
+    })
+    .expect("fill sinks should work");
     assert_eq!(filled.rows(), dem.rows(), "filled DEM rows");
     eprintln!("✓ Fill sinks: {} x {}", filled.rows(), filled.cols());
 

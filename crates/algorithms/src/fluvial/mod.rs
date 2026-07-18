@@ -24,6 +24,12 @@
 pub mod channel_steepness;
 pub mod chi;
 pub mod concavity;
+/// Divide migration (Gilbert metrics). **Experimental** (feature
+/// `unstable`): the current implementation samples χ/relief at ridge
+/// pixels rather than at channel heads (Forte & Whipple 2018), so its
+/// output is not yet scientifically meaningful on real topography
+/// (audit CR-2). Gated out of the 1.0 stability guarantee until fixed.
+#[cfg(feature = "unstable")]
 pub mod divide_migration;
 pub mod export;
 pub mod knickpoint;
@@ -34,6 +40,7 @@ pub mod swath_profile;
 pub use channel_steepness::{KsnError, KsnParams, KsnResult, KsnSegment, channel_steepness};
 pub use chi::{ChiError, ChiParams, chi_transform};
 pub use concavity::{ConcavityError, ConcavityParams, ConcavityResult, concavity_index};
+#[cfg(feature = "unstable")]
 pub use divide_migration::{
     DivideMigrationError, DivideMigrationParams, DivideSegment, divide_migration,
 };

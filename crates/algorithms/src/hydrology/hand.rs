@@ -61,6 +61,7 @@ where
 
 /// Parameters for HAND computation
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct HandParams {
     /// Flow accumulation threshold to define stream cells.
     /// Cells with accumulation >= this value are considered streams.

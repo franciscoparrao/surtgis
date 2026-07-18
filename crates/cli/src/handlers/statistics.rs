@@ -60,14 +60,13 @@ pub fn handle(algorithm: StatisticsCommands, compress: bool) -> Result<()> {
             let start = Instant::now();
             let statistic = parse_focal_stat(&stat);
             let pb = spinner(&format!("Focal {} (radius={})...", stat, radius));
-            let result = focal_statistics(
-                &raster,
-                FocalParams {
-                    radius,
-                    statistic,
-                    circular,
-                },
-            )
+            let result = focal_statistics(&raster, {
+                let mut p = FocalParams::default();
+                p.radius = radius;
+                p.statistic = statistic;
+                p.circular = circular;
+                p
+            })
             .context("Focal statistics failed")?;
             pb.finish_and_clear();
             write_result(&result, &output, compress)?;

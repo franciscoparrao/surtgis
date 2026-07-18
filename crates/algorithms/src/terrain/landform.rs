@@ -50,6 +50,7 @@ pub mod class {
 
 /// Parameters for landform classification
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct LandformParams {
     /// Small-scale TPI radius in cells (default 3)
     pub small_radius: usize,

@@ -93,13 +93,12 @@ fn io_roundtrip() {
 #[test]
 fn terrain_slope() {
     let dem = require_dem!();
-    let result = slope(
-        &dem,
-        SlopeParams {
-            units: SlopeUnits::Degrees,
-            z_factor: 1.0,
-        },
-    )
+    let result = slope(&dem, {
+        let mut p = SlopeParams::default();
+        p.units = SlopeUnits::Degrees;
+        p.z_factor = 1.0;
+        p
+    })
     .expect("slope failed");
 
     assert_eq!(result.shape(), dem.shape());
@@ -193,13 +192,11 @@ fn curvature_general() {
 #[test]
 fn curvature_profile() {
     let dem = require_dem!();
-    let result = curvature(
-        &dem,
-        CurvatureParams {
-            curvature_type: CurvatureType::Profile,
-            ..Default::default()
-        },
-    )
+    let result = curvature(&dem, {
+        let mut p = CurvatureParams::default();
+        p.curvature_type = CurvatureType::Profile;
+        p
+    })
     .expect("profile curvature failed");
 
     assert_eq!(result.shape(), dem.shape());
@@ -212,13 +209,11 @@ fn curvature_profile() {
 #[test]
 fn curvature_plan() {
     let dem = require_dem!();
-    let result = curvature(
-        &dem,
-        CurvatureParams {
-            curvature_type: CurvatureType::Plan,
-            ..Default::default()
-        },
-    )
+    let result = curvature(&dem, {
+        let mut p = CurvatureParams::default();
+        p.curvature_type = CurvatureType::Plan;
+        p
+    })
     .expect("plan curvature failed");
 
     assert_eq!(result.shape(), dem.shape());
@@ -303,13 +298,12 @@ fn hydrology_twi() {
     let filled = fill_sinks(&dem, FillSinksParams::default()).expect("fill");
     let fdir = flow_direction(&filled).expect("fdir");
     let facc = flow_accumulation(&fdir).expect("facc");
-    let slope_rad = slope(
-        &dem,
-        SlopeParams {
-            units: SlopeUnits::Radians,
-            z_factor: 1.0,
-        },
-    )
+    let slope_rad = slope(&dem, {
+        let mut p = SlopeParams::default();
+        p.units = SlopeUnits::Radians;
+        p.z_factor = 1.0;
+        p
+    })
     .expect("slope_rad");
 
     let result = twi(&facc, &slope_rad).expect("TWI failed");
@@ -334,14 +328,13 @@ fn hydrology_twi() {
 #[test]
 fn statistics_focal_mean() {
     let dem = require_dem!();
-    let result = focal_statistics(
-        &dem,
-        FocalParams {
-            radius: 2,
-            statistic: FocalStatistic::Mean,
-            circular: false,
-        },
-    )
+    let result = focal_statistics(&dem, {
+        let mut p = FocalParams::default();
+        p.radius = 2;
+        p.statistic = FocalStatistic::Mean;
+        p.circular = false;
+        p
+    })
     .expect("focal_mean failed");
 
     assert_eq!(result.shape(), dem.shape());
@@ -362,14 +355,13 @@ fn statistics_focal_mean() {
 #[test]
 fn statistics_focal_std() {
     let dem = require_dem!();
-    let result = focal_statistics(
-        &dem,
-        FocalParams {
-            radius: 2,
-            statistic: FocalStatistic::StdDev,
-            circular: false,
-        },
-    )
+    let result = focal_statistics(&dem, {
+        let mut p = FocalParams::default();
+        p.radius = 2;
+        p.statistic = FocalStatistic::StdDev;
+        p.circular = false;
+        p
+    })
     .expect("focal_std failed");
 
     assert_eq!(result.shape(), dem.shape());
@@ -393,13 +385,12 @@ fn statistics_focal_std() {
 fn no_inf_in_outputs() {
     let dem = require_dem!();
 
-    let slope_out = slope(
-        &dem,
-        SlopeParams {
-            units: SlopeUnits::Degrees,
-            z_factor: 1.0,
-        },
-    )
+    let slope_out = slope(&dem, {
+        let mut p = SlopeParams::default();
+        p.units = SlopeUnits::Degrees;
+        p.z_factor = 1.0;
+        p
+    })
     .expect("slope");
     let aspect_out = aspect(&dem, AspectOutput::Degrees).expect("aspect");
     let hs_out = hillshade(&dem, HillshadeParams::default()).expect("hillshade");

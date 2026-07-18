@@ -280,15 +280,14 @@ mod tests {
     #[test]
     fn full_pipeline_renders_without_panic() {
         let dem = ramp_dem(8, 8);
-        let sphere = sphere_shade(
-            &dem,
-            HillshadeParams {
-                azimuth: 315.0,
-                altitude: 45.0,
-                z_factor: 1.0,
-                normalized: true,
-            },
-        )
+        let sphere = sphere_shade(&dem, {
+            let mut p = HillshadeParams::default();
+            p.azimuth = 315.0;
+            p.altitude = 45.0;
+            p.z_factor = 1.0;
+            p.normalized = true;
+            p
+        })
         .unwrap();
         let shadow = ray_shade(&dem, &RayShadeParams::default()).unwrap();
         let img = ReliefBuilder::new(&dem)

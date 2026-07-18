@@ -302,13 +302,10 @@ mod tests {
         // TempDir cleans up on drop.
     }
 
-    /// Regression for the `compress: true` branch: it still buffers the
-    /// full image (a real `tiff`-crate API limitation, documented at the
-    /// call site) rather than streaming strip-by-strip, but it must
-    /// remain byte-for-byte correct after being split out of the
-    /// uncompressed streaming path. Single strip (whole image), so it
-    /// doesn't trip the multi-strip corruption documented in
-    /// `known_bug_multi_strip_deflate_corrupts_rows_after_first_strip`.
+    /// Regression for the `compress: true` branch: it now streams
+    /// strip-by-strip (hand-driven `DirectoryEncoder`, one compressed
+    /// strip in memory at a time) and must remain byte-for-byte correct
+    /// after being split out of the uncompressed streaming path.
     #[test]
     fn test_write_and_read_back_compressed() {
         let dir = tempfile::tempdir().unwrap();

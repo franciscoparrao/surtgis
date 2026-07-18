@@ -10,6 +10,7 @@ use surtgis_core::raster::Raster;
 use surtgis_core::{Error, Result};
 
 /// All temporal statistics in a single pass.
+#[non_exhaustive]
 pub struct TemporalStats {
     /// Per-cell mean across the time stack.
     pub mean: Raster<f64>,

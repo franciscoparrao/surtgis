@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 /// Axis-aligned bounding box
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct BoundingBox {
     /// Minimum x (left edge).
     pub min_x: f64,

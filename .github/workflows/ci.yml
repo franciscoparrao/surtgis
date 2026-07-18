@@ -171,6 +171,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install maturin
         run: pip install maturin numpy pytest
+      # gen_stubs.py parses the Rust source (no compiled module needed), so
+      # a drifted surtgis.pyi — a #[pyfunction] added without regenerating —
+      # is caught here rather than shipping stale type hints to users.
+      - name: Check type stubs are in sync
+        run: |
+          python3 crates/python/gen_stubs.py > /tmp/surtgis.pyi.gen
+          diff -u crates/python/surtgis.pyi /tmp/surtgis.pyi.gen \
+            || { echo "::error::surtgis.pyi is out of date; run 'python3 gen_stubs.py > surtgis.pyi' in crates/python/"; exit 1; }
       - name: Build Python package
         run: maturin build --manifest-path crates/python/Cargo.toml --release
       # The wheel is imported and exercised before it can ever reach PyPI —
