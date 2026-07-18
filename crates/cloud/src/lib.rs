@@ -41,6 +41,8 @@ pub mod wasm_api;
 
 #[cfg(feature = "grib")]
 pub mod grib_reader;
+#[cfg(any(feature = "zarr", feature = "netcdf"))]
+mod latlon_grid;
 #[cfg(feature = "netcdf")]
 pub mod netcdf_reader;
 #[cfg(feature = "zarr")]
