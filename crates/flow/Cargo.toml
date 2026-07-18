@@ -1,0 +1,22 @@
+[package]
+name = "surtgis-flow"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "2D debris-flow solver (shallow water + Voellmy rheology) for SurtGIS"
+keywords = ["gis", "debris-flow", "shallow-water", "simulation", "hazard"]
+categories = ["science::geo", "simulation"]
+# Not published until the surtgis-flow spec v1.0 milestones close (M5) and the
+# workspace 1.0 freeze is resolved — the 0.18.0 surface in soak must not grow.
+publish = false
+
+[dependencies]
+surtgis-core = { path = "../core" }
+rayon = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+approx = { workspace = true }

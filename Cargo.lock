@@ -6126,6 +6126,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "surtgis-flow"
+version = "0.18.0"
+dependencies = [
+ "approx",
+ "rayon",
+ "surtgis-core",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "surtgis-gui"
 version = "0.18.0"
 dependencies = [
