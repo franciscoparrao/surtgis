@@ -510,6 +510,7 @@ mod tests {
 
     /// A DEFLATE stream that inflates far past the expected tile size must be
     /// rejected, not allocated — the decompression-bomb guard (audit S2.3).
+    #[cfg(feature = "deflate")]
     #[test]
     fn test_decompress_deflate_bomb_is_rejected() {
         use std::io::Write;
@@ -533,6 +534,7 @@ mod tests {
 
     /// A tile that decompresses to exactly its expected size still works
     /// (the cap has slack and does not clip well-formed tiles).
+    #[cfg(feature = "deflate")]
     #[test]
     fn test_decompress_deflate_exact_size_ok() {
         use std::io::Write;
