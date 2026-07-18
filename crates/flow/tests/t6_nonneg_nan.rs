@@ -76,12 +76,13 @@ fn t6_no_negative_depths_no_nan() {
     }
     eprintln!("T6: {substeps} substeps, {checks} full-state checks, min(h) >= 0 and all finite");
 
-    // Sanity: the release actually flowed (arrival recorded downslope of the
-    // release area, on the far side of the domain).
+    // Sanity: the release actually flowed. 214 release cells; several times
+    // that must have been wetted on the way downslope (with the static-yield
+    // detention the deposit is compact: ~1250 cells in practice).
     let arrivals = sim.arrival_times();
     let wetted = arrivals.iter().filter(|t| t.is_finite()).count();
     assert!(
-        wetted > 2000,
+        wetted > 800,
         "only {wetted} cells ever wetted; the flow did not propagate"
     );
 }

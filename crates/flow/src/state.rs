@@ -32,12 +32,12 @@ impl FlowState {
         self.hv.copy_from_slice(&other.hv);
     }
 
-    /// `true` if any component is NaN or infinite.
+    /// `true` if any component is NaN or infinite. Parallel scan; the result
+    /// is a boolean over the same set of cells, so it is order-independent.
     pub(crate) fn has_non_finite(&self) -> bool {
-        // Chunked any() keeps this a tight scan; the three arrays are checked
-        // independently so the common all-finite case reads each once.
-        self.h.iter().any(|v| !v.is_finite())
-            || self.hu.iter().any(|v| !v.is_finite())
-            || self.hv.iter().any(|v| !v.is_finite())
+        use rayon::prelude::*;
+        self.h.par_iter().any(|v| !v.is_finite())
+            || self.hu.par_iter().any(|v| !v.is_finite())
+            || self.hv.par_iter().any(|v| !v.is_finite())
     }
 }
