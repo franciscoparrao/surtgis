@@ -1654,54 +1654,64 @@ impl Drop for RssPeakTracker {
     }
 }
 
-/// Handle multi-band `stac composite` in a single pass.
+/// Resolves band/mask keys via the CLI's band-alias table.
 ///
-/// Shares the STAC search and SCL mask download across all bands, avoiding
-/// redundant HTTP requests. For N bands, this is ~N× faster than running
-/// N independent single-band composites.
-fn handle_multiband_composite(
+/// Shared by every engine-routed composite (`handle_multiband_composite` and
+/// `handle_time_series`), so it lives at module scope.
+struct CliResolver;
+impl surtgis_cloud::composite::AssetResolver for CliResolver {
+    fn resolve(&self, item: &surtgis_cloud::stac_models::StacItem, key: &str) -> Option<String> {
+        resolve_asset_key(item, key).map(|(_, a)| a.href.clone())
+    }
+}
+
+/// Applies the collection's cloud-mask strategy.
+struct CliMask(Arc<dyn CloudMaskStrategy>);
+impl surtgis_cloud::composite::MaskApplier for CliMask {
+    fn apply(
+        &self,
+        data: &surtgis_core::Raster<f64>,
+        mask: &surtgis_core::Raster<f64>,
+    ) -> surtgis_core::Raster<f64> {
+        self.0.mask(data, mask).unwrap_or_else(|_| data.clone())
+    }
+}
+
+/// Run one composite through the RAM-budgeted [`CompositeEngine`], streaming
+/// each requested band straight to its `band_paths[i]` GeoTIFF.
+///
+/// This is the shared core behind both `stac composite` (multi-band, single
+/// pass) and `stac time-series` (one call per temporal interval). The engine
+/// enforces the RAM budget (`SURTGIS_RAM_BUDGET_GB`, default 16 GB) and, when
+/// `align_to` is given, produces its output *directly* on that reference grid —
+/// so callers must NOT resample post-hoc.
+///
+/// Masking is driven by [`CollectionProfile`]: Sentinel-2 (SCL), Landsat
+/// (QA_PIXEL) and Sentinel-1 (none). Collections outside those three get no
+/// mask (fallback).
+#[allow(clippy::too_many_arguments)]
+fn run_engine_composite(
     catalog: &str,
-    bbox_str: &str,
     collection: &str,
+    bbox: &str,
     band_names: &[&str],
     datetime: &str,
     max_scenes: usize,
     align_to: Option<&std::path::PathBuf>,
-    output: &std::path::Path,
-    naming: &str,
-    use_cache: bool,
-    strip_rows_cfg: usize,
+    band_paths: &[std::path::PathBuf],
     band_chunk_size: usize,
+    strip_rows_cfg: usize,
+    use_cache: bool,
     compress: bool,
     max_tile_failures: usize,
-) -> Result<()> {
-    use surtgis_cloud::composite::{
-        AssetResolver, CompositeEngine, CompositeProgress, CompositeSpec, MaskApplier, OutputGrid,
-        StripPlan, StripSink,
-    };
-
-    let n_bands = band_names.len();
-    println!(
-        "Multi-band composite: {} bands [{}]",
-        n_bands,
-        band_names.join(", ")
-    );
+    progress: &mut dyn surtgis_cloud::composite::CompositeProgress,
+) -> Result<surtgis_cloud::composite::CompositeReport> {
+    use surtgis_cloud::composite::{CompositeEngine, CompositeSpec, OutputGrid};
 
     let profile = CollectionProfile::from_collection_name(collection)?;
-    eprintln!(
-        "📷 Collection: {} (mask: {:?})",
-        profile.description(),
-        profile.mask_asset_name()
-    );
-    if use_cache {
-        let sample = cog_cache_path("sample", &BBox::new(0.0, 0.0, 1.0, 1.0));
-        if let Some(root) = sample.ancestors().nth(3) {
-            eprintln!("📦 COG cache enabled: {}", root.display());
-        }
-    }
 
     // --- Build the spec ---
-    let bb = parse_bbox(bbox_str)?;
+    let bb = parse_bbox(bbox)?;
     let align_grid = match align_to {
         Some(path) => {
             let reference: surtgis_core::Raster<f64> =
@@ -1738,30 +1748,6 @@ fn handle_multiband_composite(
     };
 
     // --- Injected collaborators (dependency inversion) ---
-
-    /// Resolves band/mask keys via the CLI's band-alias table.
-    struct CliResolver;
-    impl AssetResolver for CliResolver {
-        fn resolve(
-            &self,
-            item: &surtgis_cloud::stac_models::StacItem,
-            key: &str,
-        ) -> Option<String> {
-            resolve_asset_key(item, key).map(|(_, a)| a.href.clone())
-        }
-    }
-
-    /// Applies the collection's cloud-mask strategy.
-    struct CliMask(Arc<dyn CloudMaskStrategy>);
-    impl MaskApplier for CliMask {
-        fn apply(
-            &self,
-            data: &surtgis_core::Raster<f64>,
-            mask: &surtgis_core::Raster<f64>,
-        ) -> surtgis_core::Raster<f64> {
-            self.0.mask(data, mask).unwrap_or_else(|_| data.clone())
-        }
-    }
     let cloud_mask_strategy: Arc<dyn CloudMaskStrategy> = match &profile {
         CollectionProfile::Sentinel2L2A {
             cloud_mask_strategy,
@@ -1773,8 +1759,66 @@ fn handle_multiband_composite(
     };
     let mask_applier = CliMask(cloud_mask_strategy);
 
-    // Resolve the per-band output paths up front, then stream each band strip
-    // straight to disk (no persistent `n_bands × rows × cols × 8` RAM buffers).
+    // Stream each band strip straight to disk (no persistent
+    // `n_bands × rows × cols × 8` RAM buffers).
+    let mut sink = crate::composite_sink::StreamingTiffSink::new(band_paths.to_vec(), compress);
+
+    // --- Run the engine, then assemble the streamed scratch into GeoTIFFs ---
+    let mut engine = CompositeEngine::new(spec).context("Failed to create composite engine")?;
+    let report = engine
+        .run(&CliResolver, &mask_applier, &mut sink, progress)
+        .context("Composite run failed")?;
+    sink.finish()
+        .context("Failed to assemble composite output files")?;
+
+    Ok(report)
+}
+
+/// Handle multi-band `stac composite` in a single pass.
+///
+/// Shares the STAC search and SCL mask download across all bands, avoiding
+/// redundant HTTP requests. For N bands, this is ~N× faster than running
+/// N independent single-band composites.
+fn handle_multiband_composite(
+    catalog: &str,
+    bbox_str: &str,
+    collection: &str,
+    band_names: &[&str],
+    datetime: &str,
+    max_scenes: usize,
+    align_to: Option<&std::path::PathBuf>,
+    output: &std::path::Path,
+    naming: &str,
+    use_cache: bool,
+    strip_rows_cfg: usize,
+    band_chunk_size: usize,
+    compress: bool,
+    max_tile_failures: usize,
+) -> Result<()> {
+    use surtgis_cloud::composite::{CompositeProgress, OutputGrid, StripPlan};
+
+    let n_bands = band_names.len();
+    println!(
+        "Multi-band composite: {} bands [{}]",
+        n_bands,
+        band_names.join(", ")
+    );
+
+    let profile = CollectionProfile::from_collection_name(collection)?;
+    eprintln!(
+        "📷 Collection: {} (mask: {:?})",
+        profile.description(),
+        profile.mask_asset_name()
+    );
+    if use_cache {
+        let sample = cog_cache_path("sample", &BBox::new(0.0, 0.0, 1.0, 1.0));
+        if let Some(root) = sample.ancestors().nth(3) {
+            eprintln!("📦 COG cache enabled: {}", root.display());
+        }
+    }
+
+    // Resolve the per-band output paths up front (the engine streams each band
+    // straight to disk via `run_engine_composite`).
     let stem = output.file_stem().unwrap_or_default().to_string_lossy();
     let use_asset_naming = naming.eq_ignore_ascii_case("asset");
     let band_paths: Vec<std::path::PathBuf> = if n_bands == 1 {
@@ -1794,8 +1838,6 @@ fn handle_multiband_composite(
             })
             .collect()
     };
-    let mut sink = crate::composite_sink::StreamingTiffSink::new(band_paths.clone(), compress);
-
     /// Bridges engine progress hooks to the CLI's existing stdout/stderr
     /// reporting and RAM diagnostics (RSS logging, intra-strip peak tracking,
     /// and mimalloc page reclamation at strip boundaries — allocator control
@@ -1908,13 +1950,27 @@ fn handle_multiband_composite(
         rss_peak: RssPeakTracker::start(Duration::from_secs(2)),
     };
 
-    // --- Run the engine ---
+    // --- Run the engine (spec build + resolver/mask + streamed sink live in
+    // the shared `run_engine_composite` helper, which also assembles the
+    // per-band GeoTIFFs before returning) ---
     let start = Instant::now();
     eprintln!("[ram] baseline before composite: RSS={} MB", read_rss_mb());
-    let mut engine = CompositeEngine::new(spec).context("Failed to create composite engine")?;
-    let report = engine
-        .run(&CliResolver, &mask_applier, &mut sink, &mut progress)
-        .context("Composite run failed")?;
+    let report = run_engine_composite(
+        catalog,
+        collection,
+        bbox_str,
+        band_names,
+        datetime,
+        max_scenes,
+        align_to,
+        &band_paths,
+        band_chunk_size,
+        strip_rows_cfg,
+        use_cache,
+        compress,
+        max_tile_failures,
+        &mut progress,
+    )?;
     println!(); // newline after the \r strip progress
 
     if report.failed_tiles > 0 {
@@ -1927,17 +1983,17 @@ fn handle_multiband_composite(
         );
     }
 
-    // --- Assemble the N output GeoTIFFs from the streamed scratch files ---
+    // The helper already assembled the N output GeoTIFFs; report their sizes.
     let grid = &report.grid;
-    let sizes = sink
-        .finish()
-        .context("Failed to assemble composite output files")?;
     for (bi, band_name) in band_names.iter().enumerate() {
+        let size = std::fs::metadata(&band_paths[bi])
+            .map(|m| m.len())
+            .unwrap_or(0);
         println!(
             "  ✓ {} → {} ({:.1} MB)",
             band_name,
             band_paths[bi].display(),
-            sizes.get(bi).copied().unwrap_or(0) as f64 / 1e6
+            size as f64 / 1e6
         );
     }
 
@@ -1987,127 +2043,109 @@ fn handle_time_series(
         parts[1]
     );
 
-    // Optionally load align-to reference
-    let reference = match align_to {
-        Some(path) => {
-            let r: surtgis_core::Raster<f64> = surtgis_core::io::read_geotiff(path, None)
-                .context("Failed to read align-to reference")?;
-            Some(r)
-        }
-        None => None,
-    };
-
     std::fs::create_dir_all(outdir)?;
     let start = Instant::now();
 
-    // Prepare interval tasks
-    let tasks: Vec<(usize, SimpleDate, SimpleDate, String, String)> = intervals
-        .iter()
-        .enumerate()
-        .map(|(i, (win_start, win_end))| {
-            let win_dt = format!("{}/{}", format_date(win_start), format_date(win_end));
-            let label = format_date(win_start);
-            (i, *win_start, *win_end, win_dt, label)
-        })
-        .collect();
-
-    // Process intervals in parallel batches (3 concurrent to avoid API overload)
-    let max_concurrent = 3usize.min(tasks.len());
+    // Masking-semantics note (engine routing, R-timeseries): each interval now
+    // runs through the RAM-budgeted `CompositeEngine` (the same core as
+    // `stac composite`), instead of the legacy unbounded `fetch_stac_band`.
+    // The engine masks via `CollectionProfile` — Sentinel-2 (SCL), Landsat
+    // (QA_PIXEL) and Sentinel-1 (none) — which covers the realistic
+    // time-series case (e.g. NDVI over Sentinel-2). For masked collections
+    // *outside* those three the engine falls back to NO masking, whereas the
+    // old `fetch_stac_band` auto-introspected the STAC schema. Intervals run
+    // SEQUENTIALLY (one engine at a time): concurrent engines would each hold
+    // their own RAM budget, defeating the point of routing through the engine.
+    let total = intervals.len();
     let mut success = 0usize;
-    let mut metadata: Vec<serde_json::Value> = vec![serde_json::Value::Null; tasks.len()];
+    let mut metadata: Vec<serde_json::Value> = Vec::with_capacity(total);
 
-    for chunk_start in (0..tasks.len()).step_by(max_concurrent) {
-        let chunk_end = (chunk_start + max_concurrent).min(tasks.len());
-        let chunk = &tasks[chunk_start..chunk_end];
+    for (i, (win_start, win_end)) in intervals.iter().enumerate() {
+        let win_dt = format!("{}/{}", format_date(win_start), format_date(win_end));
+        let label = format_date(win_start);
+        println!(
+            "[{}/{}] {} → {}",
+            i + 1,
+            total,
+            format_date(win_start),
+            format_date(win_end)
+        );
 
-        // Download this batch in parallel
-        let results: Vec<(
-            usize,
-            std::result::Result<surtgis_core::Raster<f64>, String>,
-        )> = {
-            let mut handles = Vec::with_capacity(chunk.len());
-            for &(i, win_start, win_end, ref win_dt, ref _label) in chunk {
-                let cat = catalog.to_string();
-                let bb = bbox.to_string();
-                let col = collection.to_string();
-                let ast = asset.to_string();
-                let dt = win_dt.clone();
-                let ms = max_scenes;
+        let filename = format!("{}_{}.tif", asset, label);
+        let path = outdir.join(&filename);
+        let band_paths = vec![path.clone()];
+
+        // Headless progress: per-interval strip logging would spam. The
+        // interval summary line below is the user-facing progress here.
+        let mut progress = surtgis_cloud::composite::NoProgress;
+        let run = run_engine_composite(
+            catalog,
+            collection,
+            bbox,
+            &[asset],
+            &win_dt,
+            max_scenes,
+            align_to,
+            &band_paths,
+            1,   // band_chunk_size: single band per interval → minimum RAM
+            512, // strip_rows: engine default (memory model may cap it)
+            false,
+            compress,
+            0, // max_tile_failures: never abort, just gap-fill (as before)
+            &mut progress,
+        );
+
+        match run {
+            Ok(_report) => {
+                // The engine doesn't report valid% directly, so read the written
+                // GeoTIFF back to compute it (and grab the final grid dims). This
+                // also preserves the historical metadata/console format exactly.
+                let raster: surtgis_core::Raster<f64> =
+                    match surtgis_core::io::read_geotiff(&path, None) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            eprintln!(
+                                "  ⚠️ [{}/{}] Wrote {} but could not read it back: {}",
+                                i + 1,
+                                total,
+                                filename,
+                                e
+                            );
+                            continue;
+                        }
+                    };
+                let (rows, cols) = raster.shape();
+                let valid = raster.data().iter().filter(|v| v.is_finite()).count();
+                let cells = rows * cols;
+                let pct = if cells > 0 {
+                    valid as f64 / cells as f64 * 100.0
+                } else {
+                    0.0
+                };
+
                 println!(
-                    "[{}/{}] {} → {}",
+                    "  [{}/{}] → {} ({}x{}, {:.1}% valid)",
                     i + 1,
-                    tasks.len(),
-                    format_date(&win_start),
-                    format_date(&win_end)
+                    total,
+                    filename,
+                    cols,
+                    rows,
+                    pct
                 );
-                handles.push(std::thread::spawn(move || {
-                    let r = fetch_stac_band(&cat, &bb, &col, &ast, &dt, ms, None);
-                    (i, r.map_err(|e| e.to_string()))
+
+                metadata.push(serde_json::json!({
+                    "index": i,
+                    "date_start": format_date(win_start),
+                    "date_end": format_date(win_end),
+                    "file": filename,
+                    "rows": rows,
+                    "cols": cols,
+                    "valid_pct": (pct * 10.0).round() / 10.0,
                 }));
+                success += 1;
             }
-            handles.into_iter().filter_map(|h| h.join().ok()).collect()
-        };
-
-        // Write results and optionally align
-        for (i, result) in results {
-            let (_, win_start, win_end, _, ref label) = tasks[i];
-            match result {
-                Ok(raster) => {
-                    // Align to reference if provided
-                    let final_raster = if let Some(ref refr) = reference {
-                        surtgis_core::resample_to_grid(
-                            &raster,
-                            refr,
-                            surtgis_core::ResampleMethod::Bilinear,
-                        )
-                        .unwrap_or(raster)
-                    } else {
-                        raster
-                    };
-
-                    let (rows, cols) = final_raster.shape();
-                    let valid = final_raster.data().iter().filter(|v| v.is_finite()).count();
-                    let total = rows * cols;
-                    let pct = if total > 0 {
-                        valid as f64 / total as f64 * 100.0
-                    } else {
-                        0.0
-                    };
-
-                    let filename = format!("{}_{}.tif", asset, label);
-                    let path = outdir.join(&filename);
-                    write_result(&final_raster, &path, compress)?;
-
-                    println!(
-                        "  [{}/{}] → {} ({}x{}, {:.1}% valid)",
-                        i + 1,
-                        tasks.len(),
-                        filename,
-                        cols,
-                        rows,
-                        pct
-                    );
-
-                    metadata[i] = serde_json::json!({
-                        "index": i,
-                        "date_start": format_date(&win_start),
-                        "date_end": format_date(&win_end),
-                        "file": filename,
-                        "rows": rows,
-                        "cols": cols,
-                        "valid_pct": (pct * 10.0).round() / 10.0,
-                    });
-                    success += 1;
-                }
-                Err(e) => {
-                    eprintln!(
-                        "  ⚠️ [{}/{}] No data for {}: {}",
-                        i + 1,
-                        tasks.len(),
-                        label,
-                        e
-                    );
-                }
+            Err(e) => {
+                eprintln!("  ⚠️ [{}/{}] No data for {}: {}", i + 1, total, label, e);
             }
         }
     }
@@ -2123,7 +2161,7 @@ fn handle_time_series(
         "interval": interval,
         "total_intervals": intervals.len(),
         "successful": success,
-        "rasters": metadata.into_iter().filter(|v| !v.is_null()).collect::<Vec<_>>(),
+        "rasters": metadata,
     });
     std::fs::write(&meta_path, serde_json::to_string_pretty(&meta_json)?)?;
     println!("\nMetadata → {}", meta_path.display());
