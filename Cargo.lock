@@ -6027,6 +6027,7 @@ dependencies = [
  "surtgis-algorithms",
  "surtgis-cloud",
  "surtgis-core",
+ "surtgis-flow",
  "surtgis-parallel",
  "surtgis-relief",
  "surtgis-relief-3d",

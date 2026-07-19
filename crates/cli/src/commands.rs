@@ -394,11 +394,52 @@ pub enum Commands {
         #[arg(long)]
         argmax: bool,
     },
+    /// Debris-flow simulation, shallow water + Voellmy (EXPERIMENTAL pre-1.0)
+    #[cfg(feature = "flow")]
+    Flow {
+        #[command(subcommand)]
+        command: FlowCommands,
+    },
     /// Generate shell completion scripts (write to a file in your shell's
     /// completion directory, e.g. `surtgis completions bash > /etc/bash_completion.d/surtgis`)
     Completions {
         /// Target shell
         shell: clap_complete::Shell,
+    },
+}
+
+// ─── Flow (debris-flow solver) subcommands ──────────────────────────────
+
+/// Subcommands of `surtgis flow` (spec surtgis-flow v1.0 §8).
+#[cfg(feature = "flow")]
+#[derive(Subcommand)]
+pub enum FlowCommands {
+    /// Run a 2D debris-flow simulation (SWE + Voellmy) over a DEM
+    Run {
+        /// Input DEM GeoTIFF (square cells; NoData cells act as solid walls)
+        dem: PathBuf,
+        /// Release thickness raster [m] on the same grid as the DEM
+        release: PathBuf,
+        /// Output directory: h_t####.tif frames + manifest.json
+        outdir: PathBuf,
+        /// Voellmy Coulomb friction coefficient μ
+        #[arg(long, default_value = "0.15")]
+        mu: f32,
+        /// Voellmy turbulent friction ξ [m/s²]
+        #[arg(long, default_value = "200")]
+        xi: f32,
+        /// Physical time to simulate [s]
+        #[arg(long, default_value = "600")]
+        duration: f64,
+        /// Physical time between saved frames [s]
+        #[arg(long, default_value = "2")]
+        output_interval: f64,
+        /// Also write u_t####.tif / v_t####.tif velocity frames [m/s]
+        #[arg(long)]
+        dump_velocity: bool,
+        /// Write the arrival-time raster [s] to this file at the end
+        #[arg(long)]
+        arrival: Option<PathBuf>,
     },
 }
 

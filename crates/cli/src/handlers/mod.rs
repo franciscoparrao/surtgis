@@ -2,6 +2,8 @@ pub mod classification;
 pub mod clip;
 pub mod extract;
 pub mod extract_patches;
+#[cfg(feature = "flow")]
+pub mod flow;
 pub mod fluvial;
 pub mod gfm_profiles;
 pub mod hydrology;

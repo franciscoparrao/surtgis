@@ -94,6 +94,8 @@ fn run(cli: Cli) -> Result<()> {
             handlers::hydrology::handle(algorithm, compress, mem_limit_bytes)?
         }
         Commands::Fluvial { algorithm } => handlers::fluvial::handle(algorithm, compress)?,
+        #[cfg(feature = "flow")]
+        Commands::Flow { command } => handlers::flow::handle(command, compress)?,
         Commands::Imagery { algorithm } => handlers::imagery::handle(algorithm, compress)?,
         Commands::Morphology { algorithm } => handlers::morphology::handle(algorithm, compress)?,
         Commands::Landscape { algorithm } => handlers::landscape::handle(algorithm, compress)?,
