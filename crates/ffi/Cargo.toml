@@ -1,0 +1,23 @@
+[package]
+name = "surtgis-ffi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Stable C ABI (cdylib) for the surtgis-flow debris-flow solver"
+keywords = ["gis", "debris-flow", "ffi", "simulation"]
+categories = ["science::geo", "external-ffi-bindings"]
+# Not published: consumed as a binary artifact (GeodeoSim plugin) and gated
+# on the same 1.0-freeze resolution as surtgis-flow.
+publish = false
+
+[lib]
+# cdylib + staticlib per spec §1; rlib so the Rust integration tests can
+# link the same code paths that the C boundary exercises.
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+surtgis-core = { path = "../core" }
+surtgis-flow = { path = "../flow" }

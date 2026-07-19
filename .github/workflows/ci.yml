@@ -105,6 +105,25 @@ jobs:
       - name: Run tests without parallel feature
         run: cargo test --workspace --exclude surtgis-python --no-default-features
 
+  # C ABI smoke (spec surtgis-flow v1.0 §9, M5 gate): build the surtgis-ffi
+  # cdylib, compile examples/smoke.c against include/surtgis_flow.h with the
+  # system C compiler and run it end-to-end. Catches header/implementation
+  # drift and linkage breakage that pure-Rust tests can't see.
+  ffi-smoke:
+    name: FFI smoke (C)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build cdylib
+        run: cargo build -p surtgis-ffi --release
+      - name: Compile and run smoke.c
+        run: |
+          cc -Wall -Werror -Icrates/ffi/include crates/ffi/examples/smoke.c \
+             -Ltarget/release -lsurtgis_ffi -lm -o sf_smoke
+          LD_LIBRARY_PATH=target/release ./sf_smoke
+
   wasm:
     name: WASM Build
     runs-on: ubuntu-latest
