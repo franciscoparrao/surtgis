@@ -208,7 +208,11 @@ fn masked_raster(
 }
 
 /// `manifest.json` — the contract with `geodeo-bridge` (spec §8). Field set
-/// is normative: {crs, origin, cellsize, dt_output, n_frames, mu, xi, units}.
+/// frozen with GEODEO's sign-off (2026-07-19): the normative
+/// {crs, origin, cellsize, dt_output, n_frames, mu, xi, units} plus the two
+/// fields GEODEO requested — `duration` (explicit, so consumers don't
+/// re-derive dt_output*(n_frames-1) and inherit off-by-one risk) and
+/// `row0` (self-describing row orientation).
 fn write_manifest(
     outdir: &Path,
     dem: &Raster<f32>,
@@ -228,6 +232,11 @@ fn write_manifest(
         "cellsize": t.pixel_width,
         "dt_output": dt_output,
         "n_frames": n_frames,
+        // GEODEO's definition, computed with their exact formula (not the
+        // FP-accumulated simulation clock): the time span of the frame grid.
+        "duration": dt_output * (n_frames as f64 - 1.0),
+        // origin is the NW corner; row 0 of every frame is the northernmost.
+        "row0": "north",
         "mu": clean(mu),
         "xi": clean(xi),
         "units": { "h": "m", "u": "m/s", "v": "m/s", "arrival": "s" },
