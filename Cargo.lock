@@ -6130,6 +6130,7 @@ name = "surtgis-flow"
 version = "0.18.0"
 dependencies = [
  "approx",
+ "criterion",
  "rayon",
  "surtgis-core",
  "thiserror 2.0.18",

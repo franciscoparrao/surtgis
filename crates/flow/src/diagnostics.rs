@@ -16,10 +16,15 @@ pub(crate) fn total_mass(state: &FlowState, grid: &SimGrid) -> f64 {
 
 /// Record `t` as the arrival time of every newly wetted cell
 /// (first time with `h > h_dry`; cells never wetted stay NaN).
+/// Per-cell writes only: deterministic under any parallel partition.
 pub(crate) fn update_arrivals(arrival: &mut [f32], state: &FlowState, h_dry: f32, t: f64) {
-    for (a, &h) in arrival.iter_mut().zip(&state.h) {
-        if a.is_nan() && h > h_dry {
-            *a = t as f32;
-        }
-    }
+    use rayon::prelude::*;
+    arrival
+        .par_iter_mut()
+        .zip_eq(state.h.par_iter())
+        .for_each(|(a, &h)| {
+            if a.is_nan() && h > h_dry {
+                *a = t as f32;
+            }
+        });
 }

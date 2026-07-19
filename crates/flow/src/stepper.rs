@@ -7,6 +7,7 @@
 //! needed (memory budget §6), and the loop parallelises without
 //! synchronisation.
 
+use rayon::prelude::*;
 use surtgis_core::Raster;
 
 use crate::diagnostics;
@@ -222,22 +223,30 @@ impl Simulation {
 
     /// CFL-stable time step over wet cells (spec §3.7), `None` if nothing is
     /// wet (the caller then jumps over the remaining interval).
+    /// The reduction is a plain `max`, which is exact in floating point:
+    /// the result is independent of the parallel partition and thread count,
+    /// so the CFL step is deterministic by construction (spec §4, T7).
     fn stable_dt(&self) -> Option<f64> {
         let h_dry = f64::from(self.config.h_dry);
-        let mut s_max = 0.0f64;
-        for i in 0..self.state.h.len() {
-            let h = f64::from(self.state.h[i]);
-            if h < h_dry || self.grid.solid_at(i) {
-                continue;
-            }
-            let u = f64::from(self.state.hu[i]) / h;
-            let v = f64::from(self.state.hv[i]) / h;
-            let c = (G * h).sqrt();
-            let s = u.abs().max(v.abs()) + c;
-            if s > s_max {
-                s_max = s;
-            }
-        }
+        let cols = self.grid.cols();
+        let s_max = (0..self.grid.rows())
+            .into_par_iter()
+            .map(|r| {
+                let mut row_max = 0.0f64;
+                for c in 0..cols {
+                    let i = r * cols + c;
+                    let h = f64::from(self.state.h[i]);
+                    if h < h_dry || self.grid.solid_at(i) {
+                        continue;
+                    }
+                    let u = f64::from(self.state.hu[i]) / h;
+                    let v = f64::from(self.state.hv[i]) / h;
+                    let c_wave = (G * h).sqrt();
+                    row_max = row_max.max(u.abs().max(v.abs()) + c_wave);
+                }
+                row_max
+            })
+            .reduce(|| 0.0f64, f64::max);
         (s_max > 0.0).then(|| f64::from(self.config.cfl) * self.grid.cellsize() / s_max)
     }
 
@@ -246,12 +255,21 @@ impl Simulation {
     fn substep(&mut self, dt: f64) -> Result<(), FlowError> {
         let lambda = dt / self.grid.cellsize();
 
-        compute_alpha(&self.grid, &self.state, &self.config, dt, &mut self.alpha);
+        let mu = f64::from(self.params.mu);
+        compute_alpha(
+            &self.grid,
+            &self.state,
+            &self.config,
+            mu,
+            dt,
+            &mut self.alpha,
+        );
         self.scratch.copy_from(&self.state);
         apply_fluxes(
             &self.grid,
             &self.state,
             &self.config,
+            mu,
             &self.alpha,
             lambda,
             &mut self.scratch,
@@ -266,16 +284,21 @@ impl Simulation {
 
         // Wet/dry cleanup (spec §3.5): clamp FP dust to exact 0 and strip
         // momentum from cells below the dry threshold.
-        for i in 0..self.scratch.h.len() {
-            let h = self.scratch.h[i];
-            if h < 0.0 {
-                self.scratch.h[i] = 0.0;
-            }
-            if h < self.config.h_dry {
-                self.scratch.hu[i] = 0.0;
-                self.scratch.hv[i] = 0.0;
-            }
-        }
+        let h_dry = self.config.h_dry;
+        self.scratch
+            .h
+            .par_iter_mut()
+            .zip_eq(self.scratch.hu.par_iter_mut())
+            .zip_eq(self.scratch.hv.par_iter_mut())
+            .for_each(|((h, hu), hv)| {
+                if *h < 0.0 {
+                    *h = 0.0;
+                }
+                if *h < h_dry {
+                    *hu = 0.0;
+                    *hv = 0.0;
+                }
+            });
 
         if self.scratch.has_non_finite() {
             // Spec §5: freeze at the last valid step, never abort.
@@ -322,6 +345,7 @@ fn cell_face(
     grid: &SimGrid,
     state: &FlowState,
     config: &SolverConfig,
+    mu: f64,
     r: usize,
     c: usize,
     face: Face,
@@ -361,13 +385,40 @@ fn cell_face(
         return None;
     }
 
+    // Static-yield detention (Coulomb closure of spec §2.2, required by T5):
+    // between two cells at rest, the HLL mass flux carries a diffusive term
+    // ~ -c·Δη/2 that makes frozen deposits creep indefinitely even though
+    // their momentum is zeroed every step. When both sides are exactly at
+    // rest and the free-surface gradient is below the Coulomb yield μ·cosθ,
+    // the *mass* flux is suppressed — the pressure (normal-momentum) fluxes
+    // are kept, so the well-balanced Audusse property is untouched and the
+    // residual driving force is absorbed by the Coulomb detention in the
+    // friction step (a sub-yield kick is ≤ a_c by construction). With μ = 0
+    // the threshold is 0 and water levels out exactly as before.
+    let static_below_yield =
+        mine.un == 0.0 && mine.ut == 0.0 && other_side.un == 0.0 && other_side.ut == 0.0 && {
+            let d_eta = ((other_side.h + other_side.z) - (mine.h + mine.z)).abs();
+            let cos_other =
+                other_idx.map_or_else(|| grid.cos_theta_at(i), |j| grid.cos_theta_at(j));
+            let cos_avg = 0.5 * (grid.cos_theta_at(i) + cos_other);
+            d_eta <= mu * cos_avg * grid.cellsize()
+        };
+
     let (l, rr) = if cell_is_left {
         (mine, other_side)
     } else {
         (other_side, mine)
     };
+    let mut flux = flux::face_flux(l, rr);
+    if static_below_yield {
+        // Suppress only the diffusive mass exchange (and the mass-carried
+        // transverse momentum); identical on both sides of the face, so mass
+        // conservation is preserved exactly.
+        flux.mass = 0.0;
+        flux.mom_t = 0.0;
+    }
     Some(CellFace {
-        flux: flux::face_flux(l, rr),
+        flux,
         cell_is_left,
         is_x,
         neighbor: other_idx,
@@ -381,94 +432,113 @@ fn compute_alpha(
     grid: &SimGrid,
     state: &FlowState,
     config: &SolverConfig,
+    mu: f64,
     dt: f64,
     alpha: &mut [f32],
 ) {
     let dx = grid.cellsize();
     let cols = grid.cols();
-    for r in 0..grid.rows() {
-        for c in 0..cols {
-            let i = r * cols + c;
-            alpha[i] = 1.0;
-            let h = f64::from(state.h[i]);
-            if grid.solid_at(i) || h <= 0.0 {
-                continue;
-            }
-            let mut outflow = 0.0f64;
-            for face in Face::ALL {
-                if let Some(cf) = cell_face(grid, state, config, r, c, face) {
-                    let out = if cf.cell_is_left {
-                        cf.flux.mass
-                    } else {
-                        -cf.flux.mass
-                    };
-                    if out > 0.0 {
-                        outflow += out;
+    alpha
+        .par_chunks_mut(cols)
+        .enumerate()
+        .for_each(|(r, alpha_row)| {
+            for (c, a_out) in alpha_row.iter_mut().enumerate() {
+                let i = r * cols + c;
+                *a_out = 1.0;
+                let h = f64::from(state.h[i]);
+                if grid.solid_at(i) || h <= 0.0 {
+                    continue;
+                }
+                let mut outflow = 0.0f64;
+                for face in Face::ALL {
+                    if let Some(cf) = cell_face(grid, state, config, mu, r, c, face) {
+                        let out = if cf.cell_is_left {
+                            cf.flux.mass
+                        } else {
+                            -cf.flux.mass
+                        };
+                        if out > 0.0 {
+                            outflow += out;
+                        }
+                    }
+                }
+                if outflow > 0.0 {
+                    let a = (h * dx) / (dt * outflow);
+                    if a < 1.0 {
+                        *a_out = a as f32;
                     }
                 }
             }
-            if outflow > 0.0 {
-                let a = (h * dx) / (dt * outflow);
-                if a < 1.0 {
-                    alpha[i] = a as f32;
-                }
-            }
-        }
-    }
+        });
 }
 
 /// Pass 2: accumulate the α-limited face fluxes into the scratch state.
 /// Each face's α is the donor cell's (the side mass flows out of); ghost
 /// donors (inflow through a transmissive edge) are unlimited.
+/// Parallelisation (spec §6): row bands via `par_chunks_mut`; each cell
+/// accumulates its own four face fluxes in a fixed order, so no thread ever
+/// writes outside its band and faces on band boundaries are simply
+/// recomputed by both sides (bit-identical — the flux function is pure).
+/// Cell results are therefore independent of the partition and thread
+/// count: determinism (T7) holds by construction.
+#[allow(clippy::too_many_arguments)]
 fn apply_fluxes(
     grid: &SimGrid,
     state: &FlowState,
     config: &SolverConfig,
+    mu: f64,
     alpha: &[f32],
     lambda: f64,
     scratch: &mut FlowState,
 ) {
     let cols = grid.cols();
-    for r in 0..grid.rows() {
-        for c in 0..cols {
-            let i = r * cols + c;
-            if grid.solid_at(i) {
-                continue;
-            }
-            let mut dh = 0.0f64;
-            let mut dhu = 0.0f64;
-            let mut dhv = 0.0f64;
-            for face in Face::ALL {
-                let Some(cf) = cell_face(grid, state, config, r, c, face) else {
+    scratch
+        .h
+        .par_chunks_mut(cols)
+        .zip_eq(scratch.hu.par_chunks_mut(cols))
+        .zip_eq(scratch.hv.par_chunks_mut(cols))
+        .enumerate()
+        .for_each(|(r, ((h_row, hu_row), hv_row))| {
+            for c in 0..cols {
+                let i = r * cols + c;
+                if grid.solid_at(i) {
                     continue;
-                };
-                let donor = if (cf.flux.mass >= 0.0) == cf.cell_is_left {
-                    Some(i)
-                } else {
-                    cf.neighbor
-                };
-                let a = donor.map_or(1.0, |d| f64::from(alpha[d]));
-                // Cell on the left of the face: the face normal points out of
-                // the cell, so the flux leaves (−λF); on the right it enters.
-                let sign = if cf.cell_is_left { -1.0 } else { 1.0 };
-                let mom_n = if cf.cell_is_left {
-                    cf.flux.mom_l
-                } else {
-                    cf.flux.mom_r
-                };
-                let s = sign * lambda * a;
-                dh += s * cf.flux.mass;
-                if cf.is_x {
-                    dhu += s * mom_n;
-                    dhv += s * cf.flux.mom_t;
-                } else {
-                    dhv += s * mom_n;
-                    dhu += s * cf.flux.mom_t;
                 }
+                let mut dh = 0.0f64;
+                let mut dhu = 0.0f64;
+                let mut dhv = 0.0f64;
+                for face in Face::ALL {
+                    let Some(cf) = cell_face(grid, state, config, mu, r, c, face) else {
+                        continue;
+                    };
+                    let donor = if (cf.flux.mass >= 0.0) == cf.cell_is_left {
+                        Some(i)
+                    } else {
+                        cf.neighbor
+                    };
+                    let a = donor.map_or(1.0, |d| f64::from(alpha[d]));
+                    // Cell on the left of the face: the face normal points out
+                    // of the cell, so the flux leaves (−λF); on the right it
+                    // enters.
+                    let sign = if cf.cell_is_left { -1.0 } else { 1.0 };
+                    let mom_n = if cf.cell_is_left {
+                        cf.flux.mom_l
+                    } else {
+                        cf.flux.mom_r
+                    };
+                    let s = sign * lambda * a;
+                    dh += s * cf.flux.mass;
+                    if cf.is_x {
+                        dhu += s * mom_n;
+                        dhv += s * cf.flux.mom_t;
+                    } else {
+                        dhv += s * mom_n;
+                        dhu += s * cf.flux.mom_t;
+                    }
+                }
+                h_row[c] = (f64::from(state.h[i]) + dh) as f32;
+                hu_row[c] = (f64::from(state.hu[i]) + dhu) as f32;
+                hv_row[c] = (f64::from(state.hv[i]) + dhv) as f32;
             }
-            scratch.h[i] = (f64::from(state.h[i]) + dh) as f32;
-            scratch.hu[i] = (f64::from(state.hu[i]) + dhu) as f32;
-            scratch.hv[i] = (f64::from(state.hv[i]) + dhv) as f32;
-        }
-    }
+        });
 }
