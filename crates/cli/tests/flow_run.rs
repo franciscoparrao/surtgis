@@ -91,6 +91,8 @@ fn flow_run_end_to_end_produces_frames_and_manifest() {
         "cellsize",
         "dt_output",
         "n_frames",
+        "duration",
+        "row0",
         "mu",
         "xi",
         "units",
@@ -100,6 +102,10 @@ fn flow_run_end_to_end_produces_frames_and_manifest() {
     assert_eq!(manifest["n_frames"], 4);
     assert_eq!(manifest["cellsize"], DX);
     assert_eq!(manifest["dt_output"], 2.0);
+    // GEODEO-requested fields (2026-07-19): explicit duration and
+    // self-describing row orientation.
+    assert_eq!(manifest["duration"], 6.0);
+    assert_eq!(manifest["row0"], "north");
     assert_eq!(manifest["origin"][0], 500_000.0);
     assert_eq!(manifest["units"]["h"], "m");
 }
