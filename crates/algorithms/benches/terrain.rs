@@ -57,17 +57,12 @@ fn bench_curvature(c: &mut Criterion) {
     let mut group = c.benchmark_group("terrain/curvature");
     for size in [256, 512, 1024, 2048] {
         let dem = create_dem(size);
+        // Params are #[non_exhaustive] since the 1.0 freeze gate (#95):
+        // outside the crate they are built via Default + field mutation.
+        let mut params = CurvatureParams::default();
+        params.curvature_type = CurvatureType::General;
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
-            b.iter(|| {
-                curvature(
-                    black_box(&dem),
-                    CurvatureParams {
-                        curvature_type: CurvatureType::General,
-                        ..Default::default()
-                    },
-                )
-                .unwrap()
-            })
+            b.iter(|| curvature(black_box(&dem), params.clone()).unwrap())
         });
     }
     group.finish();
@@ -78,7 +73,9 @@ fn bench_tpi(c: &mut Criterion) {
     for size in [256, 512, 1024, 2048] {
         let dem = create_dem(size);
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
-            b.iter(|| tpi(black_box(&dem), TpiParams { radius: 1 }).unwrap())
+            let mut params = TpiParams::default();
+            params.radius = 1;
+            b.iter(|| tpi(black_box(&dem), params.clone()).unwrap())
         });
     }
     group.finish();
@@ -89,7 +86,9 @@ fn bench_tri(c: &mut Criterion) {
     for size in [256, 512, 1024, 2048] {
         let dem = create_dem(size);
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
-            b.iter(|| tri(black_box(&dem), TriParams { radius: 1 }).unwrap())
+            let mut params = TriParams::default();
+            params.radius = 1;
+            b.iter(|| tri(black_box(&dem), params.clone()).unwrap())
         });
     }
     group.finish();
@@ -101,18 +100,12 @@ fn bench_landform(c: &mut Criterion) {
     for size in [128, 256, 512, 1024] {
         let dem = create_dem(size);
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
-            b.iter(|| {
-                landform_classification(
-                    black_box(&dem),
-                    LandformParams {
-                        small_radius: 3,
-                        large_radius: 10,
-                        tpi_threshold: 1.0,
-                        slope_threshold: 6.0,
-                    },
-                )
-                .unwrap()
-            })
+            let mut params = LandformParams::default();
+            params.small_radius = 3;
+            params.large_radius = 10;
+            params.tpi_threshold = 1.0;
+            params.slope_threshold = 6.0;
+            b.iter(|| landform_classification(black_box(&dem), params.clone()).unwrap())
         });
     }
     group.finish();
