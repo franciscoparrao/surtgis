@@ -35,6 +35,13 @@ relief-3d = ["dep:surtgis-relief-3d"]
 # SPEC_SURTGIS_ONNX_INFERENCE.md still a scaffold upstream
 # (`OnnxModel::load`/`infer` are stubs in surtgis-algorithms).
 onnx = ["surtgis-algorithms/onnx"]
+# `surtgis flow` — debris-flow solver (SWE + Voellmy), spec surtgis-flow v1.0.
+# Off by default while the 0.18.0 surface is in 1.0-freeze soak: the default
+# binary keeps its frozen command set; GEODEO/dev builds opt in with
+# `--features flow`. NOTE: surtgis-flow is publish = false, so this feature
+# must be resolved (publish the crate, or keep the feature off) before the
+# next crates.io release of surtgis-cli.
+flow = ["dep:surtgis-flow"]
 
 [dependencies]
 surtgis-core = { version = "0.18", path = "../core", features = ["shapefile", "geopackage"] }
@@ -42,6 +49,9 @@ surtgis-algorithms = { version = "0.18", path = "../algorithms", features = ["un
 surtgis-parallel = { version = "0.18", path = "../parallel" }
 surtgis-relief = { version = "0.18", path = "../relief" }
 surtgis-relief-3d = { version = "0.18", path = "../relief-3d", optional = true }
+# Path-only on purpose: surtgis-flow is publish = false until the 1.0 freeze
+# resolves (see the `flow` feature note above).
+surtgis-flow = { path = "../flow", optional = true }
 surtgis-cloud = { version = "0.18", path = "../cloud", features = ["native", "unstable"], optional = true }
 clap.workspace = true
 clap_complete.workspace = true
