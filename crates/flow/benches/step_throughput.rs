@@ -56,17 +56,29 @@ fn build_sim() -> Simulation {
 }
 
 fn bench_substeps(c: &mut Criterion) {
-    let mut sim = build_sim();
+    // Fixed, deterministic workload: every iteration starts from the same
+    // warmed-up state (fresh sim per iteration via iter_batched), so the
+    // measurement does not drift as the wet area grows. The substep count
+    // per step(0.5) is deterministic; substeps/s = n / (time per iter).
+    let n_substeps = {
+        let mut sim = build_sim();
+        sim.step(0.5).unwrap()
+    };
+    eprintln!("workload: step(0.5) = {n_substeps} substeps from the warmed state");
+
     let mut group = c.benchmark_group("flow");
-    group.sample_size(20);
-    // Measure the cost of exactly one substep by asking for a dt below the
-    // CFL-stable step (the flow is in motion, stable dt << 0.05 s at 5 m
-    // cells with 3 m of fast material).
-    group.bench_function("substep_1024x1024_15pct_wet", |b| {
-        b.iter(|| {
-            let n = sim.step(black_box(0.01)).unwrap();
-            assert_eq!(n, 1, "dt no longer below the stable substep");
-        });
+    group.sample_size(10);
+    group.warm_up_time(std::time::Duration::from_secs(2));
+    group.bench_function("step_0.5s_1024x1024_15pct_wet", |b| {
+        b.iter_batched(
+            build_sim,
+            |mut sim| {
+                let n = sim.step(black_box(0.5)).unwrap();
+                assert_eq!(n, n_substeps, "workload changed");
+                sim
+            },
+            criterion::BatchSize::PerIteration,
+        );
     });
     group.finish();
 }

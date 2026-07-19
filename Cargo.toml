@@ -13,6 +13,7 @@ members = [
     "crates/relief",
     "crates/relief-3d",
     "crates/flow",
+    "crates/ffi",
 ]
 # The `fuzz/` crate is a cargo-fuzz harness; it must NOT be a workspace member
 # (it depends on the unstable `-Z sanitizer` build and its own nightly profile).
@@ -34,6 +35,7 @@ default-members = [
     "crates/colormap",
     "crates/relief",
     "crates/flow",
+    "crates/ffi",
 ]
 
 [workspace.package]

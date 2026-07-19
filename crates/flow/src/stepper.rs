@@ -36,37 +36,19 @@ pub struct Simulation {
     config: SolverConfig,
 }
 
-/// Which of a cell's four faces is being evaluated.
-#[derive(Clone, Copy)]
-enum Face {
-    East,
-    West,
-    North,
-    South,
-}
+/// Rows per parallel band (spec §6). Faces interior to a band are evaluated
+/// once per pass; the band's boundary face-rows are recomputed by the
+/// adjacent band — recomputing is cheaper than synchronising, and the flux
+/// function is pure, so both evaluations are bit-identical. 16 rows amortise
+/// the duplicated boundary work to ~12% extra flux evaluations.
+const BAND_ROWS: usize = 16;
 
-impl Face {
-    const ALL: [Face; 4] = [Face::East, Face::West, Face::North, Face::South];
-
-    /// `true` if the cell sits on the left (lower-coordinate) side of the
-    /// face in the canonical flux orientation (+x for E/W, +y for N/S; row 0
-    /// is north, so the south neighbour is the left side of a N/S face).
-    fn cell_is_left(self) -> bool {
-        matches!(self, Face::East | Face::North)
-    }
-
-    fn is_x(self) -> bool {
-        matches!(self, Face::East | Face::West)
-    }
-}
-
-/// Flux across one face of a cell, with the neighbour cell index (if the
-/// other side is a real cell; `None` for domain-edge ghosts and walls).
-struct CellFace {
+/// Flux across a face plus the real cell index on each side (`None` when
+/// that side is a domain-edge ghost or a `NoData` wall).
+struct EvaluatedFace {
     flux: NumFlux,
-    cell_is_left: bool,
-    is_x: bool,
-    neighbor: Option<usize>,
+    l_donor: Option<usize>,
+    r_donor: Option<usize>,
 }
 
 impl Simulation {
@@ -200,6 +182,19 @@ impl Simulation {
         &self.arrival
     }
 
+    /// Replace the Voellmy parameters mid-run (spec §5 `sf_set_params`;
+    /// interactive tuning from the Unreal side).
+    ///
+    /// # Errors
+    ///
+    /// [`FlowError::InvalidParam`] if a parameter is out of range — the
+    /// previous parameters stay in effect.
+    pub fn set_params(&mut self, params: VoellmyParams) -> Result<(), FlowError> {
+        params.validate()?;
+        self.params = params;
+        Ok(())
+    }
+
     /// Replace the DEM mid-run (live mitigation barriers, spec §4).
     /// Re-derives the slope cosines; flow thickness on cells that became
     /// `NoData` is discarded.
@@ -264,7 +259,6 @@ impl Simulation {
             dt,
             &mut self.alpha,
         );
-        self.scratch.copy_from(&self.state);
         apply_fluxes(
             &self.grid,
             &self.state,
@@ -335,53 +329,69 @@ fn cell_side(grid: &SimGrid, state: &FlowState, i: usize, is_x: bool, h_dry: f64
     }
 }
 
-/// Evaluate the flux across one face of cell (r, c).
+/// Evaluate the flux across the face between cell slots `l` and `r`
+/// (canonical orientation: `l` is the lower-coordinate side — west for
+/// x-faces, south for y-faces; row 0 is north, so the south neighbour is the
+/// left side of a y-face). `None` in a slot means off-grid; a solid slot
+/// acts as a wall.
 ///
-/// Returns `None` for inactive faces (both sides below the dry threshold —
-/// dry cells exchange nothing unless a wet neighbour floods them, spec §3.5).
-/// Domain edges use a transmissive mirror ghost (free outflow), `NoData`
-/// neighbours a reflective ghost with negated normal velocity (spec §2.3).
-fn cell_face(
+/// Returns `None` for inactive faces: both sides below the dry threshold
+/// (spec §3.5 — dry cells exchange nothing unless a wet neighbour floods
+/// them) or no real side at all. Domain edges use a transmissive mirror
+/// ghost (free outflow), `NoData` neighbours a reflective ghost with negated
+/// normal velocity (spec §2.3).
+fn face_between(
     grid: &SimGrid,
     state: &FlowState,
     config: &SolverConfig,
     mu: f64,
-    r: usize,
-    c: usize,
-    face: Face,
-) -> Option<CellFace> {
+    l: Option<usize>,
+    r: Option<usize>,
+    is_x: bool,
+) -> Option<EvaluatedFace> {
     let h_dry = f64::from(config.h_dry);
-    let cols = grid.cols();
-    let rows = grid.rows();
-    let i = r * cols + c;
-    let is_x = face.is_x();
-    let cell_is_left = face.cell_is_left();
+    let l_real = l.filter(|&i| !grid.solid_at(i));
+    let r_real = r.filter(|&i| !grid.solid_at(i));
 
-    let neighbor: Option<usize> = match face {
-        Face::East => (c + 1 < cols).then(|| i + 1),
-        Face::West => (c > 0).then(|| i - 1),
-        Face::North => (r > 0).then(|| i - cols),
-        Face::South => (r + 1 < rows).then(|| i + cols),
-    };
+    // Cheap dry-dry early-out before building any Side: ghosts and walls
+    // mirror the real side's depth, so the face is inactive iff every real
+    // side is below the dry threshold. This is what keeps the face sweep
+    // O(wet) — dry regions cost two loads per face.
+    let l_wet = l_real.is_some_and(|i| f64::from(state.h[i]) >= h_dry);
+    let r_wet = r_real.is_some_and(|i| f64::from(state.h[i]) >= h_dry);
+    if !l_wet && !r_wet {
+        return None;
+    }
 
-    let mine = cell_side(grid, state, i, is_x, h_dry);
-    let (other_side, other_idx) = match neighbor {
-        Some(j) if !grid.solid_at(j) => (cell_side(grid, state, j, is_x, h_dry), Some(j)),
-        Some(_) => {
-            // Reflective wall: mirror with negated normal velocity.
-            (
-                Side {
-                    un: -mine.un,
-                    ..mine
-                },
-                None,
-            )
+    let (ls, rs) = match (l_real, r_real) {
+        (Some(li), Some(ri)) => (
+            cell_side(grid, state, li, is_x, h_dry),
+            cell_side(grid, state, ri, is_x, h_dry),
+        ),
+        (Some(li), None) => {
+            let s = cell_side(grid, state, li, is_x, h_dry);
+            // Wall if the slot exists but is solid; transmissive ghost if
+            // off-grid.
+            let ghost = if r.is_some() {
+                Side { un: -s.un, ..s }
+            } else {
+                s
+            };
+            (s, ghost)
         }
-        // Transmissive domain edge: zero-gradient mirror ghost.
-        None => (mine, None),
+        (None, Some(ri)) => {
+            let s = cell_side(grid, state, ri, is_x, h_dry);
+            let ghost = if l.is_some() {
+                Side { un: -s.un, ..s }
+            } else {
+                s
+            };
+            (ghost, s)
+        }
+        (None, None) => return None,
     };
 
-    if mine.h < h_dry && other_side.h < h_dry {
+    if ls.h < h_dry && rs.h < h_dry {
         return None;
     }
 
@@ -395,21 +405,14 @@ fn cell_face(
     // residual driving force is absorbed by the Coulomb detention in the
     // friction step (a sub-yield kick is ≤ a_c by construction). With μ = 0
     // the threshold is 0 and water levels out exactly as before.
-    let static_below_yield =
-        mine.un == 0.0 && mine.ut == 0.0 && other_side.un == 0.0 && other_side.ut == 0.0 && {
-            let d_eta = ((other_side.h + other_side.z) - (mine.h + mine.z)).abs();
-            let cos_other =
-                other_idx.map_or_else(|| grid.cos_theta_at(i), |j| grid.cos_theta_at(j));
-            let cos_avg = 0.5 * (grid.cos_theta_at(i) + cos_other);
-            d_eta <= mu * cos_avg * grid.cellsize()
-        };
-
-    let (l, rr) = if cell_is_left {
-        (mine, other_side)
-    } else {
-        (other_side, mine)
+    let static_below_yield = ls.un == 0.0 && ls.ut == 0.0 && rs.un == 0.0 && rs.ut == 0.0 && {
+        let d_eta = ((rs.h + rs.z) - (ls.h + ls.z)).abs();
+        let cos_l = l_real.or(r_real).map_or(1.0, |i| grid.cos_theta_at(i));
+        let cos_r = r_real.or(l_real).map_or(1.0, |i| grid.cos_theta_at(i));
+        d_eta <= mu * 0.5 * (cos_l + cos_r) * grid.cellsize()
     };
-    let mut flux = flux::face_flux(l, rr);
+
+    let mut flux = flux::face_flux(ls, rs);
     if static_below_yield {
         // Suppress only the diffusive mass exchange (and the mass-carried
         // transverse momentum); identical on both sides of the face, so mass
@@ -417,17 +420,21 @@ fn cell_face(
         flux.mass = 0.0;
         flux.mom_t = 0.0;
     }
-    Some(CellFace {
+    Some(EvaluatedFace {
         flux,
-        cell_is_left,
-        is_x,
-        neighbor: other_idx,
+        l_donor: l_real,
+        r_donor: r_real,
     })
 }
 
 /// Pass 1: per-cell positivity limiter α = min(1, h·Δx / (Δt·Σ outgoing mass
 /// flux)) — scaling every outgoing flux by the donor's α guarantees h ≥ 0
 /// (spec §3.5, positivity preserving).
+///
+/// Face sweep per band row: the row's cols+1 x-faces, then the y-faces on
+/// its north edge; the band's south boundary face-row is evaluated once more
+/// to credit the last row. Every cell's outflow accumulates in the fixed
+/// order W, E, N, S regardless of banding or thread count (T7).
 fn compute_alpha(
     grid: &SimGrid,
     state: &FlowState,
@@ -438,32 +445,79 @@ fn compute_alpha(
 ) {
     let dx = grid.cellsize();
     let cols = grid.cols();
+    let rows = grid.rows();
     alpha
-        .par_chunks_mut(cols)
+        .par_chunks_mut(cols * BAND_ROWS)
         .enumerate()
-        .for_each(|(r, alpha_row)| {
-            for (c, a_out) in alpha_row.iter_mut().enumerate() {
-                let i = r * cols + c;
+        .for_each(|(band, alpha_band)| {
+            let r0 = band * BAND_ROWS;
+            let band_rows = alpha_band.len() / cols;
+            let mut outflow = vec![0.0f64; alpha_band.len()];
+            for lr in 0..band_rows {
+                let row = (r0 + lr) * cols;
+                let base = lr * cols;
+                // x-faces: face f sits between cell f-1 (west) and cell f.
+                for f in 0..=cols {
+                    let l = (f > 0).then(|| row + f - 1);
+                    let rr = (f < cols).then(|| row + f);
+                    let Some(ef) = face_between(grid, state, config, mu, l, rr, true) else {
+                        continue;
+                    };
+                    let m = ef.flux.mass;
+                    if m > 0.0
+                        && let Some(d) = ef.l_donor
+                    {
+                        outflow[base + (d - row)] += m;
+                    } else if m < 0.0
+                        && let Some(d) = ef.r_donor
+                    {
+                        outflow[base + (d - row)] += -m;
+                    }
+                }
+                // y-faces on the row's north edge: L = this row (south side),
+                // R = the row to the north. The northern row's southward
+                // outflow is credited only when it belongs to this band.
+                for c in 0..cols {
+                    let l = Some(row + c);
+                    let rr = (r0 + lr > 0).then(|| row - cols + c);
+                    let Some(ef) = face_between(grid, state, config, mu, l, rr, false) else {
+                        continue;
+                    };
+                    let m = ef.flux.mass;
+                    if m > 0.0 {
+                        if ef.l_donor.is_some() {
+                            outflow[base + c] += m;
+                        }
+                    } else if m < 0.0 && lr > 0 && ef.r_donor.is_some() {
+                        outflow[base - cols + c] += -m;
+                    }
+                }
+            }
+            // South boundary of the band: credit the last row's southward
+            // outflow (face against row r_last+1, or the domain's south edge).
+            let r_last = r0 + band_rows - 1;
+            let row = r_last * cols;
+            let base = (band_rows - 1) * cols;
+            for c in 0..cols {
+                let l = (r_last + 1 < rows).then(|| row + cols + c);
+                let rr = Some(row + c);
+                let Some(ef) = face_between(grid, state, config, mu, l, rr, false) else {
+                    continue;
+                };
+                let m = ef.flux.mass;
+                if m < 0.0 && ef.r_donor.is_some() {
+                    outflow[base + c] += -m;
+                }
+            }
+            for (k, a_out) in alpha_band.iter_mut().enumerate() {
                 *a_out = 1.0;
+                let i = r0 * cols + k;
                 let h = f64::from(state.h[i]);
                 if grid.solid_at(i) || h <= 0.0 {
                     continue;
                 }
-                let mut outflow = 0.0f64;
-                for face in Face::ALL {
-                    if let Some(cf) = cell_face(grid, state, config, mu, r, c, face) {
-                        let out = if cf.cell_is_left {
-                            cf.flux.mass
-                        } else {
-                            -cf.flux.mass
-                        };
-                        if out > 0.0 {
-                            outflow += out;
-                        }
-                    }
-                }
-                if outflow > 0.0 {
-                    let a = (h * dx) / (dt * outflow);
+                if outflow[k] > 0.0 {
+                    let a = (h * dx) / (dt * outflow[k]);
                     if a < 1.0 {
                         *a_out = a as f32;
                     }
@@ -475,12 +529,12 @@ fn compute_alpha(
 /// Pass 2: accumulate the α-limited face fluxes into the scratch state.
 /// Each face's α is the donor cell's (the side mass flows out of); ghost
 /// donors (inflow through a transmissive edge) are unlimited.
-/// Parallelisation (spec §6): row bands via `par_chunks_mut`; each cell
-/// accumulates its own four face fluxes in a fixed order, so no thread ever
-/// writes outside its band and faces on band boundaries are simply
-/// recomputed by both sides (bit-identical — the flux function is pure).
-/// Cell results are therefore independent of the partition and thread
-/// count: determinism (T7) holds by construction.
+///
+/// Same band face-sweep as [`compute_alpha`]: faces interior to the band are
+/// evaluated once and applied to both adjacent cells; boundary face-rows are
+/// recomputed by the neighbouring band. Contributions accumulate per cell in
+/// the fixed order W, E, N, S into f64 band buffers, then land in f32 in one
+/// store — bitwise independent of banding and thread count (T7).
 #[allow(clippy::too_many_arguments)]
 fn apply_fluxes(
     grid: &SimGrid,
@@ -492,53 +546,101 @@ fn apply_fluxes(
     scratch: &mut FlowState,
 ) {
     let cols = grid.cols();
+    let rows = grid.rows();
     scratch
         .h
-        .par_chunks_mut(cols)
-        .zip_eq(scratch.hu.par_chunks_mut(cols))
-        .zip_eq(scratch.hv.par_chunks_mut(cols))
+        .par_chunks_mut(cols * BAND_ROWS)
+        .zip_eq(scratch.hu.par_chunks_mut(cols * BAND_ROWS))
+        .zip_eq(scratch.hv.par_chunks_mut(cols * BAND_ROWS))
         .enumerate()
-        .for_each(|(r, ((h_row, hu_row), hv_row))| {
-            for c in 0..cols {
-                let i = r * cols + c;
-                if grid.solid_at(i) {
-                    continue;
-                }
-                let mut dh = 0.0f64;
-                let mut dhu = 0.0f64;
-                let mut dhv = 0.0f64;
-                for face in Face::ALL {
-                    let Some(cf) = cell_face(grid, state, config, mu, r, c, face) else {
+        .for_each(|(band, ((h_band, hu_band), hv_band))| {
+            let r0 = band * BAND_ROWS;
+            let band_rows = h_band.len() / cols;
+            let n = h_band.len();
+            let mut dh = vec![0.0f64; n];
+            let mut dhu = vec![0.0f64; n];
+            let mut dhv = vec![0.0f64; n];
+
+            let donor_alpha = |ef: &EvaluatedFace| -> f64 {
+                let d = if ef.flux.mass >= 0.0 {
+                    ef.l_donor
+                } else {
+                    ef.r_donor
+                };
+                d.map_or(1.0, |i| f64::from(alpha[i]))
+            };
+
+            for lr in 0..band_rows {
+                let row = (r0 + lr) * cols;
+                let base = lr * cols;
+                for f in 0..=cols {
+                    let l = (f > 0).then(|| row + f - 1);
+                    let rr = (f < cols).then(|| row + f);
+                    let Some(ef) = face_between(grid, state, config, mu, l, rr, true) else {
                         continue;
                     };
-                    let donor = if (cf.flux.mass >= 0.0) == cf.cell_is_left {
-                        Some(i)
-                    } else {
-                        cf.neighbor
-                    };
-                    let a = donor.map_or(1.0, |d| f64::from(alpha[d]));
-                    // Cell on the left of the face: the face normal points out
-                    // of the cell, so the flux leaves (−λF); on the right it
-                    // enters.
-                    let sign = if cf.cell_is_left { -1.0 } else { 1.0 };
-                    let mom_n = if cf.cell_is_left {
-                        cf.flux.mom_l
-                    } else {
-                        cf.flux.mom_r
-                    };
-                    let s = sign * lambda * a;
-                    dh += s * cf.flux.mass;
-                    if cf.is_x {
-                        dhu += s * mom_n;
-                        dhv += s * cf.flux.mom_t;
-                    } else {
-                        dhv += s * mom_n;
-                        dhu += s * cf.flux.mom_t;
+                    let s = lambda * donor_alpha(&ef);
+                    if let Some(d) = ef.l_donor {
+                        let k = base + (d - row);
+                        dh[k] -= s * ef.flux.mass;
+                        dhu[k] -= s * ef.flux.mom_l;
+                        dhv[k] -= s * ef.flux.mom_t;
+                    }
+                    if let Some(d) = ef.r_donor {
+                        let k = base + (d - row);
+                        dh[k] += s * ef.flux.mass;
+                        dhu[k] += s * ef.flux.mom_r;
+                        dhv[k] += s * ef.flux.mom_t;
                     }
                 }
-                h_row[c] = (f64::from(state.h[i]) + dh) as f32;
-                hu_row[c] = (f64::from(state.hu[i]) + dhu) as f32;
-                hv_row[c] = (f64::from(state.hv[i]) + dhv) as f32;
+                for c in 0..cols {
+                    let l = Some(row + c);
+                    let rr = (r0 + lr > 0).then(|| row - cols + c);
+                    let Some(ef) = face_between(grid, state, config, mu, l, rr, false) else {
+                        continue;
+                    };
+                    let s = lambda * donor_alpha(&ef);
+                    // This row is the south (L) side: +y is outward, so the
+                    // flux leaves; normal momentum is hv, transverse is hu.
+                    if ef.l_donor.is_some() {
+                        let k = base + c;
+                        dh[k] -= s * ef.flux.mass;
+                        dhv[k] -= s * ef.flux.mom_l;
+                        dhu[k] -= s * ef.flux.mom_t;
+                    }
+                    if lr > 0 && ef.r_donor.is_some() {
+                        let k = base - cols + c;
+                        dh[k] += s * ef.flux.mass;
+                        dhv[k] += s * ef.flux.mom_r;
+                        dhu[k] += s * ef.flux.mom_t;
+                    }
+                }
+            }
+            // South boundary of the band: apply only the r-side (last row)
+            // contribution of its south face.
+            let r_last = r0 + band_rows - 1;
+            let row = r_last * cols;
+            let base = (band_rows - 1) * cols;
+            for c in 0..cols {
+                let l = (r_last + 1 < rows).then(|| row + cols + c);
+                let rr = Some(row + c);
+                let Some(ef) = face_between(grid, state, config, mu, l, rr, false) else {
+                    continue;
+                };
+                let s = lambda * donor_alpha(&ef);
+                if ef.r_donor.is_some() {
+                    let k = base + c;
+                    dh[k] += s * ef.flux.mass;
+                    dhv[k] += s * ef.flux.mom_r;
+                    dhu[k] += s * ef.flux.mom_t;
+                }
+            }
+
+            for k in 0..n {
+                let i = r0 * cols + k;
+                h_band[k] = (f64::from(state.h[i]) + dh[k]) as f32;
+                hu_band[k] = (f64::from(state.hu[i]) + dhu[k]) as f32;
+                hv_band[k] = (f64::from(state.hv[i]) + dhv[k]) as f32;
             }
         });
 }
