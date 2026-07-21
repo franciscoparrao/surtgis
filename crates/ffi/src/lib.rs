@@ -30,7 +30,7 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use surtgis_core::{GeoTransform, Raster};
-use surtgis_flow::{FlowError, Simulation, SolverConfig, VoellmyParams};
+use surtgis_flow::{EntrainmentParams, FlowError, Simulation, SolverConfig, VoellmyParams};
 
 /// Success.
 pub const SF_OK: i32 = 0;
@@ -43,9 +43,13 @@ pub const SF_ERR_GRID_MISMATCH: i32 = 2;
 pub const SF_ERR_DIVERGED: i32 = 3;
 /// Internal error (including a caught panic).
 pub const SF_ERR_INTERNAL: i32 = 4;
+/// Mass budget invariant violated with entrainment active (spec v1.1
+/// §2.4.3); the state is frozen at the last valid substep.
+pub const SF_ERR_MASS_BUDGET: i32 = 5;
 
 /// Current ABI version. MUST be bumped on any signature change (spec §5).
-pub const SF_ABI_VERSION: i32 = 1;
+/// v2: entrainment entry points (spec v1.1 §6).
+pub const SF_ABI_VERSION: i32 = 2;
 
 /// Wet/dry threshold used to derive velocities in [`sf_read_state`];
 /// matches the solver default the FFI constructor uses.
@@ -60,8 +64,9 @@ fn status_of(e: &FlowError) -> i32 {
     match e {
         FlowError::GridMismatch { .. } | FlowError::TransformMismatch => SF_ERR_GRID_MISMATCH,
         FlowError::Diverged { .. } => SF_ERR_DIVERGED,
-        // Parameter/geometry/dt violations (incl. MaxSubstepsExceeded) are
-        // caller errors.
+        FlowError::MassBudgetViolated { .. } => SF_ERR_MASS_BUDGET,
+        // Parameter/geometry/dt violations (incl. MaxSubstepsExceeded and
+        // AlreadyStepped) are caller errors.
         _ => SF_ERR_INVALID_ARG,
     }
 }
@@ -322,6 +327,89 @@ pub unsafe extern "C" fn sf_destroy(sim: *mut SfSim) {
     if !sim.is_null() {
         drop(unsafe { Box::from_raw(sim) });
     }
+}
+
+/// Activate bed entrainment (spec v1.1 §6). `e_max`: row-major `w*h`
+/// maximum erodible depths in metres, `NoData` = NaN ⇒ 0; copied. Callable
+/// only BEFORE the first `sf_step` (returns `SF_ERR_INVALID_ARG` after).
+/// `f_max` stays at the library default (0.5) — kept out of the C surface
+/// per the N1 freeze decision (spec v1.1 §8).
+///
+/// # Safety
+///
+/// `sim` must be a live handle; `e_max` must point to `w*h` readable
+/// floats.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sf_set_erodible(
+    sim: *mut SfSim,
+    e_max: *const f32,
+    k: f32,
+    rate_max: f32,
+    v_entr_min: f32,
+) -> i32 {
+    guarded(|| {
+        let Some(s) = (unsafe { sim.as_mut() }) else {
+            return SF_ERR_INVALID_ARG;
+        };
+        if e_max.is_null() {
+            return SF_ERR_INVALID_ARG;
+        }
+        let grid = s.sim.grid();
+        let (rows, cols, cs) = (grid.rows(), grid.cols(), grid.cellsize());
+        let buf = unsafe { std::slice::from_raw_parts(e_max, rows * cols) };
+        let Some(emax_r) = raster_from(buf, rows, cols, cs) else {
+            return SF_ERR_INTERNAL;
+        };
+        let mut params = EntrainmentParams::default();
+        params.k = k;
+        params.rate_max = rate_max;
+        params.v_entr_min = v_entr_min;
+        match s.sim.set_erodible(&emax_r, params) {
+            Ok(()) => SF_OK,
+            Err(e) => status_of(&e),
+        }
+    })
+}
+
+/// Copy the cumulative eroded depth [m] into a caller-owned buffer of
+/// `w*h` floats (all zeros when entrainment is inactive).
+///
+/// # Safety
+///
+/// `sim` must be a live handle; `e` must hold `w*h` writable floats.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sf_read_erosion(sim: *const SfSim, e: *mut f32) -> i32 {
+    guarded(|| {
+        let Some(s) = (unsafe { sim.as_ref() }) else {
+            return SF_ERR_INVALID_ARG;
+        };
+        if e.is_null() {
+            return SF_ERR_INVALID_ARG;
+        }
+        let n = s.sim.grid().len();
+        let out = unsafe { std::slice::from_raw_parts_mut(e, n) };
+        let eroded = s.sim.eroded_depth();
+        if eroded.is_empty() {
+            out.fill(0.0);
+        } else {
+            out.copy_from_slice(eroded);
+        }
+        SF_OK
+    })
+}
+
+/// Total eroded volume Σ Δe·A in m³ (0 without entrainment; NaN for a
+/// null handle).
+///
+/// # Safety
+///
+/// `sim` must be a live handle or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sf_total_eroded(sim: *const SfSim) -> f64 {
+    catch_unwind(AssertUnwindSafe(|| {
+        unsafe { sim.as_ref() }.map_or(f64::NAN, |s| s.sim.total_eroded())
+    }))
+    .unwrap_or(f64::NAN)
 }
 
 /// ABI version of this library (compare against `SF_ABI_VERSION` in the

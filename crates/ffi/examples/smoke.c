@@ -75,6 +75,37 @@ int main(void) {
   if (wet < 100 || moving < 10 || arrived <= wet / 2)
     return fail("flow did not propagate", wet);
 
+  /* Entrainment (ABI v2): a fresh sim with 1 m erodible everywhere must
+   * erode, keep the budget, and reject activation after stepping. */
+  {
+    static float emax[W * H], er[W * H];
+    for (int i = 0; i < W * H; i++) emax[i] = 1.0f;
+    sf_sim* s2 = NULL;
+    if ((st = sf_create(dem, release, W, H, CELL, 0.15f, 200.0f, &s2)) != SF_OK)
+      return fail("sf_create (entrainment)", st);
+    if ((st = sf_set_erodible(s2, emax, 1e-2f, 0.05f, 0.1f)) != SF_OK)
+      return fail("sf_set_erodible", st);
+    for (int i = 0; i < 5; i++)
+      if ((st = sf_step(s2, 1.0f, NULL)) != SF_OK) return fail("sf_step (ent)", st);
+    if (!(sf_total_eroded(s2) > 0.0)) return fail("no erosion", 0);
+    if ((st = sf_read_erosion(s2, er)) != SF_OK) return fail("sf_read_erosion", st);
+    double er_sum = 0.0;
+    for (int i = 0; i < W * H; i++) {
+      if (!isfinite(er[i]) || er[i] < 0.0f || er[i] > 1.0f)
+        return fail("erosion out of [0, e_max]", i);
+      er_sum += er[i];
+    }
+    if (!(er_sum > 0.0)) return fail("erosion buffer empty", 0);
+    /* Conservation: flow grew by exactly what the bed lost (1e-5 rel). */
+    double m2 = sf_total_mass(s2);
+    if (fabs(m2 - mass0 - sf_total_eroded(s2)) / mass0 > 1e-5)
+      return fail("entrainment mass balance", 0);
+    /* Activation after stepping must be rejected. */
+    if (sf_set_erodible(s2, emax, 1e-2f, 0.05f, 0.1f) != SF_ERR_INVALID_ARG)
+      return fail("sf_set_erodible after step should fail", 0);
+    sf_destroy(s2);
+  }
+
   /* update_dem round-trip and null-arg rejection. */
   if ((st = sf_update_dem(sim, dem)) != SF_OK) return fail("sf_update_dem", st);
   if (sf_update_dem(sim, NULL) != SF_ERR_INVALID_ARG)
@@ -85,7 +116,7 @@ int main(void) {
   sf_destroy(sim);
   sf_destroy(NULL); /* must be a no-op */
 
-  printf("surtgis-ffi smoke: OK (abi %d, %d wet cells, mass %.1f m3)\n",
+  printf("surtgis-ffi smoke: OK (abi %d, %d wet cells, mass %.1f m3, entrainment OK)\n",
          sf_abi_version(), wet, mass);
   return 0;
 }

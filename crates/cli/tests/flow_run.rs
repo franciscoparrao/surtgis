@@ -111,6 +111,86 @@ fn flow_run_end_to_end_produces_frames_and_manifest() {
 }
 
 #[test]
+fn flow_run_with_entrainment_writes_erosion_and_manifest_v2() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (dem, release) = synth_inputs(tmp.path());
+    // 1 m of erodible material everywhere (the run is short: the flow only
+    // advances a couple of cells, so the erodible field must include the
+    // release area itself for erosion to be observable).
+    let emax: Raster<f32> = {
+        let mut r = Raster::filled(ROWS, COLS, 1.0f32);
+        r.set_transform(GeoTransform::new(500_000.0, 6_200_000.0, DX, -DX));
+        r
+    };
+    let emax_path = tmp.path().join("erodible.tif");
+    surtgis_core::io::write_geotiff(&emax, &emax_path, None).unwrap();
+    let outdir = tmp.path().join("out_ent");
+
+    Command::cargo_bin("surtgis")
+        .unwrap()
+        .args(["flow", "run"])
+        .arg(&dem)
+        .arg(&release)
+        .arg(&outdir)
+        .args(["--duration", "6", "--output-interval", "2"])
+        .arg("--erodible")
+        .arg(&emax_path)
+        .args(["--entrainment-k", "1e-2"])
+        .arg("--dump-erosion")
+        .assert()
+        .success();
+
+    for frame in 0..=3 {
+        assert!(outdir.join(format!("h_t{frame:04}.tif")).is_file());
+        assert!(
+            outdir.join(format!("e_t{frame:04}.tif")).is_file(),
+            "missing erosion frame {frame}"
+        );
+    }
+    // Erosion must actually have happened by the last frame.
+    let e3: Raster<f32> = surtgis_core::io::read_geotiff(outdir.join("e_t0003.tif"), None).unwrap();
+    let eroded: f64 = e3
+        .data()
+        .iter()
+        .filter(|v| v.is_finite())
+        .map(|&v| f64::from(v))
+        .sum();
+    assert!(eroded > 0.0, "no erosion recorded in e_t0003.tif");
+
+    // Manifest v2: version tag + entrainment block (spec v1.1 §5).
+    let manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(outdir.join("manifest.json")).unwrap())
+            .unwrap();
+    assert_eq!(manifest["manifest_version"], 2);
+    assert_eq!(manifest["units"]["e"], "m");
+    let ent = &manifest["entrainment"];
+    for key in ["k", "rate_max", "v_entr_min", "f_max", "total_eroded_m3"] {
+        assert!(ent.get(key).is_some(), "entrainment block missing {key}");
+    }
+    assert!(ent["total_eroded_m3"].as_f64().unwrap() > 0.0);
+
+    // Without --erodible the manifest stays byte-level v1: no version field.
+    let outdir_plain = tmp.path().join("out_plain");
+    Command::cargo_bin("surtgis")
+        .unwrap()
+        .args(["flow", "run"])
+        .arg(&dem)
+        .arg(&release)
+        .arg(&outdir_plain)
+        .args(["--duration", "2", "--output-interval", "2"])
+        .assert()
+        .success();
+    let plain: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(outdir_plain.join("manifest.json")).unwrap())
+            .unwrap();
+    assert!(
+        plain.get("manifest_version").is_none(),
+        "v1 manifest must stay untagged"
+    );
+    assert!(plain.get("entrainment").is_none());
+}
+
+#[test]
 fn flow_run_rejects_mismatched_grids() {
     let tmp = tempfile::tempdir().unwrap();
     let (dem, _) = synth_inputs(tmp.path());
