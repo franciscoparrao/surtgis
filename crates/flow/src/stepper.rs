@@ -11,10 +11,11 @@ use rayon::prelude::*;
 use surtgis_core::Raster;
 
 use crate::diagnostics;
+use crate::entrainment::{self, Entrainment};
 use crate::flux::{self, NumFlux, Side};
 use crate::friction;
 use crate::grid::SimGrid;
-use crate::params::{SolverConfig, VoellmyParams};
+use crate::params::{EntrainmentParams, SolverConfig, VoellmyParams};
 use crate::state::FlowState;
 use crate::{FlowError, G};
 
@@ -34,6 +35,10 @@ pub struct Simulation {
     time: f64,
     params: VoellmyParams,
     config: SolverConfig,
+    /// Bed-entrainment state (spec v1.1 §2); `None` = exact v1.0 behaviour.
+    entrainment: Option<Entrainment>,
+    /// `true` once any substep ran — gates `set_erodible` (spec v1.1 §4).
+    has_stepped: bool,
 }
 
 /// Rows per parallel band (spec §6). Faces interior to a band are evaluated
@@ -102,6 +107,8 @@ impl Simulation {
             time: 0.0,
             params,
             config,
+            entrainment: None,
+            has_stepped: false,
         })
     }
 
@@ -195,6 +202,77 @@ impl Simulation {
         Ok(())
     }
 
+    /// Activate bed entrainment (spec v1.1 §2, §4). `e_max` is the maximum
+    /// erodible depth per cell in metres, on the DEM grid (`NoData`/NaN and
+    /// solid cells count as 0). Callable only before the first step so runs
+    /// stay reproducible from their inputs; calling again before stepping
+    /// replaces the previous activation.
+    ///
+    /// # Errors
+    ///
+    /// [`FlowError::AlreadyStepped`] after the first step, grid/transform
+    /// mismatches, out-of-range parameters, or negative `e_max` values.
+    pub fn set_erodible(
+        &mut self,
+        e_max: &Raster<f32>,
+        params: EntrainmentParams,
+    ) -> Result<(), FlowError> {
+        params.validate()?;
+        if self.has_stepped {
+            return Err(FlowError::AlreadyStepped { time: self.time });
+        }
+        self.grid.check_compatible(e_max)?;
+        let n = self.grid.len();
+        let mut emax = vec![0.0f32; n];
+        for (i, &v) in e_max.data().iter().enumerate() {
+            if e_max.is_nodata(v) || !v.is_finite() {
+                continue; // treated as non-erodible
+            }
+            if v < 0.0 {
+                return Err(FlowError::InvalidParam {
+                    name: "e_max",
+                    value: f64::from(v),
+                    constraint: "erodible depths must be >= 0",
+                });
+            }
+            if !self.grid.solid_at(i) {
+                emax[i] = v;
+            }
+        }
+        let area = self.grid.cellsize() * self.grid.cellsize();
+        let mut budget = 0.0f64;
+        for &v in &emax {
+            budget += f64::from(v);
+        }
+        self.entrainment = Some(Entrainment {
+            params,
+            e_max: emax,
+            e: vec![0.0; n],
+            budget_total: budget * area,
+            release_volume: self.total_mass(),
+            eroded_volume: 0.0,
+        });
+        Ok(())
+    }
+
+    /// Cumulative eroded depth per cell in metres, row-major. Empty slice
+    /// until [`Simulation::set_erodible`] activates entrainment (deviation
+    /// from the spec-v1.1 wording "0 sin entrainment": an empty slice makes
+    /// the inactive state explicit instead of allocating a zero grid).
+    #[must_use]
+    pub fn eroded_depth(&self) -> &[f32] {
+        self.entrainment.as_ref().map_or(&[], |ent| &ent.e)
+    }
+
+    /// Total eroded volume Σ Δe·A in m³, f64 accumulated deterministically
+    /// (0 without entrainment).
+    #[must_use]
+    pub fn total_eroded(&self) -> f64 {
+        self.entrainment
+            .as_ref()
+            .map_or(0.0, |ent| ent.eroded_volume)
+    }
+
     /// Replace the DEM mid-run (live mitigation barriers, spec §4).
     /// Re-derives the slope cosines; flow thickness on cells that became
     /// `NoData` is discarded.
@@ -276,6 +354,23 @@ impl Simulation {
             dt,
         );
 
+        // Entrainment (spec v1.1 §2.3: after friction, before cleanup).
+        // Δe is STAGED into the alpha buffer (free after apply_fluxes,
+        // rezeroed here) and committed to e/z only after the NaN and budget
+        // checks pass, so a failed substep freezes a consistent state.
+        let entrainment_active = self.entrainment.is_some();
+        if let Some(ent) = &self.entrainment {
+            self.alpha.par_iter_mut().for_each(|a| *a = 0.0);
+            entrainment::stage(
+                &mut self.scratch,
+                ent,
+                &mut self.alpha,
+                self.grid.cols(),
+                f64::from(self.config.h_dry),
+                dt,
+            );
+        }
+
         // Wet/dry cleanup (spec §3.5): clamp FP dust to exact 0 and strip
         // momentum from cells below the dry threshold.
         let h_dry = self.config.h_dry;
@@ -298,7 +393,48 @@ impl Simulation {
             // Spec §5: freeze at the last valid step, never abort.
             return Err(FlowError::Diverged { time: self.time });
         }
+
+        // Mass-budget invariant + commit (spec v1.1 §2.4.3): checked every
+        // substep, BEFORE the swap — a violation freezes the last valid
+        // state exactly like Diverged. Under the per-cell/rate caps it can
+        // only trip on a solver bug: it fails loudly instead of letting
+        // volume run away (the r.avaflow 631M m³ failure mode).
+        if entrainment_active {
+            let cols = self.grid.cols();
+            let area = self.grid.cellsize() * self.grid.cellsize();
+            let d_eroded = diagnostics::det_sum(&self.alpha, cols) * area;
+            let v_flow = diagnostics::det_sum(&self.scratch.h, cols) * area;
+            let ent = self.entrainment.as_mut().expect("checked active");
+            let eroded_new = ent.eroded_volume + d_eroded;
+            let tol = 1e-4 * (ent.release_volume + ent.budget_total).max(1.0);
+            if v_flow > ent.release_volume + eroded_new + tol {
+                return Err(FlowError::MassBudgetViolated {
+                    time: self.time,
+                    flow_volume: v_flow,
+                    budget: ent.release_volume + eroded_new,
+                });
+            }
+            if eroded_new > ent.budget_total + tol {
+                return Err(FlowError::MassBudgetViolated {
+                    time: self.time,
+                    flow_volume: v_flow,
+                    budget: ent.budget_total,
+                });
+            }
+            ent.eroded_volume = eroded_new;
+            ent.e
+                .par_iter_mut()
+                .zip_eq(self.alpha.par_iter())
+                .for_each(|(e, &d)| {
+                    if d > 0.0 {
+                        *e += d;
+                    }
+                });
+            self.grid.erode(&self.alpha);
+        }
+
         std::mem::swap(&mut self.state, &mut self.scratch);
+        self.has_stepped = true;
         Ok(())
     }
 }

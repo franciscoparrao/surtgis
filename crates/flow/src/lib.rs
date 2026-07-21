@@ -51,6 +51,7 @@
 )]
 
 mod diagnostics;
+mod entrainment;
 mod flux;
 mod friction;
 mod grid;
@@ -59,7 +60,7 @@ mod state;
 mod stepper;
 
 pub use grid::SimGrid;
-pub use params::{SolverConfig, VoellmyParams};
+pub use params::{EntrainmentParams, SolverConfig, VoellmyParams};
 pub use state::FlowState;
 pub use stepper::Simulation;
 
@@ -157,5 +158,33 @@ pub enum FlowError {
         advanced: f64,
         /// Physical time requested, in seconds.
         requested: f64,
+    },
+
+    /// The global mass budget invariant was violated with entrainment
+    /// active (spec v1.1 §2.4.3): flow volume exceeded release plus eroded
+    /// volume, or eroded volume exceeded the erodible budget. The state is
+    /// frozen at the last valid substep. This is the hard anti-runaway
+    /// guard — it MUST never trip under the per-cell/rate caps; tripping
+    /// indicates a solver bug, and it fails loudly instead of growing
+    /// silently.
+    #[error(
+        "mass budget violated at t={time} s: flow volume {flow_volume} m³ vs budget {budget} m³; state frozen at last valid substep"
+    )]
+    MassBudgetViolated {
+        /// Physical time of the last valid state, in seconds.
+        time: f64,
+        /// Flow volume at the failed check, in m³.
+        flow_volume: f64,
+        /// Violated bound (release + eroded, or erodible budget), in m³.
+        budget: f64,
+    },
+
+    /// `set_erodible` was called after the simulation already stepped
+    /// (spec v1.1 §4: entrainment activates only before the first step so
+    /// runs stay reproducible from their inputs).
+    #[error("set_erodible must be called before the first step (t={time} s)")]
+    AlreadyStepped {
+        /// Physical time already simulated, in seconds.
+        time: f64,
     },
 }

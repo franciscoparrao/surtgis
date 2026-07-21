@@ -206,6 +206,22 @@ impl SimGrid {
         self.solid[row * self.cols + col]
     }
 
+    /// Lower the bed by the staged erosion increments (spec v1.1 §2.2:
+    /// `z ← z − Δe`). `cos θ` stays frozen at its init value — spec v1.1
+    /// §2.2 MAY, documented limitation: metre-scale erosion on ≥10 m cells
+    /// changes the Coulomb slope factor only at second order.
+    pub(crate) fn erode(&mut self, de: &[f32]) {
+        use rayon::prelude::*;
+        self.dem
+            .par_iter_mut()
+            .zip_eq(de.par_iter())
+            .for_each(|(z, &d)| {
+                if d > 0.0 {
+                    *z -= d;
+                }
+            });
+    }
+
     #[inline]
     pub(crate) fn solid_at(&self, idx: usize) -> bool {
         self.solid[idx]
