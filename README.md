@@ -38,6 +38,16 @@ brew install hdf5 netcdf
 To skip those (and the C dependencies entirely), build without default
 features: `cargo install surtgis --no-default-features --features cloud,projections`.
 
+Some subcommands are opt-in features, **not** included by default —
+installing without them yields `error: unrecognized subcommand`:
+
+```bash
+# `surtgis flow run` — debris-flow solver (EXPERIMENTAL pre-1.0, git only)
+cargo install --git https://github.com/franciscoparrao/surtgis surtgis --features flow
+# `surtgis relief-3d` — 3D rayshader-style renders (pulls a wgpu stack)
+cargo install surtgis --features relief-3d
+```
+
 End-to-end: download a cloud-free Sentinel-2 composite over a small
 Chilean bbox (5×5 km, one month) and compute NDVI. The example below
 takes ~65 seconds on a warm connection against Microsoft Planetary
