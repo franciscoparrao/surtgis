@@ -7,7 +7,7 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use surtgis_core::{GeoTransform, Raster};
-use surtgis_flow::{Simulation, SolverConfig, VoellmyParams};
+use surtgis_flow::{EntrainmentParams, Simulation, SolverConfig, VoellmyParams};
 
 const N: usize = 1024;
 const DX: f64 = 5.0;
@@ -15,6 +15,12 @@ const DX: f64 = 5.0;
 /// Inclined plane with a circular release covering ~15% of the domain,
 /// pre-run for 20 substeps so the wet area is fully in motion.
 fn build_sim() -> Simulation {
+    build_sim_opts(false)
+}
+
+/// As `build_sim`, optionally with entrainment active (1 m erodible
+/// everywhere — the spec v1.1 overhead benchmark configuration).
+fn build_sim_opts(entrainment: bool) -> Simulation {
     let slope = 15.0f64.to_radians().tan();
     let mut dem_data = vec![0.0f32; N * N];
     for r in 0..N {
@@ -48,6 +54,12 @@ fn build_sim() -> Simulation {
         max_substeps: 100_000,
     };
     let mut sim = Simulation::new(&dem, &release, VoellmyParams::default(), config).unwrap();
+    if entrainment {
+        let mut emax: Raster<f32> = Raster::filled(N, N, 1.0);
+        emax.set_transform(transform);
+        sim.set_erodible(&emax, EntrainmentParams::default())
+            .unwrap();
+    }
     let mut warmup = 0u32;
     while warmup < 20 {
         warmup += sim.step(0.5).unwrap();
@@ -75,6 +87,18 @@ fn bench_substeps(c: &mut Criterion) {
             |mut sim| {
                 let n = sim.step(black_box(0.5)).unwrap();
                 assert_eq!(n, n_substeps, "workload changed");
+                sim
+            },
+            criterion::BatchSize::PerIteration,
+        );
+    });
+    // Same workload with entrainment active (spec v1.1 §7: overhead gate
+    // <= 15% over the plain run).
+    group.bench_function("step_0.5s_1024x1024_15pct_wet_entrainment", |b| {
+        b.iter_batched(
+            || build_sim_opts(true),
+            |mut sim| {
+                sim.step(black_box(0.5)).unwrap();
                 sim
             },
             criterion::BatchSize::PerIteration,

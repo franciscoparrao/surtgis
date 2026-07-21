@@ -63,6 +63,75 @@ impl VoellmyParams {
     }
 }
 
+/// Entrainment parameters (spec v1.1 §2): bed-erosion law
+/// `ė = K·s·h` for `s ≥ v_entr_min`, with the per-substep increment capped
+/// four ways (spec v1.1 §2.1, all four MUST):
+/// `Δe = min(ė·Δt, rate_max·Δt, e_max − e, f_max·h)`.
+///
+/// `#[non_exhaustive]` per the post-1.0 Params convention: construct via
+/// `Default` + field mutation.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug)]
+pub struct EntrainmentParams {
+    /// Entrainment growth coefficient K in 1/m (`McDougall` & Hungr 2005).
+    /// Recommended range 1e-4–1e-2; 0 disables erosion. Default `1e-3`.
+    pub k: f32,
+    /// Hard cap on the erosion rate in m/s. Default 0.05.
+    pub rate_max: f32,
+    /// Minimum flow speed for erosion in m/s (near-static cells do not
+    /// erode; coherent with the static-yield rule). Default 0.1.
+    pub v_entr_min: f32,
+    /// Maximum fraction of the local flow depth incorporable per substep
+    /// (dimensionless, in (0, 1]). Default 0.5.
+    pub f_max: f32,
+}
+
+impl Default for EntrainmentParams {
+    fn default() -> Self {
+        Self {
+            k: 1e-3,
+            rate_max: 0.05,
+            v_entr_min: 0.1,
+            f_max: 0.5,
+        }
+    }
+}
+
+impl EntrainmentParams {
+    /// Validate parameter ranges (spec v1.1 §4).
+    pub(crate) fn validate(&self) -> Result<(), FlowError> {
+        if !(self.k.is_finite() && self.k >= 0.0) {
+            return Err(FlowError::InvalidParam {
+                name: "k",
+                value: f64::from(self.k),
+                constraint: "k >= 0 and finite (recommended 1e-4..1e-2)",
+            });
+        }
+        if !(self.rate_max.is_finite() && self.rate_max > 0.0) {
+            return Err(FlowError::InvalidParam {
+                name: "rate_max",
+                value: f64::from(self.rate_max),
+                constraint: "rate_max > 0 and finite",
+            });
+        }
+        if !(self.v_entr_min.is_finite() && self.v_entr_min >= 0.0) {
+            return Err(FlowError::InvalidParam {
+                name: "v_entr_min",
+                value: f64::from(self.v_entr_min),
+                constraint: "v_entr_min >= 0 and finite",
+            });
+        }
+        if !(self.f_max.is_finite() && self.f_max > 0.0 && self.f_max <= 1.0) {
+            return Err(FlowError::InvalidParam {
+                name: "f_max",
+                value: f64::from(self.f_max),
+                constraint: "0 < f_max <= 1",
+            });
+        }
+        Ok(())
+    }
+}
+
 /// Numerical configuration of the solver (spec §3, §4).
 #[derive(Clone, Debug)]
 pub struct SolverConfig {
