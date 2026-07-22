@@ -57,9 +57,24 @@ double    sf_time(const sf_sim*);        /* s físicos; NaN si sim == NULL  */
 double    sf_total_mass(const sf_sim*);  /* m^3;      NaN si sim == NULL  */
 void      sf_destroy(sf_sim*);           /* NULL es no-op                 */
 
+/* ── Entrainment (spec v1.1, ABI v2) ─────────────────────────────────────
+ * e_max: row-major w*h, espesor erosionable máximo [m], NoData = NaN ⇒ 0.
+ * Copiado; solo llamable ANTES del primer sf_step (después:
+ * SF_ERR_INVALID_ARG). f_max queda en el default de la librería (0.5). */
+sf_status sf_set_erodible(sf_sim*, const float* e_max,
+                          float k, float rate_max, float v_entr_min);
+
+/* Erosión acumulada [m] a un buffer del caller (w*h floats; ceros sin
+ * entrainment). */
+sf_status sf_read_erosion(const sf_sim*, float* e);
+double    sf_total_eroded(const sf_sim*);  /* m^3; 0 sin entrainment;
+                                            * NaN si sim == NULL */
+
 /* Versión del ABI. Incrementar SF_ABI_VERSION ante CUALQUIER cambio de
- * firma. Comparar contra sf_abi_version() al cargar la librería. */
-#define SF_ABI_VERSION 1
+ * firma. Comparar contra sf_abi_version() al cargar la librería.
+ * v2 (2026-07-21): + sf_set_erodible / sf_read_erosion / sf_total_eroded
+ *                  + SF_ERR_MASS_BUDGET. */
+#define SF_ABI_VERSION 2
 int32_t   sf_abi_version(void);
 
 #ifdef __cplusplus

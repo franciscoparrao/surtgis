@@ -440,6 +440,16 @@ pub enum FlowCommands {
         /// Write the arrival-time raster [s] to this file at the end
         #[arg(long)]
         arrival: Option<PathBuf>,
+        /// Maximum erodible depth raster [m] on the DEM grid — activates
+        /// bed entrainment (spec v1.1)
+        #[arg(long)]
+        erodible: Option<PathBuf>,
+        /// Entrainment growth coefficient K [1/m] (with --erodible)
+        #[arg(long, default_value = "1e-3")]
+        entrainment_k: f32,
+        /// Also write e_t####.tif cumulative-erosion frames [m]
+        #[arg(long, requires = "erodible")]
+        dump_erosion: bool,
     },
 }
 

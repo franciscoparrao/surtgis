@@ -4,7 +4,8 @@
 
 use surtgis_ffi::{
     SF_ABI_VERSION, SF_ERR_INVALID_ARG, SF_OK, SfSim, sf_abi_version, sf_create, sf_destroy,
-    sf_read_arrival, sf_read_state, sf_set_params, sf_step, sf_time, sf_total_mass, sf_update_dem,
+    sf_read_arrival, sf_read_erosion, sf_read_state, sf_set_erodible, sf_set_params, sf_step,
+    sf_time, sf_total_eroded, sf_total_mass, sf_update_dem,
 };
 
 const W: i32 = 64;
@@ -136,4 +137,74 @@ fn create_rejects_bad_args() {
         },
         SF_ERR_INVALID_ARG
     );
+}
+
+#[test]
+fn entrainment_abi_v2_roundtrip() {
+    assert_eq!(SF_ABI_VERSION, 2);
+    let (dem, release) = inputs();
+    let emax = vec![1.0f32; N];
+    let mut sim: *mut SfSim = std::ptr::null_mut();
+    let st = unsafe {
+        sf_create(
+            dem.as_ptr(),
+            release.as_ptr(),
+            W,
+            H,
+            CELL,
+            0.15,
+            200.0,
+            &raw mut sim,
+        )
+    };
+    assert_eq!(st, SF_OK);
+    let mass0 = unsafe { sf_total_mass(sim) };
+
+    assert_eq!(
+        unsafe { sf_set_erodible(sim, emax.as_ptr(), 1e-2, 0.05, 0.1) },
+        SF_OK
+    );
+    // Bad k must be rejected without activating.
+    let mut sim2: *mut SfSim = std::ptr::null_mut();
+    unsafe {
+        sf_create(
+            dem.as_ptr(),
+            release.as_ptr(),
+            W,
+            H,
+            CELL,
+            0.15,
+            200.0,
+            &raw mut sim2,
+        )
+    };
+    assert_eq!(
+        unsafe { sf_set_erodible(sim2, emax.as_ptr(), -1.0, 0.05, 0.1) },
+        SF_ERR_INVALID_ARG
+    );
+    // Inactive sim reads zeros.
+    let mut e = vec![9.0f32; N];
+    assert_eq!(unsafe { sf_read_erosion(sim2, e.as_mut_ptr()) }, SF_OK);
+    assert!(e.iter().all(|&x| x == 0.0));
+    assert_eq!(unsafe { sf_total_eroded(sim2) }, 0.0);
+    unsafe { sf_destroy(sim2) };
+
+    for _ in 0..5 {
+        assert_eq!(unsafe { sf_step(sim, 1.0, std::ptr::null_mut()) }, SF_OK);
+    }
+    let eroded = unsafe { sf_total_eroded(sim) };
+    assert!(eroded > 0.0, "no erosion");
+    assert_eq!(unsafe { sf_read_erosion(sim, e.as_mut_ptr()) }, SF_OK);
+    assert!(e.iter().all(|&x| x.is_finite() && (0.0..=1.0).contains(&x)));
+    let mass = unsafe { sf_total_mass(sim) };
+    assert!(
+        ((mass - mass0 - eroded) / mass0).abs() < 1e-5,
+        "mass balance broken: {mass} vs {mass0} + {eroded}"
+    );
+    // Activation after stepping -> rejected (AlreadyStepped -> INVALID_ARG).
+    assert_eq!(
+        unsafe { sf_set_erodible(sim, emax.as_ptr(), 1e-2, 0.05, 0.1) },
+        SF_ERR_INVALID_ARG
+    );
+    unsafe { sf_destroy(sim) };
 }

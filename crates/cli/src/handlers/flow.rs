@@ -8,12 +8,12 @@
 
 use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Instant;
 
 use surtgis_core::Raster;
 use surtgis_core::io::{read_geotiff, write_geotiff};
-use surtgis_flow::{SimGrid, Simulation, SolverConfig, VoellmyParams};
+use surtgis_flow::{EntrainmentParams, SimGrid, Simulation, SolverConfig, VoellmyParams};
 
 use crate::commands::FlowCommands;
 use crate::helpers::write_opts;
@@ -30,34 +30,61 @@ pub fn handle(command: FlowCommands, compress: bool) -> Result<()> {
             output_interval,
             dump_velocity,
             arrival,
-        } => run(
-            &dem,
-            &release,
-            &outdir,
+            erodible,
+            entrainment_k,
+            dump_erosion,
+        } => run(RunArgs {
+            dem_path: &dem,
+            release_path: &release,
+            outdir: &outdir,
             mu,
             xi,
             duration,
             output_interval,
             dump_velocity,
-            arrival.as_deref(),
+            arrival: arrival.as_deref(),
+            erodible: erodible.as_deref(),
+            entrainment_k,
+            dump_erosion,
             compress,
-        ),
+        }),
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn run(
-    dem_path: &PathBuf,
-    release_path: &PathBuf,
-    outdir: &Path,
+/// Arguments of one `flow run` invocation (bundled: the flag surface
+/// outgrew a readable positional list).
+struct RunArgs<'a> {
+    dem_path: &'a Path,
+    release_path: &'a Path,
+    outdir: &'a Path,
     mu: f32,
     xi: f32,
     duration: f64,
     output_interval: f64,
     dump_velocity: bool,
-    arrival: Option<&Path>,
+    arrival: Option<&'a Path>,
+    erodible: Option<&'a Path>,
+    entrainment_k: f32,
+    dump_erosion: bool,
     compress: bool,
-) -> Result<()> {
+}
+
+fn run(args: RunArgs<'_>) -> Result<()> {
+    let RunArgs {
+        dem_path,
+        release_path,
+        outdir,
+        mu,
+        xi,
+        duration,
+        output_interval,
+        dump_velocity,
+        arrival,
+        erodible,
+        entrainment_k,
+        dump_erosion,
+        compress,
+    } = args;
     anyhow::ensure!(
         duration > 0.0 && output_interval > 0.0,
         "duration and output-interval must be positive"
@@ -86,6 +113,19 @@ fn run(
         ..SolverConfig::default()
     };
     let mut sim = Simulation::new(&dem, &release, params, config)?;
+    let mut ent_params: Option<EntrainmentParams> = None;
+    if let Some(erodible_path) = erodible {
+        let emax: Raster<f32> =
+            read_geotiff(erodible_path, None).context("Failed to read erodible raster")?;
+        let mut p = EntrainmentParams::default();
+        p.k = entrainment_k;
+        sim.set_erodible(&emax, p)?;
+        ent_params = Some(p);
+        println!(
+            "Entrainment: K = {entrainment_k} /m, erodible raster {}",
+            erodible_path.display()
+        );
+    }
     let mass0 = sim.total_mass();
     println!("Release volume: {mass0:.0} m³");
 
@@ -95,7 +135,15 @@ fn run(
     let n_frames = n_outputs + 1; // frame 0000 = initial state
 
     let crs = dem.crs().cloned();
-    write_frames(&sim, crs.as_ref(), outdir, 0, dump_velocity, compress)?;
+    write_frames(
+        &sim,
+        crs.as_ref(),
+        outdir,
+        0,
+        dump_velocity,
+        dump_erosion,
+        compress,
+    )?;
 
     let pb = ProgressBar::new(n_outputs as u64);
     pb.set_style(
@@ -108,7 +156,15 @@ fn run(
         let elapsed_target = (frame as f64) * output_interval;
         let dt = (elapsed_target.min(duration) - sim.time()).max(0.0);
         total_substeps += u64::from(sim.step(dt as f32)?);
-        write_frames(&sim, crs.as_ref(), outdir, frame, dump_velocity, compress)?;
+        write_frames(
+            &sim,
+            crs.as_ref(),
+            outdir,
+            frame,
+            dump_velocity,
+            dump_erosion,
+            compress,
+        )?;
         pb.set_message(format!("{:.1} s", sim.time()));
         pb.inc(1);
     }
@@ -121,9 +177,20 @@ fn run(
         println!("Arrival times saved to: {}", arrival_path.display());
     }
 
-    write_manifest(outdir, &dem, output_interval, n_frames, mu, xi)?;
+    write_manifest(
+        outdir,
+        &dem,
+        output_interval,
+        n_frames,
+        mu,
+        xi,
+        ent_params.map(|p| (p, sim.total_eroded())),
+    )?;
 
     let mass_end = sim.total_mass();
+    if erodible.is_some() {
+        println!("Eroded volume: {:.0} m³", sim.total_eroded());
+    }
     println!(
         "Simulated {:.1} s in {} frames ({total_substeps} substeps) — wall time {:.2?}",
         sim.time(),
@@ -138,13 +205,15 @@ fn run(
     Ok(())
 }
 
-/// Write the `h` frame (and optionally `u`/`v`) for `frame`.
+/// Write the `h` frame (and optionally `u`/`v`, `e`) for `frame`.
+#[allow(clippy::fn_params_excessive_bools)]
 fn write_frames(
     sim: &Simulation,
     crs: Option<&surtgis_core::CRS>,
     outdir: &Path,
     frame: usize,
     dump_velocity: bool,
+    dump_erosion: bool,
     compress: bool,
 ) -> Result<()> {
     let grid = sim.grid();
@@ -182,6 +251,17 @@ fn write_frames(
             Some(write_opts(compress)),
         )?;
     }
+    if dump_erosion {
+        let e = sim.eroded_depth();
+        if !e.is_empty() {
+            let e = masked_raster(grid, crs, e.to_vec());
+            write_geotiff(
+                &e,
+                outdir.join(format!("e_t{frame:04}.tif")),
+                Some(write_opts(compress)),
+            )?;
+        }
+    }
     Ok(())
 }
 
@@ -207,12 +287,13 @@ fn masked_raster(
     raster
 }
 
-/// `manifest.json` — the contract with `geodeo-bridge` (spec §8). Field set
-/// frozen with GEODEO's sign-off (2026-07-19): the normative
-/// {crs, origin, cellsize, dt_output, n_frames, mu, xi, units} plus the two
-/// fields GEODEO requested — `duration` (explicit, so consumers don't
-/// re-derive dt_output*(n_frames-1) and inherit off-by-one risk) and
-/// `row0` (self-describing row orientation).
+/// `manifest.json` — the contract with `geodeo-bridge` (spec §8). The v1
+/// field set is frozen with GEODEO's 2026-07-19 sign-off: the normative
+/// {crs, origin, cellsize, dt_output, n_frames, mu, xi, units} plus
+/// `duration` and `row0`. With entrainment active the manifest gains the
+/// spec-v1.1 §5 block and declares `"manifest_version": 2`; without it the
+/// output is byte-compatible with the frozen v1 (no version field), so
+/// existing parsers are untouched.
 fn write_manifest(
     outdir: &Path,
     dem: &Raster<f32>,
@@ -220,13 +301,14 @@ fn write_manifest(
     n_frames: usize,
     mu: f32,
     xi: f32,
+    entrainment: Option<(EntrainmentParams, f64)>,
 ) -> Result<()> {
     let t = dem.transform();
     let crs = dem.crs().map(std::string::ToString::to_string);
     // f32 params round-trip through f64 with decimal noise (0.15 ->
     // 0.15000000596...); round to 6 decimals for a clean contract file.
     let clean = |v: f32| (f64::from(v) * 1e6).round() / 1e6;
-    let manifest = serde_json::json!({
+    let mut manifest = serde_json::json!({
         "crs": crs,
         "origin": [t.origin_x, t.origin_y],
         "cellsize": t.pixel_width,
@@ -241,6 +323,17 @@ fn write_manifest(
         "xi": clean(xi),
         "units": { "h": "m", "u": "m/s", "v": "m/s", "arrival": "s" },
     });
+    if let Some((p, total_eroded)) = entrainment {
+        manifest["manifest_version"] = serde_json::json!(2);
+        manifest["units"]["e"] = serde_json::json!("m");
+        manifest["entrainment"] = serde_json::json!({
+            "k": f64::from(p.k),
+            "rate_max": f64::from(p.rate_max),
+            "v_entr_min": f64::from(p.v_entr_min),
+            "f_max": f64::from(p.f_max),
+            "total_eroded_m3": total_eroded.round(),
+        });
+    }
     let path = outdir.join("manifest.json");
     std::fs::write(&path, serde_json::to_string_pretty(&manifest)?)
         .context("Failed to write manifest.json")?;
