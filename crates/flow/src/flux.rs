@@ -34,26 +34,39 @@ pub(crate) struct NumFlux {
     pub mom_t: f64,
 }
 
-/// HLL flux with Einfeldt (HLLE) wave-speed estimates over hydrostatically
-/// reconstructed interface depths.
+/// HLL flux with Einfeldt (HLLE) wave-speed estimates over interface depths
+/// reconstructed with the Chen & Noelle (2017) subcell scheme (spec v1.1 §3,
+/// replacing the Audusse reconstruction of spec v1.0 §3.4).
 ///
-/// Reconstruction (spec §3.4): `z_f = max(zL, zR)`,
-/// `h*ₛ = max(0, hₛ + zₛ − z_f)`; the naive centred bed gradient is forbidden.
+/// Reconstruction: with surfaces `η_s = h_s + z_s`,
+/// `z* = min(max(zL, zR), min(ηL, ηR))` and
+/// `h*ₛ = max(0, min(η_s − z*, h_s))`. In the fully submerged regime
+/// `z* = max(zL, zR)` and this reduces exactly to Audusse; when the bed step
+/// exceeds the flow depth, `z*` is capped by the lower surface so the
+/// per-cell source correction below carries the FULL bed-slope driving
+/// force — the thin-layer-over-step truncation of plain Audusse (documented
+/// in T5/EXP1/EXP2) is gone (test T13).
+///
 /// Wave speeds (spec §3.3): `sL = min(uL−√(g·hL*), û−ĉ)`,
 /// `sR = max(uR+√(g·hR*), û+ĉ)` with Roe-averaged `û` and `ĉ = √(g·(hL*+hR*)/2)`,
 /// specialised for dry sides (Toro 2001, ch. 10).
 pub(crate) fn face_flux(l: Side, r: Side) -> NumFlux {
-    let zf = l.z.max(r.z);
-    let hl = (l.h + l.z - zf).max(0.0);
-    let hr = (r.h + r.z - zf).max(0.0);
+    let eta_l = l.h + l.z;
+    let eta_r = r.h + r.z;
+    let zf = l.z.max(r.z).min(eta_l.min(eta_r));
+    let hl = (eta_l - zf).min(l.h).max(0.0);
+    let hr = (eta_r - zf).min(r.h).max(0.0);
 
     let (mass, momn) = hll(hl, l.un, hr, r.un);
 
-    // Audusse per-cell pressure corrections: cell i sees the face flux plus
-    // g/2·(h_i² − h*_i²) on the normal momentum, restoring exact balance for
-    // the lake at rest (test T1).
-    let p_l = 0.5 * G * (l.h * l.h - hl * hl);
-    let p_r = 0.5 * G * (r.h * r.h - hr * hr);
+    // Chen & Noelle per-cell source corrections: cell s sees the face flux
+    // plus g/2·(h_s + h*_s)·(z* − z_s) on the normal momentum. Submerged:
+    // z* − z_s = h_s − h*_s, so this equals the Audusse correction
+    // g/2·(h_s² − h*_s²) and the lake at rest balances exactly (T1/T12).
+    // Over a step deeper than the flow: z* − z_s ≈ −Δz and the correction
+    // becomes −g·h·Δz — the full driving force (T13).
+    let p_l = 0.5 * G * (l.h + hl) * (zf - l.z);
+    let p_r = 0.5 * G * (r.h + hr) * (zf - r.z);
 
     // Transverse momentum: passive upwinding by the sign of the mass flux.
     let mom_t = if mass >= 0.0 {
@@ -151,6 +164,35 @@ mod tests {
         assert_eq!(f.mass, 0.0);
         assert!((f.mom_l - 0.5 * G * (10.0 - 3.0f64).powi(2)).abs() < 1e-9);
         assert!((f.mom_r - 0.5 * G * (10.0 - 4.5f64).powi(2)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn thin_layer_over_step_feels_full_driving_force() {
+        // 0.05 m film on a 30° slope at 30 m cells: the bed step (~17.3 m)
+        // dwarfs the depth. Plain Audusse truncates the driving force to
+        // O(g·h²); Chen & Noelle must deliver ~ −g·h·Δz on the upslope
+        // cell's momentum balance (spec v1.1 §3, T13 at face level).
+        let dz = 30.0 * 30.0f64.to_radians().tan(); // ≈ 17.32 m
+        let h = 0.05;
+        let l = side(h, 0.0, 0.0, dz); // upslope cell
+        let r = side(h, 0.0, 0.0, 0.0); // downslope cell
+        let f = face_flux(l, r);
+        // Net x-momentum force on the L cell from this face pair is
+        // dominated by p_l ≈ ½g(2h)(z*−zL) with z* = ηR = h:
+        let expected = 0.5 * G * (2.0 * h) * (h - dz);
+        assert!(
+            (f.mom_l - (0.5 * G * h * h + expected)).abs() < 0.05 * expected.abs(),
+            "mom_l = {}, expected ≈ {}",
+            f.mom_l,
+            0.5 * G * h * h + expected
+        );
+        // And the R side must NOT receive a huge spurious force: its z is
+        // the face level reference, correction ≈ ½g(h+h*R)(z*−zR) ≥ 0 small.
+        assert!(
+            f.mom_r.abs() < 1.0,
+            "mom_r = {} unexpectedly large",
+            f.mom_r
+        );
     }
 
     #[test]
