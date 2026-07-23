@@ -74,6 +74,35 @@ where
     Ok(out)
 }
 
+/// Assemble a complex raster from amplitude and phase rasters:
+/// `z = amp * (cos(phase) + i*sin(phase))`.
+///
+/// Both inputs must share grid, transform and CRS. Cells where either
+/// input is non-finite become complex nodata.
+pub fn complex_from_amp_phase<T>(amp: &Raster<T>, phase: &Raster<T>) -> Result<Raster<Complex<T>>>
+where
+    T: RasterElement + Float,
+    Complex<T>: RasterCell,
+{
+    check_same_grid(amp, phase)?;
+    let (rows, cols) = amp.shape();
+    let mut out: Raster<Complex<T>> = amp.with_same_meta::<Complex<T>>(rows, cols);
+    out.set_nodata(Some(Complex::<T>::default_nodata()));
+    for row in 0..rows {
+        for col in 0..cols {
+            let a = unsafe { amp.get_unchecked(row, col) };
+            let p = unsafe { phase.get_unchecked(row, col) };
+            let v = if a.is_finite() && p.is_finite() {
+                Complex::from_polar(a, p)
+            } else {
+                Complex::<T>::default_nodata()
+            };
+            unsafe { out.set_unchecked(row, col, v) };
+        }
+    }
+    Ok(out)
+}
+
 /// Split a complex raster into real and imaginary part rasters.
 ///
 /// Nodata cells become NaN in both outputs.
@@ -185,6 +214,26 @@ mod tests {
         assert_eq!(im2.get(1, 1).unwrap(), -2.5);
         assert!(re2.get(2, 2).unwrap().is_nan());
         assert!(im2.get(2, 2).unwrap().is_nan());
+    }
+
+    #[test]
+    fn from_amp_phase_matches_polar_form() {
+        let mut amp = part(2, 2, 0.0);
+        amp.set(0, 0, 5.0).unwrap();
+        amp.set(0, 1, 1.0).unwrap();
+        let mut ph = part(2, 2, 0.0);
+        ph.set(0, 0, 0.0).unwrap();
+        ph.set(0, 1, std::f32::consts::FRAC_PI_2).unwrap();
+
+        let z = complex_from_amp_phase(&amp, &ph).unwrap();
+        let z00 = z.get(0, 0).unwrap();
+        assert!((z00.re - 5.0).abs() < 1e-6 && z00.im.abs() < 1e-6);
+        let z01 = z.get(0, 1).unwrap();
+        assert!(z01.re.abs() < 1e-6 && (z01.im - 1.0).abs() < 1e-6);
+
+        // Round-trips through magnitude/phase.
+        assert!((magnitude(&z).get(0, 0).unwrap() - 5.0).abs() < 1e-6);
+        assert!((phase(&z).get(0, 1).unwrap() - std::f32::consts::FRAC_PI_2).abs() < 1e-6);
     }
 
     #[test]
