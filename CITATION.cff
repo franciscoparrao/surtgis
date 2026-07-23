@@ -1,0 +1,30 @@
+cff-version: 1.2.0
+message: "If you use SurtGIS in your research, please cite the paper below."
+title: "SurtGIS"
+type: software
+authors:
+  - family-names: Parra
+    given-names: Francisco
+    email: francisco.parra.o@usach.cl
+repository-code: "https://github.com/franciscoparrao/surtgis"
+url: "https://franciscoparrao.github.io/surtgis/book/"
+license: "MIT OR Apache-2.0"
+keywords:
+  - GIS
+  - raster
+  - terrain-analysis
+  - hydrology
+  - remote-sensing
+  - Rust
+  - WebAssembly
+preferred-citation:
+  type: article
+  title: "SurtGIS: A high-performance raster geospatial analysis library in Rust with WebAssembly and Python support"
+  authors:
+    - family-names: Parra
+      given-names: Francisco
+  journal: "Environmental Modelling & Software"
+  volume: 204
+  year: 2026
+  article-number: "107102"
+  doi: 10.1016/j.envsoft.2026.107102
