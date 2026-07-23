@@ -25,7 +25,7 @@ projections = ["dep:proj4rs"]
 unstable = []
 
 [dependencies]
-surtgis-core = { version = "0.18", path = "../core", default-features = false }
+surtgis-core = { version = "1.0", path = "../core", default-features = false }
 thiserror.workspace = true
 serde.workspace = true
 ndarray.workspace = true

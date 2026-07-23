@@ -7,7 +7,23 @@ Versioning follows [SemVer 2.0.0](https://semver.org/). The project is still in
 the `0.x` series, so minor versions may contain breaking changes; we try to
 call them out under a `Breaking` heading when they happen.
 
-## [Unreleased]
+## [1.0.0] - 2026-07-23
+
+First stable release. It promotes the 0.18.0 candidate surface unchanged, now
+that the accompanying paper is published:
+
+> Parra, F. (2026). SurtGIS: A high-performance raster geospatial analysis
+> library in Rust with WebAssembly and Python support. *Environmental
+> Modelling & Software*, 204, 107102.
+> <https://doi.org/10.1016/j.envsoft.2026.107102>
+
+The public API of the seven published crates is now under semantic versioning.
+The curated prelude is `#[non_exhaustive]` throughout, so new fields and enum
+variants ship as minor releases rather than breaking ones; anything still
+evolving (`algorithms::inference`, `fluvial::divide_migration`, the
+`surtgis_cloud::composite` module) stays behind the `unstable` feature and is
+exempt from the 1.x guarantee. There are no API changes relative to 0.18.0
+beyond the additions and fixes listed here.
 
 ### Changed
 
@@ -41,7 +57,44 @@ call them out under a `Breaking` heading when they happen.
   unchanged (verified end-to-end against Planetary Computer); the decode
   budget scales with the RAM budget (498 MB at 2 GB, 1074 MB at 16 GB).
 
+- **Single-band `stac composite` and `stac time-series` now run through the
+  `CompositeEngine`**, and the ~1175-line legacy code path is deleted. Both
+  modes inherit the R8/R9 memory budget and robustness work that previously
+  only covered the multi-band path. Cloud masking for these two modes is now
+  driven by the collection profile (Sentinel-2 SCL, Landsat QA, Sentinel-1
+  none) instead of the old ad-hoc masking; NDVI/Sentinel-2 outputs are
+  equivalent. (audit R3 S2.5)
+
+- **The `surtgis-algorithms` prelude is `#[non_exhaustive]`** across its
+  `Params`, result structs and enums (31 types). Build them with `Default` +
+  field mutation (`let mut p = SlopeParams::default(); p.z_factor = 2.0;`)
+  rather than struct literals or exhaustive matches. This is what lets the 1.x
+  line add options and variants as minor releases.
+
+- **`fluvial::divide_migration` and `algorithms::inference` are now behind the
+  `unstable` feature** — the first because its χ/relief sampling at ridge
+  pixels is not yet scientifically sound (audit CR-2), the second because its
+  nodata/normalization contract is still unwritten. The shipped CLI, Python and
+  WASM builds enable `unstable`, so no shipped command changes.
+
+- **Composite memory robustness** (audit R3 Sprint 2): the tile decompressor is
+  capped, so a corrupt or hostile DEFLATE/LZW tile can no longer inflate past
+  its byte budget; decode permits are sized by the real output window rather
+  than the server's nominal tile size (closing a 6–22× RAM under-count); and
+  the Python binding now surfaces failed-tile/‑date counts in its `meta` dict
+  instead of silently degrading the result.
+
 ### Added
+
+- **`surtgis flow` — a 2D debris-flow solver** (opt-in `flow` feature, new
+  `surtgis-flow` crate). An HLL finite-volume shallow-flow solver with Rayon
+  parallelism and static-yield detention, bed entrainment bounded by
+  construction, and a Chen & Noelle thin-layer reconstruction that restores the
+  driving force at the flow front. Validated against the T1–T13 analytical gate
+  suite (Ritter dam-break, thin-layer step, radial symmetry). Ships with a C
+  ABI (`surtgis-ffi`) and a checkpoint/resume manifest (v2) for real-time
+  integration such as game-engine coupling. Opt-in and off by default; existing
+  commands are unchanged.
 
 - **`surtgis_cloud::composite::MemoryBudget` / `TrackedRaster`** (feature
   `unstable`) — audit R9, step 1 of 3. A byte budget backed by a counting
@@ -96,6 +149,34 @@ call them out under a `Breaking` heading when they happen.
   checkpoint/resume manifest that R8 also envisioned is deferred to land
   with R9's streaming sink, where a persistent output medium makes resume
   meaningful (resuming into in-memory buffers saves nothing).
+- **Tiled ONNX inference and a temporal streaming reducer** (feature
+  `unstable`) — scaffolds for on-raster model inference and memory-bounded
+  temporal aggregation. Halo handling and per-cell parity are tested, but the
+  nodata/normalization contract is still being finalized, hence `unstable`.
+
+### Fixed
+
+- **Panic on planar TIFFs.** `surtgis info` and the native readers crashed with
+  an index-out-of-bounds on `PlanarConfiguration=2` / `INTERLEAVE=BAND` files
+  (valid GDAL output); they now return an explicit error naming the planar
+  layout. (audit R3 Sprint 2)
+
+- **Zarr/NetCDF/GRIB bbox reads mirrored latitude to the opposite hemisphere.**
+  A southern-hemisphere bounding box could return northern-hemisphere data (and
+  vice versa). Affects every climate-data spatial subset; re-run any Zarr/NetCDF
+  bbox extraction made with 0.18.0 or earlier. (#94)
+
+- **`extract` masked away the majority value** of `stream_network`, `viewshed`
+  and `lineament` outputs when that value coincided with the nodata sentinel,
+  turning valid cells into "no data". (#93)
+
+- **Solar radiation, Perez sky model.** The clearness coefficient used the
+  degrees form (`5.535e-6·θz³`) with `θz` in radians, selecting the wrong sky
+  bin almost always. Corrected to the radians form (`1.041·θz³`). Opt-in path
+  only — the default isotropic model was unaffected. (audit R3 Sprint 1)
+
+- **Phenology label.** The smoother documented as "Savitzky-Golay" is a moving
+  average; the docstring now says so. (audit R3 Sprint 1)
 
 ## [0.18.0] - 2026-07-10
 

@@ -44,15 +44,15 @@ onnx = ["surtgis-algorithms/onnx"]
 flow = ["dep:surtgis-flow"]
 
 [dependencies]
-surtgis-core = { version = "0.18", path = "../core", features = ["shapefile", "geopackage"] }
-surtgis-algorithms = { version = "0.18", path = "../algorithms", features = ["unstable"] }
-surtgis-parallel = { version = "0.18", path = "../parallel" }
-surtgis-relief = { version = "0.18", path = "../relief" }
-surtgis-relief-3d = { version = "0.18", path = "../relief-3d", optional = true }
+surtgis-core = { version = "1.0", path = "../core", features = ["shapefile", "geopackage"] }
+surtgis-algorithms = { version = "1.0", path = "../algorithms", features = ["unstable"] }
+surtgis-parallel = { version = "1.0", path = "../parallel" }
+surtgis-relief = { version = "1.0", path = "../relief" }
+surtgis-relief-3d = { version = "1.0", path = "../relief-3d", optional = true }
 # Path-only on purpose: surtgis-flow is publish = false until the 1.0 freeze
 # resolves (see the `flow` feature note above).
 surtgis-flow = { path = "../flow", optional = true }
-surtgis-cloud = { version = "0.18", path = "../cloud", features = ["native", "unstable"], optional = true }
+surtgis-cloud = { version = "1.0", path = "../cloud", features = ["native", "unstable"], optional = true }
 clap.workspace = true
 clap_complete.workspace = true
 anyhow.workspace = true

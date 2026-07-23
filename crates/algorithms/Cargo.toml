@@ -27,8 +27,8 @@ unstable = []
 onnx = ["dep:tract-onnx", "unstable"]
 
 [dependencies]
-surtgis-core = { version = "0.18", path = "../core", default-features = false }
-surtgis-parallel = { version = "0.18", path = "../parallel", default-features = false }
+surtgis-core = { version = "1.0", path = "../core", default-features = false }
+surtgis-parallel = { version = "1.0", path = "../parallel", default-features = false }
 thiserror.workspace = true
 anyhow.workspace = true
 ndarray.workspace = true

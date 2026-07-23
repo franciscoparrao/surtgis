@@ -17,12 +17,12 @@ crate-type = ["cdylib", "rlib"]
 default = []
 
 [dependencies]
-surtgis-core = { version = "0.18", path = "../core", default-features = false }
-surtgis-algorithms = { version = "0.18", path = "../algorithms", default-features = false, features = [
+surtgis-core = { version = "1.0", path = "../core", default-features = false }
+surtgis-algorithms = { version = "1.0", path = "../algorithms", default-features = false, features = [
     "unstable",
 ] }
-surtgis-relief = { version = "0.18", path = "../relief" }
-surtgis-colormap = { version = "0.18", path = "../colormap" }
+surtgis-relief = { version = "1.0", path = "../relief" }
+surtgis-colormap = { version = "1.0", path = "../colormap" }
 wasm-bindgen.workspace = true
 js-sys.workspace = true
 serde.workspace = true

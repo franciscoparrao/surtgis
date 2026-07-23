@@ -22,13 +22,13 @@ parallel = ["surtgis-algorithms/parallel"]
 cloud = ["dep:surtgis-cloud"]
 
 [dependencies]
-surtgis-core = { version = "0.18", path = "../core", default-features = false }
-surtgis-algorithms = { version = "0.18", path = "../algorithms", default-features = false, features = [
+surtgis-core = { version = "1.0", path = "../core", default-features = false }
+surtgis-algorithms = { version = "1.0", path = "../algorithms", default-features = false, features = [
     "unstable",
 ] }
-surtgis-relief = { version = "0.18", path = "../relief" }
-surtgis-colormap = { version = "0.18", path = "../colormap" }
-surtgis-cloud = { version = "0.18", path = "../cloud", features = ["native", "unstable"], optional = true }
+surtgis-relief = { version = "1.0", path = "../relief" }
+surtgis-colormap = { version = "1.0", path = "../colormap" }
+surtgis-cloud = { version = "1.0", path = "../cloud", features = ["native", "unstable"], optional = true }
 # abi3-py39: build one stable-ABI wheel per platform instead of one per
 # CPython minor version. Matches `requires-python = ">=3.9"` in
 # pyproject.toml. Collapses the release matrix from 25 wheels to 5 (see
