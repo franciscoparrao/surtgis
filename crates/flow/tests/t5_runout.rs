@@ -7,17 +7,15 @@
 //!
 //! Stop criterion per spec: Σ|u| < v_stop · N_wet.
 //!
-//! Interpretation note (spec-v1): "MUST NOT stop on the 30° section" is
-//! asserted for the *bulk* of the flow. A thin veneer (measured ~11% of the
-//! mass, h mostly < 0.5 m) deposits along the steep track: the Voellmy
-//! turbulent term s²/h freezes thin layers (track deposition, same behaviour
-//! as RAMMS), and the hydrostatic reconstruction truncates the driving force
-//! to O(g·h²/Δx) when the bed step exceeds the flow depth, so the veneer
-//! cannot re-mobilise advectively — a documented limitation of the normative
-//! §3.4 scheme on steep slopes (improved reconstructions are a v1.1
-//! candidate). The gates below therefore check that >= 80% of the mass and
-//! the deposit centroid end on the gentle section, and that the stop
-//! criterion never fires while the bulk is still in transit on the 30°.
+//! History: with the v1.0 Audusse reconstruction a thin veneer (~11.5% of
+//! the mass) stayed frozen on the steep track — the driving force truncated
+//! to O(g·h²/Δx) when the bed step exceeded the flow depth. The Chen &
+//! Noelle reconstruction (spec v1.1 §3, N3) removes that truncation: the
+//! veneer drains advectively (< 1% measured) and the deposit relaxes to its
+//! Coulomb yield profile on the gentle section. The relaxation tail decays
+//! asymptotically, so the spec stop criterion is reached near t ≈ 1000 s
+//! rather than t ≈ 50 s of the frozen-veneer regime — the drive window
+//! below covers it. Gate per spec v1.1 §3: steep-section mass < 8% at stop.
 
 use surtgis_core::{GeoTransform, Raster};
 use surtgis_flow::{Simulation, SolverConfig, VoellmyParams};
@@ -105,7 +103,7 @@ fn t5_voellmy_flow_stops_on_gentle_section_only() {
     // While the material is still on the 30° section it must keep moving:
     // sample the stop criterion along the way.
     let mut stopped_at: Option<f64> = None;
-    for _ in 0..600 {
+    for _ in 0..1500 {
         sim.step(1.0).unwrap();
         let (sum_u, n_wet) = flow_speed(&sim);
         if sum_u < 0.01 * n_wet as f64 {
@@ -120,7 +118,7 @@ fn t5_voellmy_flow_stops_on_gentle_section_only() {
             sim.time()
         );
     }
-    let t_stop = stopped_at.expect("flow never satisfied the stop criterion within 600 s");
+    let t_stop = stopped_at.expect("flow never satisfied the stop criterion within 1500 s");
 
     let frac_steep = steep_fraction(&sim);
     let mass_end = sim.total_mass();
@@ -141,13 +139,12 @@ fn t5_voellmy_flow_stops_on_gentle_section_only() {
         mass_end / mass0 * 100.0
     );
 
-    // The bulk of the deposit must sit on the gentle section
-    // (tan 10° = 0.176 < μ = 0.2), having evacuated the steep one
-    // (tan 30° = 0.577 > μ); only the thin track veneer may remain there
-    // (see interpretation note above).
+    // The deposit must sit on the gentle section (tan 10° = 0.176 < μ =
+    // 0.2), having evacuated the steep one (tan 30° = 0.577 > μ). Spec
+    // v1.1 §3 gate: < 8% (with Chen & Noelle the measured residue is < 1%).
     assert!(
-        frac_steep < 0.20,
-        "{:.2}% of the mass stopped on the 30° section (spec T5, bulk gate 20%)",
+        frac_steep < 0.08,
+        "{:.2}% of the mass stopped on the 30° section (spec v1.1 T5 gate 8%)",
         frac_steep * 100.0
     );
     assert!(
