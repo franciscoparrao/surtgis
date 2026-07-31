@@ -283,6 +283,31 @@ where
 ///   far beyond any realistic DEM/raster cell value; `f64` is the
 ///   widest numeric variant available so this is the best available
 ///   fallback rather than a failure)
+/// Rewrite a finite `GDAL_NODATA` sentinel to NaN in a float sample buffer.
+///
+/// The [`read_geotiff_any`] path preserves native pixel values without the
+/// [`cast_and_normalize`] pass, yet [`finish_raster`] still records a float
+/// raster's nodata as NaN (SurtGIS's in-memory convention). Left unreconciled
+/// the two disagree — the buffer holds the literal sentinel (e.g. `-9999`)
+/// while masking looks for NaN — so nodata cells leak into statistics. This
+/// brings the buffer in line with the metadata. No-op for integer `T`, whose
+/// sentinel is kept verbatim and matched by exact equality.
+fn normalize_any_float_nodata<T: RasterElement>(data: &mut [T], nodata: Option<f64>) {
+    if !T::is_float() {
+        return;
+    }
+    if let Some(nd_f64) = nodata
+        && nd_f64.is_finite()
+        && let Some(nd) = num_traits::cast::<f64, T>(nd_f64)
+    {
+        for v in data.iter_mut() {
+            if v.is_nodata(Some(nd)) {
+                *v = T::default_nodata();
+            }
+        }
+    }
+}
+
 fn decode_geotiff_any<R>(
     reader: R,
     band: Option<usize>,
@@ -307,12 +332,18 @@ where
     macro_rules! band_raster {
         ($buf:expr) => {{
             let buf = $buf;
-            let selected = if raw.spp == 1 {
+            let mut selected = if raw.spp == 1 {
                 buf
             } else {
                 let n = raw.rows * raw.cols;
                 (0..n).map(|i| buf[i * raw.spp + b]).collect()
             };
+            // The dtype-preserving path skips `cast_and_normalize`, so a
+            // finite GDAL_NODATA sentinel is still literal in float buffers
+            // while `finish_raster` records the nodata as NaN. Reconcile the
+            // two so masking / statistics (and `surtgis info`) see the nodata
+            // cells instead of counting the sentinel as valid data.
+            normalize_any_float_nodata(&mut selected, raw.nodata);
             finish_raster(
                 selected,
                 raw.rows,
@@ -2000,6 +2031,66 @@ mod tests {
             }
             other => panic!("expected AnyRaster::F32, got {:?}", other.dtype()),
         }
+    }
+
+    #[test]
+    fn normalize_any_float_nodata_rewrites_finite_sentinel() {
+        // Float, finite sentinel: rewritten to NaN so masking sees it.
+        let mut d = vec![5.0f32, -9999.0, 5.0, -9999.0];
+        normalize_any_float_nodata(&mut d, Some(-9999.0));
+        assert_eq!(d[0], 5.0);
+        assert!(d[1].is_nan());
+        assert!(d[3].is_nan());
+        // Float, NaN sentinel: nothing to rewrite (already the convention).
+        let mut n = vec![5.0f32, f32::NAN];
+        normalize_any_float_nodata(&mut n, Some(f64::NAN));
+        assert_eq!(n[0], 5.0);
+        // Integer T: no-op — the sentinel is kept verbatim and matched by
+        // equality downstream, never turned into a (non-existent) NaN.
+        let mut di = vec![5i16, -9999, 5];
+        normalize_any_float_nodata(&mut di, Some(-9999.0));
+        assert_eq!(di, vec![5i16, -9999, 5]);
+    }
+
+    #[test]
+    fn read_geotiff_any_masks_finite_float_nodata_in_statistics() {
+        // Regression: a raster whose GDAL_NODATA is a *finite* sentinel (the
+        // rasterio/GDAL `-9999` convention) must not count the fill cells as
+        // valid in `surtgis info`. The dtype-preserving read used to leave the
+        // sentinel literal in float buffers while recording nodata as NaN, so
+        // all 100 cells read as valid with a fill-contaminated mean.
+        fn check<T: RasterElement + NativeGraySample>(dir: &TempDir, name: &str, nodata: f64)
+        where
+            [T]: tiff::encoder::TiffValue,
+        {
+            let valid: T = num_traits::cast(5.0).unwrap();
+            let nd: T = num_traits::cast(nodata).unwrap();
+            let mut data = vec![valid; 100]; // 10x10
+            for c in data.iter_mut().skip(50) {
+                *c = nd; // bottom half = nodata
+            }
+            let mut r = Raster::<T>::from_vec(data, 10, 10).unwrap();
+            r.set_nodata(Some(nd));
+            let path = dir.path().join(format!("{name}.tif"));
+            write_geotiff(&r, &path, None).unwrap();
+
+            let any = read_geotiff_any(&path, None).unwrap();
+            let (valid_count, mean) = crate::dispatch_any!(&any, rr => {
+                let s = rr.statistics();
+                (s.valid_count, s.mean)
+            });
+            assert_eq!(valid_count, 50, "{name}: valid_count");
+            assert_eq!(mean, Some(5.0), "{name}: mean");
+        }
+
+        let dir = TempDir::new().unwrap();
+        check::<f32>(&dir, "f32_-9999", -9999.0); // the bug
+        check::<f32>(&dir, "f32_0", 0.0); // 0.0 sentinel
+        check::<f32>(&dir, "f32_-1", -1.0);
+        check::<f64>(&dir, "f64_-9999", -9999.0);
+        // Integer paths (i16/u8 with finite sentinel) were already correct —
+        // the no-op branch is covered by `normalize_any_float_nodata_*` and
+        // verified end-to-end via the CLI matrix.
     }
 
     #[test]
