@@ -1,23 +1,28 @@
-//! GeoParquet point I/O (feature `parquet`).
+//! GeoParquet I/O (feature `parquet`).
 //!
-//! Pure-Rust reader/writer for **point tables with attributes** —
-//! embedding matrices, training samples, extracted features — in
+//! Pure-Rust reader/writer in
 //! [GeoParquet 1.0](https://geoparquet.org/releases/v1.0.0/) layout:
 //! WKB geometry column + `geo` file metadata, Snappy compression.
 //! The output is directly queryable from DuckDB, GeoPandas and GDAL.
 //!
-//! The primary type is [`PointTable`], a columnar container that
-//! avoids per-feature HashMaps for wide tables (e.g. one f32 column
-//! per embedding dimension). [`FeatureCollection`] bridges exist for
-//! interoperability with the rest of the vector module.
+//! Two entry points:
+//!
+//! - [`PointTable`] — columnar point tables with attributes (embedding
+//!   matrices, training samples, extracted features) that avoid
+//!   per-feature HashMaps for wide tables.
+//! - [`read_geoparquet`] — any geometry type into a [`FeatureCollection`]
+//!   (Point, LineString, Polygon and Multi\* variants via the WKB parser),
+//!   for tiling, analysis and format conversion.
 //!
 //! Scope (v1):
-//! - Point geometry only (2-D, WKB).
+//! - Geometry: full 2-D WKB read (all standard types), point-only write.
 //! - Column types: f64, f32, i64, UTF-8 string. No nulls.
 //! - CRS: GeoParquet `crs` is written as `null` (unknown) and the
 //!   EPSG code is preserved in a `surtgis:epsg` metadata key, which
-//!   the reader recovers. Readers other than SurtGIS will see
-//!   correct geometry but must be told the CRS out-of-band.
+//!   the reader recovers. The reader also understands the standard
+//!   GeoParquet `crs` field (PROJJSON id or OGC URI string) written by
+//!   other tools. Readers other than SurtGIS see correct geometry but
+//!   must be told the CRS out-of-band for SurtGIS-written files.
 
 use std::fs::File;
 use std::path::Path;
@@ -138,14 +143,76 @@ fn wkb_point(x: f64, y: f64) -> Vec<u8> {
     buf
 }
 
-fn parse_wkb_point(wkb: &[u8]) -> Result<(f64, f64)> {
-    if wkb.len() < 21 {
-        return Err(Error::Other(format!(
-            "geoparquet: WKB geometry too short ({} bytes)",
-            wkb.len()
-        )));
+/// Cursor over a WKB/EWKB byte buffer.
+struct WkbReader<'a> {
+    buf: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> WkbReader<'a> {
+    fn new(buf: &'a [u8]) -> Self {
+        Self { buf, pos: 0 }
     }
-    let le = match wkb[0] {
+
+    fn take(&mut self, n: usize) -> Result<&'a [u8]> {
+        if self.pos + n > self.buf.len() {
+            return Err(Error::Other(format!(
+                "geoparquet: truncated WKB geometry (need {} bytes at offset {})",
+                n, self.pos
+            )));
+        }
+        let s = &self.buf[self.pos..self.pos + n];
+        self.pos += n;
+        Ok(s)
+    }
+
+    fn u8(&mut self) -> Result<u8> {
+        Ok(self.take(1)?[0])
+    }
+
+    fn u32(&mut self, le: bool) -> Result<u32> {
+        let b: [u8; 4] = self.take(4)?.try_into().unwrap();
+        Ok(if le {
+            u32::from_le_bytes(b)
+        } else {
+            u32::from_be_bytes(b)
+        })
+    }
+
+    fn f64(&mut self, le: bool) -> Result<f64> {
+        let b: [u8; 8] = self.take(8)?.try_into().unwrap();
+        Ok(if le {
+            f64::from_le_bytes(b)
+        } else {
+            f64::from_be_bytes(b)
+        })
+    }
+
+    /// A coordinate tuple of `dims` doubles; returns the first two (x, y)
+    /// and skips any Z/M extras.
+    fn coord(&mut self, le: bool, dims: u32) -> Result<(f64, f64)> {
+        let x = self.f64(le)?;
+        let y = self.f64(le)?;
+        for _ in 2..dims {
+            self.f64(le)?;
+        }
+        Ok((x, y))
+    }
+}
+
+/// Parse a full 2-D WKB geometry (any standard type, either byte order).
+///
+/// Handles EWKB dimension flags (Z/M are read and dropped) and the SRID
+/// flag (the SRID word is consumed). Returns a `geo` geometry in source
+/// coordinates — reprojection, if any, is the caller's job.
+fn parse_wkb(wkb: &[u8]) -> Result<geo::Geometry<f64>> {
+    let mut r = WkbReader::new(wkb);
+    read_geometry(&mut r)
+}
+
+/// Read one geometry (a full WKB geometry, including its byte-order byte).
+fn read_geometry(r: &mut WkbReader) -> Result<geo::Geometry<f64>> {
+    let le = match r.u8()? {
         0 => false,
         1 => true,
         b => {
@@ -155,36 +222,107 @@ fn parse_wkb_point(wkb: &[u8]) -> Result<(f64, f64)> {
             )));
         }
     };
-    let u32_at = |off: usize| -> u32 {
-        let b: [u8; 4] = wkb[off..off + 4].try_into().unwrap();
-        if le {
-            u32::from_le_bytes(b)
-        } else {
-            u32::from_be_bytes(b)
-        }
-    };
-    let f64_at = |off: usize| -> f64 {
-        let b: [u8; 8] = wkb[off..off + 8].try_into().unwrap();
-        if le {
-            f64::from_le_bytes(b)
-        } else {
-            f64::from_be_bytes(b)
-        }
-    };
-    let geom_type = u32_at(1);
-    // Accept plain (1) and EWKB-with-SRID (0x20000001) points
-    let (base, has_srid) = (geom_type & 0xFF, geom_type & 0x2000_0000 != 0);
-    if base != 1 {
-        return Err(Error::Other(format!(
-            "geoparquet: only Point geometry is supported, got WKB type {}",
-            geom_type
-        )));
+    let ty = r.u32(le)?;
+    let base = ty & 0xFF;
+    let has_srid = ty & 0x2000_0000 != 0;
+    let dims = 2 + ((ty & 0x8000_0000 != 0) as u32) + ((ty & 0x4000_0000 != 0) as u32);
+    if has_srid {
+        r.u32(le)?; // discard SRID word
     }
-    let coord_off = if has_srid { 9 } else { 5 };
-    if wkb.len() < coord_off + 16 {
-        return Err(Error::Other("geoparquet: truncated WKB point".into()));
+
+    match base {
+        1 => {
+            let (x, y) = r.coord(le, dims)?;
+            Ok(geo::Geometry::Point(geo::Point::new(x, y)))
+        }
+        2 => {
+            let n = r.u32(le)? as usize;
+            let mut coords = Vec::with_capacity(n);
+            for _ in 0..n {
+                let (x, y) = r.coord(le, dims)?;
+                coords.push(geo::Coord { x, y });
+            }
+            Ok(geo::Geometry::LineString(geo::LineString::new(coords)))
+        }
+        3 => {
+            let n_rings = r.u32(le)? as usize;
+            let mut rings = Vec::with_capacity(n_rings);
+            for _ in 0..n_rings {
+                let n = r.u32(le)? as usize;
+                let mut ring = Vec::with_capacity(n);
+                for _ in 0..n {
+                    let (x, y) = r.coord(le, dims)?;
+                    ring.push(geo::Coord { x, y });
+                }
+                rings.push(geo::LineString::new(ring));
+            }
+            let mut it = rings.into_iter();
+            let exterior = it
+                .next()
+                .ok_or_else(|| Error::Other("geoparquet: polygon with no rings".into()))?;
+            Ok(geo::Geometry::Polygon(geo::Polygon::new(
+                exterior,
+                it.collect(),
+            )))
+        }
+        4 => {
+            let n = r.u32(le)? as usize;
+            let mut pts = Vec::with_capacity(n);
+            for _ in 0..n {
+                match read_geometry(r)? {
+                    geo::Geometry::Point(p) => pts.push(p),
+                    _ => {
+                        return Err(Error::Other("geoparquet: non-point in MultiPoint".into()));
+                    }
+                }
+            }
+            Ok(geo::Geometry::MultiPoint(geo::MultiPoint::new(pts)))
+        }
+        5 => {
+            let n = r.u32(le)? as usize;
+            let mut lines = Vec::with_capacity(n);
+            for _ in 0..n {
+                match read_geometry(r)? {
+                    geo::Geometry::LineString(l) => lines.push(l),
+                    _ => {
+                        return Err(Error::Other(
+                            "geoparquet: non-line in MultiLineString".into(),
+                        ));
+                    }
+                }
+            }
+            Ok(geo::Geometry::MultiLineString(geo::MultiLineString::new(
+                lines,
+            )))
+        }
+        6 => {
+            let n = r.u32(le)? as usize;
+            let mut polys = Vec::with_capacity(n);
+            for _ in 0..n {
+                match read_geometry(r)? {
+                    geo::Geometry::Polygon(p) => polys.push(p),
+                    _ => {
+                        return Err(Error::Other(
+                            "geoparquet: non-polygon in MultiPolygon".into(),
+                        ));
+                    }
+                }
+            }
+            Ok(geo::Geometry::MultiPolygon(geo::MultiPolygon::new(polys)))
+        }
+        other => Err(Error::Other(format!(
+            "geoparquet: unsupported WKB geometry type {}",
+            other
+        ))),
     }
-    Ok((f64_at(coord_off), f64_at(coord_off + 8)))
+}
+
+/// Parse a WKB geometry that must be a point, returning `(x, y)`.
+fn parse_wkb_point(wkb: &[u8]) -> Result<(f64, f64)> {
+    match parse_wkb(wkb)? {
+        geo::Geometry::Point(p) => Ok((p.x(), p.y())),
+        _ => Err(Error::Other("geoparquet: expected a point geometry".into())),
+    }
 }
 
 fn geo_metadata(table: &PointTable) -> String {
@@ -540,32 +678,153 @@ pub fn write_geoparquet<P: AsRef<Path>>(
     write_geoparquet_points(&table, path)
 }
 
-/// Read a GeoParquet point file as a [`FeatureCollection`].
+/// Read a GeoParquet file as a [`FeatureCollection`].
 ///
-/// The GeoParquet `geo` metadata's `crs` field is written as `null` by this
-/// crate's own writer (see module docs), so the CRS is recovered from the
-/// `surtgis:epsg` key-value metadata instead. Files from other GeoParquet
-/// writers that don't set that key yield `crs: None` — honestly unknown
+/// Any standard geometry type is supported (Point, LineString, Polygon
+/// and Multi\* variants) via the WKB parser. CRS recovery order:
+/// 1. `surtgis:epsg` key-value metadata (this crate's writer),
+/// 2. the standard GeoParquet `geo.columns.<geom>.crs` field — a PROJJSON
+///    object with an `id` (`{authority, code}`) or an OGC URI string
+///    (`http://www.opengis.net/def/crs/EPSG/0/4326`).
+///
+/// Files with no recoverable CRS yield `crs: None` — honestly unknown
 /// rather than assumed.
 pub fn read_geoparquet<P: AsRef<Path>>(path: P) -> Result<FeatureCollection> {
-    let table = read_geoparquet_points(path)?;
-    let mut fc = FeatureCollection::with_crs(table.epsg.map(CRS::from_epsg));
-    for i in 0..table.len() {
-        let mut feature = Feature::new(geo::Geometry::Point(geo::Point::new(
-            table.x[i], table.y[i],
-        )));
-        for col in &table.columns {
-            let value = match &col.data {
-                ColumnData::F64(v) => AttributeValue::Float(v[i]),
-                ColumnData::F32(v) => AttributeValue::Float(v[i] as f64),
-                ColumnData::I64(v) => AttributeValue::Int(v[i]),
-                ColumnData::Str(v) => AttributeValue::String(v[i].clone()),
-            };
-            feature.set_property(col.name.clone(), value);
+    let file = File::open(path.as_ref())
+        .map_err(|e| Error::Other(format!("geoparquet: cannot open file: {}", e)))?;
+    let reader = SerializedFileReader::new(file).map_err(|e| Error::Other(e.to_string()))?;
+    let meta = reader.metadata().file_metadata();
+
+    let mut geometry_column = GEOMETRY_COLUMN.to_string();
+    let mut epsg = None;
+    if let Some(kvs) = meta.key_value_metadata() {
+        for kv in kvs {
+            match (kv.key.as_str(), kv.value.as_deref()) {
+                ("geo", Some(json)) => {
+                    if let Ok(geo) = serde_json::from_str::<serde_json::Value>(json) {
+                        if let Some(primary) = geo["primary_column"].as_str() {
+                            geometry_column = primary.to_string();
+                        }
+                        if let Some(col) = geo["columns"].get(&geometry_column)
+                            && epsg.is_none()
+                            && let Some(code) = crs_to_epsg(&col["crs"])
+                        {
+                            epsg = Some(code);
+                        }
+                    }
+                }
+                (EPSG_METADATA_KEY, Some(code)) => {
+                    epsg = code.parse::<u32>().ok().or(epsg);
+                }
+                _ => {}
+            }
         }
-        fc.push(feature);
     }
+
+    let mut fc = FeatureCollection::with_crs(epsg.map(CRS::from_epsg));
+    let mut columns: Vec<(String, ColumnData)> = Vec::new();
+    let mut columns_init = false;
+
+    let rows = reader
+        .get_row_iter(None)
+        .map_err(|e| Error::Other(e.to_string()))?;
+    for row in rows {
+        let row = row.map_err(|e| Error::Other(e.to_string()))?;
+        let mut feature = None;
+        let mut col_idx = 0usize;
+        for (name, field) in row.get_column_iter() {
+            if name == &geometry_column {
+                let Field::Bytes(wkb) = field else {
+                    return Err(Error::Other(format!(
+                        "geoparquet: geometry column '{}' is not BYTE_ARRAY",
+                        geometry_column
+                    )));
+                };
+                feature = Some(parse_wkb(wkb.data())?);
+                continue;
+            }
+
+            if !columns_init {
+                let data = match field {
+                    Field::Double(_) => ColumnData::F64(Vec::new()),
+                    Field::Float(_) => ColumnData::F32(Vec::new()),
+                    Field::Long(_) | Field::Int(_) | Field::Short(_) | Field::Byte(_) => {
+                        ColumnData::I64(Vec::new())
+                    }
+                    Field::Str(_) => ColumnData::Str(Vec::new()),
+                    other => {
+                        return Err(Error::Other(format!(
+                            "geoparquet: unsupported type {:?} in column '{}'",
+                            other, name
+                        )));
+                    }
+                };
+                columns.push((name.clone(), data));
+            }
+
+            let col = &mut columns[col_idx].1;
+            match (col, field) {
+                (ColumnData::F64(v), Field::Double(x)) => v.push(*x),
+                (ColumnData::F32(v), Field::Float(x)) => v.push(*x),
+                (ColumnData::I64(v), Field::Long(x)) => v.push(*x),
+                (ColumnData::I64(v), Field::Int(x)) => v.push(*x as i64),
+                (ColumnData::I64(v), Field::Short(x)) => v.push(*x as i64),
+                (ColumnData::I64(v), Field::Byte(x)) => v.push(*x as i64),
+                (ColumnData::Str(v), Field::Str(s)) => v.push(s.clone()),
+                (_, other) => {
+                    return Err(Error::Other(format!(
+                        "geoparquet: inconsistent or null value {:?} in column '{}'",
+                        other, name
+                    )));
+                }
+            }
+            col_idx += 1;
+        }
+        columns_init = true;
+
+        let Some(geometry) = feature else {
+            return Err(Error::Other(format!(
+                "geoparquet: missing geometry column '{}'",
+                geometry_column
+            )));
+        };
+        let mut f = Feature::new(geometry);
+        for (name, data) in &columns {
+            let value = match data {
+                ColumnData::F64(v) => AttributeValue::Float(v[fc.len()]),
+                ColumnData::F32(v) => AttributeValue::Float(v[fc.len()] as f64),
+                ColumnData::I64(v) => AttributeValue::Int(v[fc.len()]),
+                ColumnData::Str(v) => AttributeValue::String(v[fc.len()].clone()),
+            };
+            f.set_property(name.clone(), value);
+        }
+        fc.push(f);
+    }
+
     Ok(fc)
+}
+
+/// Extract an EPSG code from a GeoParquet `crs` metadata value.
+///
+/// Accepts a PROJJSON object with an `id` (`{authority, code}`), an OGC
+/// URI string (`http://www.opengis.net/def/crs/EPSG/0/4326`,
+/// `urn:ogc:def:crs:EPSG::4326`) or `null`/missing (→ `None`).
+fn crs_to_epsg(crs: &serde_json::Value) -> Option<u32> {
+    match crs {
+        serde_json::Value::Object(obj) => obj
+            .get("id")
+            .and_then(|id| id.get("code"))
+            .and_then(|c| c.as_u64())
+            .map(|c| c as u32),
+        serde_json::Value::String(s) => {
+            // Last numeric token of the URI/URN is the EPSG code. The
+            // split rev()s a DoubleEndedIterator so `next` is O(1).
+            s.split(|c: char| !c.is_ascii_digit())
+                .rev()
+                .find_map(|tok| tok.parse::<u32>().ok())
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -752,5 +1011,224 @@ mod tests {
         assert_eq!(back.len(), n);
         assert_eq!(back.columns.len(), dims);
         assert_eq!(back.columns[63].data, table.columns[63].data);
+    }
+
+    // --- WKB helpers for the full-geometry tests ---
+
+    fn wkb_linestring(coords: &[(f64, f64)]) -> Vec<u8> {
+        let mut buf = vec![1u8, 2, 0, 0, 0];
+        buf.extend_from_slice(&(coords.len() as u32).to_le_bytes());
+        for (x, y) in coords {
+            buf.extend_from_slice(&x.to_le_bytes());
+            buf.extend_from_slice(&y.to_le_bytes());
+        }
+        buf
+    }
+
+    fn wkb_polygon(rings: &[Vec<(f64, f64)>]) -> Vec<u8> {
+        let mut buf = vec![1u8, 3, 0, 0, 0];
+        buf.extend_from_slice(&(rings.len() as u32).to_le_bytes());
+        for ring in rings {
+            buf.extend_from_slice(&(ring.len() as u32).to_le_bytes());
+            for (x, y) in ring {
+                buf.extend_from_slice(&x.to_le_bytes());
+                buf.extend_from_slice(&y.to_le_bytes());
+            }
+        }
+        buf
+    }
+
+    fn wkb_multipoint(pts: &[(f64, f64)]) -> Vec<u8> {
+        let mut buf = vec![1u8, 4, 0, 0, 0];
+        buf.extend_from_slice(&(pts.len() as u32).to_le_bytes());
+        for (x, y) in pts {
+            let mut p = vec![1u8, 1, 0, 0, 0];
+            p.extend_from_slice(&x.to_le_bytes());
+            p.extend_from_slice(&y.to_le_bytes());
+            buf.extend_from_slice(&p);
+        }
+        buf
+    }
+
+    fn wkb_multilinestring(lines: &[Vec<(f64, f64)>]) -> Vec<u8> {
+        let mut buf = vec![1u8, 5, 0, 0, 0];
+        buf.extend_from_slice(&(lines.len() as u32).to_le_bytes());
+        for coords in lines {
+            buf.extend_from_slice(&wkb_linestring(coords));
+        }
+        buf
+    }
+
+    fn wkb_multipolygon(polys: &[Vec<Vec<(f64, f64)>>]) -> Vec<u8> {
+        let mut buf = vec![1u8, 6, 0, 0, 0];
+        buf.extend_from_slice(&(polys.len() as u32).to_le_bytes());
+        for rings in polys {
+            buf.extend_from_slice(&wkb_polygon(rings));
+        }
+        buf
+    }
+
+    #[test]
+    fn wkb_parses_all_geometry_types() {
+        // Point
+        let (x, y) = parse_wkb_point(&wkb_point(1.5, -2.5)).unwrap();
+        assert_eq!((x, y), (1.5, -2.5));
+
+        // LineString
+        let g = parse_wkb(&wkb_linestring(&[(0.0, 0.0), (1.0, 1.0)])).unwrap();
+        match g {
+            geo::Geometry::LineString(l) => {
+                assert_eq!(l.0.len(), 2);
+                assert_eq!(l.0[1], geo::Coord { x: 1.0, y: 1.0 });
+            }
+            _ => panic!("expected LineString"),
+        }
+
+        // Polygon with a hole
+        let g = parse_wkb(&wkb_polygon(&[
+            vec![(0.0, 0.0), (0.0, 10.0), (10.0, 10.0), (0.0, 0.0)],
+            vec![(2.0, 2.0), (2.0, 4.0), (4.0, 4.0), (2.0, 2.0)],
+        ]))
+        .unwrap();
+        match g {
+            geo::Geometry::Polygon(p) => {
+                assert_eq!(p.exterior().0.len(), 4);
+                assert_eq!(p.interiors().len(), 1);
+            }
+            _ => panic!("expected Polygon"),
+        }
+
+        // MultiPoint
+        let g = parse_wkb(&wkb_multipoint(&[(0.0, 0.0), (5.0, 5.0)])).unwrap();
+        match g {
+            geo::Geometry::MultiPoint(mp) => assert_eq!(mp.0.len(), 2),
+            _ => panic!("expected MultiPoint"),
+        }
+
+        // MultiLineString
+        let g = parse_wkb(&wkb_multilinestring(&[
+            vec![(0.0, 0.0), (1.0, 1.0)],
+            vec![(2.0, 2.0), (3.0, 3.0)],
+        ]))
+        .unwrap();
+        match g {
+            geo::Geometry::MultiLineString(ml) => assert_eq!(ml.0.len(), 2),
+            _ => panic!("expected MultiLineString"),
+        }
+
+        // MultiPolygon
+        let g = parse_wkb(&wkb_multipolygon(&[vec![vec![
+            (0.0, 0.0),
+            (0.0, 1.0),
+            (1.0, 1.0),
+            (0.0, 0.0),
+        ]]]))
+        .unwrap();
+        match g {
+            geo::Geometry::MultiPolygon(mp) => assert_eq!(mp.0.len(), 1),
+            _ => panic!("expected MultiPolygon"),
+        }
+    }
+
+    #[test]
+    fn wkb_big_endian_and_ewkb_srid() {
+        // Big-endian point
+        let mut be = vec![0u8, 0, 0, 0, 1];
+        be.extend_from_slice(&7.0f64.to_be_bytes());
+        be.extend_from_slice(&8.0f64.to_be_bytes());
+        let (x, y) = parse_wkb_point(&be).unwrap();
+        assert_eq!((x, y), (7.0, 8.0));
+
+        // EWKB point with SRID (still just a point to parse)
+        let mut ewkb = vec![1u8];
+        ewkb.extend_from_slice(&0x2000_0001u32.to_le_bytes());
+        ewkb.extend_from_slice(&4326u32.to_le_bytes());
+        ewkb.extend_from_slice(&10.0f64.to_le_bytes());
+        ewkb.extend_from_slice(&20.0f64.to_le_bytes());
+        let (x, y) = parse_wkb_point(&ewkb).unwrap();
+        assert_eq!((x, y), (10.0, 20.0));
+    }
+
+    #[test]
+    fn wkb_rejects_truncated_and_unknown() {
+        assert!(parse_wkb(&[]).is_err());
+        assert!(parse_wkb(&[1u8, 2, 0, 0, 0]).is_err()); // LineString, no count
+        let mut unknown = vec![1u8, 9, 0, 0, 0];
+        unknown.extend_from_slice(&1u32.to_le_bytes());
+        assert!(parse_wkb(&unknown).is_err());
+    }
+
+    #[test]
+    fn crs_to_epsg_understands_uris_and_projjson() {
+        assert_eq!(
+            crs_to_epsg(&serde_json::json!(
+                "http://www.opengis.net/def/crs/EPSG/0/4326"
+            )),
+            Some(4326)
+        );
+        assert_eq!(
+            crs_to_epsg(&serde_json::json!("urn:ogc:def:crs:EPSG::32719")),
+            Some(32719)
+        );
+        assert_eq!(
+            crs_to_epsg(
+                &serde_json::json!({"type": "GeographicCRS", "id": {"authority": "EPSG", "code": 4326}})
+            ),
+            Some(4326)
+        );
+        assert_eq!(crs_to_epsg(&serde_json::json!(null)), None);
+        assert_eq!(crs_to_epsg(&serde_json::json!({})), None);
+    }
+
+    #[test]
+    fn read_geoparquet_recovers_epsg_from_geo_crs_field() {
+        // Write a point file, then rewrite its `geo` metadata to carry a
+        // standard PROJJSON crs (as other writers would) instead of the
+        // surtgis:epsg key.
+        let mut fc = FeatureCollection::new();
+        fc.push(Feature::new(geo::Geometry::Point(geo::Point::new(
+            1.0, 2.0,
+        ))));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("projjson.parquet");
+        write_geoparquet(&fc, None, &path).unwrap();
+
+        let file = File::open(&path).unwrap();
+        let reader = SerializedFileReader::new(file).unwrap();
+        let mut kvs = reader
+            .metadata()
+            .file_metadata()
+            .key_value_metadata()
+            .unwrap()
+            .clone();
+        let geo = kvs.iter_mut().find(|kv| kv.key == "geo").unwrap();
+        let mut parsed: serde_json::Value =
+            serde_json::from_str(geo.value.as_deref().unwrap()).unwrap();
+        parsed["columns"]["geometry"]["crs"] =
+            serde_json::json!({"id": {"authority": "EPSG", "code": 3857}});
+        geo.value = Some(parsed.to_string());
+
+        // Rewrite the parquet with the modified metadata.
+        let schema = reader.metadata().file_metadata().schema().clone();
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_compression(Compression::SNAPPY)
+                .set_key_value_metadata(Some(kvs))
+                .build(),
+        );
+        let f = File::create(&path).unwrap();
+        let mut w = SerializedFileWriter::new(f, schema.into(), props).unwrap();
+        let mut rg = w.next_row_group().unwrap();
+        // Single column: geometry (WKB points).
+        let mut col = rg.next_column().unwrap().unwrap();
+        col.typed::<ByteArrayType>()
+            .write_batch(&[ByteArray::from(wkb_point(1.0, 2.0))], None, None)
+            .unwrap();
+        col.close().unwrap();
+        rg.close().unwrap();
+        w.close().unwrap();
+
+        let back = read_geoparquet(&path).unwrap();
+        assert_eq!(back.crs().and_then(|c| c.epsg()), Some(3857));
     }
 }
