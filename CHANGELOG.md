@@ -7,6 +7,31 @@ Versioning follows [SemVer 2.0.0](https://semver.org/). The project is still in
 the `0.x` series, so minor versions may contain breaking changes; we try to
 call them out under a `Breaking` heading when they happen.
 
+## [1.1.0] - 2026-08-06
+
+### Added
+
+- **GeoParquet reader now parses every standard WKB geometry type** (feature
+  `parquet`). `read_geoparquet` was points-only; it now returns a
+  `FeatureCollection` with Point, LineString, Polygon, MultiPoint,
+  MultiLineString and MultiPolygon geometries, decoded by a general WKB
+  cursor that accepts both byte orders and EWKB flags (SRID honoured; Z/M
+  ordinates parsed and dropped). The CRS is resolved from `surtgis:epsg`
+  first and then from the standard `geo.columns.<geom>.crs` field (PROJJSON
+  `id` or OGC URI). Malformed, truncated or unknown-type WKB is rejected
+  with explicit errors instead of silently skipped.
+
+### Fixed
+
+- **`surtgis info` (and the dtype-preserving read path used by WASM/Python)
+  masks finite float NoData sentinels again** (e.g. the rasterio/GDAL
+  `-9999` convention). The `read_geotiff_any` path kept the literal
+  sentinel in float buffers while recording NoData as NaN, so fill cells
+  were counted as valid — `info` reported 100% valid cells and a
+  fill-contaminated Min/Mean on any float product with finite fill.
+  Reported from a real workflow (paleo-lake reconstruction); regression
+  tests cover f32/f64 with `-9999`/`0`/`-1` sentinels end-to-end.
+
 ## [1.0.0] - 2026-07-23
 
 First stable release. It promotes the 0.18.0 candidate surface unchanged, now
