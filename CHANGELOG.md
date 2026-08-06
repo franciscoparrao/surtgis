@@ -7,6 +7,21 @@ Versioning follows [SemVer 2.0.0](https://semver.org/). The project is still in
 the `0.x` series, so minor versions may contain breaking changes; we try to
 call them out under a `Breaking` heading when they happen.
 
+## [1.2.0] - 2026-08-06
+
+### Added
+
+- **`read_geoparquet` accepts nullable (OPTIONAL) attribute columns** —
+  the GeoPandas/pyarrow default when properties are not uniform across
+  features. A missing value becomes `AttributeValue::Null` on that
+  feature (including nulls in the first rows and all-null columns);
+  boolean columns are now read too (`AttributeValue::Bool`). The
+  strictly-columnar `read_geoparquet_points` path still rejects nulls by
+  design — `PointTable` has no missing-value representation — and its
+  error message now points to `read_geoparquet` for nullable data.
+- `AttributeValue` implements `PartialEq`, so consumers can compare
+  property values directly.
+
 ## [1.1.0] - 2026-08-06
 
 ### Added
