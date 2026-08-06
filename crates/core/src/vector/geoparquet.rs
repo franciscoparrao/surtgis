@@ -257,9 +257,9 @@ fn read_geometry(r: &mut WkbReader) -> Result<geo::Geometry<f64>> {
                 rings.push(geo::LineString::new(ring));
             }
             let mut it = rings.into_iter();
-            let exterior = it.next().ok_or_else(|| {
-                Error::Other("geoparquet: polygon with no rings".into())
-            })?;
+            let exterior = it
+                .next()
+                .ok_or_else(|| Error::Other("geoparquet: polygon with no rings".into()))?;
             Ok(geo::Geometry::Polygon(geo::Polygon::new(
                 exterior,
                 it.collect(),
@@ -272,9 +272,7 @@ fn read_geometry(r: &mut WkbReader) -> Result<geo::Geometry<f64>> {
                 match read_geometry(r)? {
                     geo::Geometry::Point(p) => pts.push(p),
                     _ => {
-                        return Err(Error::Other(
-                            "geoparquet: non-point in MultiPoint".into(),
-                        ));
+                        return Err(Error::Other("geoparquet: non-point in MultiPoint".into()));
                     }
                 }
             }
@@ -323,9 +321,7 @@ fn read_geometry(r: &mut WkbReader) -> Result<geo::Geometry<f64>> {
 fn parse_wkb_point(wkb: &[u8]) -> Result<(f64, f64)> {
     match parse_wkb(wkb)? {
         geo::Geometry::Point(p) => Ok((p.x(), p.y())),
-        _ => Err(Error::Other(
-            "geoparquet: expected a point geometry".into(),
-        )),
+        _ => Err(Error::Other("geoparquet: expected a point geometry".into())),
     }
 }
 
@@ -1165,7 +1161,9 @@ mod tests {
     #[test]
     fn crs_to_epsg_understands_uris_and_projjson() {
         assert_eq!(
-            crs_to_epsg(&serde_json::json!("http://www.opengis.net/def/crs/EPSG/0/4326")),
+            crs_to_epsg(&serde_json::json!(
+                "http://www.opengis.net/def/crs/EPSG/0/4326"
+            )),
             Some(4326)
         );
         assert_eq!(
@@ -1173,7 +1171,9 @@ mod tests {
             Some(32719)
         );
         assert_eq!(
-            crs_to_epsg(&serde_json::json!({"type": "GeographicCRS", "id": {"authority": "EPSG", "code": 4326}})),
+            crs_to_epsg(
+                &serde_json::json!({"type": "GeographicCRS", "id": {"authority": "EPSG", "code": 4326}})
+            ),
             Some(4326)
         );
         assert_eq!(crs_to_epsg(&serde_json::json!(null)), None);
@@ -1202,7 +1202,8 @@ mod tests {
             .unwrap()
             .clone();
         let geo = kvs.iter_mut().find(|kv| kv.key == "geo").unwrap();
-        let mut parsed: serde_json::Value = serde_json::from_str(geo.value.as_deref().unwrap()).unwrap();
+        let mut parsed: serde_json::Value =
+            serde_json::from_str(geo.value.as_deref().unwrap()).unwrap();
         parsed["columns"]["geometry"]["crs"] =
             serde_json::json!({"id": {"authority": "EPSG", "code": 3857}});
         geo.value = Some(parsed.to_string());
@@ -1221,11 +1222,7 @@ mod tests {
         // Single column: geometry (WKB points).
         let mut col = rg.next_column().unwrap().unwrap();
         col.typed::<ByteArrayType>()
-            .write_batch(
-                &[ByteArray::from(wkb_point(1.0, 2.0))],
-                None,
-                None,
-            )
+            .write_batch(&[ByteArray::from(wkb_point(1.0, 2.0))], None, None)
             .unwrap();
         col.close().unwrap();
         rg.close().unwrap();
