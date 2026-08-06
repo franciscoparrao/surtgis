@@ -16,7 +16,11 @@
 //!
 //! Scope (v1):
 //! - Geometry: full 2-D WKB read (all standard types), point-only write.
-//! - Column types: f64, f32, i64, UTF-8 string. No nulls.
+//! - Column types: f64, f32, i64, bool, UTF-8 string.
+//! - Nulls: supported by [`read_geoparquet`] — nullable (OPTIONAL) columns,
+//!   as written by GeoPandas/pyarrow for non-uniform properties, map to
+//!   [`AttributeValue::Null`] per feature. The columnar
+//!   [`read_geoparquet_points`] path stays strict (no nulls) by design.
 //! - CRS: GeoParquet `crs` is written as `null` (unknown) and the
 //!   EPSG code is preserved in a `surtgis:epsg` metadata key, which
 //!   the reader recovers. The reader also understands the standard
@@ -487,7 +491,13 @@ pub fn write_geoparquet_points<P: AsRef<Path>>(table: &PointTable, path: P) -> R
 /// The geometry column is located through the `geo` metadata
 /// (`primary_column`), falling back to a column named `geometry`.
 /// Supported attribute types: DOUBLE, FLOAT, INT64/INT32 (widened to
-/// i64), UTF-8 strings. Null values are rejected.
+/// i64), UTF-8 strings.
+///
+/// **Null values are rejected**: [`PointTable`] is strictly columnar
+/// (embedding matrices, training samples) and has no representation for
+/// missing values. For nullable data — the GeoPandas/pyarrow default for
+/// non-uniform properties — use [`read_geoparquet`], which maps nulls to
+/// [`AttributeValue::Null`].
 pub fn read_geoparquet_points<P: AsRef<Path>>(path: P) -> Result<PointTable> {
     let file = File::open(path.as_ref())
         .map_err(|e| Error::Other(format!("geoparquet: cannot open file: {}", e)))?;
@@ -548,6 +558,13 @@ pub fn read_geoparquet_points<P: AsRef<Path>>(path: P) -> Result<PointTable> {
                         ColumnData::I64(Vec::new())
                     }
                     Field::Str(_) => ColumnData::Str(Vec::new()),
+                    Field::Null => {
+                        return Err(Error::Other(format!(
+                            "geoparquet: null value in column '{}'; PointTable is \
+                             strictly columnar — use read_geoparquet for nullable data",
+                            name
+                        )));
+                    }
                     other => {
                         return Err(Error::Other(format!(
                             "geoparquet: unsupported type {:?} in column '{}'",
@@ -570,9 +587,16 @@ pub fn read_geoparquet_points<P: AsRef<Path>>(path: P) -> Result<PointTable> {
                 (ColumnData::I64(v), Field::Short(x)) => v.push(*x as i64),
                 (ColumnData::I64(v), Field::Byte(x)) => v.push(*x as i64),
                 (ColumnData::Str(v), Field::Str(s)) => v.push(s.clone()),
+                (_, Field::Null) => {
+                    return Err(Error::Other(format!(
+                        "geoparquet: null value in column '{}'; PointTable is \
+                         strictly columnar — use read_geoparquet for nullable data",
+                        name
+                    )));
+                }
                 (_, other) => {
                     return Err(Error::Other(format!(
-                        "geoparquet: inconsistent or null value {:?} in column '{}'",
+                        "geoparquet: inconsistent value {:?} in column '{}'",
                         other, name
                     )));
                 }
@@ -689,6 +713,10 @@ pub fn write_geoparquet<P: AsRef<Path>>(
 ///
 /// Files with no recoverable CRS yield `crs: None` — honestly unknown
 /// rather than assumed.
+///
+/// Nullable (OPTIONAL) attribute columns — the GeoPandas/pyarrow default
+/// when properties are not uniform across features — are supported: a
+/// missing value becomes [`AttributeValue::Null`] on that feature.
 pub fn read_geoparquet<P: AsRef<Path>>(path: P) -> Result<FeatureCollection> {
     let file = File::open(path.as_ref())
         .map_err(|e| Error::Other(format!("geoparquet: cannot open file: {}", e)))?;
@@ -722,16 +750,14 @@ pub fn read_geoparquet<P: AsRef<Path>>(path: P) -> Result<FeatureCollection> {
     }
 
     let mut fc = FeatureCollection::with_crs(epsg.map(CRS::from_epsg));
-    let mut columns: Vec<(String, ColumnData)> = Vec::new();
-    let mut columns_init = false;
 
     let rows = reader
         .get_row_iter(None)
         .map_err(|e| Error::Other(e.to_string()))?;
     for row in rows {
         let row = row.map_err(|e| Error::Other(e.to_string()))?;
-        let mut feature = None;
-        let mut col_idx = 0usize;
+        let mut geometry = None;
+        let mut props: Vec<(String, AttributeValue)> = Vec::new();
         for (name, field) in row.get_column_iter() {
             if name == &geometry_column {
                 let Field::Bytes(wkb) = field else {
@@ -740,63 +766,44 @@ pub fn read_geoparquet<P: AsRef<Path>>(path: P) -> Result<FeatureCollection> {
                         geometry_column
                     )));
                 };
-                feature = Some(parse_wkb(wkb.data())?);
+                geometry = Some(parse_wkb(wkb.data())?);
                 continue;
             }
 
-            if !columns_init {
-                let data = match field {
-                    Field::Double(_) => ColumnData::F64(Vec::new()),
-                    Field::Float(_) => ColumnData::F32(Vec::new()),
-                    Field::Long(_) | Field::Int(_) | Field::Short(_) | Field::Byte(_) => {
-                        ColumnData::I64(Vec::new())
-                    }
-                    Field::Str(_) => ColumnData::Str(Vec::new()),
-                    other => {
-                        return Err(Error::Other(format!(
-                            "geoparquet: unsupported type {:?} in column '{}'",
-                            other, name
-                        )));
-                    }
-                };
-                columns.push((name.clone(), data));
-            }
-
-            let col = &mut columns[col_idx].1;
-            match (col, field) {
-                (ColumnData::F64(v), Field::Double(x)) => v.push(*x),
-                (ColumnData::F32(v), Field::Float(x)) => v.push(*x),
-                (ColumnData::I64(v), Field::Long(x)) => v.push(*x),
-                (ColumnData::I64(v), Field::Int(x)) => v.push(*x as i64),
-                (ColumnData::I64(v), Field::Short(x)) => v.push(*x as i64),
-                (ColumnData::I64(v), Field::Byte(x)) => v.push(*x as i64),
-                (ColumnData::Str(v), Field::Str(s)) => v.push(s.clone()),
-                (_, other) => {
+            // Direct per-field mapping. Parquet's schema already guarantees
+            // each column decodes to one consistent `Field` variant across
+            // rows (or `Null` for OPTIONAL columns — the GeoPandas/pyarrow
+            // default for non-uniform properties), so no cross-row type
+            // bookkeeping is needed here.
+            let value = match field {
+                Field::Null => AttributeValue::Null,
+                Field::Bool(b) => AttributeValue::Bool(*b),
+                Field::Double(x) => AttributeValue::Float(*x),
+                Field::Float(x) => AttributeValue::Float(*x as f64),
+                Field::Long(x) => AttributeValue::Int(*x),
+                Field::Int(x) => AttributeValue::Int(*x as i64),
+                Field::Short(x) => AttributeValue::Int(*x as i64),
+                Field::Byte(x) => AttributeValue::Int(*x as i64),
+                Field::Str(s) => AttributeValue::String(s.clone()),
+                other => {
                     return Err(Error::Other(format!(
-                        "geoparquet: inconsistent or null value {:?} in column '{}'",
+                        "geoparquet: unsupported type {:?} in column '{}'",
                         other, name
                     )));
                 }
-            }
-            col_idx += 1;
+            };
+            props.push((name.clone(), value));
         }
-        columns_init = true;
 
-        let Some(geometry) = feature else {
+        let Some(geometry) = geometry else {
             return Err(Error::Other(format!(
                 "geoparquet: missing geometry column '{}'",
                 geometry_column
             )));
         };
         let mut f = Feature::new(geometry);
-        for (name, data) in &columns {
-            let value = match data {
-                ColumnData::F64(v) => AttributeValue::Float(v[fc.len()]),
-                ColumnData::F32(v) => AttributeValue::Float(v[fc.len()] as f64),
-                ColumnData::I64(v) => AttributeValue::Int(v[fc.len()]),
-                ColumnData::Str(v) => AttributeValue::String(v[fc.len()].clone()),
-            };
-            f.set_property(name.clone(), value);
+        for (name, value) in props {
+            f.set_property(name, value);
         }
         fc.push(f);
     }
@@ -1230,5 +1237,148 @@ mod tests {
 
         let back = read_geoparquet(&path).unwrap();
         assert_eq!(back.crs().and_then(|c| c.epsg()), Some(3857));
+    }
+
+    /// The GeoPandas/pyarrow shape that motivated null support: mixed
+    /// geometry types where a property only exists on some features, so
+    /// the column is written OPTIONAL and carries nulls — including in
+    /// the very first row, and one column that is null throughout.
+    fn write_nullable_fixture(path: &std::path::Path, points_only: bool) {
+        let geometry = SchemaType::primitive_type_builder("geometry", PhysicalType::BYTE_ARRAY)
+            .with_repetition(Repetition::REQUIRED)
+            .build()
+            .unwrap();
+        let estacion = SchemaType::primitive_type_builder("estacion", PhysicalType::BYTE_ARRAY)
+            .with_converted_type(ConvertedType::UTF8)
+            .with_repetition(Repetition::OPTIONAL)
+            .build()
+            .unwrap();
+        let valor = SchemaType::primitive_type_builder("valor", PhysicalType::DOUBLE)
+            .with_repetition(Repetition::OPTIONAL)
+            .build()
+            .unwrap();
+        let vacia = SchemaType::primitive_type_builder("vacia", PhysicalType::INT64)
+            .with_repetition(Repetition::OPTIONAL)
+            .build()
+            .unwrap();
+        let schema = SchemaType::group_type_builder("schema")
+            .with_fields(vec![
+                Arc::new(geometry),
+                Arc::new(estacion),
+                Arc::new(valor),
+                Arc::new(vacia),
+            ])
+            .build()
+            .unwrap();
+
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_compression(Compression::SNAPPY)
+                .build(),
+        );
+        let f = File::create(path).unwrap();
+        let mut w = SerializedFileWriter::new(f, Arc::new(schema), props).unwrap();
+        let mut rg = w.next_row_group().unwrap();
+
+        // geometry: linestring, point, point (mixed types) — or points only,
+        // so the strict PointTable reader reaches the null instead of
+        // rejecting on geometry first.
+        let first = if points_only {
+            wkb_point(0.0, 0.0)
+        } else {
+            wkb_linestring(&[(0.0, 0.0), (1.0, 1.0)])
+        };
+        let mut col = rg.next_column().unwrap().unwrap();
+        col.typed::<ByteArrayType>()
+            .write_batch(
+                &[
+                    ByteArray::from(first),
+                    ByteArray::from(wkb_point(2.0, 2.0)),
+                    ByteArray::from(wkb_point(3.0, 3.0)),
+                ],
+                None,
+                None,
+            )
+            .unwrap();
+        col.close().unwrap();
+
+        // estacion: null on the linestring (FIRST row), present on points.
+        let mut col = rg.next_column().unwrap().unwrap();
+        col.typed::<ByteArrayType>()
+            .write_batch(
+                &[ByteArray::from("EST-7"), ByteArray::from("EST-9")],
+                Some(&[0, 1, 1]),
+                None,
+            )
+            .unwrap();
+        col.close().unwrap();
+
+        // valor: present, null, present.
+        let mut col = rg.next_column().unwrap().unwrap();
+        col.typed::<DoubleType>()
+            .write_batch(&[1.5, 9.9], Some(&[1, 0, 1]), None)
+            .unwrap();
+        col.close().unwrap();
+
+        // vacia: null in every row.
+        let mut col = rg.next_column().unwrap().unwrap();
+        col.typed::<Int64Type>()
+            .write_batch(&[], Some(&[0, 0, 0]), None)
+            .unwrap();
+        col.close().unwrap();
+
+        rg.close().unwrap();
+        w.close().unwrap();
+    }
+
+    #[test]
+    fn read_geoparquet_reads_nullable_columns() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nullable.parquet");
+        write_nullable_fixture(&path, false);
+
+        let fc = read_geoparquet(&path).unwrap();
+        assert_eq!(fc.len(), 3);
+
+        // Geometry types survive alongside the nullable columns.
+        assert!(matches!(
+            fc.features[0].geometry,
+            Some(geo::Geometry::LineString(_))
+        ));
+        assert!(matches!(
+            fc.features[1].geometry,
+            Some(geo::Geometry::Point(_))
+        ));
+
+        let est = |i: usize| fc.features[i].get_property("estacion").unwrap();
+        assert_eq!(est(0), &AttributeValue::Null); // null in the FIRST row
+        assert_eq!(est(1), &AttributeValue::String("EST-7".into()));
+        assert_eq!(est(2), &AttributeValue::String("EST-9".into()));
+
+        let val = |i: usize| fc.features[i].get_property("valor").unwrap();
+        assert_eq!(val(0), &AttributeValue::Float(1.5));
+        assert_eq!(val(1), &AttributeValue::Null);
+        assert_eq!(val(2), &AttributeValue::Float(9.9));
+
+        // An all-null column still yields the property, as Null everywhere.
+        for i in 0..3 {
+            assert_eq!(
+                fc.features[i].get_property("vacia").unwrap(),
+                &AttributeValue::Null
+            );
+        }
+    }
+
+    #[test]
+    fn read_geoparquet_points_rejects_nulls_pointing_to_the_nullable_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nullable_pts.parquet");
+        write_nullable_fixture(&path, true);
+
+        let err = read_geoparquet_points(&path).unwrap_err().to_string();
+        assert!(
+            err.contains("use read_geoparquet"),
+            "error should point to the nullable-capable reader, got: {err}"
+        );
     }
 }
