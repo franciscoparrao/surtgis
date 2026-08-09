@@ -717,6 +717,8 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             asset,
             datetime,
             max_items,
+            retries,
+            allow_partial,
             output,
         } => {
             let cat = StacCatalog::from_str_or_url(&catalog);
@@ -775,6 +777,10 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
 
             let start = Instant::now();
             let mut rasters: Vec<surtgis_core::Raster<f64>> = Vec::new();
+            // Tiles that could not be fetched: (item id, last error). A
+            // missing tile leaves a hole of NoData indistinguishable from
+            // legitimate NoData in the output, so these decide success below.
+            let mut missing: Vec<(String, String)> = Vec::new();
 
             for (i, item) in items.iter().enumerate() {
                 // Plain progress line so pipelines / non-TTY logs see progress
@@ -791,10 +797,8 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                     Some(a) => a,
                     None => {
                         pb.finish_and_clear();
-                        eprintln!(
-                            "  Warning: item {} missing asset '{}', skipping",
-                            item.id, asset_key
-                        );
+                        eprintln!("  Warning: item {} missing asset '{}'", item.id, asset_key);
+                        missing.push((item.id.clone(), format!("missing asset '{asset_key}'")));
                         continue;
                     }
                 };
@@ -803,40 +807,38 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                     .sign_asset_href(&stac_asset.href, item.collection.as_deref().unwrap_or(""))
                     .context("Failed to sign asset URL")?;
 
-                let opts = CogReaderOptions::default();
-                let mut reader = match CogReaderBlocking::open(&href, opts) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        pb.finish_and_clear();
-                        eprintln!(
-                            "  Warning: failed to open COG for {}: {}, skipping",
-                            item.id, e
-                        );
-                        continue;
-                    }
-                };
+                // Open + read under retry: the HTTP client only retries at
+                // the request level (connect/429/503), but a tile fetch can
+                // also die while decoding the response body — the transient
+                // failure that motivated this (a second attempt succeeds).
+                let fetched = retry_with_backoff(retries, Duration::from_millis(500), || {
+                    let opts = CogReaderOptions::default();
+                    let mut reader = CogReaderBlocking::open(&href, opts)?;
 
-                // Auto-reproject bbox if COG is in a projected CRS
-                let read_bb = {
-                    use surtgis_cloud::reproject;
-                    let epsg = item
-                        .epsg()
-                        .or_else(|| reader.metadata().crs.as_ref().and_then(|c| c.epsg()));
-                    if let Some(epsg) = epsg {
-                        if !reproject::is_wgs84(epsg) {
-                            reproject::reproject_bbox_to_cog(&bb, epsg)
+                    // Auto-reproject bbox if COG is in a projected CRS
+                    let read_bb = {
+                        use surtgis_cloud::reproject;
+                        let epsg = item
+                            .epsg()
+                            .or_else(|| reader.metadata().crs.as_ref().and_then(|c| c.epsg()));
+                        if let Some(epsg) = epsg {
+                            if !reproject::is_wgs84(epsg) {
+                                reproject::reproject_bbox_to_cog(&bb, epsg)
+                            } else {
+                                bb
+                            }
                         } else {
                             bb
                         }
-                    } else {
-                        bb
-                    }
-                };
+                    };
 
-                // Same as `stac fetch`: `fetch-mosaic` mosaics scenes at their
-                // own native resolution (no separate output grid), so there's
-                // no ratio to compute here — always full res.
-                match reader.read_bbox::<f64>(&read_bb, None) {
+                    // Same as `stac fetch`: `fetch-mosaic` mosaics scenes at
+                    // their own native resolution (no separate output grid),
+                    // so there's no ratio to compute here — always full res.
+                    reader.read_bbox::<f64>(&read_bb, None)
+                });
+
+                match fetched {
                     Ok(raster) => {
                         pb.finish_and_clear();
                         let (rows, cols) = raster.shape();
@@ -853,15 +855,55 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                     Err(e) => {
                         pb.finish_and_clear();
                         eprintln!(
-                            "  Warning: failed to read tile {}: {}, skipping",
-                            item.id, e
+                            "  Warning: failed to fetch tile {} after {} attempts: {}",
+                            item.id,
+                            retries.max(1),
+                            e
                         );
+                        missing.push((item.id.clone(), e.to_string()));
                     }
                 }
             }
 
             if rasters.is_empty() {
                 anyhow::bail!("No tiles were successfully fetched");
+            }
+
+            if !missing.is_empty() {
+                let ids: Vec<&str> = missing.iter().map(|(id, _)| id.as_str()).collect();
+                if !allow_partial {
+                    anyhow::bail!(
+                        "fetch-mosaic: {} of {} tiles could not be fetched: {}. \
+                         Nothing was written — an incomplete mosaic has tile-sized \
+                         NoData holes indistinguishable from real NoData. Re-run \
+                         (transient errors are retried {} times), or pass \
+                         --allow-partial to save it anyway with a sidecar listing \
+                         the missing tiles.",
+                        missing.len(),
+                        items.len(),
+                        ids.join(", "),
+                        retries.max(1)
+                    );
+                }
+                let sidecar = output.with_extension("partial.json");
+                std::fs::write(
+                    &sidecar,
+                    serde_json::to_string_pretty(&partial_sidecar_json(
+                        items.len(),
+                        rasters.len(),
+                        &missing,
+                    ))
+                    .expect("sidecar json"),
+                )
+                .with_context(|| format!("Failed to write sidecar {}", sidecar.display()))?;
+                eprintln!(
+                    "WARNING: INCOMPLETE mosaic — {} of {} tiles missing ({}). \
+                     Missing-tile list written to {}",
+                    missing.len(),
+                    items.len(),
+                    ids.join(", "),
+                    sidecar.display()
+                );
             }
 
             let pb = spinner("Mosaicking tiles...");
@@ -872,8 +914,9 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             let elapsed = start.elapsed();
             let (rows, cols) = result.shape();
             println!(
-                "Mosaic: {} tiles -> {} x {} ({} cells)",
+                "Mosaic: {} of {} tiles -> {} x {} ({} cells)",
                 rasters.len(),
+                items.len(),
                 cols,
                 rows,
                 result.len()
@@ -2300,9 +2343,95 @@ pub(crate) fn split_date_range(
     Ok(windows)
 }
 
+/// Run `op` up to `attempts` times (min 1), sleeping `base × 2^n` between
+/// tries. Returns the first success or the last error. Used per tile in
+/// `fetch-mosaic`: transient HTTP failures (e.g. a response body that dies
+/// mid-decode) typically succeed on the next attempt.
+fn retry_with_backoff<T, E: std::fmt::Display>(
+    attempts: u32,
+    base: Duration,
+    mut op: impl FnMut() -> std::result::Result<T, E>,
+) -> std::result::Result<T, E> {
+    let attempts = attempts.max(1);
+    let mut last = None;
+    for i in 0..attempts {
+        match op() {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                if i + 1 < attempts {
+                    eprintln!("  retrying ({}/{}) after: {}", i + 1, attempts - 1, e);
+                    std::thread::sleep(base * 2u32.pow(i));
+                }
+                last = Some(e);
+            }
+        }
+    }
+    Err(last.expect("attempts >= 1"))
+}
+
+/// The `<output>.partial.json` sidecar for `--allow-partial`: which tiles a
+/// saved mosaic is missing, so an incomplete result stays machine-detectable.
+fn partial_sidecar_json(
+    expected: usize,
+    fetched: usize,
+    missing: &[(String, String)],
+) -> serde_json::Value {
+    serde_json::json!({
+        "warning": "INCOMPLETE MOSAIC: the tiles listed here are absent from the GeoTIFF; their footprints are NoData",
+        "tiles_expected": expected,
+        "tiles_fetched": fetched,
+        "tiles_missing": missing
+            .iter()
+            .map(|(id, error)| serde_json::json!({ "id": id, "error": error }))
+            .collect::<Vec<_>>(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retry_with_backoff_succeeds_after_transient_failures() {
+        let mut calls = 0;
+        let out = retry_with_backoff(3, Duration::ZERO, || {
+            calls += 1;
+            if calls < 3 {
+                Err("HTTP error: error decoding response body")
+            } else {
+                Ok(42)
+            }
+        });
+        assert_eq!(out, Ok(42));
+        assert_eq!(calls, 3);
+    }
+
+    #[test]
+    fn retry_with_backoff_returns_last_error_when_exhausted() {
+        let mut calls = 0;
+        let out: Result<(), _> = retry_with_backoff(3, Duration::ZERO, || {
+            calls += 1;
+            Err(format!("boom {calls}"))
+        });
+        assert_eq!(out, Err("boom 3".to_string()));
+        assert_eq!(calls, 3);
+        // attempts=0 is clamped to a single try, never a panic.
+        let out: Result<(), _> = retry_with_backoff(0, Duration::ZERO, || Err("once"));
+        assert_eq!(out, Err("once"));
+    }
+
+    #[test]
+    fn partial_sidecar_lists_missing_tiles() {
+        let missing = vec![
+            ("S45_W072".to_string(), "decode error".to_string()),
+            ("S44_W073".to_string(), "decode error".to_string()),
+        ];
+        let j = partial_sidecar_json(20, 18, &missing);
+        assert_eq!(j["tiles_expected"], 20);
+        assert_eq!(j["tiles_fetched"], 18);
+        assert_eq!(j["tiles_missing"].as_array().unwrap().len(), 2);
+        assert_eq!(j["tiles_missing"][0]["id"], "S45_W072");
+    }
 
     #[test]
     fn test_collection_profile_sentinel2() {

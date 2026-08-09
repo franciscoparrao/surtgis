@@ -2062,6 +2062,17 @@ pub enum StacCommands {
         /// Maximum items to fetch and mosaic (caps RAM/time on wide queries)
         #[arg(long, default_value = "20", visible_alias = "max-scenes")]
         max_items: u32,
+        /// Attempts per tile before giving it up (transient HTTP errors are
+        /// retried with exponential backoff)
+        #[arg(long, default_value = "3")]
+        retries: u32,
+        /// Save the mosaic even if some tiles could not be fetched. Off by
+        /// default: an incomplete mosaic is an error, because tile-sized
+        /// NoData holes are indistinguishable from legitimate NoData in the
+        /// output. With this flag, missing tiles are listed loudly and in a
+        /// `<output>.partial.json` sidecar.
+        #[arg(long)]
+        allow_partial: bool,
         /// Output GeoTIFF file
         output: PathBuf,
     },
