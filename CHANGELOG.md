@@ -7,6 +7,24 @@ Versioning follows [SemVer 2.0.0](https://semver.org/). The project is still in
 the `0.x` series, so minor versions may contain breaking changes; we try to
 call them out under a `Breaking` heading when they happen.
 
+## [1.2.1] - 2026-08-08
+
+### Fixed
+
+- **`stac fetch-mosaic` no longer saves incomplete mosaics silently.** A
+  transient HTTP error while fetching a tile was warned, skipped, and the
+  partial mosaic saved with exit 0 — leaving tile-sized NoData holes
+  indistinguishable from legitimate NoData (reported from a real
+  Patagonia workflow: 2 of 20 `cop-dem-glo-30` tiles lost, 25% of the
+  area, detected many pipeline steps later). Now each tile is retried
+  with exponential backoff (`--retries`, default 3 — the reported error
+  succeeds on the second attempt), and if any found tile still cannot be
+  fetched the command **fails by default** listing the missing ids.
+  `--allow-partial` restores the old behaviour, loudly: a WARNING plus a
+  `<output>.partial.json` sidecar listing the missing tiles, and the
+  summary line now prints `N of M tiles`. A missing asset counts as a
+  missing tile instead of a silent skip.
+
 ## [1.2.0] - 2026-08-06
 
 ### Added
