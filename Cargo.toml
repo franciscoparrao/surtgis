@@ -69,7 +69,7 @@ gdal = { version = "0.17", features = ["bindgen"] }
 geozero = "0.14"
 parquet = { version = "59", default-features = false, features = ["snap"] }
 rstar = "0.12"
-tiff = { version = "0.10", features = ["deflate"] }
+tiff = { version = "0.11", features = ["deflate"] }
 
 # Numerics
 ndarray = "0.16"
