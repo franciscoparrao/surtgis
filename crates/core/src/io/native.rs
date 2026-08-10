@@ -146,6 +146,29 @@ fn decode_raw<R>(reader: R, source_len: Option<u64>) -> Result<RawDecoded>
 where
     R: std::io::Read + std::io::Seek,
 {
+    // The `tiff` decoder can *panic* (not just return Err) on malformed
+    // input — e.g. a `SampleFormat` tag with count 0 indexes an empty Vec
+    // (tiff 0.10.3, image.rs:153; found by the nightly fuzzer). This path
+    // decodes untrusted bytes (COGs from arbitrary third-party STAC
+    // catalog hrefs), so an uncaught panic is a denial of service. Contain
+    // any unwind from the decoder and turn it into a normal error. On
+    // panic everything is dropped, so asserting unwind-safety is sound.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        decode_raw_inner(reader, source_len)
+    }))
+    .unwrap_or_else(|_| {
+        Err(Error::Other(
+            "TIFF decode error: the decoder panicked on malformed input \
+             (invalid or inconsistent TIFF tags)"
+                .into(),
+        ))
+    })
+}
+
+fn decode_raw_inner<R>(reader: R, source_len: Option<u64>) -> Result<RawDecoded>
+where
+    R: std::io::Read + std::io::Seek,
+{
     // A hostile TIFF can declare huge ImageWidth/ImageLength or tag counts;
     // `Limits::unlimited()` honours them with a single multi-GB allocation
     // (a 338-byte file forced ~32 GB — found by fuzzing). We keep the

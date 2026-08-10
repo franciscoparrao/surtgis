@@ -7,6 +7,41 @@ Versioning follows [SemVer 2.0.0](https://semver.org/). The project is still in
 the `0.x` series, so minor versions may contain breaking changes; we try to
 call them out under a `Breaking` heading when they happen.
 
+## [1.2.2] - 2026-08-10
+
+### Fixed
+
+- **Cloud reads no longer lose tiles under load.** `stac fetch-mosaic` (and
+  every cloud read: composite, fetch, pipeline) fired all of a COG's byte
+  ranges at once, a self-inflicted burst that trips bandwidth throttling on
+  shared catalogs (Planetary Computer) — bodies aborted mid-transfer,
+  failing whole tiles even after v1.2.1's per-tile retry (a 20-tile
+  Patagonia run lost 5 tiles persistently). Range concurrency is now
+  bounded (6 in flight), and the body read is retried on transient
+  transfer failures instead of surfacing reqwest's opaque "error decoding
+  response body". Verified against the live catalog: the same run now
+  completes 20/20 with negligible time cost. When a body still fails after
+  all attempts, the error names the likely cause (server-side throttling)
+  instead of the opaque message.
+
+- **Malformed TIFFs no longer panic the decoder.** A GeoTIFF declaring
+  `SampleFormat` (tag 339) with count 0 made the `tiff` decoder index an
+  empty vector and panic — a denial of service on a path that decodes
+  untrusted bytes (COGs from arbitrary STAC catalog hrefs), found by the
+  nightly fuzzer. The `tiff` dependency is bumped 0.10 → 0.11 (returns an
+  error for the bad tag) and the shared decoder is wrapped in
+  `catch_unwind`, so any other decoder panic on hostile input also becomes
+  an error rather than unwinding out of the library.
+
+### Note
+
+- When downloading DEM tiles individually and merging with `surtgis
+  mosaic` (a workaround for older versions), give each tile's bounding box
+  a small **overlap** with its neighbours. A bbox pulled slightly inward
+  leaves thin NoData seams along tile edges — invisible in aggregate
+  coverage statistics but a systematic, spatially-structured exclusion.
+  `stac fetch-mosaic` handles this correctly on its own.
+
 ## [1.2.1] - 2026-08-08
 
 ### Fixed
