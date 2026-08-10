@@ -2359,7 +2359,9 @@ fn retry_with_backoff<T, E: std::fmt::Display>(
             Ok(v) => return Ok(v),
             Err(e) => {
                 if i + 1 < attempts {
-                    eprintln!("  retrying ({}/{}) after: {}", i + 1, attempts - 1, e);
+                    // Same "attempt X of N" vocabulary as the give-up error
+                    // below (N = total attempts = 1 initial + retries).
+                    eprintln!("  retrying: attempt {} of {} after: {}", i + 2, attempts, e);
                     std::thread::sleep(base * 2u32.pow(i));
                 }
                 last = Some(e);

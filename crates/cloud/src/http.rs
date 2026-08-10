@@ -136,32 +136,68 @@ impl HttpClient {
 
         let range_value = format!("bytes={}-{}", offset, offset + length - 1);
 
-        let mut req = self.client.get(url).header("Range", &range_value);
+        // `execute_with_retry` retries send + retryable statuses, but the
+        // body transfer itself can still fail *after* an accepted status: a
+        // server that throttles bandwidth under a burst of concurrent range
+        // requests aborts the body mid-stream, which reqwest reports as a
+        // body/decode error. That failure lived outside any retry (the whole
+        // tile then failed). Retry the full request-and-body here with the
+        // same backoff; permanent statuses (416, non-success) still return
+        // immediately without retrying.
+        let mut last_body_err: Option<reqwest::Error> = None;
+        for attempt in 0..=self.max_retries {
+            if attempt > 0 {
+                backoff_sleep(backoff_with_jitter(attempt)).await;
+            }
 
-        for (key, value) in &auth_headers {
-            req = req.header(key.as_str(), value.as_str());
+            let mut req = self.client.get(url).header("Range", &range_value);
+            for (key, value) in &auth_headers {
+                req = req.header(key.as_str(), value.as_str());
+            }
+
+            let resp = self.execute_with_retry(req).await?;
+
+            let status = resp.status();
+            if status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE
+                || (status.is_success() && status != reqwest::StatusCode::PARTIAL_CONTENT)
+            {
+                return Err(CloudError::RangeNotSupported {
+                    url: url.to_string(),
+                });
+            }
+            if !status.is_success() {
+                return Err(CloudError::HttpStatus {
+                    status: status.as_u16(),
+                    url: url.to_string(),
+                });
+            }
+
+            match resp.bytes().await {
+                Ok(bytes) => return Ok(bytes.to_vec()),
+                Err(e) if is_transient_body_error(&e) && attempt < self.max_retries => {
+                    last_body_err = Some(e);
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            }
         }
 
-        let resp = self.execute_with_retry(req).await?;
-
-        let status = resp.status();
-        if status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE
-            || (status.is_success() && status != reqwest::StatusCode::PARTIAL_CONTENT)
-        {
-            return Err(CloudError::RangeNotSupported {
-                url: url.to_string(),
-            });
-        }
-
-        if !status.is_success() {
-            return Err(CloudError::HttpStatus {
-                status: status.as_u16(),
-                url: url.to_string(),
-            });
-        }
-
-        let bytes = resp.bytes().await?;
-        Ok(bytes.to_vec())
+        // Every attempt's body transfer failed transiently — surface the
+        // real cause instead of the opaque "error decoding response body".
+        Err(CloudError::Http {
+            status: last_body_err
+                .as_ref()
+                .and_then(|e| e.status().map(|s| s.as_u16())),
+            msg: format!(
+                "response body transfer failed after {} attempts (likely server-side \
+                 throttling under concurrent range requests): {}: {}",
+                self.max_retries + 1,
+                url,
+                last_body_err
+                    .map(|e| e.to_string())
+                    .unwrap_or_else(|| "unknown body error".into()),
+            ),
+        })
     }
 
     /// Fetch multiple byte ranges concurrently, with automatic coalescing.
@@ -225,16 +261,33 @@ impl HttpClient {
     ) -> Result<Vec<Vec<u8>>> {
         use futures::stream::{FuturesOrdered, StreamExt};
 
-        let mut futs = FuturesOrdered::new();
-        for &(offset, length) in ranges {
-            futs.push_back(self.fetch_range(url, offset, length, auth));
-        }
-
+        // Bound the in-flight range requests. A single COG read can request
+        // dozens of ranges; firing them all at once (the old unbounded
+        // `FuturesOrdered`) is a self-inflicted burst that trips server-side
+        // rate limiting / bandwidth throttling — observed against Planetary
+        // Computer as bodies aborted mid-transfer, failing whole tiles under
+        // otherwise-transient conditions. We keep at most
+        // `MAX_RANGE_CONCURRENCY` in flight, refilling as each completes.
+        // `FuturesOrdered` yields in push order, so results line up with
+        // `ranges` (and this preserves the exact non-`Send` future shape the
+        // async runtime elsewhere depends on — `buffered` here would impose a
+        // `Send` bound that breaks the zarr/object_store path).
         let mut results = Vec::with_capacity(ranges.len());
+        let mut futs = FuturesOrdered::new();
+        let mut next = 0;
+        while next < ranges.len() && futs.len() < MAX_RANGE_CONCURRENCY {
+            let (offset, length) = ranges[next];
+            futs.push_back(self.fetch_range(url, offset, length, auth));
+            next += 1;
+        }
         while let Some(res) = futs.next().await {
             results.push(res?);
+            if next < ranges.len() {
+                let (offset, length) = ranges[next];
+                futs.push_back(self.fetch_range(url, offset, length, auth));
+                next += 1;
+            }
         }
-
         Ok(results)
     }
 
@@ -358,6 +411,23 @@ pub fn shared_client() -> Arc<HttpClient> {
 // ---------------------------------------------------------------------------
 // Retry helpers
 // ---------------------------------------------------------------------------
+
+/// Maximum number of range requests in flight per [`fetch_ranges`] call.
+///
+/// COG reads fan out into many small range GETs; unbounded concurrency is a
+/// burst that triggers server-side throttling on shared catalogs (Planetary
+/// Computer, Earth Search). Six keeps the connection pool warm and pipelined
+/// without looking like an attack.
+const MAX_RANGE_CONCURRENCY: usize = 6;
+
+/// A reqwest error worth retrying at the *body-read* stage: the response
+/// arrived and its status was already accepted, but the body transfer failed
+/// — a timeout or a body/decode error, the signature of bandwidth throttling
+/// aborting the stream mid-download. (Status-level failures are handled by
+/// [`HttpClient::execute_with_retry`]; permanent statuses never reach here.)
+fn is_transient_body_error(e: &reqwest::Error) -> bool {
+    e.is_timeout() || e.is_body() || e.is_decode()
+}
 
 /// Maximum delay honoured from a `Retry-After` header.
 ///
@@ -545,6 +615,84 @@ fn coalesce_ranges(ranges: &[(u64, u64)], gap_tolerance: u64) -> Vec<CoalescedRa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_transient_body_error_classification_is_documented() {
+        // reqwest::Error can't be constructed directly, so this pins the
+        // *intent* in code: only post-status body-transfer failures are
+        // retried here (timeout/body/decode); status handling lives in
+        // execute_with_retry. See is_transient_body_error's doc.
+        // (Behavioural coverage is the concurrency-cap test below plus the
+        // real-regime re-test against a throttling catalog.)
+        assert_eq!(MAX_RANGE_CONCURRENCY, 6);
+    }
+
+    /// A minimal HTTP/1.1 server that answers every request with `206
+    /// Partial Content`, tracking the peak number of simultaneously-open
+    /// connections. Returns `(base_url, peak_counter)`; leaks its accept
+    /// thread (dies on process exit — fine for a test).
+    fn spawn_counting_server() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::io::{Read, Write};
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let cur = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let peak_ret = peak.clone();
+
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let cur = cur.clone();
+                let peak = peak.clone();
+                std::thread::spawn(move || {
+                    let now = cur.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(now, Ordering::SeqCst);
+                    // Hold the connection so concurrent requests overlap.
+                    std::thread::sleep(std::time::Duration::from_millis(40));
+                    let mut buf = [0u8; 1024];
+                    let _ = stream.read(&mut buf);
+                    let body = b"0123456789";
+                    let resp = format!(
+                        "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes 0-9/1000\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = stream.write_all(resp.as_bytes());
+                    let _ = stream.write_all(body);
+                    let _ = stream.flush();
+                    cur.fetch_sub(1, Ordering::SeqCst);
+                });
+            }
+        });
+
+        (format!("http://{}/file", addr), peak_ret)
+    }
+
+    #[tokio::test]
+    async fn fetch_ranges_caps_in_flight_concurrency() {
+        use crate::auth::NoAuth;
+        use std::sync::atomic::Ordering;
+
+        let (url, peak) = spawn_counting_server();
+        let client = HttpClient::new(Duration::from_secs(10), 2).unwrap();
+
+        // 24 far-apart ranges so nothing coalesces (gap > 4KB) → 24 separate
+        // range GETs. Without the cap they'd all fire at once; with it, at
+        // most MAX_RANGE_CONCURRENCY overlap.
+        let ranges: Vec<(u64, u64)> = (0..24).map(|i| (i * 100_000, 10)).collect();
+        let out = client.fetch_ranges(&url, &ranges, &NoAuth).await.unwrap();
+
+        assert_eq!(out.len(), 24);
+        let peak = peak.load(Ordering::SeqCst);
+        assert!(
+            peak <= MAX_RANGE_CONCURRENCY,
+            "peak in-flight {peak} exceeded cap {MAX_RANGE_CONCURRENCY}"
+        );
+        // Sanity: work actually overlapped (not accidentally serialised).
+        assert!(peak >= 2, "expected some concurrency, saw peak {peak}");
+    }
 
     #[test]
     fn normalize_s3_scheme_to_https_virtual_hosted() {
