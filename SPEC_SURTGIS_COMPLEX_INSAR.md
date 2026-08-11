@@ -4,9 +4,15 @@
 > **fundación pura** sobre la que arranca `insar-rs`, sin meter dominio InSAR en
 > `surtgis-core`. Es la P2.1 del `SPEC_SURTGIS_ECOSYSTEM_FOUNDATION.md`,
 > desarrollada como diseño concreto.
-> **Estado:** propuesta de diseño (2026-07-12). **Baseline objetivo:** SurtGIS
-> v0.19.0, feature `insar` (opcional). **Scaffold puro** — el valor está en dejar
-> el tipo y el I/O listos; los algoritmos InSAR viven en el motor hermano.
+> **Estado: CERRADA (2026-07-16).** El grueso de esta SPEC ya estaba
+> implementado desde antes de que este documento existiera — PR #40
+> (`61c3dbd`, 2026-06-10, "complex rasters for InSAR — RasterCell/RasterElement
+> split", v0.15.4) — bajo `feature = "complex"` (no `"insar"` como proponía
+> este texto originalmente). Esta revisión documenta el diseño **tal como
+> quedó implementado**, con dos divergencias deliberadas respecto a la
+> propuesta original (§2.2, §2.3), y cierra los gaps que sí faltaban
+> (`from_amp_phase`, smoke test de fundación). Ver §4 para el estado real de
+> cada criterio de aceptación.
 
 ---
 
@@ -21,49 +27,68 @@ contenedor + lectura/escritura, sin duplicar scaffolding.
 
 ---
 
-## 1. Verificar primero (no asumir)
+## 1. Verificado (resultado real, no la pregunta original)
 
-- [ ] `RasterElement` (en `core::raster`): ¿qué exige exactamente (traits:
-      `Copy`, `Zero`, nodata, conversión `DataType`)? Listar los bounds para saber
-      qué debe cumplir `Complex<f32>`.
-- [ ] `DataType` enum: ¿tiene variantes complejas (`CFloat32`)? GeoTIFF/GDAL las
-      define (TIFFTAG SampleFormat = 3 complejo). Confirmar si el reader/writer
-      nativo (`io/native.rs`) puede round-trippear complejo o solo real.
-- [ ] `AnyRaster`: ¿cómo se enumeran los tipos dinámicos? Agregar la variante
-      compleja sin romper el match exhaustivo existente.
-- [ ] ¿`num-complex` ya está en el árbol (transitivo)? Elegir esa repr para
-      `Complex<f32>` y feature-gate `insar` que la active.
-- [ ] Manejo de nodata para complejo: ¿NaN en cualquier componente? Definir la
-      convención y documentarla.
+- `RasterElement`/`RasterCell` (`core::raster::element`): `Complex<f32>` y
+  `Complex<f64>` implementan `RasterCell` vía macro (`impl_raster_cell_complex!`),
+  gateado tras `feature = "complex"`. No requiere `DataType` — ver siguiente punto.
+- `DataType` (`core::raster::any_raster`) **no tiene** variante compleja. Decisión
+  de diseño (divergencia de §2.2 original): en vez de `CFloat32`/SampleFormat=3
+  nativo, un raster complejo se persiste como **dos rasters `f32` reales
+  independientes** (re, im) vía `complex_to_parts`/`complex_from_parts`. Evita
+  tocar el I/O nativo (`io/native.rs`) y el match exhaustivo de `AnyRaster` por
+  completo — el ahorro de complejidad se juzgó mayor que el de un solo archivo
+  por interferograma.
+- `AnyRaster`: sin cambios, sin variante compleja — consistente con el punto
+  anterior.
+- `num-complex` ya estaba en el árbol de dependencias del workspace (`Cargo.toml`
+  raíz, `num-complex = "0.4"`); en `crates/core` es opcional
+  (`complex = ["dep:num-complex"]`).
+- Nodata: `Complex::new(NaN, NaN)` como `default_nodata()`; `is_nodata` también
+  trata "ambas partes NaN" como nodata aunque no coincida bit a bit con el
+  sentinel explícito (mismo criterio laxo que los `f32`/`f64` reales).
 
 ---
 
-## 2. Diseño
+## 2. Diseño (tal como quedó implementado)
 
 ### 2.1 El tipo
 
-- `impl RasterElement for Complex<f32>` (repr `num_complex::Complex<f32>`), tras
-  feature `insar`. Nodata = `Complex::new(NaN, NaN)` (o la convención que fije §1).
-- `DataType::CFloat32` (nueva variante) + su mapeo a SampleFormat=3 en el I/O.
+- `impl RasterCell for Complex<f32>` y `Complex<f64>` (repr `num_complex::Complex<T>`),
+  tras `feature = "complex"` (no `"insar"` — el nombre de feature real difiere
+  de la propuesta original; se mantiene porque ya es superficie pública desde
+  v0.15.4 y renombrarla ahora sería un breaking change sin beneficio).
+- Nodata = `Complex::new(NaN, NaN)`.
+- **No hay `DataType::CFloat32`** — ver §1, divergencia deliberada.
 
-### 2.2 I/O
+### 2.2 I/O — DIVERGENCIA vs. propuesta original
 
-- Lectura/escritura GeoTIFF complejo en `io/native.rs` (SampleFormat=3, 2×f32
-  intercalados por muestra). Round-trip bit-exacto es el único criterio duro.
-- Preservar CRS/transform/nodata como cualquier raster.
+En vez de SampleFormat=3 nativo en `io/native.rs`, el camino de persistencia es
+**split a dos bandas reales**: `complex_to_parts(&Raster<Complex<T>>) -> (Raster<T>, Raster<T>)`
+escribe/lee cada parte con `write_geotiff`/`read_geotiff` normales, y
+`complex_from_parts(&Raster<T>, &Raster<T>) -> Result<Raster<Complex<T>>>`
+las reensambla (validando shape/transform/CRS iguales). Round-trip bit-exacto
+verificado en `geotiff_roundtrip_via_parts` (`crates/core/src/raster/complex.rs`).
+CRS/transform/nodata se preservan porque cada parte es un `Raster<T>` real
+completo. Costo: dos archivos por raster complejo en vez de uno; beneficio: cero
+código nuevo en el I/O nativo ni en `AnyRaster`.
 
 ### 2.3 Operaciones elementales (mínimas, no dominio)
 
-Solo lo que es genuinamente "primitiva de contenedor", NO InSAR:
-
-- Constructores: `from_parts(re: &Raster<f32>, im: &Raster<f32>)`,
-  `from_amp_phase(amp, phase)`.
-- Accesores: `.real() -> Raster<f32>`, `.imag()`, `.amplitude()`, `.phase()`.
-- Helpers FFT **opcionales** (feature `insar`, vía `rustfft` pure-Rust) como
-  utilidad de contenedor — el uso InSAR (espectro, filtrado) lo decide el motor.
+- Constructores: `complex_from_parts(re, im)` y `complex_from_amp_phase(amp, phase)`
+  (agregado 2026-07-16 — usa `Complex::from_polar`).
+- Accesores: `complex_to_parts(&raster) -> (re, im)`, `magnitude(&raster)`,
+  `phase(&raster)` (todas en `crates/core/src/raster/complex.rs`).
+- Helpers FFT: **descartados**, no solo diferidos. La implementación real
+  documenta la decisión explícitamente (doc comment del módulo): "FFT helpers
+  are deliberately out of scope — spectral processing belongs to insar-rs".
+  Es consistente con el espíritu de esta SPEC (§0) pero más estricto que la
+  propuesta original, que los pedía como opcionales bajo feature.
 
 Todo lo demás (interferograma = producto conjugado, coherencia, coregistro,
-phase unwrapping, filtro Goldstein) **NO va aquí** — vive en `insar-rs`.
+phase unwrapping, filtro Goldstein) **NO está aquí** — vive en `insar-rs`. El
+producto conjugado en particular se probó como responsabilidad del consumidor
+en el smoke test de fundación (§4, `insar_conjugate_product`).
 
 ---
 
@@ -74,26 +99,38 @@ phase unwrapping, filtro Goldstein) **NO va aquí** — vive en `insar-rs`.
 - **Python/WASM:** diferido. Exponer complejo por PyO3 solo cuando insar-rs pida
   el puente (se alinea con P2.2, patrón de bindings). No bloquear con esto.
 
-## 4. Criterios de aceptación (Definition of Done del scaffold)
+## 4. Criterios de aceptación (Definition of Done del scaffold) — estado real
 
-- [ ] `impl RasterElement for Complex<f32>` compila tras `--features insar`,
-      sin afectar el build por defecto.
-- [ ] `DataType::CFloat32` + match exhaustivos actualizados (sin `todo!()` que
-      rompa otros tipos).
-- [ ] Round-trip GeoTIFF complejo bit-exacto (test) — escribir y releer un raster
-      complejo sintético y comparar.
-- [ ] `from_parts` / `amplitude` / `phase` con un test analítico simple.
-- [ ] Helpers FFT tras feature, con un test de identidad FFT→IFFT.
-- [ ] Un **smoke test de fundación**: un stub `insar-rs` (o un ejemplo en el
-      repo) hace read→conjugate-product→write usando solo la superficie de core.
+- [x] `impl RasterCell for Complex<f32>` (y `f64`) compila tras
+      `--features complex`, sin afectar el build por defecto (verificado:
+      `cargo check -p surtgis-core` sin la feature compila limpio).
+- [x] ~~`DataType::CFloat32` + match exhaustivos~~ — **no aplica**, decisión de
+      diseño fue split re/im (§2.2). Cerrado como no-objetivo, no como pendiente.
+- [x] Round-trip GeoTIFF complejo bit-exacto (test) — `geotiff_roundtrip_via_parts`,
+      vía split re/im.
+- [x] `from_parts` / `from_amp_phase` / `magnitude` / `phase` con tests
+      analíticos (`parts_roundtrip_with_nodata`, `from_amp_phase_matches_polar_form`,
+      `magnitude_and_phase`).
+- [x] ~~Helpers FFT~~ — **descartados** (§2.3), no forman parte del DoD final.
+- [x] **Smoke test de fundación**: `crates/core/examples/insar_conjugate_product.rs`
+      — dos rasters SLC sintéticos (master/slave) → GeoTIFF (re,im) → read →
+      `complex_from_parts` → producto conjugado (implementado en el ejemplo,
+      *no* en core) → `magnitude`/`phase` → write. Corre con
+      `cargo run -p surtgis-core --example insar_conjugate_product --features complex`.
+      Prueba que un consumidor externo arranca sin reimplementar tipos ni I/O.
 
 ## 5. No-objetivos
 
 - **NO** algoritmos InSAR en core (coregistro, unwrapping, coherencia). Core =
-  tipo + I/O + primitivas de contenedor.
+  tipo + I/O (split re/im) + primitivas de contenedor.
 - **NO** activar complejo en el binario/wheel por defecto — siempre feature
-  `insar`.
-- **NO** sobre-abstraer a `Complex<f64>` u otros hasta que un consumidor lo pida.
+  `complex`.
+- **NO** `DataType::CFloat32` ni SampleFormat=3 nativo — split re/im cubre el
+  caso de uso sin tocar el I/O nativo (§2.2).
+- **NO** helpers FFT en core — quedan enteramente en `insar-rs` (§2.3).
+- `Complex<f64>` **sí** se implementó junto con `Complex<f32>` (mismo costo de
+  macro) — la restricción original de "no sobre-abstraer" se relaja porque no
+  agregó superficie nueva, solo otra instancia del mismo trait.
 
 ## 6. Consumidores
 
