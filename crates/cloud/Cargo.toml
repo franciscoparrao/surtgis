@@ -25,7 +25,9 @@ projections = ["dep:proj4rs"]
 unstable = []
 
 [dependencies]
-surtgis-core = { version = "1.0", path = "../core", default-features = false }
+# 1.2.3: the COG reader shares core's `normalize_any_float_nodata` (the
+# doc(hidden) nodata-convention helper), introduced in core 1.2.3.
+surtgis-core = { version = "1.2.3", path = "../core", default-features = false }
 thiserror.workspace = true
 serde.workspace = true
 ndarray.workspace = true

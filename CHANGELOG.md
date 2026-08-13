@@ -7,7 +7,7 @@ Versioning follows [SemVer 2.0.0](https://semver.org/). The project is still in
 the `0.x` series, so minor versions may contain breaking changes; we try to
 call them out under a `Breaking` heading when they happen.
 
-## [Unreleased]
+## [1.2.3] - 2026-08-13
 
 ### Fixed
 
@@ -51,6 +51,13 @@ call them out under a `Breaking` heading when they happen.
   C `switch` could not name it), and `sf_time`/`sf_destroy` gained the
   `catch_unwind` guard every other entry point already had — no panic
   can cross the FFI boundary through them.
+
+### Security
+
+- `lru` bumped 0.16 → 0.18.2 (RUSTSEC-2026-0253: `LruCache::pop()` was
+  not panic-safe — potential use-after-free if a stored key's `Drop`
+  panics under `catch_unwind`). The transitive copy via `zarrs`
+  resolves to the patched 0.16.4 backport.
 
 ## [1.2.2] - 2026-08-10
 
