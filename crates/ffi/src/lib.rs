@@ -301,7 +301,10 @@ pub unsafe extern "C" fn sf_read_arrival(sim: *const SfSim, t_arrival: *mut f32)
 /// `sim` must be a live handle or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sf_time(sim: *const SfSim) -> f64 {
-    unsafe { sim.as_ref() }.map_or(f64::NAN, |s| s.sim.time())
+    catch_unwind(AssertUnwindSafe(|| {
+        unsafe { sim.as_ref() }.map_or(f64::NAN, |s| s.sim.time())
+    }))
+    .unwrap_or(f64::NAN)
 }
 
 /// Total flow volume Σ h·A in m³ (NaN for a null handle).
@@ -325,7 +328,13 @@ pub unsafe extern "C" fn sf_total_mass(sim: *const SfSim) -> f64 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sf_destroy(sim: *mut SfSim) {
     if !sim.is_null() {
-        drop(unsafe { Box::from_raw(sim) });
+        // A panic in Drop must not cross the boundary either; there is no
+        // status to return, so a caught panic is simply swallowed (the
+        // handle memory is reclaimed by Box::from_raw before user Drop code
+        // could run, so nothing leaks on the paths we control).
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            drop(unsafe { Box::from_raw(sim) });
+        }));
     }
 }
 

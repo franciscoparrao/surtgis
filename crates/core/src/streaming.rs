@@ -126,7 +126,12 @@ impl StripProcessor {
             cols,
             transform: reader.transform().clone(),
             crs: reader.crs().cloned(),
-            nodata: nodata.or(Some(f64::NAN)),
+            // The output buffer masks cells with NaN (padding and every
+            // WindowAlgorithm write NaN, never the input sentinel), so the
+            // declared nodata must be NaN too. Propagating a finite input
+            // sentinel here would make GDAL/QGIS/rasterio treat the NaN
+            // cells as valid data.
+            nodata: Some(f64::NAN),
             compress,
             rows_per_strip: self.chunk_rows as u32,
         };
@@ -197,5 +202,75 @@ impl StripProcessor {
         })?;
 
         Ok((rows, cols))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::GeoTransform;
+    use crate::io::{StripReader, write_geotiff};
+    use crate::raster::Raster;
+    use tempfile::TempDir;
+
+    /// Minimal `WindowAlgorithm` mirroring the real implementations'
+    /// masking contract: nodata/NaN cells produce NaN in the output.
+    struct MaskToNan;
+
+    impl WindowAlgorithm for MaskToNan {
+        fn kernel_radius(&self) -> usize {
+            1
+        }
+
+        fn process_chunk(
+            &self,
+            input: &Array2<f64>,
+            output: &mut Array2<f64>,
+            nodata: Option<f64>,
+            _cell_size_x: f64,
+            _cell_size_y: f64,
+        ) {
+            for r in 0..output.nrows() {
+                for c in 0..output.ncols() {
+                    let v = input[(r + 1, c)];
+                    let masked = v.is_nan() || nodata.is_some_and(|nd| v == nd);
+                    output[(r, c)] = if masked { f64::NAN } else { v };
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn output_declares_nan_nodata_over_finite_input_sentinel() {
+        // Regression (audit R4, H3): the output buffer masks cells with
+        // NaN, but the writer config used to propagate the input's finite
+        // sentinel (`nodata.or(Some(f64::NAN))`) into GDAL_NODATA — so
+        // external tools saw tag=-9999 over NaN pixels and treated every
+        // NaN as valid data. Invisible to any read-back through SurtGIS
+        // itself, which re-normalizes on read; assert on the raw tag.
+        let dir = TempDir::new().unwrap();
+        let input_path = dir.path().join("in.tif");
+        let output_path = dir.path().join("out.tif");
+
+        let mut r = Raster::<f32>::from_vec(vec![5.0; 64], 8, 8).unwrap();
+        r.set(3, 3, -9999.0).unwrap();
+        r.set_transform(GeoTransform::new(0.0, 80.0, 10.0, -10.0));
+        r.set_nodata(Some(-9999.0));
+        write_geotiff(&r, &input_path, None).unwrap();
+        // Precondition: the input really carries the finite sentinel tag.
+        assert_eq!(
+            StripReader::open(&input_path).unwrap().nodata(),
+            Some(-9999.0)
+        );
+
+        StripProcessor::new(4)
+            .process(&input_path, &output_path, &MaskToNan, false)
+            .unwrap();
+
+        let tag = StripReader::open(&output_path).unwrap().nodata();
+        assert!(
+            tag.is_some_and(f64::is_nan),
+            "output GDAL_NODATA must be NaN (pixels are NaN-masked), got {tag:?}"
+        );
     }
 }

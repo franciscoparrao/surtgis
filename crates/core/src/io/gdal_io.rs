@@ -37,7 +37,15 @@ where
     // Read data
     let buffer = rasterband.read_as::<T>((0, 0), (cols, rows), (cols, rows), None)?;
 
-    let mut raster = Raster::from_vec(buffer.data().to_vec(), rows, cols)?;
+    // Same convention as the native backend (`cast_and_normalize` /
+    // `finish_raster`): float buffers rewrite a non-NaN nodata sentinel
+    // to NaN so masking/statistics see the nodata cells; integer buffers
+    // keep the sentinel verbatim.
+    let nodata_f64 = rasterband.no_data_value();
+    let mut data = buffer.data().to_vec();
+    super::native::normalize_any_float_nodata(&mut data, nodata_f64);
+
+    let mut raster = Raster::from_vec(data, rows, cols)?;
 
     // Set geotransform
     if let Ok(gt) = dataset.geo_transform() {
@@ -57,9 +65,13 @@ where
         }
     }
 
-    // Set nodata
-    if let Some(nodata) = rasterband.no_data_value() {
-        if let Some(nd) = num_traits::cast(nodata) {
+    // Set nodata. Float pixels were just normalized to NaN, so the
+    // metadata must say NaN too (keeping the sentinel would make a
+    // subsequent write declare GDAL_NODATA=<sentinel> over NaN pixels).
+    if let Some(nodata) = nodata_f64 {
+        if T::is_float() {
+            raster.set_nodata(Some(T::default_nodata()));
+        } else if let Some(nd) = num_traits::cast(nodata) {
             raster.set_nodata(Some(nd));
         }
     }
@@ -166,5 +178,54 @@ mod tests {
 
         assert_eq!(loaded.shape(), raster.shape());
         assert_eq!(loaded.get(50, 50).unwrap(), raster.get(50, 50).unwrap());
+    }
+
+    #[test]
+    fn read_normalizes_finite_float_sentinel_to_nan() {
+        // Regression (audit R4, H1): with `--features gdal` this backend
+        // replaces the native `read_geotiff`, and it used to leave a finite
+        // GDAL_NODATA sentinel literal in float buffers — the 3x3 kernels
+        // check neighbours with `is_nan()` only, so a -9999 DEM produced a
+        // silent ring of ~90° slopes around every nodata region. Both
+        // backends must agree: float pixels -> NaN, metadata -> NaN.
+        let mut raster: Raster<f32> = Raster::new(4, 4);
+        raster.set_transform(GeoTransform::new(0.0, 40.0, 10.0, -10.0));
+        raster.set_nodata(Some(-9999.0));
+        for i in 0..4 {
+            for j in 0..4 {
+                raster.set(i, j, 5.0).unwrap();
+            }
+        }
+        raster.set(1, 1, -9999.0).unwrap();
+
+        let tmp = NamedTempFile::with_suffix(".tif").unwrap();
+        write_geotiff(&raster, tmp.path(), None).unwrap();
+
+        let loaded: Raster<f32> = read_geotiff(tmp.path(), None).unwrap();
+        assert!(loaded.get(1, 1).unwrap().is_nan(), "sentinel pixel -> NaN");
+        assert_eq!(loaded.get(0, 0).unwrap(), 5.0);
+        assert!(
+            loaded.nodata().is_some_and(f32::is_nan),
+            "float nodata metadata must be NaN, got {:?}",
+            loaded.nodata()
+        );
+
+        // Integer rasters keep the sentinel verbatim (no NaN to map to).
+        let mut int_raster: Raster<i32> = Raster::new(4, 4);
+        int_raster.set_transform(GeoTransform::new(0.0, 40.0, 10.0, -10.0));
+        int_raster.set_nodata(Some(-9999));
+        for i in 0..4 {
+            for j in 0..4 {
+                int_raster.set(i, j, 5).unwrap();
+            }
+        }
+        int_raster.set(1, 1, -9999).unwrap();
+
+        let tmp_int = NamedTempFile::with_suffix(".tif").unwrap();
+        write_geotiff(&int_raster, tmp_int.path(), None).unwrap();
+
+        let loaded_int: Raster<i32> = read_geotiff(tmp_int.path(), None).unwrap();
+        assert_eq!(loaded_int.get(1, 1).unwrap(), -9999);
+        assert_eq!(loaded_int.nodata(), Some(-9999));
     }
 }

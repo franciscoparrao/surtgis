@@ -86,6 +86,11 @@ fn run(args: RunArgs<'_>) -> Result<()> {
         compress,
     } = args;
     anyhow::ensure!(
+        duration.is_finite() && output_interval.is_finite(),
+        "duration and output-interval must be finite (got duration={duration}, \
+         output-interval={output_interval})"
+    );
+    anyhow::ensure!(
         duration > 0.0 && output_interval > 0.0,
         "duration and output-interval must be positive"
     );
@@ -132,7 +137,26 @@ fn run(args: RunArgs<'_>) -> Result<()> {
     std::fs::create_dir_all(outdir).context("Failed to create output directory")?;
 
     let n_outputs = (duration / output_interval).ceil() as usize;
+    anyhow::ensure!(
+        n_outputs <= 1_000_000,
+        "duration / output-interval implies {n_outputs} frames (cap: 1,000,000); \
+         raise --output-interval or lower --duration"
+    );
     let n_frames = n_outputs + 1; // frame 0000 = initial state
+
+    // The manifest contract (GEODEO plays frame i at i·dt_output, spec §8)
+    // assumes a uniform frame grid, so the run covers the full grid span.
+    // Clamping the last frame to a non-multiple --duration instead would
+    // make the manifest's `duration` longer than the time the frames
+    // actually span, and GEODEO would stretch the animation.
+    let grid_duration = n_outputs as f64 * output_interval;
+    if grid_duration > duration * (1.0 + 1e-9) {
+        eprintln!(
+            "warning: --duration {duration} is not a multiple of --output-interval \
+             {output_interval}; simulating to {grid_duration} s so the frame grid \
+             stays uniform (manifest contract)"
+        );
+    }
 
     let crs = dem.crs().cloned();
     write_frames(
@@ -154,7 +178,7 @@ fn run(args: RunArgs<'_>) -> Result<()> {
     let mut total_substeps: u64 = 0;
     for frame in 1..=n_outputs {
         let elapsed_target = (frame as f64) * output_interval;
-        let dt = (elapsed_target.min(duration) - sim.time()).max(0.0);
+        let dt = (elapsed_target - sim.time()).max(0.0);
         total_substeps += u64::from(sim.step(dt as f32)?);
         write_frames(
             &sim,

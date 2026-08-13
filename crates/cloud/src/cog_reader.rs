@@ -690,6 +690,16 @@ impl CogReader {
             }
         }
 
+        // Float outputs: rewrite a non-NaN nodata sentinel to NaN, the same
+        // convention as every other read path (`cast_and_normalize` in core).
+        // Without this, tiles with data keep the literal sentinel while
+        // sparse tiles were pre-filled with NaN — the same raster mixes both
+        // conventions and NaN-checking kernels see the sentinel as valid
+        // data (audit R4, H4). No-op for integer `T`.
+        if let Some(slice) = output.as_slice_mut() {
+            surtgis_core::io::normalize_any_float_nodata(slice, self.geo_meta.nodata);
+        }
+
         // Tile assembly stats (verbose; gated behind SURTGIS_COG_DEBUG).
         let valid_pixels = output.iter().filter(|v| !v.is_nodata(None)).count();
         if cog_debug() {
@@ -721,10 +731,14 @@ impl CogReader {
         raster.set_transform(out_gt);
         raster.set_crs(self.geo_meta.crs.clone());
 
-        if let Some(nd) = self.geo_meta.nodata
-            && let Some(nd_t) = num_traits::cast(nd)
-        {
-            raster.set_nodata(Some(nd_t));
+        // Float pixels were just normalized to NaN, so the metadata must say
+        // NaN too; integers keep the sentinel verbatim.
+        if let Some(nd) = self.geo_meta.nodata {
+            if T::is_float() {
+                raster.set_nodata(Some(T::default_nodata()));
+            } else if let Some(nd_t) = num_traits::cast(nd) {
+                raster.set_nodata(Some(nd_t));
+            }
         }
 
         Ok(raster)

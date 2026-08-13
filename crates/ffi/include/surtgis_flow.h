@@ -32,7 +32,10 @@ typedef enum {
   SF_ERR_INVALID_ARG   = 1,
   SF_ERR_GRID_MISMATCH = 2,
   SF_ERR_DIVERGED      = 3, /* NaN/Inf detected in the state */
-  SF_ERR_INTERNAL      = 4
+  SF_ERR_INTERNAL      = 4,
+  SF_ERR_MASS_BUDGET   = 5  /* mass-budget invariant violated with
+                             * entrainment active (spec v1.1 §2.4.3);
+                             * state frozen at the last valid substep */
 } sf_status;
 
 /* dem/release: row-major, fila 0 = norte, longitud w*h. NoData = NaN.
