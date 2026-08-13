@@ -7,6 +7,46 @@ Versioning follows [SemVer 2.0.0](https://semver.org/). The project is still in
 the `0.x` series, so minor versions may contain breaking changes; we try to
 call them out under a `Breaking` heading when they happen.
 
+## [Unreleased]
+
+### Fixed
+
+- **`surtgis-flow` (unpublished, audit R4 sprint 2 — solver correctness
+  ahead of the N4-Macul calibration):**
+  - **Open (transmissive) borders are now on the mass books.** The
+    transmissive ghost mirrors the edge cell including its velocity, so a
+    release near the edge of a cropped DEM legitimately draws mass in from
+    the ghost — previously that was silent mass creation without
+    entrainment, and with entrainment it tripped `MassBudgetViolated`
+    almost immediately with an error message blaming the solver. The net
+    border exchange is tracked per substep (deterministically, per band)
+    and included on the budget side of the invariant; a new
+    `Simulation::boundary_volume()` exposes the running ledger and the CLI
+    "% through open borders" now reports it directly (the plain mass
+    difference wrongly counted eroded volume as border flux).
+  - **The bed is now derived, `z = z₀ − e`, instead of a running
+    `z -= Δe`.** In f32 with bed elevations of 500-900 m the ulp is
+    3-6e-5 m, so sub-ulp erosion increments were credited to the flow and
+    the erosion ledger but never actually left the bed — mass appeared
+    from nowhere. The derived form rounds once, keeping bed and ledger in
+    exact agreement (pinned bitwise by a new test; the legacy path
+    deviated ~2 mm in 20 steps).
+  - Cumulative erosion is clamped to `e_max` at commit (the f64→f32
+    double rounding could overshoot by ~1 ulp).
+  - `update_dem` with entrainment active now re-applies accumulated
+    erosion on top of the new DEM (`z = z₀_new − e`) — raising a live
+    barrier no longer silently un-erodes the channel. The live-barrier
+    path, sold to GEODEO, gains its first tests.
+  - New `SimGrid::bed()` accessor (current, possibly eroded, bed).
+
+### Documentation
+
+- `surtgis-flow`: the horizontal-coordinate (g·tanθ) formulation and its
+  calibration consequences are now documented at the crate root — μ/ξ
+  calibrated with this solver absorb the ~33%-at-30° driving-force bias
+  versus slope-aligned solvers (RAMMS, r.avaflow) and are not
+  interchangeable with values calibrated there.
+
 ## [1.2.3] - 2026-08-13
 
 ### Fixed

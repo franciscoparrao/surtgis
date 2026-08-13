@@ -221,9 +221,12 @@ fn run(args: RunArgs<'_>) -> Result<()> {
         n_frames,
         start.elapsed()
     );
+    // boundary_volume() is the solver's own ledger of the open-border
+    // exchange — with entrainment active, the plain mass difference would
+    // wrongly count the eroded volume as border flux.
     println!(
         "Mass: {mass0:.0} -> {mass_end:.0} m³ ({:+.2}% through open borders)",
-        (mass_end - mass0) / mass0 * 100.0
+        sim.boundary_volume() / mass0 * 100.0
     );
     println!("Frames saved to: {}", outdir.display());
     Ok(())

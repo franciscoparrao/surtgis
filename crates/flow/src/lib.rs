@@ -17,6 +17,27 @@
 //! point-implicit Voellmy friction (Coulomb → turbulent) via operator
 //! splitting.
 //!
+//! # Calibration note: horizontal-coordinate formulation (g·tanθ)
+//!
+//! The equations above are written in **horizontal** (map) coordinates, the
+//! standard SWE form on a DEM grid: the driving term `−g h ∂z/∂x` scales
+//! with `tan θ` of the bed slope. Slope-aligned formulations (RAMMS,
+//! r.avaflow) drive with `g·sinθ·cosθ` instead — at 30° the horizontal form
+//! overestimates the driving force by ~33% (`tanθ / (sinθ·cosθ) =
+//! 1/cos²θ`). The Coulomb friction term DOES apply the `cos θ` slope
+//! correction (see `friction`), so the formulation is deliberately mixed
+//! (spec §2.1 — this is not a bug).
+//!
+//! Consequences for calibration and comparison:
+//! - `μ`/`ξ` values calibrated against observed runouts with THIS solver
+//!   absorb the formulation bias — they are effective parameters of the
+//!   horizontal form and are NOT interchangeable with RAMMS/r.avaflow
+//!   values for steep terrain, nor with literature values calibrated on
+//!   slope-aligned solvers.
+//! - Any published comparison against slope-aligned solvers must disclose
+//!   the formulation difference; on slopes ≲15° the discrepancy is <7% and
+//!   in practice is swallowed by the calibration.
+//!
 //! Entry point: [`Simulation`].
 //!
 //! ```no_run
@@ -162,11 +183,14 @@ pub enum FlowError {
 
     /// The global mass budget invariant was violated with entrainment
     /// active (spec v1.1 §2.4.3): flow volume exceeded release plus eroded
-    /// volume, or eroded volume exceeded the erodible budget. The state is
-    /// frozen at the last valid substep. This is the hard anti-runaway
-    /// guard — it MUST never trip under the per-cell/rate caps; tripping
-    /// indicates a solver bug, and it fails loudly instead of growing
-    /// silently.
+    /// volume plus the net volume exchanged through the domain's open
+    /// (transmissive) edges, or eroded volume exceeded the erodible
+    /// budget. The state is frozen at the last valid substep. This is the
+    /// hard anti-runaway guard — with boundary exchange accounted for
+    /// (audit R4; before that fix, a flow reaching an open border with
+    /// inward-pointing velocity tripped it spuriously), it MUST never trip
+    /// under the per-cell/rate caps; tripping indicates a solver bug, and
+    /// it fails loudly instead of growing silently.
     #[error(
         "mass budget violated at t={time} s: flow volume {flow_volume} m³ vs budget {budget} m³; state frozen at last valid substep"
     )]

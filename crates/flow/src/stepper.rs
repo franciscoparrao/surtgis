@@ -37,6 +37,13 @@ pub struct Simulation {
     config: SolverConfig,
     /// Bed-entrainment state (spec v1.1 §2); `None` = exact v1.0 behaviour.
     entrainment: Option<Entrainment>,
+    /// Net volume exchanged through the domain's transmissive edges in m³
+    /// (positive = entered). The transmissive ghost mirrors the edge cell
+    /// including its velocity, so an inward-pointing edge velocity draws
+    /// mass in from the ghost — physically: the flow field continues past
+    /// the cropped DEM. Tracked per substep so the mass-budget invariant
+    /// can distinguish that legitimate exchange from a solver bug.
+    boundary_volume: f64,
     /// `true` once any substep ran — gates `set_erodible` (spec v1.1 §4).
     has_stepped: bool,
 }
@@ -108,6 +115,7 @@ impl Simulation {
             params,
             config,
             entrainment: None,
+            boundary_volume: 0.0,
             has_stepped: false,
         })
     }
@@ -189,6 +197,17 @@ impl Simulation {
         &self.arrival
     }
 
+    /// Net volume exchanged through the domain's transmissive (open) edges
+    /// since the start of the run, in m³. Positive = net inflow: the ghost
+    /// mirrors the edge cell's state, so an edge cell moving inward draws
+    /// mass in (the flow field continues past the cropped DEM). Exactly
+    /// `total_mass() - release - total_eroded()` up to f32 rounding —
+    /// useful to audit how much of a run's mass crossed the open borders.
+    #[must_use]
+    pub fn boundary_volume(&self) -> f64 {
+        self.boundary_volume
+    }
+
     /// Replace the Voellmy parameters mid-run (spec §5 `sf_set_params`;
     /// interactive tuning from the Unreal side).
     ///
@@ -252,6 +271,9 @@ impl Simulation {
             release_volume: self.total_mass(),
             eroded_volume: 0.0,
         });
+        // Freeze the pristine bed z₀: from here on the bed is always the
+        // derived z₀ − e (see SimGrid::erode).
+        self.grid.snapshot_bed();
         Ok(())
     }
 
@@ -277,6 +299,11 @@ impl Simulation {
     /// Re-derives the slope cosines; flow thickness on cells that became
     /// `NoData` is discarded.
     ///
+    /// With entrainment active, the new DEM becomes the new erosion
+    /// baseline `z₀` and the erosion accumulated so far is re-applied on
+    /// top (`z = z₀_new − e`) — a barrier raised over an eroded channel
+    /// does not silently un-erode it (audit R4).
+    ///
     /// # Errors
     ///
     /// [`FlowError::GridMismatch`] / [`FlowError::TransformMismatch`] if the
@@ -284,6 +311,10 @@ impl Simulation {
     pub fn update_dem(&mut self, dem: &Raster<f32>) -> Result<(), FlowError> {
         self.grid.check_compatible(dem)?;
         self.grid.replace_dem(dem);
+        if let Some(ent) = &self.entrainment {
+            self.grid.snapshot_bed();
+            self.grid.erode(&ent.e);
+        }
         for i in 0..self.grid.len() {
             if self.grid.solid_at(i) {
                 self.state.h[i] = 0.0;
@@ -337,7 +368,8 @@ impl Simulation {
             dt,
             &mut self.alpha,
         );
-        apply_fluxes(
+        let area = self.grid.cellsize() * self.grid.cellsize();
+        let d_boundary = apply_fluxes(
             &self.grid,
             &self.state,
             &self.config,
@@ -345,7 +377,7 @@ impl Simulation {
             &self.alpha,
             lambda,
             &mut self.scratch,
-        );
+        ) * area;
         friction::apply(
             &mut self.scratch,
             &self.grid,
@@ -396,22 +428,28 @@ impl Simulation {
 
         // Mass-budget invariant + commit (spec v1.1 §2.4.3): checked every
         // substep, BEFORE the swap — a violation freezes the last valid
-        // state exactly like Diverged. Under the per-cell/rate caps it can
-        // only trip on a solver bug: it fails loudly instead of letting
-        // volume run away (the r.avaflow 631M m³ failure mode).
+        // state exactly like Diverged. The budget side includes the net
+        // volume exchanged through the transmissive edges (audit R4):
+        // without it, a run whose flow reaches an open border with
+        // inward-pointing velocity draws legitimate mass from the ghost and
+        // trips the invariant spuriously — exactly the geometry of a
+        // cropped DEM with the release near the edge. With the boundary
+        // term the balance is exact up to f32 rounding, so a trip once
+        // again can only be a solver bug: it fails loudly instead of
+        // letting volume run away (the r.avaflow 631M m³ failure mode).
         if entrainment_active {
             let cols = self.grid.cols();
-            let area = self.grid.cellsize() * self.grid.cellsize();
             let d_eroded = diagnostics::det_sum(&self.alpha, cols) * area;
             let v_flow = diagnostics::det_sum(&self.scratch.h, cols) * area;
+            let boundary_new = self.boundary_volume + d_boundary;
             let ent = self.entrainment.as_mut().expect("checked active");
             let eroded_new = ent.eroded_volume + d_eroded;
             let tol = 1e-4 * (ent.release_volume + ent.budget_total).max(1.0);
-            if v_flow > ent.release_volume + eroded_new + tol {
+            if v_flow > ent.release_volume + eroded_new + boundary_new + tol {
                 return Err(FlowError::MassBudgetViolated {
                     time: self.time,
                     flow_volume: v_flow,
-                    budget: ent.release_volume + eroded_new,
+                    budget: ent.release_volume + eroded_new + boundary_new,
                 });
             }
             if eroded_new > ent.budget_total + tol {
@@ -422,17 +460,26 @@ impl Simulation {
                 });
             }
             ent.eroded_volume = eroded_new;
+            // Commit Δe into the cumulative e, clamped to e_max: the staged
+            // increment is capped at e_max − e in f64, but the f64→f32
+            // double rounding can overshoot e_max by ~1 ulp (audit R4) —
+            // the clamp keeps the per-cell budget exact and the T8/T10
+            // exact asserts safe.
             ent.e
                 .par_iter_mut()
                 .zip_eq(self.alpha.par_iter())
-                .for_each(|(e, &d)| {
+                .zip_eq(ent.e_max.par_iter())
+                .for_each(|((e, &d), &emax)| {
                     if d > 0.0 {
-                        *e += d;
+                        *e = (*e + d).min(emax);
                     }
                 });
-            self.grid.erode(&self.alpha);
+            self.grid.erode(&ent.e);
         }
 
+        // Committed only on success, like eroded_volume: a frozen substep
+        // must not accumulate the exchange it never applied.
+        self.boundary_volume += d_boundary;
         std::mem::swap(&mut self.state, &mut self.scratch);
         self.has_stepped = true;
         Ok(())
@@ -671,7 +718,15 @@ fn compute_alpha(
 /// recomputed by the neighbouring band. Contributions accumulate per cell in
 /// the fixed order W, E, N, S into f64 band buffers, then land in f32 in one
 /// store — bitwise independent of banding and thread count (T7).
-#[allow(clippy::too_many_arguments)]
+///
+/// Returns the net depth-sum that entered through the domain's transmissive
+/// edges (Σ of the applied `dh` on edge faces; × cell area = volume,
+/// positive = inflow). Each domain-edge face is owned by exactly one band,
+/// and the per-band partials are reduced in band order — deterministic like
+/// the state update itself.
+// too_many_lines: the band sweep is one deliberate unit — splitting it would
+// scatter the face-ownership rules that make the boundary accounting exact.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn apply_fluxes(
     grid: &SimGrid,
     state: &FlowState,
@@ -680,16 +735,19 @@ fn apply_fluxes(
     alpha: &[f32],
     lambda: f64,
     scratch: &mut FlowState,
-) {
+) -> f64 {
     let cols = grid.cols();
     let rows = grid.rows();
+    let n_bands = grid.len().div_ceil(cols * BAND_ROWS);
+    let mut boundary_bands = vec![0.0f64; n_bands];
     scratch
         .h
         .par_chunks_mut(cols * BAND_ROWS)
         .zip_eq(scratch.hu.par_chunks_mut(cols * BAND_ROWS))
         .zip_eq(scratch.hv.par_chunks_mut(cols * BAND_ROWS))
+        .zip_eq(boundary_bands.par_iter_mut())
         .enumerate()
-        .for_each(|(band, ((h_band, hu_band), hv_band))| {
+        .for_each(|(band, (((h_band, hu_band), hv_band), b_net))| {
             let r0 = band * BAND_ROWS;
             let band_rows = h_band.len() / cols;
             let n = h_band.len();
@@ -728,6 +786,13 @@ fn apply_fluxes(
                         dhu[k] += s * ef.flux.mom_r;
                         dhv[k] += s * ef.flux.mom_t;
                     }
+                    // Domain-edge faces (transmissive ghost on the off-grid
+                    // side): record exactly the dh applied to the real cell.
+                    if l.is_none() {
+                        *b_net += s * ef.flux.mass; // west edge: +mass enters
+                    } else if rr.is_none() {
+                        *b_net -= s * ef.flux.mass; // east edge: +mass leaves
+                    }
                 }
                 for c in 0..cols {
                     let l = Some(row + c);
@@ -750,6 +815,11 @@ fn apply_fluxes(
                         dhv[k] += s * ef.flux.mom_r;
                         dhu[k] += s * ef.flux.mom_t;
                     }
+                    // North domain edge (rr off-grid only on row 0): +mass
+                    // flows north out of the domain.
+                    if rr.is_none() {
+                        *b_net -= s * ef.flux.mass;
+                    }
                 }
             }
             // South boundary of the band: apply only the r-side (last row)
@@ -770,6 +840,11 @@ fn apply_fluxes(
                     dhv[k] += s * ef.flux.mom_r;
                     dhu[k] += s * ef.flux.mom_t;
                 }
+                // South domain edge (l off-grid only on the last row):
+                // +mass enters from the south ghost.
+                if l.is_none() {
+                    *b_net += s * ef.flux.mass;
+                }
             }
 
             for k in 0..n {
@@ -779,4 +854,6 @@ fn apply_fluxes(
                 hv_band[k] = (f64::from(state.hv[i]) + dhv[k]) as f32;
             }
         });
+    // Band order is fixed → deterministic sum regardless of thread count.
+    boundary_bands.iter().sum()
 }
