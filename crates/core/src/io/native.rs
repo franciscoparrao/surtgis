@@ -292,6 +292,32 @@ where
     })
 }
 
+/// Rewrite a non-NaN `GDAL_NODATA` sentinel (finite or ±inf) to NaN in a
+/// float sample buffer.
+///
+/// The [`read_geotiff_any`] path preserves native pixel values without the
+/// [`cast_and_normalize`] pass, yet [`finish_raster`] still records a float
+/// raster's nodata as NaN (SurtGIS's in-memory convention). Left unreconciled
+/// the two disagree — the buffer holds the literal sentinel (e.g. `-9999`)
+/// while masking looks for NaN — so nodata cells leak into statistics. This
+/// brings the buffer in line with the metadata. No-op for integer `T`, whose
+/// sentinel is kept verbatim and matched by exact equality.
+pub fn normalize_any_float_nodata<T: RasterElement>(data: &mut [T], nodata: Option<f64>) {
+    if !T::is_float() {
+        return;
+    }
+    if let Some(nd_f64) = nodata
+        && !nd_f64.is_nan()
+        && let Some(nd) = num_traits::cast::<f64, T>(nd_f64)
+    {
+        for v in data.iter_mut() {
+            if v.is_nodata(Some(nd)) {
+                *v = T::default_nodata();
+            }
+        }
+    }
+}
+
 /// Internal: decode a GeoTIFF into an [`AnyRaster`], selecting one band
 /// (0-based; default: first) — the dtype-preserving counterpart of
 /// `decode_geotiff`.
@@ -306,31 +332,6 @@ where
 ///   far beyond any realistic DEM/raster cell value; `f64` is the
 ///   widest numeric variant available so this is the best available
 ///   fallback rather than a failure)
-/// Rewrite a finite `GDAL_NODATA` sentinel to NaN in a float sample buffer.
-///
-/// The [`read_geotiff_any`] path preserves native pixel values without the
-/// [`cast_and_normalize`] pass, yet [`finish_raster`] still records a float
-/// raster's nodata as NaN (SurtGIS's in-memory convention). Left unreconciled
-/// the two disagree — the buffer holds the literal sentinel (e.g. `-9999`)
-/// while masking looks for NaN — so nodata cells leak into statistics. This
-/// brings the buffer in line with the metadata. No-op for integer `T`, whose
-/// sentinel is kept verbatim and matched by exact equality.
-fn normalize_any_float_nodata<T: RasterElement>(data: &mut [T], nodata: Option<f64>) {
-    if !T::is_float() {
-        return;
-    }
-    if let Some(nd_f64) = nodata
-        && nd_f64.is_finite()
-        && let Some(nd) = num_traits::cast::<f64, T>(nd_f64)
-    {
-        for v in data.iter_mut() {
-            if v.is_nodata(Some(nd)) {
-                *v = T::default_nodata();
-            }
-        }
-    }
-}
-
 fn decode_geotiff_any<R>(
     reader: R,
     band: Option<usize>,
@@ -2068,6 +2069,14 @@ mod tests {
         let mut n = vec![5.0f32, f32::NAN];
         normalize_any_float_nodata(&mut n, Some(f64::NAN));
         assert_eq!(n[0], 5.0);
+        // Float, infinite sentinel: rewritten like any other non-NaN one —
+        // the typed path (`cast_and_normalize`) never excluded ±inf, so the
+        // dtype-preserving path must not either.
+        let mut inf = vec![5.0f32, f32::INFINITY, f32::NEG_INFINITY];
+        normalize_any_float_nodata(&mut inf, Some(f64::INFINITY));
+        assert_eq!(inf[0], 5.0);
+        assert!(inf[1].is_nan());
+        assert_eq!(inf[2], f32::NEG_INFINITY);
         // Integer T: no-op — the sentinel is kept verbatim and matched by
         // equality downstream, never turned into a (non-existent) NaN.
         let mut di = vec![5i16, -9999, 5];

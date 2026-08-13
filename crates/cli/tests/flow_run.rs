@@ -191,6 +191,98 @@ fn flow_run_with_entrainment_writes_erosion_and_manifest_v2() {
 }
 
 #[test]
+fn flow_run_non_multiple_duration_keeps_manifest_grid_consistent() {
+    // Audit R4 (GEODEO ALTO): with duration % output_interval != 0 the loop
+    // used to clamp the last frame to `duration` while the manifest declared
+    // duration = dt_output·(n_frames−1) — GEODEO, which plays frame i at
+    // i·dt_output, stretched the animation by the difference. The run now
+    // extends to the full uniform frame grid and warns about it.
+    let tmp = tempfile::tempdir().unwrap();
+    let (dem, release) = synth_inputs(tmp.path());
+    let outdir = tmp.path().join("out_nonmult");
+
+    let assert = Command::cargo_bin("surtgis")
+        .unwrap()
+        .args(["flow", "run"])
+        .arg(&dem)
+        .arg(&release)
+        .arg(&outdir)
+        .args(["--duration", "5", "--output-interval", "2"])
+        .assert()
+        .success();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+    assert!(
+        stderr.contains("not a multiple"),
+        "expected the grid-extension warning on stderr, got: {stderr}"
+    );
+
+    // ceil(5/2) = 3 outputs -> frames at t = 0, 2, 4, 6 (4 frames).
+    for frame in 0..=3 {
+        let f = outdir.join(format!("h_t{frame:04}.tif"));
+        assert!(f.is_file(), "missing frame {}", f.display());
+    }
+    assert!(!outdir.join("h_t0004.tif").exists());
+
+    // The manifest's duration must equal the span the frames actually
+    // cover: dt_output · (n_frames − 1) = 2 · 3 = 6 s, not the requested 5.
+    let manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(outdir.join("manifest.json")).unwrap())
+            .unwrap();
+    assert_eq!(manifest["n_frames"], 4);
+    assert_eq!(manifest["dt_output"], 2.0);
+    assert_eq!(manifest["duration"], 6.0);
+}
+
+#[test]
+fn flow_run_rejects_non_finite_and_absurd_time_args() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (dem, release) = synth_inputs(tmp.path());
+
+    // --duration inf used to pass the `> 0.0` validation, saturate
+    // n_outputs and let the loop fill the disk (audit R4).
+    let assert = Command::cargo_bin("surtgis")
+        .unwrap()
+        .args(["flow", "run"])
+        .arg(&dem)
+        .arg(&release)
+        .arg(tmp.path().join("out_inf"))
+        .args(["--duration", "inf", "--output-interval", "2"])
+        .assert()
+        .failure();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+    assert!(
+        stderr.contains("finite"),
+        "expected finiteness error: {stderr}"
+    );
+
+    // A denormal interval implies an absurd frame count — same failure mode.
+    let assert = Command::cargo_bin("surtgis")
+        .unwrap()
+        .args(["flow", "run"])
+        .arg(&dem)
+        .arg(&release)
+        .arg(tmp.path().join("out_denormal"))
+        .args(["--duration", "600", "--output-interval", "1e-300"])
+        .assert()
+        .failure();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+    assert!(stderr.contains("cap"), "expected frame-cap error: {stderr}");
+
+    // --entrainment-k is meaningless without --erodible; clap must reject
+    // the combination instead of silently ignoring the coefficient.
+    Command::cargo_bin("surtgis")
+        .unwrap()
+        .args(["flow", "run"])
+        .arg(&dem)
+        .arg(&release)
+        .arg(tmp.path().join("out_k"))
+        .args(["--duration", "2", "--output-interval", "2"])
+        .args(["--entrainment-k", "1e-2"])
+        .assert()
+        .failure();
+}
+
+#[test]
 fn flow_run_rejects_mismatched_grids() {
     let tmp = tempfile::tempdir().unwrap();
     let (dem, _) = synth_inputs(tmp.path());

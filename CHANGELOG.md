@@ -7,6 +7,51 @@ Versioning follows [SemVer 2.0.0](https://semver.org/). The project is still in
 the `0.x` series, so minor versions may contain breaking changes; we try to
 call them out under a `Breaking` heading when they happen.
 
+## [Unreleased]
+
+### Fixed
+
+- **Every read path now converges on the NaN nodata convention** (audit
+  R4, the class behind the v1.2.x "ring of ~90° slopes around nodata"
+  user report). Four lateral entry points still leaked a literal float
+  sentinel (e.g. `-9999`) into buffers whose masking looks for NaN:
+  - `--features gdal` builds substituted `read_geotiff` with a
+    non-normalizing version — float sentinel pixels now become NaN and
+    the raster's nodata metadata says NaN, matching the native backend.
+  - The COG/cloud reader kept the sentinel literal and, on sparse COGs,
+    mixed NaN-filled missing tiles with sentinel-valued data tiles in
+    the same raster; it now normalizes on assembly.
+  - The streaming processor's **output** declared the input's finite
+    sentinel as `GDAL_NODATA` while its masked pixels are NaN, so
+    QGIS/GDAL/rasterio read every NaN as valid data; the tag is now NaN.
+  - Zarr/NetCDF reads replaced fill values with NaN but declared the
+    original finite fill as nodata metadata — same external-tools
+    mismatch on any subsequent write; the metadata now says NaN.
+  - The dtype-preserving read's normalization excluded ±inf sentinels
+    (`is_finite` guard); it now rewrites any non-NaN sentinel, matching
+    the typed path.
+
+- **`surtgis flow run` frame grid vs manifest** (GEODEO contract): with
+  `--duration` not a multiple of `--output-interval`, the last frame was
+  clamped to the requested duration while the manifest declared
+  `duration = dt_output·(n_frames−1)` — consumers that place frame *i*
+  at `i·dt_output` (GEODEO) stretched the animation. The run now extends
+  to the full uniform frame grid (with a warning), so the manifest's
+  `duration` equals the span the frames actually cover.
+
+- **`surtgis flow run` argument validation**: `--duration inf` (or a
+  denormal `--output-interval`) passed the `> 0.0` check, saturated the
+  frame count and filled the disk; both must now be finite and the
+  implied frame count is capped at 1,000,000. `--entrainment-k` without
+  `--erodible` is now rejected by the CLI instead of silently ignored.
+
+- **`surtgis-flow` C ABI**: the shipped header now declares
+  `SF_ERR_MASS_BUDGET = 5` (the v2 binary already returned it with
+  entrainment active, but the enum ended at `SF_ERR_INTERNAL = 4`, so a
+  C `switch` could not name it), and `sf_time`/`sf_destroy` gained the
+  `catch_unwind` guard every other entry point already had — no panic
+  can cross the FFI boundary through them.
+
 ## [1.2.2] - 2026-08-10
 
 ### Fixed

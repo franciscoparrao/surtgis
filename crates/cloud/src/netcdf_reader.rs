@@ -308,7 +308,11 @@ impl NetCdfReader {
         let mut raster = Raster::from_array(data_2d);
         raster.set_transform(geo_transform);
         raster.set_crs(Some(CRS::wgs84()));
-        raster.set_nodata(self.cf.fill_value);
+        // Fill pixels were replaced with NaN in `unpack_data`, so the
+        // declared nodata must be NaN too — declaring the original finite
+        // fill would make a subsequent write stamp GDAL_NODATA=<fill> over
+        // NaN pixels, and external tools would read the NaNs as valid data.
+        raster.set_nodata(self.cf.fill_value.map(|_| f64::NAN));
 
         Ok(raster)
     }

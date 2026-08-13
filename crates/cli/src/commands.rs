@@ -445,7 +445,7 @@ pub enum FlowCommands {
         #[arg(long)]
         erodible: Option<PathBuf>,
         /// Entrainment growth coefficient K [1/m] (with --erodible)
-        #[arg(long, default_value = "1e-3")]
+        #[arg(long, default_value = "1e-3", requires = "erodible")]
         entrainment_k: f32,
         /// Also write e_t####.tif cumulative-erosion frames [m]
         #[arg(long, requires = "erodible")]
