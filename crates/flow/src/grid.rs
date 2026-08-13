@@ -19,7 +19,13 @@ pub struct SimGrid {
     cellsize: f64,
     transform: GeoTransform,
     /// Bed elevation per cell; solid cells hold an arbitrary finite value.
+    /// With entrainment active this is always the derived `z₀ − e` (see
+    /// [`SimGrid::erode`]), never a running subtraction.
     dem: Vec<f32>,
+    /// Pristine bed snapshot `z₀`, taken when entrainment activates (one
+    /// extra `Vec<f32>` on top of the amended §6 budget's `e_max`/`e`).
+    /// `None` until then — the erosion path is the only user.
+    dem0: Option<Vec<f32>>,
     /// cosθ of the local slope per cell (spec §2.2), 1.0 on solid cells.
     cos_theta: Vec<f32>,
     /// `NoData` mask: `true` cells are impenetrable walls.
@@ -72,6 +78,7 @@ impl SimGrid {
             cellsize: pw,
             transform: t,
             dem: z,
+            dem0: None,
             cos_theta: vec![1.0; n],
             solid,
         };
@@ -206,18 +213,45 @@ impl SimGrid {
         self.solid[row * self.cols + col]
     }
 
-    /// Lower the bed by the staged erosion increments (spec v1.1 §2.2:
-    /// `z ← z − Δe`). `cos θ` stays frozen at its init value — spec v1.1
-    /// §2.2 MAY, documented limitation: metre-scale erosion on ≥10 m cells
-    /// changes the Coulomb slope factor only at second order.
-    pub(crate) fn erode(&mut self, de: &[f32]) {
+    /// Current bed elevation per cell in metres, row-major (row 0 = north).
+    /// With entrainment active this is the eroded bed `z₀ − e`; solid cells
+    /// hold an arbitrary finite value (check [`SimGrid::is_solid`]).
+    #[must_use]
+    pub fn bed(&self) -> &[f32] {
+        &self.dem
+    }
+
+    /// Snapshot the current bed as the erosion baseline `z₀`. Called when
+    /// entrainment activates and again after [`SimGrid::replace_dem`] so
+    /// live barriers become the new baseline (spec §4 + v1.1 §2.2).
+    pub(crate) fn snapshot_bed(&mut self) {
+        self.dem0 = Some(self.dem.clone());
+    }
+
+    /// Re-derive the bed from the invariant `z = z₀ − e` (spec v1.1 §2.2),
+    /// where `e` is the CUMULATIVE eroded depth per cell.
+    ///
+    /// A running `z -= Δe` in f32 silently absorbs sub-ulp increments —
+    /// with `z` ~ 500-900 m the ulp is 3-6e-5 m, so small Δe were credited
+    /// to `h`/`e`/`eroded_volume` but never left the bed (audit R4). The
+    /// derived form rounds `z₀ − e` exactly once, so the bed always agrees
+    /// with `e` to within half an ulp regardless of how many substeps ran.
+    /// `cos θ` stays frozen at its init value — spec v1.1 §2.2 MAY,
+    /// documented limitation: metre-scale erosion on ≥10 m cells changes
+    /// the Coulomb slope factor only at second order.
+    pub(crate) fn erode(&mut self, e_total: &[f32]) {
         use rayon::prelude::*;
+        let dem0 = self
+            .dem0
+            .as_ref()
+            .expect("snapshot_bed must run before erode");
         self.dem
             .par_iter_mut()
-            .zip_eq(de.par_iter())
-            .for_each(|(z, &d)| {
-                if d > 0.0 {
-                    *z -= d;
+            .zip_eq(dem0.par_iter())
+            .zip_eq(e_total.par_iter())
+            .for_each(|((z, &z0), &e)| {
+                if e > 0.0 {
+                    *z = (f64::from(z0) - f64::from(e)) as f32;
                 }
             });
     }
