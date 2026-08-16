@@ -453,7 +453,7 @@ def log_transform_compute(data: npt.NDArray[np.float64]) -> npt.NDArray[np.float
     """
     ...
 
-def mann_kendall_compute(stack: npt.NDArray[np.float64], cell_size: float = 1.0, times: typing.Optional[list[float]] = None) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+def mann_kendall_compute(stack: npt.NDArray[np.float64], cell_size: float = 1.0, times: list[float] | None = None) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64]]:
     """Per-pixel Mann-Kendall trend test across a temporal stack `(time, rows,
 cols)`. Returns `(tau, p_value, trend, sens_slope)` — `trend` is
 1=increasing / -1=decreasing / 0=no significant trend at alpha=0.05.
