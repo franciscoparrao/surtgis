@@ -453,10 +453,15 @@ def log_transform_compute(data: npt.NDArray[np.float64]) -> npt.NDArray[np.float
     """
     ...
 
-def mann_kendall_compute(stack: npt.NDArray[np.float64], cell_size: float = 1.0) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+def mann_kendall_compute(stack: npt.NDArray[np.float64], cell_size: float = 1.0, times: list[float] | None = None) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64]]:
     """Per-pixel Mann-Kendall trend test across a temporal stack `(time, rows,
 cols)`. Returns `(tau, p_value, trend, sens_slope)` — `trend` is
 1=increasing / -1=decreasing / 0=no significant trend at alpha=0.05.
+
+`times` (optional, one value per band) feeds Sen's slope so irregularly
+spaced acquisitions get the correct magnitude — the slope's units become
+"per unit of `times`". S/tau/p are rank statistics and ignore spacing.
+Without `times`, index spacing (0, 1, …, n−1) is used as before.
     """
     ...
 

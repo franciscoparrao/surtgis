@@ -19,7 +19,11 @@ pub struct CfMetadata {
     pub lon_dim: Option<usize>,
     /// Time units string, e.g. `"hours since 1900-01-01 00:00:00.0"`.
     pub time_units: Option<String>,
-    /// Calendar type, e.g. `"gregorian"`, `"365_day"`.
+    /// CF calendar attribute, e.g. `"gregorian"`. Only real-world
+    /// (gregorian-family) calendars are supported for time decoding;
+    /// model calendars (`"365_day"`/`"noleap"`, `"360_day"`, `"julian"`, …)
+    /// make [`CfMetadata::decode_time`] return an explicit error instead
+    /// of silently mis-dating the series.
     pub time_calendar: Option<String>,
     /// `_FillValue` for masked/missing data.
     pub fill_value: Option<f64>,
@@ -84,7 +88,33 @@ impl CfMetadata {
     ///
     /// Parses the `units` attribute format: `"{unit} since {reference_datetime}"`
     /// where unit is `hours`, `days`, `seconds`, or `minutes`.
+    ///
+    /// # Errors
+    ///
+    /// Besides malformed `units`, this rejects non-gregorian CF calendars
+    /// (`"noleap"`/`"365_day"`, `"360_day"`, `"julian"`, `"all_leap"`, …):
+    /// the arithmetic below is real-calendar (chrono), so decoding a
+    /// model-calendar axis with it silently drifts the dates — a noleap
+    /// series runs ahead ~1 day per 4 years and a 360-day one ~5 days per
+    /// year. Refusing loudly beats returning wrong dates (audit R2 D8,
+    /// third round).
     pub fn decode_time(&self, raw_values: &[f64]) -> Result<Vec<DateTime<Utc>>> {
+        if let Some(cal) = self.time_calendar.as_deref() {
+            // CF §4.4.1: these all mean the real-world gregorian calendar
+            // that chrono implements. Anything else is a model calendar.
+            let supported = matches!(
+                cal.to_ascii_lowercase().as_str(),
+                "gregorian" | "standard" | "proleptic_gregorian"
+            );
+            if !supported {
+                return Err(CloudError::ZarrCfError(format!(
+                    "unsupported CF calendar '{cal}': only gregorian-family \
+                     calendars can be decoded; decoding a model calendar \
+                     with real-calendar arithmetic would silently mis-date \
+                     the series (e.g. noleap drifts ~1 day per 4 years)"
+                )));
+            }
+        }
         let units_str = self
             .time_units
             .as_deref()
@@ -429,6 +459,40 @@ mod tests {
             expected
         );
         assert_eq!(parse_reference_datetime("1900-01-01").unwrap(), expected);
+    }
+
+    #[test]
+    fn test_non_gregorian_calendar_is_rejected() {
+        // Regression (audit R2 D8 / R4, third round): the calendar was
+        // parsed and then ignored, so an ERA5-style noleap axis decoded
+        // with real-calendar arithmetic silently drifted ~1 day/4 years.
+        let make = |cal: &str| CfMetadata {
+            time_dim: Some(0),
+            lat_dim: None,
+            lon_dim: None,
+            time_units: Some("days since 2000-01-01".into()),
+            time_calendar: Some(cal.into()),
+            fill_value: None,
+            scale_factor: None,
+            add_offset: None,
+            units: None,
+            long_name: None,
+        };
+        for cal in ["noleap", "365_day", "360_day", "julian", "all_leap"] {
+            let err = make(cal).decode_time(&[0.0]).unwrap_err();
+            let msg = format!("{err}");
+            assert!(
+                msg.contains(cal) && msg.contains("calendar"),
+                "error for '{cal}' must name the calendar: {msg}"
+            );
+        }
+        // Gregorian family still decodes (case-insensitive).
+        for cal in ["gregorian", "standard", "proleptic_gregorian", "Gregorian"] {
+            assert!(
+                make(cal).decode_time(&[0.0]).is_ok(),
+                "'{cal}' must stay supported"
+            );
+        }
     }
 
     #[test]

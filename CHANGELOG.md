@@ -2,6 +2,48 @@
 
 All notable changes to SurtGIS are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+Three silent-wrong-data findings open since audit R2/R3, closed in audit
+R4's third round:
+
+- **Zarr/NetCDF time decoding now rejects non-gregorian CF calendars**
+  (`noleap`/`365_day`, `360_day`, `julian`, `all_leap`, …) with an explicit
+  error instead of decoding them with real-calendar arithmetic — which
+  silently mis-dated the series (a noleap axis, common in climate-model
+  output, drifts ~1 day per 4 years; a 360-day one ~5 days per year).
+  Gregorian-family calendars (`gregorian`, `standard`,
+  `proleptic_gregorian`, or no calendar attribute) behave as before.
+
+- **Sen's slope can now use real acquisition times.** `mann_kendall` and
+  `sens_slope` divided by the *index* separation `(j − i)`, which is wrong
+  whenever the series is irregularly spaced — the normal case for
+  Landsat/Sentinel stacks. New `mann_kendall_with_times` /
+  `sens_slope_with_times` (validated against `scipy.stats.theilslopes`)
+  divide by the actual time separation; the Mann-Kendall statistic itself
+  (S/tau/p) is rank-based and unaffected. The existing functions keep
+  index spacing (units: per time step) for compatibility. The CLI's
+  `temporal trend --times` now feeds Mann-Kendall and Sen's slope (it
+  previously only reached the linear trend), and Python's
+  `mann_kendall_compute` gains an optional `times=` argument.
+
+- **The native GeoTIFF reader warns when a file declares band
+  scale/offset it does not apply.** Packed products (HLS/MODIS int16
+  reflectance or temperature) carry `SCALE`/`OFFSET` in `GDAL_METADATA`;
+  GDAL unpacks them on read, and SurtGIS's own Zarr/NetCDF readers unpack
+  their CF equivalents — but the GeoTIFF reader returns raw packed values.
+  Until it unpacks, it now says so on stderr (with the unpacking formula)
+  instead of silently handing back values off by orders of magnitude.
+
+### Documentation
+
+- The 1.0.0 release notes overclaimed that the byte-budgeted decode
+  "bounds the composite's whole memory footprint by construction"; a
+  correction note in that entry now states what the code actually bounds
+  (concurrent decode + output buffers, not the accumulated mosaic tiles).
+
 Format follows [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer 2.0.0](https://semver.org/). The project is still in
 the `0.x` series, so minor versions may contain breaking changes; we try to
@@ -225,6 +267,14 @@ beyond the additions and fixes listed here.
   halve; real-data pixels are unchanged, interpolated gap-fill pixels differ
   by at most ~5e-4, i.e. f32 rounding). Together with R9-PR2's byte-budgeted
   decode this bounds the composite's whole memory footprint by construction.
+  *[Correction, 2026-08-16 — audit R4]*: "whole memory footprint by
+  construction" overclaims. The byte budget bounds **concurrent tile
+  decode** (the permit is released when a tile's decoded raster is
+  returned), and this change bounds the **output buffers** — but the tiles
+  subsequently accumulated for each mosaic strip remain an unbounded
+  resident set (the mosaic's inherent floor; the engine's own docs say so).
+  Tying permits to raster lifetime (`TrackedRaster`) is tracked follow-up
+  work.
 
 - **Composite RAM is now bounded by the byte budget, and the calibrated
   strip-sizing model is retired** (feature `unstable`) — audit R9, step 2
