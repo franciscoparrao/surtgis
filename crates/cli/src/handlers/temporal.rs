@@ -6,8 +6,9 @@ use std::time::Instant;
 
 use surtgis_algorithms::imagery::{RasterDiffParams, raster_difference};
 use surtgis_algorithms::temporal::{
-    AnomalyMethod, PhenologyParams, TheilSenTrend, linear_trend, mann_kendall, reduce_temporal,
-    sens_slope, temporal_anomaly, temporal_percentile, temporal_stats, vegetation_phenology,
+    AnomalyMethod, PhenologyParams, TheilSenTrend, linear_trend, mann_kendall_with_times,
+    reduce_temporal, sens_slope_with_times, temporal_anomaly, temporal_percentile, temporal_stats,
+    vegetation_phenology,
 };
 
 use crate::commands::TemporalCommands;
@@ -173,7 +174,10 @@ fn handle_trend(
         "mann-kendall" | "mk" => {
             let refs: Vec<&surtgis_core::Raster<f64>> = rasters.iter().collect();
             println!("Computing Mann-Kendall trend test...");
-            let result = mann_kendall(&refs).context("mann_kendall failed")?;
+            // --times feeds Sen's slope (units become "per unit of times");
+            // S/tau/p are rank statistics and don't depend on the spacing.
+            let result =
+                mann_kendall_with_times(&refs, times.as_deref()).context("mann_kendall failed")?;
 
             let tau_path = outdir.join("tau.tif");
             let pval_path = outdir.join("p_value.tif");
@@ -196,7 +200,8 @@ fn handle_trend(
         "sens" | "sens-slope" => {
             let refs: Vec<&surtgis_core::Raster<f64>> = rasters.iter().collect();
             println!("Computing Sen's slope...");
-            let result = sens_slope(&refs).context("sens_slope failed")?;
+            let result =
+                sens_slope_with_times(&refs, times.as_deref()).context("sens_slope failed")?;
             let path = outdir.join("sens_slope.tif");
             write_result(&result, &path, compress)?;
             println!("  Sen's slope → {}", path.display());

@@ -181,16 +181,56 @@ pub fn linear_trend(rasters: &[&Raster<f64>], times: Option<&[f64]>) -> Result<L
     })
 }
 
-/// Mann-Kendall non-parametric trend test with Sen's slope.
+/// Mann-Kendall non-parametric trend test with Sen's slope, on an evenly
+/// spaced series (time = 0, 1, …, n−1).
 ///
 /// Tests whether there is a monotonic trend in the time series.
 /// More robust than linear regression for non-normal data.
 ///
+/// For irregularly spaced acquisitions (the normal case for Landsat/
+/// Sentinel stacks) use [`mann_kendall_with_times`]: the test statistic
+/// (S/tau/p) only depends on the ordering, but Sen's slope divides by the
+/// time separation — with index-based times its magnitude is wrong
+/// whenever the spacing is uneven (audit R4).
+///
 /// # Arguments
 /// * `rasters` - Time-ordered raster stack (at least 3)
 pub fn mann_kendall(rasters: &[&Raster<f64>]) -> Result<MannKendallResult> {
+    mann_kendall_with_times(rasters, None)
+}
+
+/// [`mann_kendall`] with real acquisition times for Sen's slope.
+///
+/// `times` (same length as `rasters`, strictly increasing recommended) is
+/// used ONLY for the Sen's slope denominator — Mann-Kendall's S, tau and
+/// p-value are rank statistics and depend on the ordering alone. With
+/// `None` this is exactly [`mann_kendall`] (index times), so slope units
+/// are "per time step"; with real times the units are "per unit of
+/// `times`" (e.g. per day for Julian days, per year for decimal years).
+///
+/// # Arguments
+/// * `rasters` - Time-ordered raster stack (at least 3)
+/// * `times` - Optional acquisition times, one per raster
+pub fn mann_kendall_with_times(
+    rasters: &[&Raster<f64>],
+    times: Option<&[f64]>,
+) -> Result<MannKendallResult> {
     let (rows, cols) = validate_series(rasters)?;
     let n = rasters.len();
+
+    let t_vals: Vec<f64> = match times {
+        Some(t) => {
+            if t.len() != n {
+                return Err(Error::Other(format!(
+                    "times length {} != raster count {}",
+                    t.len(),
+                    n
+                )));
+            }
+            t.to_vec()
+        }
+        None => (0..n).map(|i| i as f64).collect(),
+    };
 
     let total = rows * cols;
     let mut tau_flat = vec![f64::NAN; total];
@@ -223,9 +263,8 @@ pub fn mann_kendall(rasters: &[&Raster<f64>]) -> Result<MannKendallResult> {
                     continue;
                 }
 
-                // Mann-Kendall S statistic
+                // Mann-Kendall S statistic (rank-based: ordering only).
                 let mut s: i64 = 0;
-                let mut slopes = Vec::new();
                 let k = vals.len();
                 for i in 0..k {
                     if !vals[i].is_finite() {
@@ -241,19 +280,14 @@ pub fn mann_kendall(rasters: &[&Raster<f64>]) -> Result<MannKendallResult> {
                         } else if diff < 0.0 {
                             s -= 1;
                         }
-                        slopes.push(diff / (j - i) as f64);
                     }
                 }
 
-                // Sen's slope = median of pairwise slopes
-                if !slopes.is_empty() {
-                    slopes.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
-                    let mid = slopes.len() / 2;
-                    sens_row[col] = if slopes.len() % 2 == 0 {
-                        (slopes[mid - 1] + slopes[mid]) / 2.0
-                    } else {
-                        slopes[mid]
-                    };
+                // Sen's slope via the shared per-pixel core — divides by the
+                // actual time separation, so irregular spacing gives the
+                // correct magnitude (audit R4; previously diff/(j−i)).
+                if let Some(slope) = sens_slope_series(&vals, &t_vals) {
+                    sens_row[col] = slope;
                 }
 
                 // Tie groups (size >= 2) among the finite values, needed for both
@@ -379,13 +413,39 @@ pub fn sens_slope_series(values: &[f64], times: &[f64]) -> Option<f64> {
     })
 }
 
-/// Per-pixel Sen's slope estimator (standalone, without full Mann-Kendall test).
+/// Per-pixel Sen's slope estimator (standalone, without full Mann-Kendall
+/// test), on an evenly spaced series (time = 0, 1, …, n−1).
 ///
 /// Returns the median of all pairwise slopes: (y_j - y_i) / (j - i) for j > i.
+/// For irregularly spaced acquisitions use [`sens_slope_with_times`].
 pub fn sens_slope(rasters: &[&Raster<f64>]) -> Result<Raster<f64>> {
+    sens_slope_with_times(rasters, None)
+}
+
+/// [`sens_slope`] with real acquisition times: the median of
+/// `(y_j − y_i) / (t_j − t_i)`, the correct estimator for irregularly
+/// spaced series (audit R4). With `None`, index times (0, 1, …, n−1) are
+/// used and this is exactly [`sens_slope`]; the slope's units follow the
+/// units of `times`.
+pub fn sens_slope_with_times(
+    rasters: &[&Raster<f64>],
+    times: Option<&[f64]>,
+) -> Result<Raster<f64>> {
     let (rows, cols) = validate_series(rasters)?;
     let n = rasters.len();
-    let times: Vec<f64> = (0..n).map(|i| i as f64).collect();
+    let times: Vec<f64> = match times {
+        Some(t) => {
+            if t.len() != n {
+                return Err(Error::Other(format!(
+                    "times length {} != raster count {}",
+                    t.len(),
+                    n
+                )));
+            }
+            t.to_vec()
+        }
+        None => (0..n).map(|i| i as f64).collect(),
+    };
     let mut out = Array2::<f64>::from_elem((rows, cols), f64::NAN);
 
     out.as_slice_mut()
@@ -659,6 +719,82 @@ mod tests {
             (tau - 0.5555555555555556).abs() < 1e-9,
             "no ties: tau-b should equal tau-a = 25/45, got {}",
             tau
+        );
+    }
+
+    #[test]
+    fn test_sens_slope_irregular_spacing_uses_real_times() {
+        // Regression (audit R4): a perfectly linear signal y = 2·t sampled
+        // at irregular times must give slope exactly 2 when the real times
+        // are supplied — every pairwise slope is 2, so the median is 2
+        // (scipy.stats.theilslopes agrees). The index-based estimator
+        // divides by (j−i) instead and is wrong on the same data.
+        let t = [0.0, 1.0, 2.0, 10.0];
+        let rasters: Vec<Raster<f64>> = t.iter().map(|&ti| make_raster(vec![2.0 * ti])).collect();
+        let refs: Vec<&Raster<f64>> = rasters.iter().collect();
+
+        let with_times = sens_slope_with_times(&refs, Some(&t)).unwrap();
+        assert!(
+            (with_times.data()[[0, 0]] - 2.0).abs() < 1e-12,
+            "real-time Sen's slope must be exactly 2, got {}",
+            with_times.data()[[0, 0]]
+        );
+
+        // Index-based (legacy default): pairwise slopes sorted are
+        // [2, 2, 2, 20/3, 9, 16] -> median (2 + 20/3)/2 = 13/3 ≠ 2. Pinned
+        // so the default's semantics stay documented and any accidental
+        // change is caught.
+        let by_index = sens_slope(&refs).unwrap();
+        assert!(
+            (by_index.data()[[0, 0]] - 13.0 / 3.0).abs() < 1e-12,
+            "index-based slope on this series is 13/3, got {}",
+            by_index.data()[[0, 0]]
+        );
+
+        // mann_kendall_with_times: same slope; S/tau/p unaffected by times.
+        let mk = mann_kendall_with_times(&refs, Some(&t)).unwrap();
+        assert!((mk.sens_slope.data()[[0, 0]] - 2.0).abs() < 1e-12);
+        let mk_plain = mann_kendall(&refs).unwrap();
+        assert_eq!(mk.tau.data()[[0, 0]], mk_plain.tau.data()[[0, 0]]);
+        assert_eq!(mk.p_value.data()[[0, 0]], mk_plain.p_value.data()[[0, 0]]);
+        assert!((mk_plain.sens_slope.data()[[0, 0]] - 13.0 / 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_sens_slope_with_times_matches_scipy_theilslopes() {
+        // Cross-validation: irregular times + noisy linear signal, reference
+        // computed with scipy.stats.theilslopes (rng seed 42, y = 0.35·t + ε):
+        //   theilslopes(y, t).slope = 0.33374944886123714
+        let t = [
+            9.4177347888,
+            12.8113632676,
+            43.8878439752,
+            69.7368029059,
+            76.113970199,
+            77.3956048556,
+            78.6064305277,
+            85.8597919911,
+            97.5622351637,
+        ];
+        let y = [
+            1.5901193209,
+            6.2427730934,
+            16.9163292622,
+            24.5399424122,
+            28.8943719836,
+            28.023480384,
+            25.7936657589,
+            30.7884287651,
+            32.2290171056,
+        ];
+        let rasters: Vec<Raster<f64>> = y.iter().map(|&v| make_raster(vec![v])).collect();
+        let refs: Vec<&Raster<f64>> = rasters.iter().collect();
+
+        let result = sens_slope_with_times(&refs, Some(&t)).unwrap();
+        let slope = result.data()[[0, 0]];
+        assert!(
+            (slope - 0.33374944886123714).abs() < 1e-12,
+            "must match scipy.theilslopes, got {slope}"
         );
     }
 

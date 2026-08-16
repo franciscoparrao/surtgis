@@ -233,6 +233,7 @@ where
     let transform = read_geotransform(&mut decoder).ok();
     let crs = read_crs(&mut decoder);
     let nodata = read_nodata(&mut decoder);
+    warn_unapplied_scale_offset(&mut decoder);
 
     // Read image data (pixel-interleaved for multi-band TIFFs)
     let result = decoder
@@ -633,6 +634,64 @@ fn read_geotransform<R: std::io::Read + std::io::Seek>(
     }
 
     Err(Error::Other("Cannot determine geotransform".into()))
+}
+
+/// Warn (stderr, once per open) when the file's `GDAL_METADATA` (tag
+/// 42112) declares a non-identity per-band SCALE/OFFSET that this reader
+/// does not apply.
+///
+/// Packed products (HLS/MODIS int16 reflectance, scaled temperature) store
+/// physical values as `raw * scale + offset`; GDAL applies the pair on
+/// read, SurtGIS's native reader returns raw values (and its Zarr/NetCDF
+/// readers DO unpack — an asymmetry a user has no way to see). Until the
+/// reader unpacks, the defensible minimum is to say so out loud instead of
+/// silently handing back numbers that are off by orders of magnitude
+/// (audit R4, third round).
+fn warn_unapplied_scale_offset<R: std::io::Read + std::io::Seek>(decoder: &mut Decoder<R>) {
+    let Ok(xml) = decoder.get_tag_ascii_string(Tag::Unknown(42112)) else {
+        return;
+    };
+    if let Some((scale, offset)) = parse_non_identity_scale_offset(&xml) {
+        eprintln!(
+            "warning: GeoTIFF declares band scale/offset (SCALE={}, OFFSET={}) \
+             which SurtGIS does not apply — values are returned RAW (packed). \
+             Unpack with: value = raw * scale + offset",
+            scale.unwrap_or(1.0),
+            offset.unwrap_or(0.0),
+        );
+    }
+}
+
+/// Extract a non-identity per-band SCALE/OFFSET pair from a `GDAL_METADATA`
+/// XML payload. Returns `None` when the metadata declares no scaling or
+/// only the identity pair (SCALE=1, OFFSET=0), `Some((scale, offset))`
+/// otherwise (each side `None` if absent/identity).
+///
+/// Minimal scan of `<Item name="SCALE" ...>v</Item>` — the same schema this
+/// crate writes for band names. No XML dependency: GDAL itself generates
+/// this structure, so plain string parsing holds.
+fn parse_non_identity_scale_offset(xml: &str) -> Option<(Option<f64>, Option<f64>)> {
+    let non_identity = |key: &str, identity: f64| {
+        let needle = format!("name=\"{key}\"");
+        let mut rest = xml;
+        while let Some(pos) = rest.find(&needle) {
+            let after = &rest[pos..];
+            if let Some(v) = after
+                .find('>')
+                .map(|g| &after[g + 1..])
+                .and_then(|s| s.split('<').next())
+                .and_then(|s| s.trim().parse::<f64>().ok())
+                && v != identity
+            {
+                return Some(v);
+            }
+            rest = &after[needle.len()..];
+        }
+        None
+    };
+    let scale = non_identity("SCALE", 1.0);
+    let offset = non_identity("OFFSET", 0.0);
+    (scale.is_some() || offset.is_some()).then_some((scale, offset))
 }
 
 /// Read GDAL_NODATA tag (42113) — stored as ASCII string, parsed to f64.
@@ -2055,6 +2114,32 @@ mod tests {
             }
             other => panic!("expected AnyRaster::F32, got {:?}", other.dtype()),
         }
+    }
+
+    #[test]
+    fn parse_scale_offset_detects_packed_products() {
+        // HLS-style: int16 reflectance packed with SCALE=0.0001.
+        let hls = r#"<GDALMetadata><Item name="SCALE" sample="0" role="scale">0.0001</Item><Item name="OFFSET" sample="0" role="offset">0</Item></GDALMetadata>"#;
+        let (scale, offset) = parse_non_identity_scale_offset(hls).expect("HLS must warn");
+        assert_eq!(scale, Some(0.0001));
+        assert_eq!(offset, None); // 0 is the identity offset
+
+        // MODIS LST style: scale + offset both non-identity.
+        let lst = r#"<GDALMetadata><Item name="SCALE" sample="0">0.02</Item><Item name="OFFSET" sample="0">-273.15</Item></GDALMetadata>"#;
+        let (scale, offset) = parse_non_identity_scale_offset(lst).unwrap();
+        assert_eq!(scale, Some(0.02));
+        assert_eq!(offset, Some(-273.15));
+
+        // Identity pair: no warning.
+        let identity = r#"<GDALMetadata><Item name="SCALE" sample="0">1</Item><Item name="OFFSET" sample="0">0</Item></GDALMetadata>"#;
+        assert!(parse_non_identity_scale_offset(identity).is_none());
+
+        // Unrelated metadata (band names, as this crate writes): no warning.
+        let names = r#"<GDALMetadata><Item name="DESCRIPTION" sample="0" role="description">ndvi</Item></GDALMetadata>"#;
+        assert!(parse_non_identity_scale_offset(names).is_none());
+
+        // No metadata at all.
+        assert!(parse_non_identity_scale_offset("").is_none());
     }
 
     #[test]

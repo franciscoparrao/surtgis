@@ -114,7 +114,8 @@ use surtgis_algorithms::statistics::{
     zonal_statistics_raster as compute_zonal_statistics_raster,
 };
 use surtgis_algorithms::temporal::{
-    linear_trend as compute_linear_trend, mann_kendall as compute_mann_kendall,
+    linear_trend as compute_linear_trend,
+    mann_kendall_with_times as compute_mann_kendall_with_times,
 };
 use surtgis_algorithms::terrain::{
     AdvancedCurvatureType,
@@ -2705,12 +2706,18 @@ fn linear_trend_compute<'py>(
 /// Per-pixel Mann-Kendall trend test across a temporal stack `(time, rows,
 /// cols)`. Returns `(tau, p_value, trend, sens_slope)` — `trend` is
 /// 1=increasing / -1=decreasing / 0=no significant trend at alpha=0.05.
+///
+/// `times` (optional, one value per band) feeds Sen's slope so irregularly
+/// spaced acquisitions get the correct magnitude — the slope's units become
+/// "per unit of `times`". S/tau/p are rank statistics and ignore spacing.
+/// Without `times`, index spacing (0, 1, …, n−1) is used as before.
 #[pyfunction]
-#[pyo3(signature = (stack, cell_size=1.0))]
+#[pyo3(signature = (stack, cell_size=1.0, times=None))]
 fn mann_kendall_compute<'py>(
     py: Python<'py>,
     stack: PyReadonlyArray3<'py, f64>,
     cell_size: f64,
+    times: Option<Vec<f64>>,
 ) -> PyResult<(
     Bound<'py, PyArray2<f64>>,
     Bound<'py, PyArray2<f64>>,
@@ -2720,7 +2727,7 @@ fn mann_kendall_compute<'py>(
     let rasters = array3_to_rasters(&stack, cell_size)?;
     let refs: Vec<&Raster<f64>> = rasters.iter().collect();
     let result = py
-        .allow_threads(|| compute_mann_kendall(&refs))
+        .allow_threads(|| compute_mann_kendall_with_times(&refs, times.as_deref()))
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok((
         raster_to_numpy(py, result.tau),
