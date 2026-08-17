@@ -2,7 +2,7 @@
 
 All notable changes to SurtGIS are documented in this file.
 
-## [Unreleased]
+## [1.2.4] - 2026-08-17
 
 ### Fixed
 
