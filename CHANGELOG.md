@@ -2,6 +2,38 @@
 
 All notable changes to SurtGIS are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **`multidirectional_hillshade` produced a degenerate raster** (reported
+  from the WASM bindings, 2026-08). The blend averaged six azimuths spread
+  over the full compass, whose directional terms cancel exactly
+  (`Σ sin az = Σ cos az = 0`): every cell collapsed to
+  `cos θz · 1/√(1+g²)`, i.e. an output capped at `cos(45°)·255 = 180` and
+  nearly constant — on gentle terrain literally every percentile came out
+  as 180. The weighting compounded it: `1 + cross²/g²` is both the
+  complement of the intended weight and carries a constant term that
+  flattens it toward a plain mean.
+
+  It now implements Mark (1992) as `gdaldem hillshade -multidirectional`
+  does — four azimuths over a half-circle (225°, 270°, 315°, 360°) with
+  the aspect-dependent weights `x²/g²`, `y²/g²`, `½ ∓ xy/g²`. Validated
+  against GDAL on a 1000×1000 DEM: **RMSE 0.68, r = 0.99999**, the same
+  agreement the single-direction `hillshade` already had (RMSE 0.69) — the
+  residual is GDAL's `1 + 254·x` versus SurtGIS's `255·x` scaling, present
+  in both. Output values change for every input; that is the point.
+
+- **Terrain algorithms warn when a DEM has no CRS but degree-sized cells.**
+  With a geographic CRS the cell size has been converted to metres per row
+  since 0.17.0, but a DEM whose CRS was stripped still had its ~2.8e-4°
+  cells used as metres, saturating slope near 90° everywhere and poisoning
+  TWI and everything else downstream — silently. Such rasters now get a
+  stderr warning naming the symptom and the two fixes (set the CRS, or
+  reproject). The heuristic requires both degree-sized cells and an extent
+  inside the lon/lat domain, so projected centimetre-resolution grids
+  (drone/LiDAR, coordinates in the hundreds of thousands) are unaffected.
+
 ## [1.2.4] - 2026-08-17
 
 ### Fixed
