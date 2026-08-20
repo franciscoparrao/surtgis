@@ -90,7 +90,7 @@ pub fn hillshade_compute(
     }))
 }
 
-/// Compute multidirectional hillshade (6 azimuths combined).
+/// Compute multidirectional hillshade (Mark 1992: 4 azimuths, GDAL-compatible).
 #[wasm_bindgen]
 pub fn multidirectional_hillshade(tiff_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
     dem_op!(tiff_bytes, |dem: &_| compute_multi_hillshade(

@@ -663,7 +663,7 @@ pub enum TerrainCommands {
         #[arg(short, long, default_value = "3")]
         radius: usize,
     },
-    /// Multi-directional hillshade (6 azimuths combined)
+    /// Multi-directional hillshade (Mark 1992: 225/270/315/360 deg, GDAL-compatible)
     MultiHillshade { input: PathBuf, output: PathBuf },
     /// LS-Factor for RUSLE soil erosion model
     LsFactor {
