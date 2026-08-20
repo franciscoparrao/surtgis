@@ -2,7 +2,7 @@
 
 All notable changes to SurtGIS are documented in this file.
 
-## [Unreleased]
+## [1.2.5] - 2026-08-20
 
 ### Fixed
 
@@ -33,6 +33,12 @@ All notable changes to SurtGIS are documented in this file.
   reproject). The heuristic requires both degree-sized cells and an extent
   inside the lon/lat domain, so projected centimetre-resolution grids
   (drone/LiDAR, coordinates in the hundreds of thousands) are unaffected.
+
+### Security
+
+- `h2` bumped 0.4.13 → 0.4.17 (RUSTSEC-2026-0258: empty DATA frames were
+  accepted and queued without limit). Transitive via `hyper`; lockfile
+  only, no direct dependency change.
 
 ## [1.2.4] - 2026-08-17
 

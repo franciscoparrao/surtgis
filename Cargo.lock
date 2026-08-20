@@ -6018,7 +6018,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "surtgis"
-version = "1.2.4"
+version = "1.2.5"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -6053,7 +6053,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-algorithms"
-version = "1.2.4"
+version = "1.2.5"
 dependencies = [
  "anyhow",
  "approx",
@@ -6076,7 +6076,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-cloud"
-version = "1.2.4"
+version = "1.2.5"
 dependencies = [
  "approx",
  "byteorder",
@@ -6108,7 +6108,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-colormap"
-version = "1.2.4"
+version = "1.2.5"
 dependencies = [
  "image",
  "num-traits",
@@ -6118,7 +6118,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-core"
-version = "1.2.4"
+version = "1.2.5"
 dependencies = [
  "anyhow",
  "approx",
@@ -6142,7 +6142,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-ffi"
-version = "1.2.4"
+version = "1.2.5"
 dependencies = [
  "surtgis-core",
  "surtgis-flow",
@@ -6150,7 +6150,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-flow"
-version = "1.2.4"
+version = "1.2.5"
 dependencies = [
  "approx",
  "criterion",
@@ -6161,7 +6161,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-gui"
-version = "1.2.4"
+version = "1.2.5"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -6182,7 +6182,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-parallel"
-version = "1.2.4"
+version = "1.2.5"
 dependencies = [
  "criterion",
  "crossbeam",
@@ -6194,7 +6194,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-python"
-version = "1.2.4"
+version = "1.2.5"
 dependencies = [
  "numpy",
  "pyo3",
@@ -6207,7 +6207,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-relief"
-version = "1.2.4"
+version = "1.2.5"
 dependencies = [
  "ndarray 0.16.1",
  "num-traits",
@@ -6220,7 +6220,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-relief-3d"
-version = "1.2.4"
+version = "1.2.5"
 dependencies = [
  "bytemuck",
  "console_error_panic_hook",
@@ -6241,7 +6241,7 @@ dependencies = [
 
 [[package]]
 name = "surtgis-wasm"
-version = "1.2.4"
+version = "1.2.5"
 dependencies = [
  "js-sys",
  "serde",
