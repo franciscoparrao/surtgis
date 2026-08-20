@@ -62,3 +62,6 @@ docs/wos/analysis_results.json
 # GFM-prep benchmark intermediate outputs (regenerable, ~5GB per run)
 benchmarks/results/gfm_prep/synthetic_dataset/
 benchmarks/results/gfm_prep/run_*/
+
+# wasm-pack distributables (built on demand, attached to GitHub releases)
+crates/wasm/*.tgz
