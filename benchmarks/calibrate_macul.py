@@ -135,6 +135,17 @@ def run_once(args, mu: float, xi: float, k: float, tag: str) -> dict:
         "footprint_ha": round(sim.sum() * area / 1e4, 2),
         "volume_m3": round(float(np.nansum(h[sim])) * area, 0),
     }
+
+    # Lowest elevation the flow reached. For a channelised event this is a
+    # sharper acceptance test than planimetric distance: Macul 1993 has to
+    # reach the fan apex at 947 m, and pre-entrainment runs stalled at
+    # 959–978 m (GEODEO docs/validacion-surtgis-flow.md).
+    if args.dem:
+        dem, _, _ = _read(args.dem)
+        if dem.shape == h.shape and sim.any():
+            row["min_elev_m"] = round(float(np.nanmin(dem[sim])), 1)
+            if args.target_elevation:
+                row["reaches_apex"] = row["min_elev_m"] <= args.target_elevation
     # The manifest carries the solver's own mass ledger (entrainment, borders).
     manifest = outdir / "manifest.json"
     if manifest.is_file():
@@ -174,6 +185,9 @@ def main() -> int:
                    help="fan apex in the DEM's CRS — the runout origin")
     p.add_argument("--target-runout", type=float, default=947.0,
                    help="observed front distance from the apex, m (default: 947)")
+    p.add_argument("--target-elevation", type=float,
+                   help="elevation the front must reach, m (Macul 1993: 947); "
+                        "scored from --dem")
     p.add_argument("--mu", default="0.08,0.10,0.12,0.15,0.20")
     p.add_argument("--xi", default="300,500,700,1000")
     p.add_argument("--k", default="1e-4,5e-4,1e-3,5e-3")
@@ -238,10 +252,13 @@ def main() -> int:
         return 1
 
     def score(r) -> float:
-        """Rank by IoU when an observed footprint exists, else by how close
-        the modelled front lands to the observed runout."""
+        """Rank by IoU when an observed footprint exists; otherwise by how
+        far the front got — lowest elevation reached when a DEM is given
+        (the sharper test for a channelised event), else runout error."""
         if r.get("iou") not in (None, "", "None"):
             return -float(r["iou"])
+        if r.get("min_elev_m") not in (None, "", "None"):
+            return float(r["min_elev_m"])
         return abs(float(r.get("runout_m", 0)) - args.target_runout)
 
     ok.sort(key=score)
@@ -249,7 +266,12 @@ def main() -> int:
           f"({'IoU' if args.observed else f'|runout − {args.target_runout} m|'}):")
     for r in ok[:10]:
         line = (f"  mu={r['mu']:<6} xi={r['xi']:<6} k={r['k']:<8} "
-                f"runout={r['runout_m']:>7} m  area={r['footprint_ha']:>7} ha")
+                f"area={r['footprint_ha']:>7} ha")
+        if r.get("min_elev_m") not in (None, "", "None"):
+            mark = " REACHES APEX" if str(r.get("reaches_apex")) == "True" else ""
+            line += f"  min_elev={r['min_elev_m']:>7} m{mark}"
+        else:
+            line += f"  runout={r['runout_m']:>7} m"
         if r.get("iou") not in (None, "", "None"):
             line += f"  IoU={r['iou']}"
         print(line)
