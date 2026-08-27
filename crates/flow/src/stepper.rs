@@ -197,6 +197,61 @@ impl Simulation {
         &self.arrival
     }
 
+    /// Fraction of the flow's volume that is moving slower than
+    /// `v_threshold` (m/s), in `[0, 1]`; `1.0` when nothing is wet.
+    ///
+    /// This is the quiescence test a runout calibration needs: the final
+    /// extent of a Voellmy flow is only meaningful once the flow has come
+    /// to rest, and stopping at a fixed simulated time instead measures
+    /// where the front happened to be at that instant. Cells below the
+    /// wet/dry threshold count as at rest (they carry no momentum by
+    /// construction, spec §3.5).
+    ///
+    /// Volume-weighted on purpose: a handful of fast, vanishingly thin
+    /// cells at the margin must not keep a deposited flow "in motion",
+    /// while a thick moving core must not be diluted by a large stopped
+    /// tail. Accumulated in f64 in fixed row order, so the value is
+    /// independent of the thread count (T7).
+    #[must_use]
+    pub fn mass_fraction_at_rest(&self, v_threshold: f32) -> f64 {
+        let cols = self.grid.cols();
+        let h_dry = f64::from(self.config.h_dry);
+        let vt = f64::from(v_threshold);
+        let state = &self.state;
+
+        let rows: Vec<(f64, f64)> = (0..self.grid.rows())
+            .into_par_iter()
+            .map(|r| {
+                let (mut total, mut resting) = (0.0f64, 0.0f64);
+                for c in 0..cols {
+                    let i = r * cols + c;
+                    let h = f64::from(state.h[i]);
+                    if h <= 0.0 || self.grid.solid_at(i) {
+                        continue;
+                    }
+                    total += h;
+                    if h < h_dry {
+                        resting += h; // dry film: no momentum by construction
+                        continue;
+                    }
+                    let u = f64::from(state.hu[i]) / h;
+                    let v = f64::from(state.hv[i]) / h;
+                    if (u * u + v * v).sqrt() < vt {
+                        resting += h;
+                    }
+                }
+                (total, resting)
+            })
+            .collect();
+
+        let (mut total, mut resting) = (0.0f64, 0.0f64);
+        for (t, r) in rows {
+            total += t;
+            resting += r;
+        }
+        if total <= 0.0 { 1.0 } else { resting / total }
+    }
+
     /// Net volume exchanged through the domain's transmissive (open) edges
     /// since the start of the run, in m³. Positive = net inflow: the ghost
     /// mirrors the edge cell's state, so an edge cell moving inward draws

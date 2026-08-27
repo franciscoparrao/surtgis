@@ -33,6 +33,8 @@ pub fn handle(command: FlowCommands, compress: bool) -> Result<()> {
             erodible,
             entrainment_k,
             dump_erosion,
+            until_rest,
+            rest_velocity,
         } => run(RunArgs {
             dem_path: &dem,
             release_path: &release,
@@ -46,6 +48,8 @@ pub fn handle(command: FlowCommands, compress: bool) -> Result<()> {
             erodible: erodible.as_deref(),
             entrainment_k,
             dump_erosion,
+            until_rest,
+            rest_velocity,
             compress,
         }),
     }
@@ -66,6 +70,8 @@ struct RunArgs<'a> {
     erodible: Option<&'a Path>,
     entrainment_k: f32,
     dump_erosion: bool,
+    until_rest: Option<f64>,
+    rest_velocity: f32,
     compress: bool,
 }
 
@@ -83,6 +89,8 @@ fn run(args: RunArgs<'_>) -> Result<()> {
         erodible,
         entrainment_k,
         dump_erosion,
+        until_rest,
+        rest_velocity,
         compress,
     } = args;
     anyhow::ensure!(
@@ -176,6 +184,8 @@ fn run(args: RunArgs<'_>) -> Result<()> {
             .unwrap(),
     );
     let mut total_substeps: u64 = 0;
+    let mut frames_written = n_outputs;
+    let mut rest_reached: Option<f64> = None;
     for frame in 1..=n_outputs {
         let elapsed_target = (frame as f64) * output_interval;
         let dt = (elapsed_target - sim.time()).max(0.0);
@@ -191,8 +201,39 @@ fn run(args: RunArgs<'_>) -> Result<()> {
         )?;
         pb.set_message(format!("{:.1} s", sim.time()));
         pb.inc(1);
+
+        // Stop early once the flow has come to rest: a runout is only
+        // meaningful on a settled flow, and stopping at an arbitrary
+        // --duration instead reports where the front happened to be at
+        // that instant (for any target extent there is a friction/cut-off
+        // pair that "reproduces" it).
+        if let Some(min_fraction) = until_rest {
+            let at_rest = sim.mass_fraction_at_rest(rest_velocity);
+            if at_rest >= min_fraction {
+                rest_reached = Some(sim.time());
+                frames_written = frame;
+                println!(
+                    "Flow reached rest at t = {:.1} s ({:.1}% of the volume \
+                     below {rest_velocity} m/s); stopping early.",
+                    sim.time(),
+                    at_rest * 100.0
+                );
+                break;
+            }
+        }
     }
     pb.finish_and_clear();
+
+    if until_rest.is_some() && rest_reached.is_none() {
+        eprintln!(
+            "warning: the flow had NOT reached rest when --duration {duration} s \
+             was exhausted ({:.1}% of the volume below {rest_velocity} m/s, \
+             target {:.1}%) — the runout of this run is a snapshot, not a \
+             final extent. Raise --duration.",
+            sim.mass_fraction_at_rest(rest_velocity) * 100.0,
+            until_rest.unwrap_or(0.0) * 100.0
+        );
+    }
 
     if let Some(arrival_path) = arrival {
         let raster = masked_raster(sim.grid(), dem.crs(), sim.arrival_times().to_vec());
@@ -205,7 +246,7 @@ fn run(args: RunArgs<'_>) -> Result<()> {
         outdir,
         &dem,
         output_interval,
-        n_frames,
+        frames_written + 1, // + frame 0000 (initial state)
         mu,
         xi,
         ent_params.map(|p| (p, sim.total_eroded())),

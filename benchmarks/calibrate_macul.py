@@ -106,6 +106,9 @@ def run_once(args, mu: float, xi: float, k: float, tag: str) -> dict:
     ]
     if args.erodible:
         cmd += ["--erodible", str(args.erodible), "--entrainment-k", f"{k}"]
+    if args.until_rest:
+        cmd += ["--until-rest", f"{args.until_rest}",
+                "--rest-velocity", f"{args.rest_velocity}"]
 
     t0 = time.time()
     proc = subprocess.run(cmd, capture_output=True, text=True)
@@ -119,6 +122,17 @@ def run_once(args, mu: float, xi: float, k: float, tag: str) -> dict:
             "error": (proc.stderr.strip().splitlines() or ["unknown"])[-1][:200],
         }
 
+    # Did the flow actually settle? Without this the "runout" is just where
+    # the front was when the clock ran out (see --until-rest).
+    at_rest, rest_t = None, None
+    if args.until_rest:
+        at_rest = "reached rest" in proc.stdout
+        if at_rest:
+            for line in proc.stdout.splitlines():
+                if "reached rest at t =" in line:
+                    rest_t = float(line.split("t =")[1].split("s")[0].strip())
+                    break
+
     frames = sorted(outdir.glob("h_t*.tif"))
     if not frames:
         return {"tag": tag, "mu": mu, "xi": xi, "k": k, "status": "no-output",
@@ -131,6 +145,7 @@ def run_once(args, mu: float, xi: float, k: float, tag: str) -> dict:
     row = {
         "tag": tag, "mu": mu, "xi": xi, "k": k, "status": "ok",
         "wall_s": round(wall, 1),
+        "at_rest": at_rest, "rest_t_s": rest_t,
         "runout_m": round(runout_distance(sim, transform, args.apex), 1),
         "footprint_ha": round(sim.sum() * area / 1e4, 2),
         "volume_m3": round(float(np.nansum(h[sim])) * area, 0),
@@ -194,6 +209,13 @@ def main() -> int:
     p.add_argument("--duration", type=float, default=900.0)
     p.add_argument("--output-interval", type=float, default=900.0,
                    help="only the last frame is scored; keep it large to save I/O")
+    p.add_argument("--until-rest", type=float, metavar="FRACTION",
+                   help="stop each run once this fraction of the volume is "
+                        "slower than --rest-velocity; --duration becomes the "
+                        "upper bound. Runs that never settle are excluded "
+                        "from the ranking")
+    p.add_argument("--rest-velocity", type=float, default=0.5,
+                   help="speed below which a cell counts as at rest, m/s")
     p.add_argument("--h-deposit", type=float, default=0.1,
                    help="thickness (m) above which a cell counts as deposited")
     p.add_argument("--outdir", type=Path, default=Path("sweep_macul"))
@@ -247,8 +269,15 @@ def main() -> int:
 
     # ── ranking ──────────────────────────────────────────────────────────
     ok = [r for r in rows if str(r.get("status")) == "ok"]
+    if args.until_rest:
+        unsettled = [r for r in ok if str(r.get("at_rest")) != "True"]
+        ok = [r for r in ok if str(r.get("at_rest")) == "True"]
+        if unsettled:
+            print(f"\nexcluded {len(unsettled)} run(s) that never settled "
+                  f"(their extent is a snapshot, not a final runout): "
+                  + ", ".join(r["tag"] for r in unsettled))
     if not ok:
-        print("\nno successful run to rank")
+        print("\nno successful settled run to rank")
         return 1
 
     def score(r) -> float:

@@ -450,6 +450,16 @@ pub enum FlowCommands {
         /// Also write e_t####.tif cumulative-erosion frames [m]
         #[arg(long, requires = "erodible")]
         dump_erosion: bool,
+        /// Stop as soon as this fraction of the volume moves slower than
+        /// --rest-velocity, instead of always running the full --duration.
+        /// A runout is only meaningful once the flow has settled; without
+        /// this, the reported extent is wherever the front was when the
+        /// clock ran out. --duration then acts as the upper bound.
+        #[arg(long, value_name = "FRACTION")]
+        until_rest: Option<f64>,
+        /// Speed below which a cell counts as at rest [m/s] (with --until-rest)
+        #[arg(long, default_value = "0.5")]
+        rest_velocity: f32,
     },
 }
 
