@@ -15,9 +15,9 @@ use surtgis_algorithms::hydrology::{
 };
 use surtgis_algorithms::imagery::{
     EviParams, SaviParams, bsi as compute_bsi, evi as compute_evi, evi2 as compute_evi2,
-    gndvi as compute_gndvi, mndwi as compute_mndwi, msavi as compute_msavi, nbr as compute_nbr,
-    ndbi as compute_ndbi, ndmi as compute_ndmi, ndre as compute_ndre, ndvi as compute_ndvi,
-    ndwi as compute_ndwi, normalized_difference, savi as compute_savi,
+    gndvi as compute_gndvi, index_builder, mndwi as compute_mndwi, msavi as compute_msavi,
+    nbr as compute_nbr, ndbi as compute_ndbi, ndmi as compute_ndmi, ndre as compute_ndre,
+    ndvi as compute_ndvi, ndwi as compute_ndwi, normalized_difference, savi as compute_savi,
 };
 use surtgis_algorithms::morphology::{
     StructuringElement, closing as compute_closing, dilate as compute_dilate,
@@ -535,6 +535,57 @@ pub fn evi(nir_bytes: &[u8], red_bytes: &[u8], blue_bytes: &[u8]) -> Result<Vec<
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
     let result = compute_evi(&nir, &red, &blue, EviParams::default())
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    write_geotiff_to_buffer(&result, None).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+/// Evaluate an arbitrary spectral-index formula over named bands.
+///
+/// Covers the full grammar of the Awesome Spectral Indices catalogue
+/// (Montero et al., 2023): `+`, `-`, `*`, `/`, `**` (right-associative
+/// power), parentheses, unary minus and numeric constants. Band names in
+/// the formula follow the caller's `band_names` — use the ASI convention
+/// (`N`, `R`, `G`, `B`, `RE1`..`RE3`, `N2`, `S1`, `S2`, `A`, `WV`) to run
+/// catalogue formulas verbatim, e.g. `"(N - R)/(N + R)"` for NDVI.
+///
+/// `band_names[i]` names the band decoded from `band_tiffs[i]`; the two
+/// arrays must have the same length and every GeoTIFF the same dimensions.
+/// Nodata (NaN or the declared nodata value) in any referenced band and
+/// division by zero both produce NaN in the output.
+#[wasm_bindgen]
+pub fn spectral_index(
+    formula: &str,
+    band_names: Vec<String>,
+    band_tiffs: Vec<js_sys::Uint8Array>,
+) -> Result<Vec<u8>, JsValue> {
+    if band_names.is_empty() {
+        return Err(JsValue::from_str("spectral_index: no bands provided"));
+    }
+    if band_names.len() != band_tiffs.len() {
+        return Err(JsValue::from_str(&format!(
+            "spectral_index: {} band names but {} band buffers",
+            band_names.len(),
+            band_tiffs.len()
+        )));
+    }
+
+    let mut rasters = Vec::with_capacity(band_tiffs.len());
+    for (name, tiff) in band_names.iter().zip(&band_tiffs) {
+        let raster = read_geotiff_from_buffer::<f64>(&tiff.to_vec(), None)
+            .map_err(|e| JsValue::from_str(&format!("spectral_index: band '{}': {}", name, e)))?;
+        rasters.push(raster);
+    }
+
+    let mut bands = std::collections::HashMap::new();
+    for (name, raster) in band_names.iter().zip(&rasters) {
+        if bands.insert(name.as_str(), raster).is_some() {
+            return Err(JsValue::from_str(&format!(
+                "spectral_index: duplicate band name '{}'",
+                name
+            )));
+        }
+    }
+
+    let result = index_builder(formula, &bands).map_err(|e| JsValue::from_str(&e.to_string()))?;
     write_geotiff_to_buffer(&result, None).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 

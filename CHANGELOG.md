@@ -2,6 +2,30 @@
 
 All notable changes to SurtGIS are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **The formula evaluator now covers the full Awesome Spectral Indices
+  grammar** (Montero et al., 2023, *Scientific Data* 10, 197). The
+  `index_builder` expression engine — behind `surtgis imagery calc` and the
+  new WASM entry point — gained the `**` power operator (right-associative,
+  Python semantics: `-x ** 2` is `-(x ** 2)`, `x ** -2` is legal). With it,
+  every parameter-free formula in the catalogue (197 of the 245
+  Sentinel-2-compatible indices) evaluates verbatim; indices with tunable
+  parameters run by substituting the numeric values into the formula string.
+  The evaluator also learned to honour each band's declared nodata value
+  (previously only NaN) and to reject formulas with trailing tokens
+  (`"N R"` used to silently evaluate as `"N"`). Per-pixel evaluation now
+  resolves band names at parse time instead of building a per-pixel hash
+  map, removing per-pixel allocations from the hot loop.
+
+- **WASM: `spectral_index(formula, band_names, band_tiffs)`** — evaluates an
+  arbitrary band formula in the browser over parallel arrays of GeoTIFF
+  buffers, one per named band. All bands must share dimensions; nodata and
+  division by zero propagate as NaN. Verified bit-identical against the
+  hand-written `ndvi`, `nbr`, `mndwi`, `ndmi`, `gndvi` and `savi`.
+
 ## [1.2.5] - 2026-08-20
 
 ### Fixed

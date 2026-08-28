@@ -1371,11 +1371,16 @@ pub enum ImageryCommands {
     },
     /// Compute custom spectral index from arithmetic expression
     ///
+    /// Supports + - * / ** (power), parentheses, unary minus and numeric
+    /// constants: the full grammar of the Awesome Spectral Indices
+    /// catalogue (Montero et al., 2023), so its parameter-free formulas
+    /// run verbatim with the ASI band names.
+    ///
     /// Common formulas:
     ///   NDVI:  "(NIR - Red) / (NIR + Red)"
     ///   EXG:   "2 * Green - Red - Blue"
     ///   VARI:  "(Green - Red) / (Green + Red - Blue)"
-    ///   Clay:  "SWIR1 / SWIR2"
+    ///   BAI:   "1.0 / ((0.1 - R) ** 2.0 + (0.06 - N) ** 2.0)"
     Calc {
         /// Arithmetic expression using band names
         #[arg(short, long)]
