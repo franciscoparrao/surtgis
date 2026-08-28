@@ -1,20 +1,26 @@
 {
   "name": "surtgis",
   "type": "module",
-  "author": "Francisco Parra",
+  "collaborators": [
+    "Francisco Parra"
+  ],
   "description": "High-performance geospatial analysis in the browser via WebAssembly",
-  "version": "0.1.0",
+  "version": "1.2.5",
   "license": "MIT OR Apache-2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/franciscoparrao/surtgis"
   },
-  "homepage": "https://github.com/franciscoparrao/surtgis",
   "files": [
     "surtgis_wasm_bg.wasm",
     "surtgis_wasm.js",
     "surtgis_wasm_bg.js",
     "surtgis_wasm.d.ts",
+    "surtgis.js",
+    "surtgis.d.ts",
+    "worker.js",
+    "surtgis-worker.js",
+    "surtgis-worker.d.ts",
     "README.md"
   ],
   "main": "surtgis_wasm.js",
@@ -33,7 +39,7 @@
     "slope",
     "hillshade",
     "hydrology",
-    "ndvi",
-    "raster"
-  ]
+    "ndvi"
+  ],
+  "homepage": "https://franciscoparrao.github.io/surtgis"
 }

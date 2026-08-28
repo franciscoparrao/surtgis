@@ -45,6 +45,7 @@ import {
   evi,
   bsi,
   normalized_diff,
+  spectral_index,
   // Morphology
   morph_erode,
   morph_dilate,
@@ -181,6 +182,24 @@ export async function runAlgorithm(name, demBytes, params = {}, extraBands = [])
     case "normalized_diff":
       if (!b1) throw new Error("Normalized Difference requires bands A (primary) and B (band 2)");
       return normalized_diff(demBytes, b1);
+
+    // ── Imagery (custom formula, n-band) ──
+    case "spectral_index": {
+      // params.formula: ASI-grammar expression; params.bandNames: identifiers
+      // in order of appearance — bandNames[0] is the primary raster, the rest
+      // map positionally onto extraBands. No null-filtering here: order is
+      // the name↔buffer correspondence.
+      const formula = params.formula?.trim();
+      if (!formula) throw new Error("Custom formula requires a formula string");
+      const names = params.bandNames ?? [];
+      if (names.length === 0)
+        throw new Error("Formula references no bands — use names like N, R, G, S1");
+      const buffers = [demBytes, ...extraBands.slice(0, names.length - 1)];
+      const missing = names.filter((_, i) => buffers[i] == null);
+      if (missing.length)
+        throw new Error(`Missing GeoTIFF for band(s): ${missing.join(", ")}`);
+      return spectral_index(formula, names, buffers);
+    }
 
     // ── Imagery (3- and 4-band) ──
     case "evi":

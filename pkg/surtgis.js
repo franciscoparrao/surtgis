@@ -36,6 +36,7 @@ import {
   ndwi as _ndwi,
   savi as _savi,
   normalized_diff as _normalized_diff,
+  spectral_index as _spectral_index,
   morph_erode as _morph_erode,
   morph_dilate as _morph_dilate,
   morph_opening as _morph_opening,
@@ -220,6 +221,24 @@ export class SurtGIS {
   normalizedDifference(a, b) {
     this.#check();
     return _normalized_diff(a, b);
+  }
+
+  /**
+   * Evaluate an arbitrary spectral-index formula over named bands.
+   *
+   * Covers the full grammar of the Awesome Spectral Indices catalogue
+   * (Montero et al., 2023): + - * / ** parentheses, unary minus, numeric
+   * constants. Use the ASI band names (N, R, G, B, RE1..RE3, N2, S1, S2,
+   * A, WV) to run catalogue formulas verbatim.
+   *
+   * @param {string} formula e.g. "(N - R)/(N + R)"
+   * @param {string[]} bandNames one name per buffer, e.g. ["N", "R"]
+   * @param {Uint8Array[]} bandTiffs GeoTIFF buffers, same dimensions
+   * @returns {Uint8Array} result GeoTIFF
+   */
+  spectralIndex(formula, bandNames, bandTiffs) {
+    this.#check();
+    return _spectral_index(formula, bandNames, bandTiffs);
   }
 
   // ── Morphology ───────────────────────────────────────────────────────
