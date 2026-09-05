@@ -42,6 +42,10 @@ onnx = ["surtgis-algorithms/onnx"]
 # must be resolved (publish the crate, or keep the feature off) before the
 # next crates.io release of surtgis-cli.
 flow = ["dep:surtgis-flow"]
+# `surtgis ecw` — native ECW v2 decoder (no GDAL, no Hexagon SDK). Same
+# path-only situation as flow: surtgis-ecw is publish = false until its
+# licensing review is signed off, so the feature is opt-in.
+ecw = ["dep:surtgis-ecw"]
 
 [dependencies]
 surtgis-core = { version = "1.0", path = "../core", features = ["shapefile", "geopackage"] }
@@ -52,6 +56,9 @@ surtgis-relief-3d = { version = "1.0", path = "../relief-3d", optional = true }
 # Path-only on purpose: surtgis-flow is publish = false until the 1.0 freeze
 # resolves (see the `flow` feature note above).
 surtgis-flow = { path = "../flow", optional = true }
+# Path-only on purpose: surtgis-ecw is publish = false (licensing review
+# pending — see docs/ecw_format.md and the `ecw` feature note above).
+surtgis-ecw = { path = "../ecw", optional = true }
 surtgis-cloud = { version = "1.0", path = "../cloud", features = ["native", "unstable"], optional = true }
 clap.workspace = true
 clap_complete.workspace = true

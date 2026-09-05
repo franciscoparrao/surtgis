@@ -6041,6 +6041,7 @@ dependencies = [
  "surtgis-algorithms",
  "surtgis-cloud",
  "surtgis-core",
+ "surtgis-ecw",
  "surtgis-flow",
  "surtgis-parallel",
  "surtgis-relief",
@@ -6138,6 +6139,15 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tiff",
+]
+
+[[package]]
+name = "surtgis-ecw"
+version = "1.2.5"
+dependencies = [
+ "approx",
+ "surtgis-core",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

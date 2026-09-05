@@ -6,6 +6,26 @@ All notable changes to SurtGIS are documented in this file.
 
 ### Added
 
+- **New crate `surtgis-ecw`: native ECW v2 decoder** — reads ER Mapper
+  Enhanced Compressed Wavelet orthomosaics in pure safe Rust, with no GDAL
+  and no Hexagon/ERDAS SDK. Full-image, windowed and reduced-resolution
+  reads (the wavelet pyramid makes overviews first-class: opening a
+  gigapixel mosaic at 1:32 takes ~300 ms); all six sideband encodings
+  (RAW, Huffman, range, range-8, zeros, run-zero); greyscale, YUV→RGB and
+  multiband colour spaces; georeferencing with EPSG mapping for the common
+  ER Mapper datum/projection pairs. Line-streamed reconstruction: memory
+  scales with image width, not area. Validated against a real 1.3-gigapixel
+  4-band drone orthomosaic (31666×41817 @ 4 cm GSD). The format knowledge
+  was extracted from the libecwj2-3.3 sources used strictly as a specification
+  (no code ported; the three ER Mapper patents are verified expired) — the
+  full format write-up and licensing review live in `docs/ecw_format.md`.
+  The crate is `publish = false` until that review is signed off.
+
+- **CLI: `surtgis ecw info` / `surtgis ecw convert`** (behind the opt-in
+  `ecw` feature, same path-only pattern as `flow`): header/pyramid
+  inspection and decode-to-GeoTIFF with `--reduction` (1:2^N overviews)
+  and `--window` (crops in full-resolution cell coordinates).
+
 - **The formula evaluator now covers the full Awesome Spectral Indices
   grammar** (Montero et al., 2023, *Scientific Data* 10, 197). The
   `index_builder` expression engine — behind `surtgis imagery calc` and the

@@ -400,11 +400,48 @@ pub enum Commands {
         #[command(subcommand)]
         command: FlowCommands,
     },
+    /// Read ER Mapper ECW v2 imagery with the native decoder (no GDAL)
+    #[cfg(feature = "ecw")]
+    Ecw {
+        #[command(subcommand)]
+        action: EcwCommands,
+    },
     /// Generate shell completion scripts (write to a file in your shell's
     /// completion directory, e.g. `surtgis completions bash > /etc/bash_completion.d/surtgis`)
     Completions {
         /// Target shell
         shell: clap_complete::Shell,
+    },
+}
+
+// ─── ECW subcommands ────────────────────────────────────────────────────
+
+/// Subcommands of `surtgis ecw` (native ECW v2 reader, docs/ecw_format.md).
+#[cfg(feature = "ecw")]
+#[derive(Subcommand)]
+pub enum EcwCommands {
+    /// Print header, georeferencing and pyramid information
+    Info {
+        /// Input .ecw file
+        input: PathBuf,
+    },
+    /// Decode to GeoTIFF (one file per band: <output>_b1.tif, ...)
+    ///
+    /// By default converts the whole image at full resolution; use
+    /// --reduction for overviews (1:2^N) and/or --window for a crop.
+    /// Windows are given in full-resolution cell coordinates even when
+    /// combined with --reduction.
+    Convert {
+        /// Input .ecw file
+        input: PathBuf,
+        /// Output prefix (writes <prefix>_b1.tif .. <prefix>_bN.tif)
+        output: PathBuf,
+        /// Decode at 1:2^N scale (0 = full resolution)
+        #[arg(long, default_value = "0")]
+        reduction: u32,
+        /// Crop window as: start_x start_y width height (full-res cells)
+        #[arg(long, num_args = 4, value_names = ["X", "Y", "W", "H"])]
+        window: Option<Vec<u32>>,
     },
 }
 

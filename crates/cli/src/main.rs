@@ -96,6 +96,8 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Fluvial { algorithm } => handlers::fluvial::handle(algorithm, compress)?,
         #[cfg(feature = "flow")]
         Commands::Flow { command } => handlers::flow::handle(command, compress)?,
+        #[cfg(feature = "ecw")]
+        Commands::Ecw { action } => handlers::ecw::handle(action, compress)?,
         Commands::Imagery { algorithm } => handlers::imagery::handle(algorithm, compress)?,
         Commands::Morphology { algorithm } => handlers::morphology::handle(algorithm, compress)?,
         Commands::Landscape { algorithm } => handlers::landscape::handle(algorithm, compress)?,
