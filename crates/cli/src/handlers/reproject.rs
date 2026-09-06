@@ -5,6 +5,13 @@
 //! (STAC composite → reproject → terrain analysis → output) runs without
 //! a system GDAL dependency.
 //!
+//! Multi-band aware (issue #123): every band of the input is reprojected
+//! onto one shared output grid — the per-pixel coordinate transform is
+//! computed once, not once per band — and the result is written as a
+//! single multi-band GeoTIFF (RGB/RGBA photometric for 3/4 bands, plain
+//! band stack otherwise). The output preserves the input's sample type, so
+//! a u8 RGB orthophoto comes back as u8 RGB, not as float greyscale.
+//!
 //! Performance: a 10 000 × 10 000 raster takes ~30–60 s to reproject in
 //! release mode on the i7-1270P benchmark machine. Reprojection is
 //! parallelised across rows via Rayon. proj4rs handles the coordinate
@@ -17,7 +24,11 @@ use std::time::Instant;
 use anyhow::{Context, Result, anyhow};
 use rayon::prelude::*;
 
-use surtgis_core::io::{GeoTiffOptions, read_geotiff, write_geotiff};
+use surtgis_core::io::{
+    GeoTiffOptions, read_geotiff_any, read_geotiff_bands, write_geotiff, write_geotiff_multiband,
+    write_geotiff_stack,
+};
+use surtgis_core::raster::DataType;
 use surtgis_core::{Raster, crs::CRS, raster::GeoTransform};
 
 /// Resampling method for the inverse-mapping interpolation.
@@ -64,12 +75,21 @@ pub fn handle(
     let dst_epsg = parse_epsg(&to)?;
     let method = Method::parse(&method)?;
 
-    let raster: Raster<f64> = read_geotiff(&input, None)
+    // The resampling maths runs in f64 regardless of the stored sample
+    // type; the input dtype is probed separately so the output can be
+    // written back with the same type (u8 RGB in, u8 RGB out).
+    let bands: Vec<Raster<f64>> = read_geotiff_bands(&input)
         .with_context(|| format!("failed to read input GeoTIFF: {}", input.display()))?;
+    if bands.is_empty() {
+        return Err(anyhow!("input has no bands"));
+    }
+    let dtype = read_geotiff_any(&input, Some(0))
+        .map(|r| r.dtype())
+        .unwrap_or(DataType::F64);
 
     let src_epsg = match from {
         Some(f) => parse_epsg(&f)?,
-        None => raster.crs().and_then(|c| c.epsg()).ok_or_else(|| {
+        None => bands[0].crs().and_then(|c| c.epsg()).ok_or_else(|| {
             anyhow!("source CRS not embedded in input GeoTIFF; pass --from EPSG:XXXX to override")
         })?,
     };
@@ -81,7 +101,7 @@ pub fn handle(
             "source and target CRS are the same (EPSG:{}); copying input to output",
             src_epsg
         );
-        write_output(&raster, &output, compress)?;
+        write_output(&bands, dtype, &output, compress)?;
         eprintln!(
             "✓ wrote {} in {:.2} s",
             output.display(),
@@ -91,30 +111,86 @@ pub fn handle(
     }
 
     eprintln!(
-        "Reprojecting EPSG:{} → EPSG:{} ({}, {} method)",
+        "Reprojecting EPSG:{} → EPSG:{} ({} band{}, {} rows, {} method)",
         src_epsg,
         dst_epsg,
-        raster.shape().0,
+        bands.len(),
+        if bands.len() == 1 { "" } else { "s" },
+        bands[0].shape().0,
         match method {
             Method::Nearest => "nearest",
             Method::Bilinear => "bilinear",
         }
     );
 
-    let out = reproject(&raster, src_epsg, dst_epsg, method, pixel_size)?;
+    let out = reproject(&bands, src_epsg, dst_epsg, method, pixel_size)?;
 
-    write_output(&out, &output, compress)?;
+    write_output(&out, dtype, &output, compress)?;
     eprintln!(
-        "✓ wrote {} ({}×{}) in {:.2} s",
+        "✓ wrote {} ({}×{}, {} band{}) in {:.2} s",
         output.display(),
-        out.shape().0,
-        out.shape().1,
+        out[0].shape().0,
+        out[0].shape().1,
+        out.len(),
+        if out.len() == 1 { "" } else { "s" },
         start.elapsed().as_secs_f64()
     );
     Ok(())
 }
 
-fn write_output(raster: &Raster<f64>, output: &Path, compress: bool) -> Result<()> {
+/// Convert one reprojected f64 band back to an integer sample type,
+/// rounding and saturating. Cells that fell outside the source footprint
+/// (NaN) become 0, the conventional fill for integer imagery.
+fn quantize_band<T>(band: &Raster<f64>, min: f64, max: f64, cast: impl Fn(f64) -> T) -> Raster<T>
+where
+    T: surtgis_core::raster::RasterElement,
+{
+    let (rows, cols) = band.shape();
+    let data: Vec<T> = band
+        .data()
+        .iter()
+        .map(|&v| {
+            if v.is_finite() {
+                cast(v.round().clamp(min, max))
+            } else {
+                cast(0.0)
+            }
+        })
+        .collect();
+    let mut out = Raster::from_vec(data, rows, cols).expect("shape preserved");
+    out.set_transform(*band.transform());
+    out.set_crs(band.crs().cloned());
+    out
+}
+
+/// Dispatch a typed band group to the right writer: one band through
+/// `write_geotiff`, 3 or 4 through `write_geotiff_multiband` (RGB/RGBA
+/// photometric, sample type preserved), any other count through
+/// `write_geotiff_stack` (BlackIsZero, sample type preserved). A macro
+/// instead of a generic fn because the writers' trait bounds are private
+/// to core; instantiating at concrete types sidesteps them.
+macro_rules! write_group {
+    ($bands:expr, $path:expr, $opts:expr) => {{
+        let refs: Vec<_> = $bands.iter().collect();
+        let path: &Path = $path;
+        let result = match refs.len() {
+            1 => write_geotiff(refs[0], path, $opts),
+            3 | 4 => write_geotiff_multiband(&refs, path, $opts),
+            _ => write_geotiff_stack(&refs, None, path, &$opts.unwrap_or_default()),
+        };
+        result.with_context(|| format!("failed to write {}", path.display()))
+    }};
+}
+
+/// Write the reprojected bands as one GeoTIFF, restoring the input's
+/// sample type (u8 RGB in, u8 RGB out; u16 and i16 likewise; f32 stays
+/// f32; everything else is written as f64).
+fn write_output(
+    bands: &[Raster<f64>],
+    dtype: DataType,
+    output: &Path,
+    compress: bool,
+) -> Result<()> {
     let opts = if compress {
         Some(GeoTiffOptions {
             compression: "DEFLATE".into(),
@@ -123,21 +199,77 @@ fn write_output(raster: &Raster<f64>, output: &Path, compress: bool) -> Result<(
     } else {
         None
     };
-    write_geotiff(raster, output, opts)
-        .with_context(|| format!("failed to write {}", output.display()))
+
+    match dtype {
+        DataType::U8 => {
+            let typed: Vec<Raster<u8>> = bands
+                .iter()
+                .map(|b| quantize_band(b, 0.0, 255.0, |v| v as u8))
+                .collect();
+            write_group!(typed, output, opts)?;
+        }
+        DataType::U16 => {
+            let typed: Vec<Raster<u16>> = bands
+                .iter()
+                .map(|b| quantize_band(b, 0.0, 65535.0, |v| v as u16))
+                .collect();
+            write_group!(typed, output, opts)?;
+        }
+        DataType::I16 => {
+            let typed: Vec<Raster<i16>> = bands
+                .iter()
+                .map(|b| quantize_band(b, -32768.0, 32767.0, |v| v as i16))
+                .collect();
+            write_group!(typed, output, opts)?;
+        }
+        DataType::F32 => {
+            let typed: Vec<Raster<f32>> = bands
+                .iter()
+                .map(|b| {
+                    let (rows, cols) = b.shape();
+                    let data: Vec<f32> = b.data().iter().map(|&v| v as f32).collect();
+                    let mut out = Raster::from_vec(data, rows, cols).expect("shape preserved");
+                    out.set_transform(*b.transform());
+                    out.set_crs(b.crs().cloned());
+                    out.set_nodata(Some(f32::NAN));
+                    out
+                })
+                .collect();
+            write_group!(typed, output, opts)?;
+        }
+        // F64 and the exotic integer widths stay in f64, which every
+        // downstream SurtGIS tool consumes natively.
+        _ => {
+            write_group!(bands, output, opts)?;
+        }
+    }
+    Ok(())
 }
 
-/// Reproject a raster from src_epsg to dst_epsg using proj4rs for the
-/// coordinate transform and Rayon-parallelised inverse-mapping for the
-/// pixel sampling.
+/// Reproject a stack of co-registered bands from src_epsg to dst_epsg.
+/// The output grid and the per-pixel inverse coordinate mapping are
+/// computed once from the first band and shared by all of them.
 fn reproject(
-    src: &Raster<f64>,
+    src_bands: &[Raster<f64>],
     src_epsg: u32,
     dst_epsg: u32,
     method: Method,
     pixel_size_override: Option<f64>,
-) -> Result<Raster<f64>> {
+) -> Result<Vec<Raster<f64>>> {
     use proj4rs::Proj;
+
+    let src = &src_bands[0];
+    let n_bands = src_bands.len();
+    for (i, b) in src_bands.iter().enumerate().skip(1) {
+        if b.shape() != src.shape() {
+            return Err(anyhow!(
+                "band {} has shape {:?}, band 1 has {:?}; bands must be co-registered",
+                i + 1,
+                b.shape(),
+                src.shape()
+            ));
+        }
+    }
 
     let src_proj = Proj::from_epsg_code(src_epsg as u16)
         .map_err(|e| anyhow!("proj4rs failed to load EPSG:{}: {:?}", src_epsg, e))?;
@@ -216,22 +348,15 @@ fn reproject(
     }
 
     let out_gt = GeoTransform::new(min_x, max_y, px, -px);
-    let mut out = Raster::<f64>::new(out_rows, out_cols);
-    out.set_transform(out_gt);
-    out.set_crs(Some(CRS::from_epsg(dst_epsg)));
-    if let Some(nd) = src.nodata() {
-        out.set_nodata(Some(nd));
-    }
 
-    // Inverse-mapping per output pixel: parallelised across rows with Rayon.
-    // Each row creates its own buffer and writes the result; we then copy into
-    // the output raster in a single serial pass to avoid borrow issues with
-    // the ndarray-backed Raster.
-    let src_data = src.data();
-    let row_results: Vec<Vec<f64>> = (0..out_rows)
+    // Inverse-mapping per output pixel, parallelised across rows with
+    // Rayon. The expensive part — the dst→src coordinate transform — runs
+    // once per pixel and its result samples every band.
+    let src_datas: Vec<&ndarray::Array2<f64>> = src_bands.iter().map(|b| b.data()).collect();
+    let row_results: Vec<Vec<Vec<f64>>> = (0..out_rows)
         .into_par_iter()
         .map(|out_r| {
-            let mut row = vec![f64::NAN; out_cols];
+            let mut rows: Vec<Vec<f64>> = (0..n_bands).map(|_| vec![f64::NAN; out_cols]).collect();
             let dst_y = max_y - (out_r as f64 + 0.5) * px;
             for out_c in 0..out_cols {
                 let dst_x = min_x + (out_c as f64 + 0.5) * px;
@@ -254,29 +379,45 @@ fn reproject(
                 let src_c_f = (src_x - src_gt.origin_x) / src_gt.pixel_width - 0.5;
                 let src_r_f = (src_y - src_gt.origin_y) / src_gt.pixel_height - 0.5;
 
-                let val = match method {
-                    Method::Nearest => {
-                        sample_nearest(src_data, src_rows, src_cols, src_r_f, src_c_f)
+                for (band, data) in src_datas.iter().enumerate() {
+                    let val = match method {
+                        Method::Nearest => {
+                            sample_nearest(data, src_rows, src_cols, src_r_f, src_c_f)
+                        }
+                        Method::Bilinear => {
+                            sample_bilinear(data, src_rows, src_cols, src_r_f, src_c_f)
+                        }
+                    };
+                    if let Some(v) = val {
+                        rows[band][out_c] = v;
                     }
-                    Method::Bilinear => {
-                        sample_bilinear(src_data, src_rows, src_cols, src_r_f, src_c_f)
-                    }
-                };
-                if let Some(v) = val {
-                    row[out_c] = v;
                 }
             }
-            row
+            rows
         })
         .collect();
 
-    for (out_r, row) in row_results.into_iter().enumerate() {
-        for (out_c, v) in row.into_iter().enumerate() {
-            let _ = out.set(out_r, out_c, v);
+    let mut outputs: Vec<Raster<f64>> = (0..n_bands)
+        .map(|band| {
+            let mut out = Raster::<f64>::new(out_rows, out_cols);
+            out.set_transform(out_gt);
+            out.set_crs(Some(CRS::from_epsg(dst_epsg)));
+            if let Some(nd) = src_bands[band].nodata() {
+                out.set_nodata(Some(nd));
+            }
+            out
+        })
+        .collect();
+
+    for (out_r, rows) in row_results.into_iter().enumerate() {
+        for (band, row) in rows.into_iter().enumerate() {
+            for (out_c, v) in row.into_iter().enumerate() {
+                let _ = outputs[band].set(out_r, out_c, v);
+            }
         }
     }
 
-    Ok(out)
+    Ok(outputs)
 }
 
 fn sample_nearest(

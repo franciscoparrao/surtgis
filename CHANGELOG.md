@@ -4,6 +4,22 @@ All notable changes to SurtGIS are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`surtgis reproject` is now multi-band aware** (issue #123). It used to
+  read only the first band of the input, so a regular RGB GeoTIFF came out
+  as a single grey band — the "wrong output" reported. Every band is now
+  reprojected onto one shared output grid (the per-pixel coordinate
+  transform runs once, not once per band) and written as a single
+  multi-band GeoTIFF; the input's sample type is preserved (u8 RGB in,
+  u8 RGB out; u16/i16/f32 likewise). Validated against `gdalwarp` on a
+  synthetic RGB: MAE 0.0/0.46/0.0 DN per band.
+
+- **`write_geotiff_multiband` preserves u8 and u16 sample types**
+  (`Gray8`/`RGB8`/`RGBA8`, `Gray16`/`RGB16`/`RGBA16`) instead of promoting
+  everything to Float32. Other element types keep the previous
+  Float32 behaviour, so existing f32/f64 callers are unchanged.
+
 ### Added
 
 - **New crate `surtgis-ecw`: native ECW v2 decoder** — reads ER Mapper

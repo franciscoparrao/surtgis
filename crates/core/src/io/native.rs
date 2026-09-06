@@ -13,7 +13,7 @@ use std::path::Path;
 use tiff::decoder::{Decoder, DecodingResult, Limits};
 use tiff::encoder::colortype::{
     ColorType, Gray8, Gray16, Gray32, Gray32Float, Gray64, Gray64Float, GrayI8, GrayI16, GrayI32,
-    GrayI64, RGB32Float, RGBA32Float,
+    GrayI64, RGB8, RGB16, RGB32Float, RGBA8, RGBA16, RGBA32Float,
 };
 use tiff::encoder::compression::DeflateLevel;
 use tiff::encoder::{
@@ -1044,13 +1044,17 @@ where
 
 /// Write a stack of single-band rasters as a multi-band GeoTIFF.
 ///
-/// Supports 1, 3 or 4 bands (`Gray32Float`, `RGB32Float`,
-/// `RGBA32Float`). All band rasters must share the same shape and
-/// geotransform. GeoTIFF metadata (CRS, transform, nodata) is
-/// inherited from `bands[0]`. Per-band values are cast to `f32`.
+/// Supports 1, 3 or 4 bands. The sample type is preserved for `u8`
+/// (`Gray8`/`RGB8`/`RGBA8`) and `u16` (`Gray16`/`RGB16`/`RGBA16`), so an
+/// RGB orthophoto stays byte-sized RGB (issue #123); every other element
+/// type is cast to `f32` (`Gray32Float`/`RGB32Float`/`RGBA32Float`) as
+/// before. All band rasters must share the same shape and geotransform.
+/// GeoTIFF metadata (CRS, transform, nodata) is inherited from
+/// `bands[0]`.
 ///
-/// For arbitrary `N > 4`, enable the `gdal` feature and use
-/// `gdal_io::write_geotiff_multiband`.
+/// For arbitrary `N` with `BlackIsZero` photometric use
+/// [`write_geotiff_stack`]; for `N > 4` with RGB semantics, enable the
+/// `gdal` feature and use `gdal_io::write_geotiff_multiband`.
 pub fn write_geotiff_multiband<T, P>(
     bands: &[&Raster<T>],
     path: P,
@@ -1086,27 +1090,60 @@ where
     let tmp_path = final_path.with_extension("tmp");
     let file = File::create(&tmp_path)?;
 
-    // Build the interleaved (chunky) buffer expected by the tiff
-    // crate for pixel-interleaved multi-sample images:
-    //   [s0_px0, s1_px0, ..., sK_px0,
-    //    s0_px1, s1_px1, ..., sK_px1, ...]
-    let n_px = rows * cols;
-    let mut interleaved: Vec<f32> = vec![0.0; n_px * n_bands];
-    for (b, raster) in bands.iter().enumerate() {
-        for (i, &v) in raster.data().iter().enumerate() {
-            let f: f32 = num_traits::cast(v).unwrap_or(f32::NAN);
-            interleaved[i * n_bands + b] = f;
+    // Dispatch on the element type so byte and 16-bit imagery keep their
+    // native sample format; anything else falls back to f32 as before.
+    if TypeId::of::<T>() == TypeId::of::<u8>() {
+        let interleaved: Vec<u8> = interleave_cast(bands, rows, cols, 0u8);
+        match n_bands {
+            1 => encode_multiband_image::<Gray8, _>(file, bands[0], &interleaved, compression)?,
+            3 => encode_multiband_image::<RGB8, _>(file, bands[0], &interleaved, compression)?,
+            4 => encode_multiband_image::<RGBA8, _>(file, bands[0], &interleaved, compression)?,
+            _ => unreachable!(),
         }
-    }
-
-    match n_bands {
-        1 => encode_multiband_image::<Gray32Float, _>(file, bands[0], &interleaved, compression)?,
-        3 => encode_multiband_image::<RGB32Float, _>(file, bands[0], &interleaved, compression)?,
-        4 => encode_multiband_image::<RGBA32Float, _>(file, bands[0], &interleaved, compression)?,
-        _ => unreachable!(),
+    } else if TypeId::of::<T>() == TypeId::of::<u16>() {
+        let interleaved: Vec<u16> = interleave_cast(bands, rows, cols, 0u16);
+        match n_bands {
+            1 => encode_multiband_image::<Gray16, _>(file, bands[0], &interleaved, compression)?,
+            3 => encode_multiband_image::<RGB16, _>(file, bands[0], &interleaved, compression)?,
+            4 => encode_multiband_image::<RGBA16, _>(file, bands[0], &interleaved, compression)?,
+            _ => unreachable!(),
+        }
+    } else {
+        let interleaved: Vec<f32> = interleave_cast(bands, rows, cols, f32::NAN);
+        match n_bands {
+            1 => {
+                encode_multiband_image::<Gray32Float, _>(file, bands[0], &interleaved, compression)?
+            }
+            3 => {
+                encode_multiband_image::<RGB32Float, _>(file, bands[0], &interleaved, compression)?
+            }
+            4 => {
+                encode_multiband_image::<RGBA32Float, _>(file, bands[0], &interleaved, compression)?
+            }
+            _ => unreachable!(),
+        }
     }
     std::fs::rename(&tmp_path, final_path)?;
     Ok(())
+}
+
+/// Build the interleaved (chunky) buffer expected by the tiff crate for
+/// pixel-interleaved multi-sample images:
+///   `[s0_px0, s1_px0, ..., sK_px0, s0_px1, s1_px1, ...]`
+/// Values that don't fit the target sample type become `fill`.
+fn interleave_cast<T, X>(bands: &[&Raster<T>], rows: usize, cols: usize, fill: X) -> Vec<X>
+where
+    T: RasterElement,
+    X: num_traits::NumCast + Copy,
+{
+    let n_bands = bands.len();
+    let mut interleaved: Vec<X> = vec![fill; rows * cols * n_bands];
+    for (b, raster) in bands.iter().enumerate() {
+        for (i, &v) in raster.data().iter().enumerate() {
+            interleaved[i * n_bands + b] = num_traits::cast(v).unwrap_or(fill);
+        }
+    }
+    interleaved
 }
 
 /// Generic multi-band writer parameterised over the tiff
@@ -1116,11 +1153,12 @@ where
 fn encode_multiband_image<CT, W>(
     writer: W,
     meta: &Raster<impl RasterElement>,
-    interleaved: &[f32],
+    interleaved: &[CT::Inner],
     compression: Compression,
 ) -> Result<()>
 where
-    CT: ColorType<Inner = f32>,
+    CT: ColorType,
+    [CT::Inner]: tiff::encoder::TiffValue,
     W: std::io::Write + std::io::Seek,
 {
     let mut encoder = TiffEncoder::new(writer)
@@ -2028,6 +2066,34 @@ mod tests {
     // ---------------------------------------------------------------
     // write_geotiff_stack: arbitrary N bands (mejora 3)
     // ---------------------------------------------------------------
+
+    /// Issue #123 regression: the 1/3/4-band writer must keep u8 samples
+    /// as u8 (RGB8), not silently promote them to Float32.
+    #[test]
+    fn write_geotiff_multiband_preserves_u8() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("rgb_u8.tif");
+        let mut bands: Vec<Raster<u8>> = Vec::new();
+        for base in [10u8, 120, 240] {
+            let mut r = Raster::filled(4, 5, base);
+            r.set(1, 2, base.saturating_add(5)).unwrap();
+            r.set_transform(GeoTransform::new(0.0, 4.0, 1.0, -1.0));
+            bands.push(r);
+        }
+        let refs: Vec<&Raster<u8>> = bands.iter().collect();
+        write_geotiff_multiband(&refs, &path, None).unwrap();
+
+        let probe = read_geotiff_any(&path, Some(0)).unwrap();
+        assert!(
+            matches!(probe, AnyRaster::U8(_)),
+            "u8 stack must stay u8 on disk"
+        );
+        let back: Vec<Raster<u8>> = read_geotiff_bands(&path).unwrap();
+        assert_eq!(back.len(), 3);
+        for (orig, round) in bands.iter().zip(&back) {
+            assert_eq!(orig.data(), round.data());
+        }
+    }
 
     #[test]
     fn write_geotiff_stack_roundtrips_arbitrary_band_count() {
