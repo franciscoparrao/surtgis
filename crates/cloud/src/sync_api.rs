@@ -213,7 +213,9 @@ mod zarr_inner {
 
     use crate::error::Result;
     use crate::tile_index::BBox;
-    use crate::zarr_reader::{TimeReduction, ZarrMetadata, ZarrReader, ZarrReaderOptions};
+    use crate::zarr_reader::{
+        TimeAggPartial, TimeReduction, ZarrMetadata, ZarrReader, ZarrReaderOptions,
+    };
 
     /// Blocking wrapper around [`ZarrReader`].
     ///
@@ -237,6 +239,18 @@ mod zarr_inner {
         /// Read a geographic bounding box at a specific time (blocking).
         pub fn read_bbox(&self, bbox: &BBox, time: &TimeReduction) -> Result<Raster<f64>> {
             self.rt.block_on(self.inner.read_bbox(bbox, time))
+        }
+
+        /// Read a bounding box over `[start, end]` as mergeable partial
+        /// statistics (blocking). See [`ZarrReader::read_bbox_partial`].
+        pub fn read_bbox_partial(
+            &self,
+            bbox: &BBox,
+            start: &chrono::DateTime<chrono::Utc>,
+            end: &chrono::DateTime<chrono::Utc>,
+        ) -> Result<TimeAggPartial> {
+            self.rt
+                .block_on(self.inner.read_bbox_partial(bbox, start, end))
         }
 
         /// Read the full spatial extent at a specific time (blocking).

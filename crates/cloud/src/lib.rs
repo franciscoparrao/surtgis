@@ -66,7 +66,8 @@ pub use stac_cube_source::StacCubeSource;
 
 #[cfg(feature = "zarr")]
 pub use zarr_reader::{
-    AggMethod, TimeReduction, TimeSelector, ZarrMetadata, ZarrReader, ZarrReaderOptions,
+    AggMethod, TimeAggPartial, TimeReduction, TimeSelector, ZarrMetadata, ZarrReader,
+    ZarrReaderOptions,
 };
 
 /// Blocking API re-exported as `blocking` module (native only).
