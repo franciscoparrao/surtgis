@@ -1166,9 +1166,9 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             aggregate,
             output,
         } => {
+            use std::collections::HashMap;
             use surtgis_cloud::blocking::ZarrReaderBlocking;
-            use surtgis_cloud::zarr_auth::abfs_to_https_with_account;
-            use surtgis_cloud::{AggMethod, TimeReduction, ZarrReaderOptions};
+            use surtgis_cloud::{AggMethod, ZarrReaderOptions};
 
             let cat = StacCatalog::from_str_or_url(&catalog);
             let bb = parse_bbox(&bbox)?;
@@ -1179,71 +1179,123 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             // Parse datetime range
             let (dt_start, dt_end) = parse_datetime_range(&datetime)?;
 
-            // Search STAC for the collection item
+            // Collect EVERY item that covers the range. Climate archives
+            // publish one item (= one Zarr store) per period — ERA5-pds on
+            // Planetary Computer is monthly — so an annual aggregate spans
+            // several items. Taking only the first hit made `yearly-sum` the
+            // sum of a single month (the newest one, PC sorts descending),
+            // and `yearly-mean` the mean of that same month.
             let pb = spinner("Searching STAC catalog...");
-            let client = StacClientBlocking::new(cat, StacClientOptions::default())
+            let client_opts = StacClientOptions {
+                max_items: 10_000,
+                ..StacClientOptions::default()
+            };
+            let client = StacClientBlocking::new(cat, client_opts)
                 .context("Failed to create STAC client")?;
 
             let params = StacSearchParams::new()
                 .bbox(bb.min_x, bb.min_y, bb.max_x, bb.max_y)
                 .collections(&[collection.as_str()])
                 .datetime(&datetime)
-                .limit(1);
+                .limit(100);
 
-            let results = client.search(&params).context("STAC search failed")?;
-            let item = results.features.first().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "No items found for collection '{}' in range '{}'",
+            let items = client.search_all(&params).context("STAC search failed")?;
+            if items.is_empty() {
+                // A collection can declare an open-ended extent while its
+                // items stop earlier (era5-pds on Planetary Computer declares
+                // 1979–present but ends in 2020-12), so say what the
+                // catalogue actually returns without a date filter.
+                let probe = StacSearchParams::new()
+                    .bbox(bb.min_x, bb.min_y, bb.max_x, bb.max_y)
+                    .collections(&[collection.as_str()])
+                    .limit(1);
+                let hint = client
+                    .search(&probe)
+                    .ok()
+                    .and_then(|r| r.features.into_iter().next())
+                    .and_then(|it| item_time_extent(&it).map(|(_, end)| (it.id, end)))
+                    .map(|(id, end)| {
+                        format!(
+                            " First item the catalogue returns without a date filter: {} (ends {}).",
+                            id,
+                            end.format("%Y-%m-%d")
+                        )
+                    })
+                    .unwrap_or_default();
+                anyhow::bail!(
+                    "No items found for collection '{}' in range '{}'.{}",
                     collection,
-                    datetime
-                )
-            })?;
+                    datetime,
+                    hint
+                );
+            }
+
+            let mut stores: Vec<ClimateStore> = items
+                .iter()
+                .filter_map(|item| {
+                    let asset = item.asset(&variable)?;
+                    let (start, end) = item_time_extent(item)?;
+                    Some(ClimateStore {
+                        id: item.id.clone(),
+                        href: asset.href.clone(),
+                        start,
+                        end,
+                    })
+                })
+                .collect();
+            stores.sort_by_key(|s| s.start);
             pb.finish_and_clear();
 
-            println!(
-                "Item: {} [{}]",
-                item.id,
-                item.collection.as_deref().unwrap_or("-")
-            );
-
-            // Find the asset matching the variable name
-            let stac_asset = item.asset(&variable).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Asset '{}' not found. Available: {}",
+            if stores.is_empty() {
+                let available: std::collections::BTreeSet<&str> = items
+                    .iter()
+                    .flat_map(|it| it.assets.keys().map(String::as_str))
+                    .collect();
+                anyhow::bail!(
+                    "Asset '{}' not found in any of the {} items. Available: {}",
                     variable,
-                    item.assets.keys().cloned().collect::<Vec<_>>().join(", ")
-                )
-            })?;
+                    items.len(),
+                    available.into_iter().collect::<Vec<_>>().join(", ")
+                );
+            }
+
+            println!(
+                "Stores: {} items with asset '{}' ({} to {})",
+                stores.len(),
+                variable,
+                stores.first().unwrap().start.format("%Y-%m-%d"),
+                stores.last().unwrap().end.format("%Y-%m-%d")
+            );
 
             // Get collection-level auth for Zarr
             let auth = client
                 .get_collection_zarr_auth(&collection)
                 .context("Failed to get collection auth")?;
-
-            let (sas_token, store_url) = if let Some((token, account, _container)) = auth {
-                let url = abfs_to_https_with_account(&stac_asset.href, Some(&account));
-                (Some(token), url)
-            } else {
-                (None, stac_asset.href.clone())
+            let (sas_token, account) = match auth {
+                Some((token, account, _container)) => (Some(token), Some(account)),
+                None => (None, None),
             };
-
             let opts = ZarrReaderOptions { sas_token };
 
-            // Open the Zarr store
-            let pb = spinner("Opening Zarr store...");
-            let reader = ZarrReaderBlocking::open(&store_url, &variable, opts)
-                .context("Failed to open Zarr store")?;
+            // One reader per store, opened on first use and kept for the
+            // rest of the run (daily intervals hit the same monthly store
+            // many times).
+            let mut readers: HashMap<String, ZarrReaderBlocking> = HashMap::new();
 
-            let meta = reader.metadata();
-            println!(
-                "Variable: {} — shape {:?}, dims {:?}",
-                meta.variable, meta.shape, meta.dimension_names
-            );
-            if let Some((t0, t1)) = &meta.time_range {
+            // Describe the variable from the first store
+            let pb = spinner("Opening Zarr store...");
+            {
+                let meta = climate_reader(
+                    &mut readers,
+                    &stores[0],
+                    &variable,
+                    account.as_deref(),
+                    &opts,
+                )?
+                .metadata();
                 println!(
-                    "Time range: {} to {}",
-                    t0.format("%Y-%m-%d"),
-                    t1.format("%Y-%m-%d")
+                    "Variable: {} — shape {:?}, dims {:?} (per store)",
+                    meta.variable, meta.shape, meta.dimension_names
                 );
             }
             pb.finish_and_clear();
@@ -1262,19 +1314,32 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
 
             let total_start = Instant::now();
             for (i, (int_start, int_end, label)) in intervals.iter().enumerate() {
-                let time = if agg_method.is_some() {
-                    TimeReduction::Aggregate {
-                        start: *int_start,
-                        end: *int_end,
-                        method: agg_method.unwrap(),
-                    }
-                } else {
-                    TimeReduction::Single(surtgis_cloud::TimeSelector::Nearest(*int_start))
-                };
-
                 let pb = spinner(&format!("[{}/{}] {}", i + 1, intervals.len(), label));
-                match reader.read_bbox(&bb, &time) {
-                    Ok(raster) => {
+
+                let covering: Vec<&ClimateStore> = stores
+                    .iter()
+                    .filter(|s| s.start <= *int_end && s.end >= *int_start)
+                    .collect();
+                if covering.is_empty() {
+                    pb.finish_and_clear();
+                    eprintln!("  Warning: {} — no store covers this interval", label);
+                    continue;
+                }
+
+                let result = aggregate_interval(
+                    &mut readers,
+                    &covering,
+                    &bb,
+                    int_start,
+                    int_end,
+                    agg_method,
+                    &variable,
+                    account.as_deref(),
+                    &opts,
+                );
+
+                match result {
+                    Ok((raster, used, steps)) => {
                         let suffix = agg_method
                             .map(|m| match m {
                                 AggMethod::Mean => "mean",
@@ -1288,7 +1353,19 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                         write_result(&raster, &out_path, compress)?;
                         let (rows, cols) = raster.shape();
                         pb.finish_and_clear();
-                        println!("  {} — {}x{}", filename, cols, rows);
+                        if agg_method.is_some() {
+                            println!(
+                                "  {} — {}x{} ({} time steps from {} store{})",
+                                filename,
+                                cols,
+                                rows,
+                                steps,
+                                used,
+                                if used == 1 { "" } else { "s" }
+                            );
+                        } else {
+                            println!("  {} — {}x{}", filename, cols, rows);
+                        }
                     }
                     Err(e) => {
                         pb.finish_and_clear();
@@ -2435,6 +2512,87 @@ mod tests {
         assert_eq!(j["tiles_missing"][0]["id"], "S45_W072");
     }
 
+    /// ERA5-pds items span a month with `datetime: null`; the extent comes
+    /// from `start_datetime`/`end_datetime`.
+    #[cfg(feature = "zarr")]
+    #[test]
+    fn item_time_extent_uses_start_end_datetime() {
+        let item: surtgis_cloud::StacItem = serde_json::from_value(serde_json::json!({
+            "type": "Feature",
+            "id": "era5-pds-2020-01-fc",
+            "properties": {
+                "datetime": null,
+                "start_datetime": "2020-01-01T00:00:00Z",
+                "end_datetime": "2020-01-31T23:00:00Z"
+            },
+            "assets": {}
+        }))
+        .unwrap();
+        let (start, end) = item_time_extent(&item).unwrap();
+        assert_eq!(start.to_rfc3339(), "2020-01-01T00:00:00+00:00");
+        assert_eq!(end.to_rfc3339(), "2020-01-31T23:00:00+00:00");
+    }
+
+    #[cfg(feature = "zarr")]
+    #[test]
+    fn item_time_extent_falls_back_to_datetime() {
+        let item: surtgis_cloud::StacItem = serde_json::from_value(serde_json::json!({
+            "type": "Feature",
+            "id": "x",
+            "properties": { "datetime": "2020-06-15T12:00:00Z" },
+            "assets": {}
+        }))
+        .unwrap();
+        let (start, end) = item_time_extent(&item).unwrap();
+        assert_eq!(start, end);
+        assert_eq!(start.to_rfc3339(), "2020-06-15T12:00:00+00:00");
+    }
+
+    #[cfg(feature = "zarr")]
+    #[test]
+    fn item_time_extent_none_without_dates() {
+        let item: surtgis_cloud::StacItem = serde_json::from_value(serde_json::json!({
+            "type": "Feature",
+            "id": "x",
+            "properties": {},
+            "assets": {}
+        }))
+        .unwrap();
+        assert!(item_time_extent(&item).is_none());
+    }
+
+    /// A monthly store overlaps exactly the monthly and yearly windows
+    /// that contain it, and no neighbour's.
+    #[cfg(feature = "zarr")]
+    #[test]
+    fn monthly_stores_cover_their_own_intervals_only() {
+        use chrono::{TimeZone, Utc};
+        let store = |m: u32, last: u32| {
+            (
+                Utc.with_ymd_and_hms(2020, m, 1, 0, 0, 0).unwrap(),
+                Utc.with_ymd_and_hms(2020, m, last, 23, 0, 0).unwrap(),
+            )
+        };
+        let jan = store(1, 31);
+        let feb = store(2, 29);
+        let covers =
+            |s: &(chrono::DateTime<Utc>, chrono::DateTime<Utc>),
+             w: &(chrono::DateTime<Utc>, chrono::DateTime<Utc>, String)| {
+                s.0 <= w.1 && s.1 >= w.0
+            };
+        let (y0, y1) = parse_datetime_range("2020-01-01/2020-12-31").unwrap();
+        let months = generate_intervals(y0, y1, IntervalType::Monthly);
+        assert_eq!(months.len(), 12);
+        assert!(covers(&jan, &months[0]));
+        assert!(!covers(&jan, &months[1]));
+        assert!(!covers(&feb, &months[0]));
+        assert!(covers(&feb, &months[1]));
+        let years = generate_intervals(y0, y1, IntervalType::Yearly);
+        assert_eq!(years.len(), 1);
+        assert!(covers(&jan, &years[0]));
+        assert!(covers(&feb, &years[0]));
+    }
+
     #[test]
     fn test_collection_profile_sentinel2() {
         let profile = CollectionProfile::from_collection_name("sentinel-2-l2a").unwrap();
@@ -2513,6 +2671,119 @@ enum IntervalType {
 }
 
 #[cfg(feature = "zarr")]
+/// One STAC item of a climate collection: a Zarr store covering `[start, end]`.
+#[cfg(feature = "zarr")]
+struct ClimateStore {
+    id: String,
+    href: String,
+    start: chrono::DateTime<chrono::Utc>,
+    end: chrono::DateTime<chrono::Utc>,
+}
+
+/// Reader for `store`, opened on first use and cached for the rest of the
+/// run (daily intervals hit the same monthly store many times).
+#[cfg(feature = "zarr")]
+fn climate_reader<'a>(
+    readers: &'a mut std::collections::HashMap<String, surtgis_cloud::blocking::ZarrReaderBlocking>,
+    store: &ClimateStore,
+    variable: &str,
+    account: Option<&str>,
+    opts: &surtgis_cloud::ZarrReaderOptions,
+) -> Result<&'a surtgis_cloud::blocking::ZarrReaderBlocking> {
+    use surtgis_cloud::blocking::ZarrReaderBlocking;
+    use surtgis_cloud::zarr_auth::abfs_to_https_with_account;
+    if !readers.contains_key(&store.id) {
+        let url = match account {
+            Some(acc) => abfs_to_https_with_account(&store.href, Some(acc)),
+            None => store.href.clone(),
+        };
+        let reader = ZarrReaderBlocking::open(&url, variable, opts.clone())
+            .with_context(|| format!("Failed to open Zarr store {}", store.id))?;
+        readers.insert(store.id.clone(), reader);
+    }
+    Ok(&readers[&store.id])
+}
+
+/// Aggregate one interval across every store that overlaps it.
+///
+/// Each store contributes the time steps it holds inside
+/// `[int_start, int_end]` as a partial; the partials merge exactly, so
+/// `yearly-sum == Σ monthly-sum`. Returns the raster plus the number of
+/// stores used and time steps read. Without an aggregation method, reads the
+/// single step nearest to `int_start` from the first covering store.
+#[cfg(feature = "zarr")]
+#[allow(clippy::too_many_arguments)]
+fn aggregate_interval(
+    readers: &mut std::collections::HashMap<String, surtgis_cloud::blocking::ZarrReaderBlocking>,
+    covering: &[&ClimateStore],
+    bb: &BBox,
+    int_start: &chrono::DateTime<chrono::Utc>,
+    int_end: &chrono::DateTime<chrono::Utc>,
+    agg_method: Option<surtgis_cloud::AggMethod>,
+    variable: &str,
+    account: Option<&str>,
+    opts: &surtgis_cloud::ZarrReaderOptions,
+) -> Result<(surtgis_core::raster::Raster<f64>, usize, usize)> {
+    use surtgis_cloud::{CloudError, TimeAggPartial, TimeReduction, TimeSelector};
+
+    let Some(method) = agg_method else {
+        let store = covering[0];
+        let reader = climate_reader(readers, store, variable, account, opts)?;
+        let time = TimeReduction::Single(TimeSelector::Nearest(*int_start));
+        return Ok((reader.read_bbox(bb, &time)?, 1, 1));
+    };
+
+    let mut acc: Option<TimeAggPartial> = None;
+    let mut used = 0usize;
+    for store in covering {
+        let reader = climate_reader(readers, store, variable, account, opts)?;
+        match reader.read_bbox_partial(bb, int_start, int_end) {
+            Ok(part) => {
+                used += 1;
+                match acc.as_mut() {
+                    Some(a) => a.merge(&part)?,
+                    None => acc = Some(part),
+                }
+            }
+            // The item's declared extent overlaps the window but the store
+            // holds no step inside it.
+            Err(CloudError::ZarrTimeOutOfRange { .. }) => continue,
+            Err(e) => return Err(e.into()),
+        }
+    }
+    let acc = acc.ok_or_else(|| {
+        anyhow::anyhow!("no time steps in range across {} store(s)", covering.len())
+    })?;
+    Ok((acc.finish(method), used, acc.time_steps))
+}
+
+/// Temporal extent of a STAC item: `start_datetime`/`end_datetime` when the
+/// item spans a period (ERA5-pds months have `datetime: null`), else the
+/// instantaneous `datetime` as a degenerate range.
+#[cfg(feature = "zarr")]
+pub(crate) fn item_time_extent(
+    item: &surtgis_cloud::StacItem,
+) -> Option<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)> {
+    use chrono::{DateTime, Utc};
+    let parse = |v: &serde_json::Value| -> Option<DateTime<Utc>> {
+        DateTime::parse_from_rfc3339(v.as_str()?)
+            .ok()
+            .map(|d| d.with_timezone(&Utc))
+    };
+    let extra = &item.properties.extra;
+    match (extra.get("start_datetime"), extra.get("end_datetime")) {
+        (Some(a), Some(b)) => {
+            let (start, end) = (parse(a)?, parse(b)?);
+            Some((start, end.max(start)))
+        }
+        _ => {
+            let dt = item.properties.datetime.as_deref()?;
+            let t = DateTime::parse_from_rfc3339(dt).ok()?.with_timezone(&Utc);
+            Some((t, t))
+        }
+    }
+}
+
 fn parse_aggregate(s: &str) -> Result<(IntervalType, Option<surtgis_cloud::AggMethod>)> {
     use surtgis_cloud::AggMethod;
     match s.to_lowercase().replace('_', "-").as_str() {

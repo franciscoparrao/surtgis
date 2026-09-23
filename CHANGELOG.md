@@ -6,6 +6,38 @@ All notable changes to SurtGIS are documented in this file.
 
 ### Fixed
 
+- **`stac download-climate` aggregates over every store in the range**
+  (`daily-sum`/`monthly-sum`/`yearly-sum` and the `*-mean` variants).
+  Climate collections publish one STAC item, hence one Zarr store, per
+  period — ERA5-pds on Planetary Computer is monthly — and the command took
+  only the first search hit, so `yearly-sum` returned the sum of a single
+  month (the newest, PC sorts descending) and `yearly-mean` the mean of
+  that same month. Every item whose extent overlaps an interval now
+  contributes the time steps it holds inside it, as mergeable partial
+  statistics; sums and counts merge exactly, so
+  `yearly-sum == Σ monthly-sum` and a mean is the mean over every step
+  read, never a mean of per-store means. Each written interval reports how
+  many time steps and stores it came from. Validated on ERA5-pds
+  precipitation over the Altiplano: the 2020 annual sum equals the sum of
+  the twelve monthly sums exactly, and the January sum is bit-identical to
+  an independent `zarr`/NumPy read of the same store.
+
+- **`stac download-climate` explains an empty date range.** When no item
+  matches, the error now names the first item the catalogue returns without
+  a date filter and when it ends, because a collection can declare an
+  open-ended extent while its items stop earlier (era5-pds on Planetary
+  Computer declares 1979–present but its last item is 2020-12).
+
+- **Zarr time aggregation selects steps by membership, not nearest
+  neighbour.** `TimeReduction::Aggregate { start, end }` used to clamp both
+  ends to the nearest coordinate, which could pull in a step outside the
+  window; it now reads exactly the steps with `start <= t <= end`, and
+  fails with `ZarrTimeOutOfRange` when the store has none.
+
+- **Zarr time aggregation unpacks before accumulating.** Packed variables
+  (`scale_factor`/`add_offset`) are unpacked per value before summing, so a
+  sum is a sum of physical values rather than `scale·Σraw + offset`.
+
 - **`surtgis reproject` is now multi-band aware** (issue #123). It used to
   read only the first band of the input, so a regular RGB GeoTIFF came out
   as a single grey band — the "wrong output" reported. Every band is now
@@ -21,6 +53,11 @@ All notable changes to SurtGIS are documented in this file.
   Float32 behaviour, so existing f32/f64 callers are unchanged.
 
 ### Added
+
+- `surtgis_cloud::TimeAggPartial` (per-pixel sum/count/min/max over a time
+  range, with `merge` and `finish`) plus `ZarrReader::read_bbox_partial` and
+  `ZarrReaderBlocking::read_bbox_partial`, for aggregates that span several
+  stores.
 
 - **New crate `surtgis-ecw`: native ECW v2 decoder** — reads ER Mapper
   Enhanced Compressed Wavelet orthomosaics in pure safe Rust, with no GDAL
