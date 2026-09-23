@@ -1,8 +1,14 @@
 # Changelog
 
 All notable changes to SurtGIS are documented in this file.
+Format follows [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/)
+and versioning follows [SemVer 2.0.0](https://semver.org/): since 1.0.0,
+breaking changes only ship in a major version and are called out under a
+`Breaking` heading.
 
 ## [Unreleased]
+
+## [1.3.0] - 2026-09-23
 
 ### Fixed
 
@@ -99,6 +105,12 @@ All notable changes to SurtGIS are documented in this file.
   division by zero propagate as NaN. Verified bit-identical against the
   hand-written `ndvi`, `nbr`, `mndwi`, `ndmi`, `gndvi` and `savi`.
 
+### Security
+
+- Lockfile bump: `rustls` 0.23.41 → 0.23.45 (RUSTSEC-2026-0285, TLS 1.3
+  handshake messages accepted at the wrong encryption level) and the
+  yanked `chacha20` 0.10.0 → 0.10.2. No manifest changes.
+
 ## [1.2.5] - 2026-08-20
 
 ### Fixed
@@ -179,16 +191,9 @@ R4's third round:
   correction note in that entry now states what the code actually bounds
   (concurrent decode + output buffers, not the accumulated mosaic tiles).
 
-Format follows [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/).
-Versioning follows [SemVer 2.0.0](https://semver.org/). The project is still in
-the `0.x` series, so minor versions may contain breaking changes; we try to
-call them out under a `Breaking` heading when they happen.
+### Fixed — `surtgis-flow` (unpublished crate)
 
-## [Unreleased]
-
-### Fixed
-
-- **`surtgis-flow` (unpublished, audit R4 sprint 2 — solver correctness
+- **`surtgis-flow` (audit R4 sprint 2 — solver correctness
   ahead of the N4-Macul calibration):**
   - **Open (transmissive) borders are now on the mass books.** The
     transmissive ghost mirrors the edge cell including its velocity, so a
