@@ -142,6 +142,22 @@ Each is potentially its own paper:
 **Impact**: New papers possible. Only worth starting once one of A-C
 is fully done.
 
+### F-bis. Data-access gaps (operational, found dogfooding `lahar`)
+
+- **`stac download-climate` / `fetch` eligen siempre el primer item** de
+  `era5-pds` en Planetary Computer. La colección publica dos items por mes:
+  `-fc` (forecast: precip/temp/flux, sin viento) y `-an` (analysis: viento
+  u/v a 10 m y 100 m). `download-climate --variable eastward_wind_at_10_metres`
+  falla porque toma el `-fc`. Falta: filtro por asset (descartar items sin la
+  variable pedida) o flag `--item-type an|fc`. Además `search_all` con bbox
+  solo devolvió `-fc`; verificar paginación/orden.
+- **Zarr de ERA5 anónimo no accesible**: `pc.sign` no firma sin una
+  subscription key de Planetary Computer; el Zarr `abfs://era5/...` no resuelve
+  `era5.blob.core.windows.net` con adlfs anónimo. El viento por niveles de
+  presión (850-200 hPa) no está en el catálogo abierto (solo 10 m/100 m);
+  requiere Copernicus CDS key. Impacto: `lahar` necesita perfil de viento por
+  capas para tefra probabilística (MC por temporada).
+
 ## Agreed priority (2026-05-15)
 
 User chose: **C → B → (then revisit)**.

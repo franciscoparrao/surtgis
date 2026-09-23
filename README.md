@@ -280,6 +280,17 @@ cargo test --workspace
 cargo test --test cross_validation
 ```
 
+## Reproducibility
+
+```bash
+cargo build --release
+cargo test
+```
+
+Algorithms are deterministic; the same input and parameters produce identical output
+across runs and platforms. Pin the toolchain via `Cargo.lock` for bit-level
+reproducibility, and see the CHANGELOG for the version-to-result mapping.
+
 ## License
 
 MIT OR Apache-2.0
