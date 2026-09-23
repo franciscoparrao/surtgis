@@ -8,6 +8,40 @@ breaking changes only ship in a major version and are called out under a
 
 ## [Unreleased]
 
+### Changed
+
+- **`stac download-climate` is 5–7× faster** (measured on ERA5-pds from
+  Chile, bbox of 5×5 cells): the 2020 annual precipitation sum went from
+  289 s to 51–61 s, the annual tmax mean from 420 s to 61–95 s, and twelve
+  daily sums across a month boundary from 124 s to 15 s. Outputs are
+  bit-identical to the previous release. Two changes drive it:
+  - **Stores are read concurrently** (`--concurrency N`, default 4; 8 was
+    faster still in our runs). Each store costs a handful of latency-bound
+    requests (~270 ms each from Chile to the Azure West Europe region), so
+    reading them one after another was the bottleneck.
+  - **Each store is fetched once for every interval that overlaps it** and
+    bucketed in memory (`ZarrReader::read_bbox_partials`). Daily intervals
+    against a monthly store used to re-download the same 3 MB time chunk
+    once per day.
+- **`stac download-climate --variable` accepts a comma-separated list.**
+  The STAC search and the collection auth run once; each variable is
+  written to its own `<output>/<variable>/` folder (a single variable keeps
+  the flat layout). Verified on precipitation, tmax and 10 m wind — the last
+  one lives in the `-an` items, which the asset filter now selects.
+- **`ZarrReader::open` probes Zarr v2 first** (the default probe asked for
+  `zarr.json` first, one 404 per open on climate stores) and no longer lists
+  every array in the store on open — that listing costs one request per
+  array and was only used to explain a failure, where it is still fetched.
+  `ZarrMetadata::available_variables` is therefore empty after a successful
+  open; use `ZarrReader::list_variables` to enumerate.
+
+### Added
+
+- `ZarrReader::read_bbox_partials(bbox, windows)` and the blocking wrapper:
+  partial statistics for several time windows from one fetch of their
+  union, aligned with the input windows (`None` where the store has no step
+  in a window).
+
 ## [1.3.0] - 2026-09-23
 
 ### Fixed

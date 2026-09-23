@@ -2225,7 +2225,8 @@ pub enum StacCommands {
         /// Collection (e.g. "era5-pds")
         #[arg(long)]
         collection: String,
-        /// Variable name (e.g. "precipitation_amount_1hour_Accumulation")
+        /// Variable (STAC asset / Zarr array) to read; several separated by commas
+        /// (each variable then goes to its own `<output>/<variable>/` folder)
         #[arg(long)]
         variable: String,
         /// Datetime range (e.g. "2020-01-01/2020-12-31")
@@ -2234,6 +2235,12 @@ pub enum StacCommands {
         /// Temporal aggregation: none, daily-sum, daily-mean, monthly-mean, monthly-sum, yearly-mean, yearly-sum
         #[arg(long, default_value = "monthly-mean")]
         aggregate: String,
+
+        /// Stores (STAC items) read at the same time. Climate archives publish
+        /// one store per period, and each store costs a few latency-bound
+        /// requests, so reading several at once is the main speed-up.
+        #[arg(long, default_value_t = 4)]
+        concurrency: usize,
         /// Output directory (one GeoTIFF per interval)
         output: PathBuf,
     },

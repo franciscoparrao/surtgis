@@ -178,6 +178,9 @@ pub struct ZarrMetadata {
     /// First and last decoded time step (if time dimension exists).
     pub time_range: Option<(DateTime<Utc>, DateTime<Utc>)>,
     /// All variable names found in the store.
+    /// Variables listed in the store. Empty after a successful `open`
+    /// (listing costs one request per array); use
+    /// [`ZarrReader::list_variables`] to enumerate.
     pub available_variables: Vec<String>,
 }
 
@@ -204,35 +207,42 @@ impl ZarrReader {
     pub async fn open(store_url: &str, variable: &str, options: ZarrReaderOptions) -> Result<Self> {
         let store = zarr_auth::build_zarr_store(store_url, options.sas_token.as_deref()).await?;
 
-        // Open root group (try default → V2 fallback)
-        let group = match Group::async_open(store.clone(), "/").await {
-            Ok(g) => g,
-            Err(_) => Group::async_open_opt(store.clone(), "/", &MetadataRetrieveVersion::V2)
-                .await
-                .map_err(|e| CloudError::Zarr(format!("failed to open Zarr group: {e}")))?,
-        };
+        // Open root group. Climate stores are overwhelmingly Zarr v2, and
+        // the default probe asks for `zarr.json` first (one 404 round trip
+        // per open), so try v2 first and fall back to the default probe.
+        let group =
+            match Group::async_open_opt(store.clone(), "/", &MetadataRetrieveVersion::V2).await {
+                Ok(g) => g,
+                Err(_) => Group::async_open(store.clone(), "/")
+                    .await
+                    .map_err(|e| CloudError::Zarr(format!("failed to open Zarr group: {e}")))?,
+            };
 
         let group_attrs = serde_json::Value::Object(group.attributes().clone());
 
-        // List available variables (may be empty if store doesn't support listing)
-        let available_variables = Self::list_arrays(&store).await.unwrap_or_default();
-
-        // Open data array (try default → V2 fallback)
+        // Open data array (v2 first, default probe as fallback). The store's
+        // variable listing costs one request per child array, so it is only
+        // fetched to explain a failure; `metadata().available_variables` is
+        // therefore empty on success (use `list_variables` to enumerate).
         let array_path = format!("/{variable}");
-        let array = match Array::async_open(store.clone(), &array_path).await {
-            Ok(a) => a,
-            Err(_) => {
-                // Retry with explicit V2 (common for climate Zarr stores)
-                Array::async_open_opt(store.clone(), &array_path, &MetadataRetrieveVersion::V2)
-                    .await
-                    .map_err(|e| {
-                        CloudError::Zarr(format!(
+        let array =
+            match Array::async_open_opt(store.clone(), &array_path, &MetadataRetrieveVersion::V2)
+                .await
+            {
+                Ok(a) => a,
+                Err(_) => match Array::async_open(store.clone(), &array_path).await {
+                    Ok(a) => a,
+                    Err(e) => {
+                        let available_variables =
+                            Self::list_arrays(&store).await.unwrap_or_default();
+                        return Err(CloudError::Zarr(format!(
                             "failed to open array '/{variable}': {e}. Available: [{}]",
                             available_variables.join(", ")
-                        ))
-                    })?
-            }
-        };
+                        )));
+                    }
+                },
+            };
+        let available_variables = Vec::new();
 
         // Dimension names
         // DimensionName = Option<String>, so we unwrap each name
@@ -376,12 +386,43 @@ impl ZarrReader {
         start: &DateTime<Utc>,
         end: &DateTime<Utc>,
     ) -> Result<TimeAggPartial> {
+        let mut parts = self.read_bbox_partials(bbox, &[(*start, *end)]).await?;
+        parts
+            .pop()
+            .flatten()
+            .ok_or_else(|| self.time_out_of_range(start, end))
+    }
+
+    /// Partials for several time windows from **one** fetch of their union.
+    ///
+    /// The store is read once over `[min start, max end]` and every window
+    /// is bucketed from that buffer, so 31 daily windows against a monthly
+    /// store cost one download instead of 31 re-downloads of the same
+    /// chunks. Windows may overlap or be unsorted. The result is aligned
+    /// with `windows`; an entry is `None` when the store holds no time step
+    /// inside that window (including when it holds none for the union).
+    pub async fn read_bbox_partials(
+        &self,
+        bbox: &BBox,
+        windows: &[(DateTime<Utc>, DateTime<Utc>)],
+    ) -> Result<Vec<Option<TimeAggPartial>>> {
+        if windows.is_empty() {
+            return Ok(Vec::new());
+        }
+        let start = windows.iter().map(|w| w.0).min().unwrap();
+        let end = windows.iter().map(|w| w.1).max().unwrap();
         let time = TimeReduction::Aggregate {
-            start: *start,
-            end: *end,
+            start,
+            end,
             method: AggMethod::Sum,
         };
-        let sub = self.fetch_subset(bbox, &time).await?;
+        let sub = match self.fetch_subset(bbox, &time).await {
+            Ok(sub) => sub,
+            Err(CloudError::ZarrTimeOutOfRange { .. }) => {
+                return Ok(vec![None; windows.len()]);
+            }
+            Err(e) => return Err(e),
+        };
 
         let layout_ok = (sub.shape.len() == 3
             && self.cf.time_dim == Some(0)
@@ -399,17 +440,62 @@ impl ZarrReader {
 
         let lat_size = sub.shape[sub.lat_dim];
         let lon_size = sub.shape[sub.lon_dim];
-        let stats =
-            accumulate_time_stats(&sub.values, sub.time_count, lat_size, lon_size, &self.cf);
+        let spatial = lat_size * lon_size;
 
-        let sum = self.build_raster(self.orient_north_up(stats.sum), &sub);
-        Ok(TimeAggPartial {
-            sum,
+        // Time coordinates of the fetched planes (empty when the store has
+        // no decodable time axis: then there is a single plane).
+        let coords: &[DateTime<Utc>] = if self.cf.time_dim.is_some() && !self.time_coords.is_empty()
+        {
+            let (first, _) = self.time_indices(&time)?;
+            &self.time_coords[first..first + sub.time_count]
+        } else {
+            &[]
+        };
+
+        let out = window_ranges(coords, sub.time_count, windows)
+            .into_iter()
+            .map(|range| {
+                range.map(|(first, count)| {
+                    let planes = &sub.values[first * spatial..(first + count) * spatial];
+                    let stats = accumulate_time_stats(planes, count, lat_size, lon_size, &self.cf);
+                    self.partial_from_stats(stats, &sub, count)
+                })
+            })
+            .collect();
+        Ok(out)
+    }
+
+    /// Georeference and orient raw accumulators into a [`TimeAggPartial`].
+    fn partial_from_stats(
+        &self,
+        stats: TimeStats,
+        sub: &Subset,
+        time_steps: usize,
+    ) -> TimeAggPartial {
+        TimeAggPartial {
+            sum: self.build_raster(self.orient_north_up(stats.sum), sub),
             count: self.orient_north_up(stats.count),
             min: self.orient_north_up(stats.min),
             max: self.orient_north_up(stats.max),
-            time_steps: sub.time_count,
-        })
+            time_steps,
+        }
+    }
+
+    fn time_out_of_range(&self, start: &DateTime<Utc>, end: &DateTime<Utc>) -> CloudError {
+        CloudError::ZarrTimeOutOfRange {
+            requested: format!("{start} to {end}"),
+            available: format!(
+                "{} to {}",
+                self.time_coords
+                    .first()
+                    .map(|t| t.to_string())
+                    .unwrap_or_default(),
+                self.time_coords
+                    .last()
+                    .map(|t| t.to_string())
+                    .unwrap_or_default(),
+            ),
+        }
     }
 
     /// Fetch the raw array subset for `bbox` and the time steps selected by
@@ -594,22 +680,8 @@ impl ZarrReader {
                 Ok((idx, 1))
             }
             TimeReduction::Aggregate { start, end, .. } => {
-                time_index_range(&self.time_coords, start, end).ok_or_else(|| {
-                    CloudError::ZarrTimeOutOfRange {
-                        requested: format!("{start} to {end}"),
-                        available: format!(
-                            "{} to {}",
-                            self.time_coords
-                                .first()
-                                .map(|t| t.to_string())
-                                .unwrap_or_default(),
-                            self.time_coords
-                                .last()
-                                .map(|t| t.to_string())
-                                .unwrap_or_default(),
-                        ),
-                    }
-                })
+                time_index_range(&self.time_coords, start, end)
+                    .ok_or_else(|| self.time_out_of_range(start, end))
             }
         }
     }
@@ -791,6 +863,26 @@ fn time_index_range(
     } else {
         Some((first, past - first))
     }
+}
+
+/// For each window, the `(first, count)` plane range inside a fetched
+/// buffer of `time_count` planes whose coordinates are `coords` (in order).
+/// With no coordinates the buffer is a single plane that every window gets.
+fn window_ranges(
+    coords: &[DateTime<Utc>],
+    time_count: usize,
+    windows: &[(DateTime<Utc>, DateTime<Utc>)],
+) -> Vec<Option<(usize, usize)>> {
+    windows
+        .iter()
+        .map(|(start, end)| {
+            if coords.is_empty() {
+                Some((0, time_count.min(1)))
+            } else {
+                time_index_range(coords, start, end)
+            }
+        })
+        .collect()
 }
 
 fn default_dimension_names(ndim: usize) -> Vec<String> {
@@ -1164,5 +1256,27 @@ mod tests {
             time_steps: 1,
         };
         assert!(a.merge(&b).is_err());
+    }
+
+    /// One fetch, many windows: daily windows against a monthly buffer map
+    /// to disjoint 24-step ranges, a window outside the buffer is `None`,
+    /// windows may be unsorted, and a time-less buffer is one plane for all.
+    #[test]
+    fn test_window_ranges_buckets_daily_windows() {
+        let jan = hours("2020-01-01T00:00:00Z", 31 * 24);
+        let day = |d: u32| {
+            (
+                dt(&format!("2020-01-{d:02}T00:00:00Z")),
+                dt(&format!("2020-01-{d:02}T23:59:59Z")),
+            )
+        };
+        let feb1 = (dt("2020-02-01T00:00:00Z"), dt("2020-02-01T23:59:59Z"));
+        let windows = [day(3), day(1), feb1, day(31)];
+        let got = window_ranges(&jan, jan.len(), &windows);
+        assert_eq!(
+            got,
+            vec![Some((48, 24)), Some((0, 24)), None, Some((720, 24))]
+        );
+        assert_eq!(window_ranges(&[], 1, &windows), vec![Some((0, 1)); 4]);
     }
 }
