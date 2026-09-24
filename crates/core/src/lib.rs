@@ -50,6 +50,8 @@ pub mod resample;
 pub mod streaming;
 pub mod tiling;
 pub mod vector;
+#[cfg(feature = "projections")]
+pub mod warp;
 
 /// Re-exported so downstream code can depend on the exact `geo` version
 /// used by algorithm-crate vector operations built on this crate.

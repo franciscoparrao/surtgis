@@ -6132,6 +6132,7 @@ dependencies = [
  "num-traits",
  "ordered-float 4.6.0",
  "parquet",
+ "proj4rs",
  "rusqlite",
  "serde",
  "serde_json",

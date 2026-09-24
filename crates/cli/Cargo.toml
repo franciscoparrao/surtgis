@@ -24,7 +24,7 @@ cloud = ["dep:surtgis-cloud"]
 zarr = ["surtgis-cloud/zarr", "dep:chrono"]
 netcdf = ["surtgis-cloud/netcdf"]
 grib = ["surtgis-cloud/grib"]
-projections = ["surtgis-cloud/projections", "dep:proj4rs"]
+projections = ["surtgis-core/projections", "surtgis-cloud/projections", "dep:proj4rs"]
 ml = ["dep:smelt-ml"]
 # Off by default — pulls wgpu + winit-style deps that aren't useful for
 # the 2D CLI workflows. Enable explicitly to get the `relief-3d`
