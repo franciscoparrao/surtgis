@@ -1164,11 +1164,13 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             variable,
             datetime,
             aggregate,
+            concurrency,
             output,
         } => {
             use std::collections::HashMap;
-            use surtgis_cloud::blocking::ZarrReaderBlocking;
-            use surtgis_cloud::{AggMethod, ZarrReaderOptions};
+            use surtgis_cloud::{
+                AggMethod, TimeAggPartial, TimeReduction, TimeSelector, ZarrReaderOptions,
+            };
 
             let cat = StacCatalog::from_str_or_url(&catalog);
             let bb = parse_bbox(&bbox)?;
@@ -1230,44 +1232,18 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                 );
             }
 
-            let mut stores: Vec<ClimateStore> = items
-                .iter()
-                .filter_map(|item| {
-                    let asset = item.asset(&variable)?;
-                    let (start, end) = item_time_extent(item)?;
-                    Some(ClimateStore {
-                        id: item.id.clone(),
-                        href: asset.href.clone(),
-                        start,
-                        end,
-                    })
-                })
+            let variables: Vec<String> = variable
+                .split(',')
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
                 .collect();
-            stores.sort_by_key(|s| s.start);
+            if variables.is_empty() {
+                anyhow::bail!("--variable is empty");
+            }
+            let multi = variables.len() > 1;
             pb.finish_and_clear();
 
-            if stores.is_empty() {
-                let available: std::collections::BTreeSet<&str> = items
-                    .iter()
-                    .flat_map(|it| it.assets.keys().map(String::as_str))
-                    .collect();
-                anyhow::bail!(
-                    "Asset '{}' not found in any of the {} items. Available: {}",
-                    variable,
-                    items.len(),
-                    available.into_iter().collect::<Vec<_>>().join(", ")
-                );
-            }
-
-            println!(
-                "Stores: {} items with asset '{}' ({} to {})",
-                stores.len(),
-                variable,
-                stores.first().unwrap().start.format("%Y-%m-%d"),
-                stores.last().unwrap().end.format("%Y-%m-%d")
-            );
-
-            // Get collection-level auth for Zarr
+            // Get collection-level auth for Zarr (once for every variable)
             let auth = client
                 .get_collection_zarr_auth(&collection)
                 .context("Failed to get collection auth")?;
@@ -1277,109 +1253,195 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             };
             let opts = ZarrReaderOptions { sas_token };
 
-            // One reader per store, opened on first use and kept for the
-            // rest of the run (daily intervals hit the same monthly store
-            // many times).
-            let mut readers: HashMap<String, ZarrReaderBlocking> = HashMap::new();
-
-            // Describe the variable from the first store
-            let pb = spinner("Opening Zarr store...");
-            {
-                let meta = climate_reader(
-                    &mut readers,
-                    &stores[0],
-                    &variable,
-                    account.as_deref(),
-                    &opts,
-                )?
-                .metadata();
-                println!(
-                    "Variable: {} — shape {:?}, dims {:?} (per store)",
-                    meta.variable, meta.shape, meta.dimension_names
-                );
-            }
-            pb.finish_and_clear();
-
             // Generate time intervals
             let intervals = generate_intervals(dt_start, dt_end, interval_type);
             println!(
-                "Downloading {} intervals ({}) for {}...",
+                "{} intervals ({}) × {} variable{}",
                 intervals.len(),
                 aggregate,
-                variable
+                variables.len(),
+                if multi { "s" } else { "" }
             );
 
-            // Create output directory
-            std::fs::create_dir_all(&output).context("Failed to create output directory")?;
-
             let total_start = Instant::now();
-            for (i, (int_start, int_end, label)) in intervals.iter().enumerate() {
-                let pb = spinner(&format!("[{}/{}] {}", i + 1, intervals.len(), label));
-
-                let covering: Vec<&ClimateStore> = stores
+            for var in &variables {
+                let mut stores: Vec<ClimateStore> = items
                     .iter()
-                    .filter(|s| s.start <= *int_end && s.end >= *int_start)
+                    .filter_map(|item| {
+                        let asset = item.asset(var)?;
+                        let (start, end) = item_time_extent(item)?;
+                        Some(ClimateStore {
+                            id: item.id.clone(),
+                            href: asset.href.clone(),
+                            start,
+                            end,
+                        })
+                    })
                     .collect();
-                if covering.is_empty() {
-                    pb.finish_and_clear();
-                    eprintln!("  Warning: {} — no store covers this interval", label);
-                    continue;
+                stores.sort_by_key(|s| s.start);
+
+                if stores.is_empty() {
+                    let available: std::collections::BTreeSet<&str> = items
+                        .iter()
+                        .flat_map(|it| it.assets.keys().map(String::as_str))
+                        .collect();
+                    let msg = format!(
+                        "Asset '{}' not found in any of the {} items. Available: {}",
+                        var,
+                        items.len(),
+                        available.into_iter().collect::<Vec<_>>().join(", ")
+                    );
+                    if multi {
+                        eprintln!("Warning: {msg}");
+                        continue;
+                    }
+                    anyhow::bail!(msg);
                 }
 
-                let result = aggregate_interval(
-                    &mut readers,
-                    &covering,
-                    &bb,
-                    int_start,
-                    int_end,
-                    agg_method,
-                    &variable,
-                    account.as_deref(),
-                    &opts,
+                println!(
+                    "{}: {} stores ({} to {})",
+                    var,
+                    stores.len(),
+                    stores.first().unwrap().start.format("%Y-%m-%d"),
+                    stores.last().unwrap().end.format("%Y-%m-%d")
                 );
 
-                match result {
-                    Ok((raster, used, steps)) => {
-                        let suffix = agg_method
-                            .map(|m| match m {
-                                AggMethod::Mean => "mean",
-                                AggMethod::Sum => "sum",
-                                AggMethod::Min => "min",
-                                AggMethod::Max => "max",
-                            })
-                            .unwrap_or("value");
-                        let filename = format!("{}_{}.tif", label, suffix);
-                        let out_path = output.join(&filename);
-                        write_result(&raster, &out_path, compress)?;
-                        let (rows, cols) = raster.shape();
+                let out_dir = if multi {
+                    output.join(var)
+                } else {
+                    output.clone()
+                };
+                std::fs::create_dir_all(&out_dir).context("Failed to create output directory")?;
+
+                let suffix = agg_method
+                    .map(|m| match m {
+                        AggMethod::Mean => "mean",
+                        AggMethod::Sum => "sum",
+                        AggMethod::Min => "min",
+                        AggMethod::Max => "max",
+                    })
+                    .unwrap_or("value");
+
+                let Some(method) = agg_method else {
+                    // Single time step per interval: nearest to the interval
+                    // start, from the first store that covers it.
+                    let mut readers = HashMap::new();
+                    for (i, (int_start, _int_end, label)) in intervals.iter().enumerate() {
+                        let pb = spinner(&format!("[{}/{}] {}", i + 1, intervals.len(), label));
+                        let Some(store) = stores
+                            .iter()
+                            .find(|s| s.start <= *int_start && s.end >= *int_start)
+                        else {
+                            pb.finish_and_clear();
+                            eprintln!("  Warning: {} — no store covers this instant", label);
+                            continue;
+                        };
+                        let result =
+                            climate_reader(&mut readers, store, var, account.as_deref(), &opts)
+                                .and_then(|reader| {
+                                    let time =
+                                        TimeReduction::Single(TimeSelector::Nearest(*int_start));
+                                    Ok(reader.read_bbox(&bb, &time)?)
+                                });
                         pb.finish_and_clear();
-                        if agg_method.is_some() {
-                            println!(
-                                "  {} — {}x{} ({} time steps from {} store{})",
-                                filename,
-                                cols,
-                                rows,
-                                steps,
-                                used,
-                                if used == 1 { "" } else { "s" }
-                            );
-                        } else {
-                            println!("  {} — {}x{}", filename, cols, rows);
+                        match result {
+                            Ok(raster) => {
+                                let filename = format!("{}_{}.tif", label, suffix);
+                                write_result(&raster, &out_dir.join(&filename), compress)?;
+                                let (rows, cols) = raster.shape();
+                                println!("  {} — {}x{}", filename, cols, rows);
+                            }
+                            Err(e) => eprintln!("  Warning: {} — {}", label, e),
                         }
                     }
-                    Err(e) => {
-                        pb.finish_and_clear();
-                        eprintln!("  Warning: {} — {}", label, e);
+                    continue;
+                };
+
+                // One job per store: the intervals it overlaps. Each store is
+                // fetched ONCE for the union of its windows and bucketed in
+                // memory, and stores are read `concurrency` at a time — the
+                // per-store cost is a handful of latency-bound requests.
+                let jobs: Vec<(usize, Vec<usize>)> = stores
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(si, s)| {
+                        let idx: Vec<usize> = intervals
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, (a, b, _))| s.start <= *b && s.end >= *a)
+                            .map(|(i, _)| i)
+                            .collect();
+                        (!idx.is_empty()).then_some((si, idx))
+                    })
+                    .collect();
+
+                let pb = spinner(&format!(
+                    "{}: reading {} stores, {} at a time...",
+                    var,
+                    jobs.len(),
+                    concurrency.max(1)
+                ));
+                let results = read_stores_parallel(
+                    &stores,
+                    &jobs,
+                    &intervals,
+                    &bb,
+                    var,
+                    account.as_deref(),
+                    &opts,
+                    concurrency,
+                );
+                pb.finish_and_clear();
+
+                // Merge the per-store partials into one accumulator per interval
+                let mut acc: Vec<Option<TimeAggPartial>> =
+                    (0..intervals.len()).map(|_| None).collect();
+                let mut used = vec![0usize; intervals.len()];
+                for (j, res) in results {
+                    let (si, idx) = &jobs[j];
+                    match res {
+                        Ok(parts) => {
+                            for (k, part) in parts.into_iter().enumerate() {
+                                let Some(part) = part else { continue };
+                                let i = idx[k];
+                                used[i] += 1;
+                                match acc[i].as_mut() {
+                                    Some(a) => a.merge(&part)?,
+                                    None => acc[i] = Some(part),
+                                }
+                            }
+                        }
+                        Err(e) => eprintln!("  Warning: store {} — {:#}", stores[*si].id, e),
                     }
+                }
+
+                for (i, (_, _, label)) in intervals.iter().enumerate() {
+                    let Some(part) = acc[i].as_ref() else {
+                        eprintln!("  Warning: {} — no time steps in any store", label);
+                        continue;
+                    };
+                    let raster = part.finish(method);
+                    let filename = format!("{}_{}.tif", label, suffix);
+                    write_result(&raster, &out_dir.join(&filename), compress)?;
+                    let (rows, cols) = raster.shape();
+                    println!(
+                        "  {} — {}x{} ({} time steps from {} store{})",
+                        filename,
+                        cols,
+                        rows,
+                        part.time_steps,
+                        used[i],
+                        if used[i] == 1 { "" } else { "s" }
+                    );
                 }
             }
 
-            let elapsed = total_start.elapsed();
             println!(
-                "\nDone: {} intervals written to {} in {:.1?}",
+                "\nDone: {} intervals × {} variable{} in {:.1?}",
                 intervals.len(),
-                output.display(),
-                elapsed
+                variables.len(),
+                if multi { "s" } else { "" },
+                total_start.elapsed()
             );
         }
 
@@ -2704,57 +2766,74 @@ fn climate_reader<'a>(
     Ok(&readers[&store.id])
 }
 
-/// Aggregate one interval across every store that overlaps it.
+/// Read every job's store once (the union of its windows) and bucket the
+/// partials per window, `concurrency` stores at a time.
 ///
-/// Each store contributes the time steps it holds inside
-/// `[int_start, int_end]` as a partial; the partials merge exactly, so
-/// `yearly-sum == Σ monthly-sum`. Returns the raster plus the number of
-/// stores used and time steps read. Without an aggregation method, reads the
-/// single step nearest to `int_start` from the first covering store.
+/// Returns `(job index, result)` pairs in completion order. Each worker
+/// opens its own reader, so failures are per store and never take the
+/// other stores down.
 #[cfg(feature = "zarr")]
 #[allow(clippy::too_many_arguments)]
-fn aggregate_interval(
-    readers: &mut std::collections::HashMap<String, surtgis_cloud::blocking::ZarrReaderBlocking>,
-    covering: &[&ClimateStore],
+fn read_stores_parallel(
+    stores: &[ClimateStore],
+    jobs: &[(usize, Vec<usize>)],
+    intervals: &[(
+        chrono::DateTime<chrono::Utc>,
+        chrono::DateTime<chrono::Utc>,
+        String,
+    )],
     bb: &BBox,
-    int_start: &chrono::DateTime<chrono::Utc>,
-    int_end: &chrono::DateTime<chrono::Utc>,
-    agg_method: Option<surtgis_cloud::AggMethod>,
     variable: &str,
     account: Option<&str>,
     opts: &surtgis_cloud::ZarrReaderOptions,
-) -> Result<(surtgis_core::raster::Raster<f64>, usize, usize)> {
-    use surtgis_cloud::{CloudError, TimeAggPartial, TimeReduction, TimeSelector};
+    concurrency: usize,
+) -> Vec<(usize, Result<Vec<Option<surtgis_cloud::TimeAggPartial>>>)> {
+    use std::sync::{Mutex, mpsc};
+    use surtgis_cloud::blocking::ZarrReaderBlocking;
+    use surtgis_cloud::zarr_auth::abfs_to_https_with_account;
 
-    let Some(method) = agg_method else {
-        let store = covering[0];
-        let reader = climate_reader(readers, store, variable, account, opts)?;
-        let time = TimeReduction::Single(TimeSelector::Nearest(*int_start));
-        return Ok((reader.read_bbox(bb, &time)?, 1, 1));
-    };
-
-    let mut acc: Option<TimeAggPartial> = None;
-    let mut used = 0usize;
-    for store in covering {
-        let reader = climate_reader(readers, store, variable, account, opts)?;
-        match reader.read_bbox_partial(bb, int_start, int_end) {
-            Ok(part) => {
-                used += 1;
-                match acc.as_mut() {
-                    Some(a) => a.merge(&part)?,
-                    None => acc = Some(part),
+    let next = Mutex::new(0usize);
+    let (tx, rx) = mpsc::channel();
+    let workers = concurrency.max(1).min(jobs.len().max(1));
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            let tx = tx.clone();
+            let next = &next;
+            scope.spawn(move || {
+                loop {
+                    let j = {
+                        let mut cursor = next.lock().unwrap();
+                        let j = *cursor;
+                        *cursor += 1;
+                        j
+                    };
+                    if j >= jobs.len() {
+                        break;
+                    }
+                    let (si, idx) = &jobs[j];
+                    let store = &stores[*si];
+                    let windows: Vec<_> = idx
+                        .iter()
+                        .map(|&i| (intervals[i].0, intervals[i].1))
+                        .collect();
+                    let res = (|| -> Result<Vec<Option<surtgis_cloud::TimeAggPartial>>> {
+                        let url = match account {
+                            Some(acc) => abfs_to_https_with_account(&store.href, Some(acc)),
+                            None => store.href.clone(),
+                        };
+                        let reader = ZarrReaderBlocking::open(&url, variable, opts.clone())
+                            .with_context(|| format!("Failed to open Zarr store {}", store.id))?;
+                        Ok(reader.read_bbox_partials(bb, &windows)?)
+                    })();
+                    if tx.send((j, res)).is_err() {
+                        break;
+                    }
                 }
-            }
-            // The item's declared extent overlaps the window but the store
-            // holds no step inside it.
-            Err(CloudError::ZarrTimeOutOfRange { .. }) => continue,
-            Err(e) => return Err(e.into()),
+            });
         }
-    }
-    let acc = acc.ok_or_else(|| {
-        anyhow::anyhow!("no time steps in range across {} store(s)", covering.len())
-    })?;
-    Ok((acc.finish(method), used, acc.time_steps))
+        drop(tx);
+    });
+    rx.into_iter().collect()
 }
 
 /// Temporal extent of a STAC item: `start_datetime`/`end_datetime` when the

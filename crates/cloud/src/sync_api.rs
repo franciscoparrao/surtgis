@@ -253,6 +253,17 @@ mod zarr_inner {
                 .block_on(self.inner.read_bbox_partial(bbox, start, end))
         }
 
+        /// Partials for several time windows from one fetch of their union
+        /// (blocking). See [`ZarrReader::read_bbox_partials`].
+        pub fn read_bbox_partials(
+            &self,
+            bbox: &BBox,
+            windows: &[(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)],
+        ) -> Result<Vec<Option<TimeAggPartial>>> {
+            self.rt
+                .block_on(self.inner.read_bbox_partials(bbox, windows))
+        }
+
         /// Read the full spatial extent at a specific time (blocking).
         pub fn read_full(&self, time: &TimeReduction) -> Result<Raster<f64>> {
             self.rt.block_on(self.inner.read_full(time))
