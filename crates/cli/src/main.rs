@@ -96,6 +96,13 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Fluvial { algorithm } => handlers::fluvial::handle(algorithm, compress)?,
         #[cfg(feature = "flow")]
         Commands::Flow { command } => handlers::flow::handle(command, compress)?,
+        #[cfg(feature = "server")]
+        Commands::Serve {
+            bind,
+            root,
+            allow,
+            max_age,
+        } => handlers::serve::handle(bind, root, allow, max_age)?,
         #[cfg(feature = "ecw")]
         Commands::Ecw { action } => handlers::ecw::handle(action, compress)?,
         Commands::Imagery { algorithm } => handlers::imagery::handle(algorithm, compress)?,
