@@ -18,6 +18,8 @@ shapefile = ["dep:shapefile"]
 geopackage = ["dep:rusqlite"]
 parquet = ["dep:parquet"]
 complex = ["dep:num-complex"]
+# Raster warping between CRSs via proj4rs (pure Rust; native, WASM, server)
+projections = ["dep:proj4rs"]
 
 [dependencies]
 thiserror.workspace = true
@@ -32,6 +34,7 @@ ordered-float.workspace = true
 gdal = { workspace = true, optional = true }
 parquet = { workspace = true, optional = true }
 num-complex = { workspace = true, optional = true }
+proj4rs = { workspace = true, optional = true }
 shapefile = { workspace = true, optional = true }
 rusqlite = { workspace = true, optional = true }
 tiff.workspace = true

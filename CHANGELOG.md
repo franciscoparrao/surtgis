@@ -8,6 +8,19 @@ breaking changes only ship in a major version and are called out under a
 
 ## [Unreleased]
 
+### Added
+
+- **`surtgis_core::warp`** (feature `projections`, pulls in proj4rs — pure
+  Rust, so it builds natively, in WASM and in a server): the inverse-mapping
+  warp kernel that `surtgis reproject` used to keep to itself. `Transformer`
+  (EPSG → EPSG with the degrees/radians convention handled), `GridSpec`,
+  `grid_for` (whole-raster target grid), `source_window` (which source
+  bounds to read for a target window plus a margin) and `warp` (nearest or
+  bilinear, parallel across rows). The CLI now calls it, and its output is
+  bit-identical to the previous release on the benchmark DEM (UTM 19S →
+  WGS84 nearest and bilinear, → Web Mercator bilinear). First building
+  block of the tile server (`docs/surtgis_server_design.md`).
+
 ### Changed
 
 - **`stac download-climate` is 5–7× faster** (measured on ERA5-pds from
