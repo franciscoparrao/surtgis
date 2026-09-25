@@ -348,8 +348,65 @@ impl CogReader {
         )
         .ok_or(CloudError::BBoxOutside)?;
 
-        self.assemble_raster::<T>(ifd_idx, &ifd, &gt, &mapping)
+        let mut bands = self
+            .assemble_bands::<T>(ifd_idx, &ifd, &gt, &mapping, &[0])
+            .await?;
+        Ok(bands.remove(0))
+    }
+
+    /// Read every band of a geographic bounding box — pixel-interleaved
+    /// COGs only (`PlanarConfiguration = 1`). One raster per band, in file
+    /// order, sharing one tile fetch and decode.
+    pub async fn read_bbox_bands<T: RasterElement>(
+        &mut self,
+        bbox: &BBox,
+        overview: Option<usize>,
+    ) -> Result<Vec<Raster<T>>> {
+        let ifd_idx = overview.unwrap_or(0);
+        let ifd = self.get_ifd(ifd_idx)?;
+        let gt = self.geo_transform_for(ifd_idx);
+        let mapping = tile_index::tiles_for_bbox(
+            bbox,
+            &gt,
+            ifd.width,
+            ifd.height,
+            ifd.tile_width,
+            ifd.tile_height,
+        )
+        .ok_or(CloudError::BBoxOutside)?;
+        let all: Vec<usize> = (0..ifd.samples_per_pixel.max(1) as usize).collect();
+        self.assemble_bands::<T>(ifd_idx, &ifd, &gt, &mapping, &all)
             .await
+    }
+
+    /// Read one band (0-based) of a geographic bounding box.
+    pub async fn read_bbox_band<T: RasterElement>(
+        &mut self,
+        bbox: &BBox,
+        overview: Option<usize>,
+        band: usize,
+    ) -> Result<Raster<T>> {
+        let ifd_idx = overview.unwrap_or(0);
+        let ifd = self.get_ifd(ifd_idx)?;
+        let gt = self.geo_transform_for(ifd_idx);
+        let mapping = tile_index::tiles_for_bbox(
+            bbox,
+            &gt,
+            ifd.width,
+            ifd.height,
+            ifd.tile_width,
+            ifd.tile_height,
+        )
+        .ok_or(CloudError::BBoxOutside)?;
+        let mut bands = self
+            .assemble_bands::<T>(ifd_idx, &ifd, &gt, &mapping, &[band])
+            .await?;
+        Ok(bands.remove(0))
+    }
+
+    /// Number of bands (samples per pixel) of the full-resolution IFD.
+    pub fn bands(&self) -> usize {
+        self.ifds[0].samples_per_pixel.max(1) as usize
     }
 
     /// Read the full raster extent.
@@ -374,8 +431,10 @@ impl CogReader {
         )
         .ok_or(CloudError::BBoxOutside)?;
 
-        self.assemble_raster::<T>(ifd_idx, &ifd, &gt, &mapping)
-            .await
+        let mut bands = self
+            .assemble_bands::<T>(ifd_idx, &ifd, &gt, &mapping, &[0])
+            .await?;
+        Ok(bands.remove(0))
     }
 
     /// Return metadata about the COG.
@@ -467,20 +526,37 @@ impl CogReader {
     }
 
     /// Fetch tiles, decompress, and assemble into a `Raster<T>`.
-    async fn assemble_raster<T: RasterElement>(
+    /// Fetch, decode and assemble the requested bands (0-based indices)
+    /// of `mapping`'s window. Tiles are pixel-interleaved, so every band
+    /// comes from the same decoded tile bytes.
+    async fn assemble_bands<T: RasterElement>(
         &mut self,
         ifd_idx: usize,
         ifd: &IfdInfo,
         gt: &GeoTransform,
         mapping: &TileMapping,
-    ) -> Result<Raster<T>> {
+        bands: &[usize],
+    ) -> Result<Vec<Raster<T>>> {
         let tw = ifd.tile_width as usize;
         let th = ifd.tile_height as usize;
         let bps = ifd.bits_per_sample;
         let sf = ifd.sample_format;
         let compression = ifd.compression;
+        let spp = ifd.samples_per_pixel.max(1) as usize;
+        if spp > 1 && ifd.planar_config == 2 {
+            return Err(CloudError::InvalidTiff {
+                reason: "planar (PlanarConfiguration = 2) multi-band COGs are not supported; \
+                         rewrite with INTERLEAVE=PIXEL"
+                    .into(),
+            });
+        }
+        if let Some(&b) = bands.iter().find(|&&b| b >= spp) {
+            return Err(CloudError::InvalidTiff {
+                reason: format!("band {b} out of range: the COG has {spp} band(s)"),
+            });
+        }
         let bytes_per_pixel = (bps as usize).div_ceil(8);
-        let raw_tile_size = tw * th * bytes_per_pixel;
+        let raw_tile_size = tw * th * bytes_per_pixel * spp;
 
         let (px_min_col, px_min_row, px_max_col, px_max_row) = mapping.pixel_window;
         let (out_rows, out_cols) = mapping.output_shape;
@@ -520,7 +596,12 @@ impl CogReader {
                 match ifd.predictor {
                     1 => {}
                     2 => {
-                        decompress::undo_horizontal_differencing(&mut raw, tw, bytes_per_pixel);
+                        decompress::undo_horizontal_differencing_multi(
+                            &mut raw,
+                            tw,
+                            bytes_per_pixel,
+                            spp,
+                        );
                         if fetch_count == 0 && cog_debug() {
                             eprintln!(
                                 "    [pred] undo horiz-diff: bps={} tw={} len={}",
@@ -531,7 +612,12 @@ impl CogReader {
                         }
                     }
                     3 => {
-                        decompress::undo_floating_point_predictor(&mut raw, tw, bytes_per_pixel);
+                        decompress::undo_floating_point_predictor_multi(
+                            &mut raw,
+                            tw,
+                            bytes_per_pixel,
+                            spp,
+                        );
                         if fetch_count == 0 && cog_debug() {
                             let sample0 = if raw.len() >= 4 {
                                 f32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]])
@@ -559,8 +645,11 @@ impl CogReader {
             }
         }
 
-        // Assemble output array from cached tiles.
-        let mut output = Array2::<T>::from_elem((out_rows, out_cols), T::default_nodata());
+        // Assemble one output array per requested band from cached tiles.
+        let mut outputs: Vec<Array2<T>> = bands
+            .iter()
+            .map(|_| Array2::<T>::from_elem((out_rows, out_cols), T::default_nodata()))
+            .collect();
         let mut tiles_written = 0usize;
         let mut tiles_skipped = 0usize;
         let tiles_fetched = mapping.tiles.len();
@@ -635,7 +724,7 @@ impl CogReader {
             // BUG_TILE_DECODE_BPS15_STRIPING.md. We now treat the mismatch as
             // a hard error so the run aborts loudly instead of producing
             // scientifically unusable composites.
-            let expected_pixels = tw * th;
+            let expected_pixels = tw * th * spp;
             if typed.len() != expected_pixels {
                 eprintln!(
                     "    [cog] FATAL tile({},{}) idx={} decoded {} px, expected {} (raw={} bytes, bps={} sf={} tw={} th={}).\
@@ -682,9 +771,11 @@ impl CogReader {
                     }
                     let out_col = img_col - px_min_col;
 
-                    let tile_linear = local_row * tw + local_col;
-                    if tile_linear < typed.len() {
-                        output[(out_row, out_col)] = typed[tile_linear];
+                    let tile_linear = (local_row * tw + local_col) * spp;
+                    for (k, &band) in bands.iter().enumerate() {
+                        if tile_linear + band < typed.len() {
+                            outputs[k][(out_row, out_col)] = typed[tile_linear + band];
+                        }
                     }
                 }
             }
@@ -696,12 +787,14 @@ impl CogReader {
         // sparse tiles were pre-filled with NaN — the same raster mixes both
         // conventions and NaN-checking kernels see the sentinel as valid
         // data (audit R4, H4). No-op for integer `T`.
-        if let Some(slice) = output.as_slice_mut() {
-            surtgis_core::io::normalize_any_float_nodata(slice, self.geo_meta.nodata);
+        for output in outputs.iter_mut() {
+            if let Some(slice) = output.as_slice_mut() {
+                surtgis_core::io::normalize_any_float_nodata(slice, self.geo_meta.nodata);
+            }
         }
 
         // Tile assembly stats (verbose; gated behind SURTGIS_COG_DEBUG).
-        let valid_pixels = output.iter().filter(|v| !v.is_nodata(None)).count();
+        let valid_pixels = outputs[0].iter().filter(|v| !v.is_nodata(None)).count();
         if cog_debug() {
             eprintln!(
                 "    [cog] assembled: {} tiles ({}+{} skip), output={}x{}, tw={} th={}, valid={}/{} ({:.0}%)",
@@ -722,26 +815,27 @@ impl CogReader {
             );
         }
 
-        // Build Raster with correct geo metadata.
-        let mut raster = Raster::from_array(output);
-
-        // GeoTransform for the output window.
+        // GeoTransform for the output window, shared by every band.
         let (corner_x, corner_y) = gt.pixel_to_geo_corner(px_min_col, px_min_row);
         let out_gt = GeoTransform::new(corner_x, corner_y, gt.pixel_width, gt.pixel_height);
-        raster.set_transform(out_gt);
-        raster.set_crs(self.geo_meta.crs.clone());
-
-        // Float pixels were just normalized to NaN, so the metadata must say
-        // NaN too; integers keep the sentinel verbatim.
-        if let Some(nd) = self.geo_meta.nodata {
-            if T::is_float() {
-                raster.set_nodata(Some(T::default_nodata()));
-            } else if let Some(nd_t) = num_traits::cast(nd) {
-                raster.set_nodata(Some(nd_t));
-            }
-        }
-
-        Ok(raster)
+        Ok(outputs
+            .into_iter()
+            .map(|output| {
+                let mut raster = Raster::from_array(output);
+                raster.set_transform(out_gt);
+                raster.set_crs(self.geo_meta.crs.clone());
+                // Float pixels were just normalized to NaN, so the metadata
+                // must say NaN too; integers keep the sentinel verbatim.
+                if let Some(nd) = self.geo_meta.nodata {
+                    if T::is_float() {
+                        raster.set_nodata(Some(T::default_nodata()));
+                    } else if let Some(nd_t) = num_traits::cast(nd) {
+                        raster.set_nodata(Some(nd_t));
+                    }
+                }
+                raster
+            })
+            .collect())
     }
 }
 

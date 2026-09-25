@@ -137,52 +137,62 @@ fn inflate_capped(
 /// store the difference from the previous sample as a WHOLE SAMPLE
 /// (not individual bytes). For uint16, accumulate as u16 with wrapping.
 pub fn undo_horizontal_differencing(data: &mut [u8], tile_width: usize, bytes_per_sample: usize) {
+    undo_horizontal_differencing_multi(data, tile_width, bytes_per_sample, 1)
+}
+
+/// Same as [`undo_horizontal_differencing`] for pixel-interleaved tiles
+/// with `samples_per_pixel` samples: TIFF predictor 2 differences each
+/// sample against the same sample of the previous pixel, so the
+/// accumulation stride is `samples_per_pixel` samples, row by row.
+pub fn undo_horizontal_differencing_multi(
+    data: &mut [u8],
+    tile_width: usize,
+    bytes_per_sample: usize,
+    samples_per_pixel: usize,
+) {
+    let spp = samples_per_pixel.max(1);
     if tile_width == 0 || bytes_per_sample == 0 {
         return;
     }
-    let row_bytes = tile_width * bytes_per_sample;
+    let row_bytes = tile_width * spp * bytes_per_sample;
     for row_start in (0..data.len()).step_by(row_bytes) {
         let row_end = (row_start + row_bytes).min(data.len());
         let row = &mut data[row_start..row_end];
         match bytes_per_sample {
             1 => {
-                for i in 1..row.len() {
-                    row[i] = row[i].wrapping_add(row[i - 1]);
+                for i in spp..row.len() {
+                    row[i] = row[i].wrapping_add(row[i - spp]);
                 }
             }
             2 => {
-                // Accumulate as u16 to propagate carry between bytes
                 let samples = row.len() / 2;
-                for i in 1..samples {
-                    let prev = u16::from_le_bytes([row[(i - 1) * 2], row[(i - 1) * 2 + 1]]);
+                for i in spp..samples {
+                    let p = (i - spp) * 2;
+                    let prev = u16::from_le_bytes([row[p], row[p + 1]]);
                     let diff = u16::from_le_bytes([row[i * 2], row[i * 2 + 1]]);
-                    let val = prev.wrapping_add(diff);
-                    let bytes = val.to_le_bytes();
+                    let bytes = prev.wrapping_add(diff).to_le_bytes();
                     row[i * 2] = bytes[0];
                     row[i * 2 + 1] = bytes[1];
                 }
             }
             4 => {
                 let samples = row.len() / 4;
-                for i in 1..samples {
+                for i in spp..samples {
+                    let p = (i - spp) * 4;
                     let off = i * 4;
-                    let prev = u32::from_le_bytes([
-                        row[off - 4],
-                        row[off - 3],
-                        row[off - 2],
-                        row[off - 1],
-                    ]);
+                    let prev = u32::from_le_bytes([row[p], row[p + 1], row[p + 2], row[p + 3]]);
                     let diff =
                         u32::from_le_bytes([row[off], row[off + 1], row[off + 2], row[off + 3]]);
-                    let val = prev.wrapping_add(diff);
-                    let bytes = val.to_le_bytes();
+                    let bytes = prev.wrapping_add(diff).to_le_bytes();
                     row[off..off + 4].copy_from_slice(&bytes);
                 }
             }
             _ => {
-                // Fallback: byte-level accumulation (may not be correct for >1 bps)
-                for i in bytes_per_sample..row.len() {
-                    row[i] = row[i].wrapping_add(row[i - bytes_per_sample]);
+                // Fallback: byte-level accumulation with the pixel stride
+                // (may not be correct for >1 bps).
+                let stride = bytes_per_sample * spp;
+                for i in stride..row.len() {
+                    row[i] = row[i].wrapping_add(row[i - stride]);
                 }
             }
         }
@@ -645,5 +655,31 @@ mod tests {
             result.is_err(),
             "truncated 15-bit buffer should fail decode"
         );
+    }
+
+    #[test]
+    fn horizontal_differencing_multi_uses_pixel_stride() {
+        // Two pixels of three u8 samples, one row: encoded as first pixel
+        // verbatim then per-sample deltas against the previous pixel.
+        let mut row = vec![10u8, 20, 30, 1, 2, 3];
+        undo_horizontal_differencing_multi(&mut row, 2, 1, 3);
+        assert_eq!(row, vec![10, 20, 30, 11, 22, 33]);
+        // u16, two pixels, two samples.
+        let mut row16: Vec<u8> = [100u16, 200, 5, 7]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        undo_horizontal_differencing_multi(&mut row16, 2, 2, 2);
+        let got: Vec<u16> = row16
+            .chunks(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        assert_eq!(got, vec![100, 200, 105, 207]);
+        // spp = 1 matches the single-sample function.
+        let mut a = vec![1u8, 1, 1, 1];
+        let mut b = a.clone();
+        undo_horizontal_differencing(&mut a, 4, 1);
+        undo_horizontal_differencing_multi(&mut b, 4, 1, 1);
+        assert_eq!(a, b);
     }
 }

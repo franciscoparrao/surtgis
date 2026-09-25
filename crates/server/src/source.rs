@@ -3,8 +3,8 @@
 //! Two kinds in M0:
 //!
 //! - **HTTP(S) COG**, read through `surtgis_cloud::CogReader` at the
-//!   overview closest to the requested resolution. Single band (the reader
-//!   is single-band today).
+//!   overview closest to the requested resolution, every band of a
+//!   pixel-interleaved file.
 //! - **Local GeoTIFF** under the configured root, read by window through
 //!   `surtgis_core::io::window`: only the strips or tiles a tile touches
 //!   are decoded, at the overview level matching the tile resolution, so
@@ -239,7 +239,7 @@ impl Source {
                     width: m.width as usize,
                     height: m.height as usize,
                     pixel_size: m.geo_transform.pixel_width.abs(),
-                    bands: 1,
+                    bands: reader.bands(),
                     overviews: m.num_overviews,
                     nodata: m.nodata,
                 })
@@ -309,22 +309,24 @@ impl Source {
                     max_x: bounds.max_x,
                     max_y: bounds.max_y,
                 };
-                let raster: Raster<f64> = match reader
-                    .read_bbox::<f64>(&bbox, if level == 0 { None } else { Some(level) })
+                let rasters: Vec<Raster<f64>> = match reader
+                    .read_bbox_bands::<f64>(&bbox, if level == 0 { None } else { Some(level) })
                     .await
                 {
                     Ok(r) => r,
                     Err(surtgis_cloud::CloudError::BBoxOutside) => return Err(ServeError::Outside),
                     Err(e) => return Err(ServeError::Source(format!("read failed: {e}"))),
                 };
-                let mut raster = raster;
-                if raster.nodata().is_none() {
-                    raster.set_nodata(m.nodata);
-                }
-                Ok(Window {
-                    bands: vec![nan_nodata(raster)],
-                    epsg,
-                })
+                let bands = rasters
+                    .into_iter()
+                    .map(|mut r| {
+                        if r.nodata().is_none() {
+                            r.set_nodata(m.nodata);
+                        }
+                        nan_nodata(r)
+                    })
+                    .collect();
+                Ok(Window { bands, epsg })
             }
         }
     }
