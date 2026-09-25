@@ -36,6 +36,7 @@
   <select id="alg">
     <option value="hillshade">hillshade</option>
     <option value="slope">slope</option>
+    <option value="rgb">rgb (true colour, orthomosaics)</option>
     <option value="value">value (raw band)</option>
     <option value="formula">formula (ASI grammar)</option>
   </select>
@@ -85,7 +86,7 @@
       if ($('bands').value.trim()) p.set('bands', $('bands').value.trim());
     } else {
       p.set('alg', alg);
-      if (alg === 'value' && $('bands').value.trim()) p.set('bands', $('bands').value.trim());
+      if ((alg === 'value' || alg === 'rgb') && $('bands').value.trim()) p.set('bands', $('bands').value.trim());
     }
     if ($('params').value.trim()) p.set('params', $('params').value.trim());
     p.set('cmap', $('cmap').value);
@@ -109,7 +110,7 @@
   }
   $('go').addEventListener('click', () => show().catch(e => { $('status').textContent = 'Error: ' + e; }));
   $('alg').addEventListener('change', () => {
-    const d = { hillshade: 'azimuth:315,altitude:45', slope: 'units:degrees', value: '', formula: '' };
+    const d = { hillshade: 'azimuth:315,altitude:45', slope: 'units:degrees', rgb: '', value: '', formula: '' };
     $('params').placeholder = d[$('alg').value];
   });
 </script>

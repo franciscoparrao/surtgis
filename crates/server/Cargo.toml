@@ -15,6 +15,7 @@ surtgis-core = { path = "../core", features = ["projections"] }
 surtgis-algorithms = { path = "../algorithms", default-features = false }
 surtgis-colormap = { path = "../colormap" }
 surtgis-cloud = { path = "../cloud", features = ["native"] }
+surtgis-ecw = { path = "../ecw", optional = true }
 
 axum = { workspace = true }
 tokio = { workspace = true, features = ["net", "macros", "signal"] }
@@ -27,6 +28,10 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 ndarray = { workspace = true }
 lru = { workspace = true }
+
+[features]
+# ECW (ER Mapper) orthomosaics as a local source, through the native decoder.
+ecw = ["dep:surtgis-ecw"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

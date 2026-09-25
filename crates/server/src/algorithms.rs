@@ -63,6 +63,14 @@ pub fn catalog() -> Vec<AlgoSpec> {
             default_range: Some([-1.0, 1.0]),
         },
         AlgoSpec {
+            name: "rgb",
+            class: "local",
+            gutter: 0,
+            description: "True-colour composite of three bands, no colormap (`?bands=1,2,3`, default; values 0–255 or `rescale`)",
+            params: vec![],
+            default_range: Some([0.0, 255.0]),
+        },
+        AlgoSpec {
             name: "value",
             class: "local",
             gutter: 0,
@@ -85,6 +93,11 @@ pub enum Op {
     Slope(SlopeParams),
     /// Hillshade.
     Hillshade(HillshadeParams),
+    /// True-colour composite; `bands` are 1-based R, G, B indices.
+    Rgb {
+        /// Red, green and blue band indices (1-based).
+        bands: [usize; 3],
+    },
     /// Band formula.
     Formula {
         /// Expression in the ASI grammar.
@@ -177,6 +190,20 @@ impl Op {
                     band: b.first().map(|(_, i)| *i).unwrap_or(1),
                 })
             }
+            "rgb" => {
+                let b = parse_bands(bands)?;
+                let idx: Vec<usize> = b.iter().map(|(_, i)| *i).collect();
+                let bands = match idx.as_slice() {
+                    [] => [1, 2, 3],
+                    [r, g, b] => [*r, *g, *b],
+                    _ => {
+                        return Err(ServeError::BadRequest(
+                            "rgb takes exactly three bands".into(),
+                        ));
+                    }
+                };
+                Ok(Op::Rgb { bands })
+            }
             "slope" => {
                 let units = match map.get("units").map(String::as_str).unwrap_or("degrees") {
                     "degrees" | "deg" => SlopeUnits::Degrees,
@@ -208,10 +235,18 @@ impl Op {
         }
     }
 
+    /// The three bands of a true-colour request, if this is one.
+    pub fn rgb_bands(&self) -> Option<[usize; 3]> {
+        match self {
+            Op::Rgb { bands } => Some(*bands),
+            _ => None,
+        }
+    }
+
     /// Extra cells around the tile the operator needs.
     pub fn gutter(&self) -> usize {
         match self {
-            Op::Value { .. } | Op::Formula { .. } => 0,
+            Op::Value { .. } | Op::Rgb { .. } | Op::Formula { .. } => 0,
             Op::Slope(_) | Op::Hillshade(_) => 1,
         }
     }
@@ -220,6 +255,7 @@ impl Op {
     pub fn max_band(&self) -> usize {
         match self {
             Op::Value { band } => *band,
+            Op::Rgb { bands } => *bands.iter().max().unwrap_or(&1),
             Op::Slope(_) | Op::Hillshade(_) => 1,
             Op::Formula { bands, .. } => bands.iter().map(|(_, i)| *i).max().unwrap_or(1),
         }
@@ -229,6 +265,7 @@ impl Op {
     pub fn default_range(&self) -> Option<(f64, f64)> {
         match self {
             Op::Value { .. } => None,
+            Op::Rgb { .. } => Some((0.0, 255.0)),
             Op::Slope(p) => Some(match p.units {
                 SlopeUnits::Percent => (0.0, 100.0),
                 SlopeUnits::Radians => (0.0, 1.0),
@@ -250,6 +287,7 @@ impl Op {
         }
         match self {
             Op::Value { band } => Ok(bands[band - 1].clone()),
+            Op::Rgb { bands: idx } => Ok(bands[idx[0] - 1].clone()),
             Op::Slope(p) => {
                 slope(&bands[0], p.clone()).map_err(|e| ServeError::Compute(e.to_string()))
             }

@@ -153,13 +153,78 @@ pub async fn compute_grid(
     }
     let op = op.clone();
     tokio::task::spawn_blocking(move || -> Result<Raster<f64>, ServeError> {
-        let src_gt = *window.bands[0].transform();
-        let warped = warp::warp(&window.bands, &src_gt, &tf, &grid, Resampling::Bilinear)
-            .map_err(|e| ServeError::Compute(e.to_string()))?;
+        let warped = warp_window(&window.bands, &tf, &grid)?;
         op.run(&warped)
     })
     .await
     .map_err(|e| ServeError::Compute(format!("compute task failed: {e}")))?
+}
+
+fn warp_window(
+    bands: &[Raster<f64>],
+    tf: &Transformer,
+    grid: &GridSpec,
+) -> Result<Vec<Raster<f64>>, ServeError> {
+    let src_gt = *bands[0].transform();
+    warp::warp(bands, &src_gt, tf, grid, Resampling::Bilinear)
+        .map_err(|e| ServeError::Compute(e.to_string()))
+}
+
+/// True-colour tile: warp the three requested bands and pack them as RGBA
+/// (alpha 0 where any band is NaN), scaling `rescale` (default 0–255) to
+/// 0–255.
+async fn render_rgb(
+    state: &AppState,
+    req: &Request,
+    grid: GridSpec,
+    bands: [usize; 3],
+) -> Result<Bytes, ServeError> {
+    let info = req.source.info(&state.local, &state.pool).await?;
+    let tf =
+        Transformer::new(info.epsg, grid.epsg).map_err(|e| ServeError::Source(e.to_string()))?;
+    let src_bounds =
+        warp::source_window(&grid, &tf, 2).map_err(|e| ServeError::Source(e.to_string()))?;
+    let window = req
+        .source
+        .read_window(&state.local, &state.pool, &src_bounds, grid.cols)
+        .await?;
+    let need = *bands.iter().max().unwrap();
+    if window.bands.len() < need {
+        return Err(ServeError::BadRequest(format!(
+            "source has {} band(s), rgb needs band {need}",
+            window.bands.len()
+        )));
+    }
+    let (lo, hi) = req.rescale.unwrap_or((0.0, 255.0));
+    tokio::task::spawn_blocking(move || -> Result<Bytes, ServeError> {
+        let picked: Vec<Raster<f64>> = bands.iter().map(|&i| window.bands[i - 1].clone()).collect();
+        let warped = warp_window(&picked, &tf, &grid)?;
+        let n = TILE_SIZE * TILE_SIZE;
+        let mut rgba = vec![0u8; n * 4];
+        let scale = 255.0 / (hi - lo);
+        for r in 0..TILE_SIZE {
+            for c in 0..TILE_SIZE {
+                let px = (r * TILE_SIZE + c) * 4;
+                let v = [
+                    warped[0].data()[[r, c]],
+                    warped[1].data()[[r, c]],
+                    warped[2].data()[[r, c]],
+                ];
+                if v.iter().any(|x| !x.is_finite()) {
+                    continue;
+                }
+                for k in 0..3 {
+                    rgba[px + k] = ((v[k] - lo) * scale).round().clamp(0.0, 255.0) as u8;
+                }
+                rgba[px + 3] = 255;
+            }
+        }
+        rgba_to_png_bytes(TILE_SIZE as u32, TILE_SIZE as u32, &rgba)
+            .map(Bytes::from)
+            .map_err(|e| ServeError::Compute(e.to_string()))
+    })
+    .await
+    .map_err(|e| ServeError::Compute(format!("render task failed: {e}")))?
 }
 
 /// Parsed request pieces shared by the endpoints.
@@ -202,6 +267,9 @@ pub async fn render_tile(
     let req = parse_request(state, q)?;
     let gutter = req.op.gutter();
     let grid = tiles::grid(z, x, y, gutter);
+    if let Some(bands) = req.op.rgb_bands() {
+        return render_rgb(state, &req, grid, bands).await;
+    }
     let result = compute_grid(state, &req.source, &req.op, grid).await?;
     let (scheme, rescale, default_range) = (req.scheme, req.rescale, req.op.default_range());
     tokio::task::spawn_blocking(move || -> Result<Bytes, ServeError> {
