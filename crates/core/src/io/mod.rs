@@ -7,7 +7,6 @@ mod native;
 mod options;
 pub mod strip_reader;
 pub mod strip_writer;
-#[cfg(not(feature = "gdal"))]
 pub mod window;
 
 // Single GeoTiffOptions struct shared by both backends (see options.rs) —
