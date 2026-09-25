@@ -6335,6 +6335,7 @@ dependencies = [
  "surtgis-cloud",
  "surtgis-colormap",
  "surtgis-core",
+ "surtgis-ecw",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

@@ -31,6 +31,16 @@ breaking changes only ship in a major version and are called out under a
   (formulas need a local multi-band file), local files are read fully into
   memory.
 
+- **SurtGIS Server M1, ECW sources and true-colour tiles.** With the
+  CLI built with `--features server,ecw`, a `.ecw` file under `--root` is a
+  source like any other: the native decoder reads just the window a tile
+  needs at the pyramid level matching its resolution, so a 1.3-gigapixel
+  4-band orthomosaic (31 666 × 41 817, 4 cm) serves tiles from zoom 14 to
+  22 in 20–55 ms uncached, without the vendor SDK. New operator
+  `?alg=rgb` (`&bands=1,2,3` default, `&rescale=` optional) packs three
+  bands straight into an RGBA PNG — alpha 0 outside the footprint — for
+  orthomosaics and imagery; formulas and `value` work on ECW bands too.
+
 - **SurtGIS Server M1, operational core.** Remote readers are pooled per
   URL (`--pool-per-url`, default 4, idle TTL 5 min) instead of re-opened
   per request: neighbouring uncached tiles of a remote COG went from

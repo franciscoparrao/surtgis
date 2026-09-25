@@ -45,7 +45,7 @@ flow = ["dep:surtgis-flow"]
 # `surtgis ecw` — native ECW v2 decoder (no GDAL, no Hexagon SDK). Same
 # path-only situation as flow: surtgis-ecw is publish = false until its
 # licensing review is signed off, so the feature is opt-in.
-ecw = ["dep:surtgis-ecw"]
+ecw = ["dep:surtgis-ecw", "surtgis-server?/ecw"]
 # `surtgis serve` — analysis-first dynamic tile server (docs/surtgis_server_design.md).
 # Same path-only pattern as flow/ecw: surtgis-server is publish = false.
 server = ["dep:surtgis-server"]
