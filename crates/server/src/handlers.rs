@@ -534,7 +534,7 @@ pub async fn algorithms_catalog() -> axum::Json<serde_json::Value> {
 /// `GET /metrics` — Prometheus text exposition.
 pub async fn metrics(State(state): State<Arc<AppState>>) -> Response {
     let (entries, bytes, _, _) = state.tile_cache.stats();
-    let (files, local_bytes, _, _) = state.local.stats();
+    let files = state.local.len();
     let (urls, readers) = state.pool.stats();
     let body = state.metrics.render(&[
         (
@@ -549,13 +549,8 @@ pub async fn metrics(State(state): State<Arc<AppState>>) -> Response {
         ),
         (
             "surtgis_local_sources",
-            "Local sources held in memory.",
+            "Local sources described (metadata cached).",
             files as f64,
-        ),
-        (
-            "surtgis_local_bytes",
-            "Bytes of local sources held in memory.",
-            local_bytes as f64,
         ),
         (
             "surtgis_pool_urls",

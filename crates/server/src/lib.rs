@@ -58,8 +58,6 @@ pub struct ServerConfig {
     pub max_age: u32,
     /// L1 cache of rendered tiles, in MiB (0 disables).
     pub cache_mb: usize,
-    /// Budget for local sources held in memory, in MiB.
-    pub local_cache_mb: usize,
     /// Per-tile deadline, in milliseconds.
     pub timeout_ms: u64,
     /// Tiles rendered concurrently before requests are rejected with 503.
@@ -76,7 +74,6 @@ impl Default for ServerConfig {
             root: None,
             max_age: 3600,
             cache_mb: 256,
-            local_cache_mb: 2048,
             timeout_ms: 30_000,
             max_inflight: 64,
             pool_per_url: 4,
@@ -88,7 +85,7 @@ impl Default for ServerConfig {
 pub struct AppState {
     /// Source policy.
     pub sources: SourceConfig,
-    /// In-memory local sources.
+    /// Metadata of local sources.
     pub local: LocalCache,
     /// Open remote readers.
     pub pool: pool::ReaderPool,
@@ -119,7 +116,7 @@ impl AppState {
                 allow: cfg.allow.clone(),
                 root,
             },
-            local: LocalCache::new(cfg.local_cache_mb << 20),
+            local: LocalCache::default(),
             pool: pool::ReaderPool::new(cfg.pool_per_url, Duration::from_secs(300)),
             tile_cache: cache::ByteLru::new(cfg.cache_mb << 20, |b: &Bytes| b.len()),
             metrics: metrics::Metrics::default(),

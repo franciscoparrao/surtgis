@@ -441,7 +441,7 @@ fn same_type_vec<T: 'static, U: 'static>(v: Vec<U>) -> std::result::Result<Vec<T
 ///   nodata->NaN check happen in the same `map`, instead of casting here
 ///   and normalizing again in a second full-buffer pass in
 ///   `finish_raster`.
-fn cast_and_normalize<T, U>(buf: Vec<U>, nodata: Option<f64>) -> Vec<T>
+pub(crate) fn cast_and_normalize<T, U>(buf: Vec<U>, nodata: Option<f64>) -> Vec<T>
 where
     T: RasterElement,
     U: RasterElement,
@@ -576,7 +576,9 @@ where
 }
 
 /// Attempt to read CRS EPSG code from GeoKeyDirectory tag
-fn read_crs<R: std::io::Read + std::io::Seek>(decoder: &mut Decoder<R>) -> Option<crate::crs::CRS> {
+pub(crate) fn read_crs<R: std::io::Read + std::io::Seek>(
+    decoder: &mut Decoder<R>,
+) -> Option<crate::crs::CRS> {
     let geokeys = decoder.get_tag_u16_vec(Tag::Unknown(34735)).ok()?;
     if geokeys.len() < 4 {
         return None;
@@ -598,7 +600,7 @@ fn read_crs<R: std::io::Read + std::io::Seek>(decoder: &mut Decoder<R>) -> Optio
 }
 
 /// Attempt to read GeoTransform from TIFF tags
-fn read_geotransform<R: std::io::Read + std::io::Seek>(
+pub(crate) fn read_geotransform<R: std::io::Read + std::io::Seek>(
     decoder: &mut Decoder<R>,
 ) -> Result<GeoTransform> {
     // ModelPixelScaleTag = 33550
@@ -695,7 +697,9 @@ fn parse_non_identity_scale_offset(xml: &str) -> Option<(Option<f64>, Option<f64
 }
 
 /// Read GDAL_NODATA tag (42113) — stored as ASCII string, parsed to f64.
-fn read_nodata<R: std::io::Read + std::io::Seek>(decoder: &mut Decoder<R>) -> Option<f64> {
+pub(crate) fn read_nodata<R: std::io::Read + std::io::Seek>(
+    decoder: &mut Decoder<R>,
+) -> Option<f64> {
     let s = match decoder.get_tag_ascii_string(Tag::Unknown(42113)) {
         Ok(s) => s,
         // Fallback: SurtGIS <= 0.16.3 wrote this tag via as_bytes(),
