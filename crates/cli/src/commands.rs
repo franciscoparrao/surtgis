@@ -418,9 +418,6 @@ pub enum Commands {
         /// In-memory cache of rendered tiles, in MiB (0 disables)
         #[arg(long, default_value_t = 256)]
         cache_mb: usize,
-        /// Budget for local sources held in memory, in MiB
-        #[arg(long, default_value_t = 2048)]
-        local_cache_mb: usize,
         /// Per-tile deadline, in milliseconds
         #[arg(long, default_value_t = 30_000)]
         timeout_ms: u64,

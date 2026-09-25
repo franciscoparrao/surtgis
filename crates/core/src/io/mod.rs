@@ -7,6 +7,7 @@ mod native;
 mod options;
 pub mod strip_reader;
 pub mod strip_writer;
+pub mod window;
 
 // Single GeoTiffOptions struct shared by both backends (see options.rs) —
 // no longer feature-dependent, so the type is stable regardless of which

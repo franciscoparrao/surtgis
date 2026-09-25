@@ -5,9 +5,10 @@
 //! - **HTTP(S) COG**, read through `surtgis_cloud::CogReader` at the
 //!   overview closest to the requested resolution. Single band (the reader
 //!   is single-band today).
-//! - **Local GeoTIFF** under the configured root, read once in full and
-//!   kept in memory (every band), then cropped per request. Fine for DEMs
-//!   and demo-sized imagery; windowed local reads are an M1 item.
+//! - **Local GeoTIFF** under the configured root, read by window through
+//!   `surtgis_core::io::window`: only the strips or tiles a tile touches
+//!   are decoded, at the overview level matching the tile resolution, so
+//!   memory is bounded by the window and gigapixel local COGs serve fine.
 //! - **Local ECW** under the root (feature `ecw`), decoded per request
 //!   through `surtgis_ecw` at the pyramid level that matches the tile —
 //!   gigapixel orthomosaics without the vendor SDK.
@@ -20,12 +21,11 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use ndarray::s;
 use surtgis_cloud::BBox;
 
 use crate::pool::ReaderPool;
 use surtgis_core::Raster;
-use surtgis_core::io::read_geotiff_bands;
+use surtgis_core::io::window::{GeoTiffInfo, geotiff_info, read_geotiff_window_bands};
 use surtgis_core::raster::GeoTransform;
 use surtgis_core::warp::Bounds;
 
@@ -140,57 +140,37 @@ pub struct Window {
     pub epsg: u32,
 }
 
-/// In-memory copies of local sources, bounded by a byte budget (LRU).
+/// Parsed metadata of local sources (size, georeferencing, chunking),
+/// so a tile does not re-read the IFD chain of a large COG.
+#[derive(Default)]
 pub struct LocalCache {
-    entries: crate::cache::ByteLru<PathBuf, Arc<Vec<Raster<f64>>>>,
-}
-
-fn bands_bytes(b: &Arc<Vec<Raster<f64>>>) -> usize {
-    b.iter()
-        .map(|r| {
-            let (rows, cols) = r.shape();
-            rows * cols * std::mem::size_of::<f64>()
-        })
-        .sum()
+    entries: std::sync::Mutex<std::collections::HashMap<PathBuf, Arc<GeoTiffInfo>>>,
 }
 
 impl LocalCache {
-    /// Cache holding at most `budget` bytes of decoded rasters.
-    pub fn new(budget: usize) -> Self {
-        Self {
-            entries: crate::cache::ByteLru::new(budget, bands_bytes),
-        }
+    /// Number of local sources described so far.
+    pub fn len(&self) -> usize {
+        self.entries.lock().unwrap().len()
     }
 
-    /// `(files, bytes, hits, misses)`.
-    pub fn stats(&self) -> (usize, usize, u64, u64) {
-        self.entries.stats()
+    /// Whether no local source has been described yet.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
-    fn get_or_load(&self, path: &Path) -> Result<Arc<Vec<Raster<f64>>>, ServeError> {
-        if let Some(b) = self.entries.get(&path.to_path_buf()) {
-            return Ok(b);
+    fn describe(&self, path: &Path) -> Result<Arc<GeoTiffInfo>, ServeError> {
+        if let Some(i) = self.entries.lock().unwrap().get(path) {
+            return Ok(i.clone());
         }
-        let bands: Vec<Raster<f64>> = read_geotiff_bands(path)
-            .map_err(|e| ServeError::Source(format!("failed to read {}: {e}", path.display())))?;
-        if bands.is_empty() {
-            return Err(ServeError::Source(format!(
-                "{} has no bands",
-                path.display()
-            )));
-        }
-        let bands: Vec<Raster<f64>> = bands.into_iter().map(nan_nodata).collect();
-        let arc = Arc::new(bands);
-        if bands_bytes(&arc) > self.entries.budget() {
-            return Err(ServeError::Source(format!(
-                "{} needs {} MiB in memory, over the --local-cache-mb budget of {} MiB",
-                path.display(),
-                bands_bytes(&arc) >> 20,
-                self.entries.budget() >> 20
-            )));
-        }
-        self.entries.put(path.to_path_buf(), arc.clone());
-        Ok(arc)
+        let info =
+            Arc::new(geotiff_info(path).map_err(|e| {
+                ServeError::Source(format!("failed to read {}: {e}", path.display()))
+            })?);
+        self.entries
+            .lock()
+            .unwrap()
+            .insert(path.to_path_buf(), info.clone());
+        Ok(info)
     }
 }
 
@@ -221,38 +201,6 @@ fn bounds_of(gt: &GeoTransform, rows: usize, cols: usize) -> Bounds {
     }
 }
 
-/// Crop `bands` to the cells intersecting `bounds` (north-up transform).
-fn crop(bands: &[Raster<f64>], bounds: &Bounds) -> Result<Vec<Raster<f64>>, ServeError> {
-    let first = &bands[0];
-    let gt = *first.transform();
-    let (rows, cols) = first.shape();
-    let pw = gt.pixel_width;
-    let ph = gt.pixel_height.abs();
-    let c0 = ((bounds.min_x - gt.origin_x) / pw).floor().max(0.0) as usize;
-    let c1 = (((bounds.max_x - gt.origin_x) / pw).ceil().max(0.0) as usize).min(cols);
-    let r0 = ((gt.origin_y - bounds.max_y) / ph).floor().max(0.0) as usize;
-    let r1 = (((gt.origin_y - bounds.min_y) / ph).ceil().max(0.0) as usize).min(rows);
-    if c0 >= c1 || r0 >= r1 {
-        return Err(ServeError::Outside);
-    }
-    let sub_gt = GeoTransform::new(
-        gt.origin_x + c0 as f64 * pw,
-        gt.origin_y + r0 as f64 * gt.pixel_height,
-        pw,
-        gt.pixel_height,
-    );
-    Ok(bands
-        .iter()
-        .map(|b| {
-            let mut out = Raster::from_array(b.data().slice(s![r0..r1, c0..c1]).to_owned());
-            out.set_transform(sub_gt);
-            out.set_crs(b.crs().cloned());
-            out.set_nodata(b.nodata());
-            out
-        })
-        .collect())
-}
-
 impl Source {
     /// Describe the source.
     pub async fn info(
@@ -262,20 +210,17 @@ impl Source {
     ) -> Result<SourceInfo, ServeError> {
         match self {
             Source::Local(path) => {
-                let bands = cache.get_or_load(path)?;
-                let b = &bands[0];
-                let (rows, cols) = b.shape();
-                let gt = b.transform();
-                let bb = bounds_of(gt, rows, cols);
+                let info = cache.describe(path)?;
+                let bb = bounds_of(&info.transform, info.height as usize, info.width as usize);
                 Ok(SourceInfo {
-                    epsg: epsg_of(b.crs(), "local")?,
+                    epsg: epsg_of(info.crs.as_ref(), "local")?,
                     bounds: [bb.min_x, bb.min_y, bb.max_x, bb.max_y],
-                    width: cols,
-                    height: rows,
-                    pixel_size: gt.pixel_width.abs(),
-                    bands: bands.len(),
-                    overviews: 0,
-                    nodata: b.nodata(),
+                    width: info.width as usize,
+                    height: info.height as usize,
+                    pixel_size: info.transform.pixel_width.abs(),
+                    bands: info.bands,
+                    overviews: info.levels.len() - 1,
+                    nodata: info.nodata,
                 })
             }
             #[cfg(feature = "ecw")]
@@ -313,10 +258,32 @@ impl Source {
     ) -> Result<Window, ServeError> {
         match self {
             Source::Local(path) => {
-                let bands = cache.get_or_load(path)?;
-                let epsg = epsg_of(bands[0].crs(), "local")?;
-                let bands = crop(&bands, bounds)?;
-                Ok(Window { bands, epsg })
+                let info = cache.describe(path)?;
+                let epsg = epsg_of(info.crs.as_ref(), "local")?;
+                // Coarsest level that still gives ≥ 1 source pixel per output pixel.
+                let scale =
+                    bounds.width() / target_px.max(1) as f64 / info.transform.pixel_width.abs();
+                let level = info.level_for_scale(scale);
+                let Some(pw) = info.window_for_bounds(
+                    level,
+                    bounds.min_x,
+                    bounds.min_y,
+                    bounds.max_x,
+                    bounds.max_y,
+                ) else {
+                    return Err(ServeError::Outside);
+                };
+                let (path, info) = (path.clone(), info.clone());
+                let bands = tokio::task::spawn_blocking(move || {
+                    read_geotiff_window_bands::<f64, _>(&path, &info, level, &pw)
+                        .map_err(|e| ServeError::Source(format!("window read failed: {e}")))
+                })
+                .await
+                .map_err(|e| ServeError::Source(format!("read task failed: {e}")))??;
+                Ok(Window {
+                    bands: bands.into_iter().map(nan_nodata).collect(),
+                    epsg,
+                })
             }
             #[cfg(feature = "ecw")]
             Source::Ecw(path) => ecw::read_window(path, bounds, target_px).await,
@@ -553,44 +520,6 @@ mod tests {
         assert!(matches!(
             Source::resolve("https://example.org/cogs/a.tif", &no_root),
             Err(ServeError::Forbidden(_))
-        ));
-    }
-
-    #[test]
-    fn crop_selects_the_intersecting_cells() {
-        let mut r = Raster::<f64>::new(10, 10);
-        for i in 0..10 {
-            for j in 0..10 {
-                r.data_mut()[[i, j]] = (i * 10 + j) as f64;
-            }
-        }
-        r.set_transform(GeoTransform::new(100.0, 200.0, 10.0, -10.0));
-        let sub = crop(
-            std::slice::from_ref(&r),
-            &Bounds {
-                min_x: 125.0,
-                min_y: 155.0,
-                max_x: 145.0,
-                max_y: 175.0,
-            },
-        )
-        .unwrap();
-        // x 125..145 → cols 2..5, y 155..175 → rows 2..5
-        assert_eq!(sub[0].shape(), (3, 3));
-        assert_eq!(sub[0].data()[[0, 0]], 22.0);
-        assert_eq!(sub[0].transform().origin_x, 120.0);
-        assert_eq!(sub[0].transform().origin_y, 180.0);
-        assert!(matches!(
-            crop(
-                std::slice::from_ref(&r),
-                &Bounds {
-                    min_x: 500.0,
-                    min_y: 500.0,
-                    max_x: 600.0,
-                    max_y: 600.0
-                }
-            ),
-            Err(ServeError::Outside)
         ));
     }
 
