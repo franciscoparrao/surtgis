@@ -4,12 +4,35 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
+/// Command-line arguments of `surtgis serve`.
+pub struct Args {
+    /// Address to listen on (`host:port`).
+    pub bind: String,
+    /// Directory local sources must live under.
+    pub root: Option<PathBuf>,
+    /// URL prefixes remote sources may start with.
+    pub allow: Vec<String>,
+    /// `Cache-Control: max-age` for tiles.
+    pub max_age: u32,
+    /// L1 tile cache, MiB.
+    pub cache_mb: usize,
+    /// Local sources budget, MiB.
+    pub local_cache_mb: usize,
+    /// Per-tile deadline, ms.
+    pub timeout_ms: u64,
+    /// Concurrent renders before 503.
+    pub max_inflight: usize,
+    /// Open COG readers per URL.
+    pub pool_per_url: usize,
+}
+
 /// Run the server until Ctrl-C.
-pub fn handle(bind: String, root: Option<PathBuf>, allow: Vec<String>, max_age: u32) -> Result<()> {
-    let bind = bind
+pub fn handle(args: Args) -> Result<()> {
+    let bind = args
+        .bind
         .parse()
-        .with_context(|| format!("--bind '{bind}' is not a socket address (host:port)"))?;
-    if root.is_none() && allow.is_empty() {
+        .with_context(|| format!("--bind '{}' is not a socket address (host:port)", args.bind))?;
+    if args.root.is_none() && args.allow.is_empty() {
         eprintln!(
             "warning: neither --root nor --allow given: every ?url= will be refused. \
              Pass --root <dir> for local GeoTIFFs and/or --allow <url-prefix> for remote COGs."
@@ -17,8 +40,13 @@ pub fn handle(bind: String, root: Option<PathBuf>, allow: Vec<String>, max_age: 
     }
     surtgis_server::serve_blocking(surtgis_server::ServerConfig {
         bind,
-        allow,
-        root,
-        max_age,
+        allow: args.allow,
+        root: args.root,
+        max_age: args.max_age,
+        cache_mb: args.cache_mb,
+        local_cache_mb: args.local_cache_mb,
+        timeout_ms: args.timeout_ms,
+        max_inflight: args.max_inflight,
+        pool_per_url: args.pool_per_url,
     })
 }

@@ -29,7 +29,24 @@ breaking changes only ship in a major version and are called out under a
   (`docs/surtgis_server_design.md` §3); global ones are materialised
   offline and served as sources. M0 limits: remote COGs are single-band
   (formulas need a local multi-band file), local files are read fully into
-  memory, no tile cache yet.
+  memory.
+
+- **SurtGIS Server M1, operational core.** Remote readers are pooled per
+  URL (`--pool-per-url`, default 4, idle TTL 5 min) instead of re-opened
+  per request: neighbouring uncached tiles of a remote COG went from
+  0.4–2.4 s to 7–55 ms. Rendered tiles go to a byte-bounded L1 LRU
+  (`--cache-mb`, default 256; `X-Cache: hit|miss`), and a request whose
+  `If-None-Match` carries the tile's ETag gets 304. Local sources held in
+  memory are bounded too (`--local-cache-mb`, default 2048; a file over
+  the budget is refused with a clear message). Limits: per-tile deadline
+  (`--timeout-ms`, default 30 s → 504) and a render concurrency cap
+  (`--max-inflight`, default 64 → 503 with `Retry-After`). New endpoints:
+  `/statistics?url=…&alg=…[&size=512]` evaluates the operator on a coarse
+  grid over the whole source and returns count/min/max/mean/std/p2/p50/p98
+  plus the `rescale` they suggest; `/metrics` exposes Prometheus text
+  (tiles by operator and outcome, render-time histogram per operator,
+  cache hits/misses, rejections, timeouts, cache/pool gauges). 5xx
+  responses are logged at WARN, not ERROR.
 
 - **`surtgis_core::warp`** (feature `projections`, pulls in proj4rs — pure
   Rust, so it builds natively, in WASM and in a server): the inverse-mapping

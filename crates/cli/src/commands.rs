@@ -415,6 +415,21 @@ pub enum Commands {
         /// Cache-Control max-age for tiles, in seconds
         #[arg(long, default_value_t = 3600)]
         max_age: u32,
+        /// In-memory cache of rendered tiles, in MiB (0 disables)
+        #[arg(long, default_value_t = 256)]
+        cache_mb: usize,
+        /// Budget for local sources held in memory, in MiB
+        #[arg(long, default_value_t = 2048)]
+        local_cache_mb: usize,
+        /// Per-tile deadline, in milliseconds
+        #[arg(long, default_value_t = 30_000)]
+        timeout_ms: u64,
+        /// Tiles rendered concurrently before requests get 503
+        #[arg(long, default_value_t = 64)]
+        max_inflight: usize,
+        /// Open COG readers kept per URL
+        #[arg(long, default_value_t = 4)]
+        pool_per_url: usize,
     },
     /// Read ER Mapper ECW v2 imagery with the native decoder (no GDAL)
     #[cfg(feature = "ecw")]

@@ -1,6 +1,8 @@
 //! HTTP handlers.
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
@@ -11,7 +13,7 @@ use surtgis_colormap::{
     ColorScheme, ColormapParams, auto_params, raster_to_rgba, rgba_to_png_bytes,
 };
 use surtgis_core::Raster;
-use surtgis_core::warp::{self, Resampling, Transformer};
+use surtgis_core::warp::{self, Bounds, GridSpec, Resampling, Transformer};
 
 use crate::AppState;
 use crate::algorithms::{self, Op};
@@ -19,7 +21,7 @@ use crate::error::ServeError;
 use crate::source::Source;
 use crate::tiles::{self, TILE_EPSG, TILE_SIZE};
 
-/// Query string of `/tiles` and `/tilejson`.
+/// Query string of `/tiles`, `/tilejson` and `/statistics`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct TileQuery {
     /// Source: COG URL or local path.
@@ -37,6 +39,8 @@ pub struct TileQuery {
     pub rescale: Option<String>,
     /// Operator parameters `key:value,...`.
     pub params: Option<String>,
+    /// `/statistics` only: side of the sampling grid in pixels (default 512).
+    pub size: Option<usize>,
 }
 
 /// Query string of `/info`.
@@ -108,7 +112,7 @@ fn transparent_png() -> Bytes {
     Bytes::from(rgba_to_png_bytes(TILE_SIZE as u32, TILE_SIZE as u32, &rgba).unwrap_or_default())
 }
 
-fn png_response(bytes: Bytes, etag: &str, max_age: u32) -> Response {
+fn png_response(bytes: Bytes, etag: &str, max_age: u32, cached: bool) -> Response {
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("image/png"));
     headers.insert(
@@ -118,13 +122,71 @@ fn png_response(bytes: Bytes, etag: &str, max_age: u32) -> Response {
     if let Ok(v) = HeaderValue::from_str(&format!("\"{etag}\"")) {
         headers.insert(header::ETAG, v);
     }
+    headers.insert(
+        axum::http::HeaderName::from_static("x-cache"),
+        HeaderValue::from_static(if cached { "hit" } else { "miss" }),
+    );
     (StatusCode::OK, headers, bytes).into_response()
 }
 
-/// Render tile `(z, x, y)` for the query. This is the whole pipeline of the
-/// design document §4.2: validate the source, tile → grid + gutter, read
-/// the source window, warp onto the grid, run the operator, crop, colour,
-/// encode.
+/// Run `op` over `grid`: read the source window it needs, warp it onto
+/// the grid and apply the operator. Shared by tiles and `/statistics`.
+pub async fn compute_grid(
+    state: &AppState,
+    source: &Source,
+    op: &Op,
+    grid: GridSpec,
+) -> Result<Raster<f64>, ServeError> {
+    let info = source.info(&state.local, &state.pool).await?;
+    let tf =
+        Transformer::new(info.epsg, grid.epsg).map_err(|e| ServeError::Source(e.to_string()))?;
+    // 2 extra target cells of bilinear support around the grid.
+    let src_bounds =
+        warp::source_window(&grid, &tf, 2).map_err(|e| ServeError::Source(e.to_string()))?;
+    let window = source
+        .read_window(&state.local, &state.pool, &src_bounds, grid.cols)
+        .await?;
+    if window.epsg != info.epsg {
+        return Err(ServeError::Source(
+            "source CRS changed between reads".into(),
+        ));
+    }
+    let op = op.clone();
+    tokio::task::spawn_blocking(move || -> Result<Raster<f64>, ServeError> {
+        let src_gt = *window.bands[0].transform();
+        let warped = warp::warp(&window.bands, &src_gt, &tf, &grid, Resampling::Bilinear)
+            .map_err(|e| ServeError::Compute(e.to_string()))?;
+        op.run(&warped)
+    })
+    .await
+    .map_err(|e| ServeError::Compute(format!("compute task failed: {e}")))?
+}
+
+/// Parsed request pieces shared by the endpoints.
+struct Request {
+    source: Source,
+    op: Op,
+    scheme: ColorScheme,
+    rescale: Option<(f64, f64)>,
+}
+
+fn parse_request(state: &AppState, q: &TileQuery) -> Result<Request, ServeError> {
+    Ok(Request {
+        source: Source::resolve(&q.url, &state.sources)?,
+        op: Op::parse(
+            q.alg.as_deref(),
+            q.formula.as_deref(),
+            q.bands.as_deref(),
+            q.params.as_deref(),
+        )?,
+        scheme: parse_cmap(q.cmap.as_deref())?,
+        rescale: parse_rescale(q.rescale.as_deref())?,
+    })
+}
+
+/// Render tile `(z, x, y)` for the query: the pipeline of the design
+/// document §4.2 — validate, tile → grid + gutter, read, warp, operator,
+/// crop, colour, encode.
 pub async fn render_tile(
     state: &AppState,
     z: u8,
@@ -137,45 +199,14 @@ pub async fn render_tile(
             "tile {z}/{x}/{y} does not exist"
         )));
     }
-    let source = Source::resolve(&q.url, &state.sources)?;
-    let op = Op::parse(
-        q.alg.as_deref(),
-        q.formula.as_deref(),
-        q.bands.as_deref(),
-        q.params.as_deref(),
-    )?;
-    let scheme = parse_cmap(q.cmap.as_deref())?;
-    let rescale = parse_rescale(q.rescale.as_deref())?;
-
-    let gutter = op.gutter();
+    let req = parse_request(state, q)?;
+    let gutter = req.op.gutter();
     let grid = tiles::grid(z, x, y, gutter);
-
-    // Source CRS → the window to read (2 extra target cells of bilinear support).
-    let info_epsg = match &source {
-        Source::Local(_) | Source::Http(_) => source.info(&state.local).await?.epsg,
-    };
-    let tf =
-        Transformer::new(info_epsg, TILE_EPSG).map_err(|e| ServeError::Source(e.to_string()))?;
-    let src_bounds =
-        warp::source_window(&grid, &tf, 2).map_err(|e| ServeError::Source(e.to_string()))?;
-    let window = source
-        .read_window(&state.local, &src_bounds, grid.cols)
-        .await?;
-    if window.epsg != info_epsg {
-        return Err(ServeError::Source(
-            "source CRS changed between reads".into(),
-        ));
-    }
-
-    // CPU work off the async runtime.
-    let max_age = state.max_age;
-    let png = tokio::task::spawn_blocking(move || -> Result<Bytes, ServeError> {
-        let src_gt = *window.bands[0].transform();
-        let warped = warp::warp(&window.bands, &src_gt, &tf, &grid, Resampling::Bilinear)
-            .map_err(|e| ServeError::Compute(e.to_string()))?;
-        let result = op.run(&warped)?;
+    let result = compute_grid(state, &req.source, &req.op, grid).await?;
+    let (scheme, rescale, default_range) = (req.scheme, req.rescale, req.op.default_range());
+    tokio::task::spawn_blocking(move || -> Result<Bytes, ServeError> {
         let tile = crop_gutter(&result, gutter);
-        let params = match rescale.or(op.default_range()) {
+        let params = match rescale.or(default_range) {
             Some((min, max)) => ColormapParams::with_range(scheme, min, max),
             None => auto_params(&tile, scheme),
         };
@@ -185,9 +216,7 @@ pub async fn render_tile(
             .map_err(|e| ServeError::Compute(e.to_string()))
     })
     .await
-    .map_err(|e| ServeError::Compute(format!("render task failed: {e}")))??;
-    let _ = max_age;
-    Ok(png)
+    .map_err(|e| ServeError::Compute(format!("render task failed: {e}")))?
 }
 
 fn etag_for(z: u8, x: u32, y: u32, q: &TileQuery) -> String {
@@ -200,10 +229,19 @@ fn etag_for(z: u8, x: u32, y: u32, q: &TileQuery) -> String {
     format!("{:016x}", h.finish())
 }
 
+fn alg_label(q: &TileQuery) -> String {
+    if q.formula.is_some() {
+        "formula".into()
+    } else {
+        q.alg.clone().unwrap_or_else(|| "value".into())
+    }
+}
+
 /// `GET /tiles/{z}/{x}/{y}.png?url=…`
 pub async fn tile(
     State(state): State<Arc<AppState>>,
     Path((z, x, y_ext)): Path<(u8, u32, String)>,
+    headers: HeaderMap,
     Query(q): Query<TileQuery>,
 ) -> Response {
     let y_str = y_ext.strip_suffix(".png").unwrap_or(&y_ext);
@@ -211,31 +249,67 @@ pub async fn tile(
         return ServeError::BadRequest(format!("bad tile row '{y_ext}'")).into_response();
     };
     let etag = etag_for(z, x, y, &q);
-    match render_tile(&state, z, x, y, &q).await {
-        Ok(png) => png_response(png, &etag, state.max_age),
-        Err(ServeError::Outside) => png_response(transparent_png(), &etag, state.max_age),
-        Err(e) => {
+    let alg = alg_label(&q);
+
+    // Conditional request: the ETag is a pure function of the query.
+    if headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.contains(etag.as_str()))
+    {
+        state.metrics.tile(&alg, "not_modified");
+        return StatusCode::NOT_MODIFIED.into_response();
+    }
+    if let Some(png) = state.tile_cache.get(&etag) {
+        state.metrics.cache_hits.fetch_add(1, Ordering::Relaxed);
+        state.metrics.tile(&alg, "cached");
+        return png_response(png, &etag, state.max_age, true);
+    }
+    state.metrics.cache_misses.fetch_add(1, Ordering::Relaxed);
+
+    let Ok(_permit) = state.inflight.try_acquire() else {
+        state.metrics.rejected.fetch_add(1, Ordering::Relaxed);
+        state.metrics.tile(&alg, "rejected");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [(header::RETRY_AFTER, "1")],
+            "too many tiles in flight",
+        )
+            .into_response();
+    };
+
+    let started = Instant::now();
+    let outcome = tokio::time::timeout(state.timeout, render_tile(&state, z, x, y, &q)).await;
+    let elapsed = started.elapsed().as_secs_f64();
+    match outcome {
+        Ok(Ok(png)) => {
+            state.metrics.observe(&alg, elapsed);
+            state.metrics.tile(&alg, "ok");
+            state.tile_cache.put(etag.clone(), png.clone());
+            png_response(png, &etag, state.max_age, false)
+        }
+        Ok(Err(ServeError::Outside)) => {
+            state.metrics.tile(&alg, "empty");
+            let png = transparent_png();
+            state.tile_cache.put(etag.clone(), png.clone());
+            png_response(png, &etag, state.max_age, false)
+        }
+        Ok(Err(e)) => {
+            state.metrics.tile(&alg, "error");
             tracing::warn!(tile = %format!("{z}/{x}/{y}"), url = %q.url, error = %e, "tile failed");
             e.into_response()
+        }
+        Err(_) => {
+            state.metrics.timeouts.fetch_add(1, Ordering::Relaxed);
+            state.metrics.tile(&alg, "timeout");
+            tracing::warn!(tile = %format!("{z}/{x}/{y}"), url = %q.url, "tile timed out");
+            (StatusCode::GATEWAY_TIMEOUT, "tile timed out").into_response()
         }
     }
 }
 
-/// `GET /tilejson?url=…` — TileJSON 3.0 for the same query.
-pub async fn tilejson(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Query(q): Query<TileQuery>,
-    raw: axum::extract::RawQuery,
-) -> Result<axum::Json<serde_json::Value>, ServeError> {
-    let source = Source::resolve(&q.url, &state.sources)?;
-    Op::parse(
-        q.alg.as_deref(),
-        q.formula.as_deref(),
-        q.bands.as_deref(),
-        q.params.as_deref(),
-    )?;
-    let info = source.info(&state.local).await?;
+/// Source bounds in WGS84 as `[w, s, e, n]`.
+fn bounds_wgs84(info: &crate::source::SourceInfo) -> Result<[f64; 4], ServeError> {
     let tf = Transformer::new(info.epsg, 4326).map_err(|e| ServeError::Source(e.to_string()))?;
     let corners = [
         (info.bounds[0], info.bounds[1]),
@@ -252,6 +326,19 @@ pub async fn tilejson(
             b[3] = b[3].max(lat);
         }
     }
+    Ok(b)
+}
+
+/// `GET /tilejson?url=…` — TileJSON 3.0 for the same query.
+pub async fn tilejson(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(q): Query<TileQuery>,
+    raw: axum::extract::RawQuery,
+) -> Result<axum::Json<serde_json::Value>, ServeError> {
+    let req = parse_request(&state, &q)?;
+    let info = req.source.info(&state.local, &state.pool).await?;
+    let b = bounds_wgs84(&info)?;
     let host = headers
         .get(header::HOST)
         .and_then(|h| h.to_str().ok())
@@ -262,7 +349,10 @@ pub async fn tilejson(
         .unwrap_or("http");
     let query = raw.0.unwrap_or_default();
     // Native pixel size → the zoom whose resolution is about as fine.
-    let native_res_m = if tf.src_is_geographic() {
+    let native_res_m = if Transformer::new(info.epsg, 4326)
+        .map(|t| t.src_is_geographic())
+        .unwrap_or(false)
+    {
         info.pixel_size * 111_320.0
     } else {
         info.pixel_size
@@ -273,7 +363,7 @@ pub async fn tilejson(
         .min(24);
     Ok(axum::Json(serde_json::json!({
         "tilejson": "3.0.0",
-        "name": q.alg.clone().or(q.formula.clone()).unwrap_or_else(|| "value".into()),
+        "name": alg_label(&q),
         "tiles": [format!("{scheme}://{host}/tiles/{{z}}/{{x}}/{{y}}.png?{query}")],
         "bounds": b,
         "minzoom": 0,
@@ -283,13 +373,84 @@ pub async fn tilejson(
     })))
 }
 
+/// `GET /statistics?url=…&alg=…[&size=512]` — the operator evaluated on a
+/// coarse grid covering the whole source (Web Mercator), summarised:
+/// count, min, max, mean, std, 2nd and 98th percentiles, and the
+/// `rescale` those percentiles suggest.
+pub async fn statistics(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<TileQuery>,
+) -> Result<axum::Json<serde_json::Value>, ServeError> {
+    let req = parse_request(&state, &q)?;
+    let size = q.size.unwrap_or(512).clamp(16, 2048);
+    let info = req.source.info(&state.local, &state.pool).await?;
+    let tf =
+        Transformer::new(info.epsg, TILE_EPSG).map_err(|e| ServeError::Source(e.to_string()))?;
+    let src_gt = surtgis_core::raster::GeoTransform::new(
+        info.bounds[0],
+        info.bounds[3],
+        (info.bounds[2] - info.bounds[0]) / info.width as f64,
+        -(info.bounds[3] - info.bounds[1]) / info.height as f64,
+    );
+    let merc: Bounds = warp::target_bounds(&src_gt, info.height, info.width, &tf)
+        .map_err(|e| ServeError::Source(e.to_string()))?;
+    let px = merc.width().max(merc.height()) / size as f64;
+    let gutter = req.op.gutter();
+    let inner =
+        GridSpec::covering(&merc, px, TILE_EPSG).map_err(|e| ServeError::Source(e.to_string()))?;
+    let grid = GridSpec {
+        transform: surtgis_core::raster::GeoTransform::new(
+            inner.transform.origin_x - gutter as f64 * px,
+            inner.transform.origin_y + gutter as f64 * px,
+            px,
+            -px,
+        ),
+        rows: inner.rows + 2 * gutter,
+        cols: inner.cols + 2 * gutter,
+        epsg: TILE_EPSG,
+    };
+    let result = compute_grid(&state, &req.source, &req.op, grid).await?;
+    let stats = tokio::task::spawn_blocking(move || {
+        let tile = crop_gutter(&result, gutter);
+        let mut v: Vec<f64> = tile
+            .data()
+            .iter()
+            .copied()
+            .filter(|x| x.is_finite())
+            .collect();
+        if v.is_empty() {
+            return serde_json::json!({ "count": 0 });
+        }
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let n = v.len();
+        let mean = v.iter().sum::<f64>() / n as f64;
+        let var = v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n as f64;
+        let pct = |p: f64| v[((n - 1) as f64 * p).round() as usize];
+        serde_json::json!({
+            "count": n,
+            "grid": [tile.shape().1, tile.shape().0],
+            "min": v[0],
+            "max": v[n - 1],
+            "mean": mean,
+            "std": var.sqrt(),
+            "p2": pct(0.02),
+            "p50": pct(0.5),
+            "p98": pct(0.98),
+            "rescale": format!("{},{}", pct(0.02), pct(0.98)),
+        })
+    })
+    .await
+    .map_err(|e| ServeError::Compute(format!("statistics task failed: {e}")))?;
+    Ok(axum::Json(stats))
+}
+
 /// `GET /info?url=…`
 pub async fn info(
     State(state): State<Arc<AppState>>,
     Query(q): Query<InfoQuery>,
 ) -> Result<axum::Json<crate::source::SourceInfo>, ServeError> {
     let source = Source::resolve(&q.url, &state.sources)?;
-    Ok(axum::Json(source.info(&state.local).await?))
+    Ok(axum::Json(source.info(&state.local, &state.pool).await?))
 }
 
 /// `GET /algorithms`
@@ -300,6 +461,58 @@ pub async fn algorithms_catalog() -> axum::Json<serde_json::Value> {
         "tile_matrix_set": "WebMercatorQuad",
         "tile_size": TILE_SIZE,
     }))
+}
+
+/// `GET /metrics` — Prometheus text exposition.
+pub async fn metrics(State(state): State<Arc<AppState>>) -> Response {
+    let (entries, bytes, _, _) = state.tile_cache.stats();
+    let (files, local_bytes, _, _) = state.local.stats();
+    let (urls, readers) = state.pool.stats();
+    let body = state.metrics.render(&[
+        (
+            "surtgis_tile_cache_entries",
+            "Rendered tiles held in the L1 cache.",
+            entries as f64,
+        ),
+        (
+            "surtgis_tile_cache_bytes",
+            "Bytes held in the L1 cache.",
+            bytes as f64,
+        ),
+        (
+            "surtgis_local_sources",
+            "Local sources held in memory.",
+            files as f64,
+        ),
+        (
+            "surtgis_local_bytes",
+            "Bytes of local sources held in memory.",
+            local_bytes as f64,
+        ),
+        (
+            "surtgis_pool_urls",
+            "Remote sources with open readers.",
+            urls as f64,
+        ),
+        (
+            "surtgis_pool_readers",
+            "Open remote readers.",
+            readers as f64,
+        ),
+        (
+            "surtgis_inflight_available",
+            "Render slots currently free.",
+            state.inflight.available_permits() as f64,
+        ),
+    ]);
+    (
+        [(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        body,
+    )
+        .into_response()
 }
 
 /// `GET /healthz`

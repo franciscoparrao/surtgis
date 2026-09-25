@@ -14,12 +14,13 @@
 //! the root (local paths). Without an allowlist no remote source is
 //! accepted at all.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use ndarray::s;
-use surtgis_cloud::{BBox, CogReader, CogReaderOptions};
+use surtgis_cloud::BBox;
+
+use crate::pool::ReaderPool;
 use surtgis_core::Raster;
 use surtgis_core::io::read_geotiff_bands;
 use surtgis_core::raster::GeoTransform;
@@ -123,16 +124,36 @@ pub struct Window {
     pub epsg: u32,
 }
 
-/// In-memory copies of local sources (M0 strategy, see the module docs).
-#[derive(Default)]
+/// In-memory copies of local sources, bounded by a byte budget (LRU).
 pub struct LocalCache {
-    entries: Mutex<HashMap<PathBuf, Arc<Vec<Raster<f64>>>>>,
+    entries: crate::cache::ByteLru<PathBuf, Arc<Vec<Raster<f64>>>>,
+}
+
+fn bands_bytes(b: &Arc<Vec<Raster<f64>>>) -> usize {
+    b.iter()
+        .map(|r| {
+            let (rows, cols) = r.shape();
+            rows * cols * std::mem::size_of::<f64>()
+        })
+        .sum()
 }
 
 impl LocalCache {
+    /// Cache holding at most `budget` bytes of decoded rasters.
+    pub fn new(budget: usize) -> Self {
+        Self {
+            entries: crate::cache::ByteLru::new(budget, bands_bytes),
+        }
+    }
+
+    /// `(files, bytes, hits, misses)`.
+    pub fn stats(&self) -> (usize, usize, u64, u64) {
+        self.entries.stats()
+    }
+
     fn get_or_load(&self, path: &Path) -> Result<Arc<Vec<Raster<f64>>>, ServeError> {
-        if let Some(b) = self.entries.lock().unwrap().get(path) {
-            return Ok(b.clone());
+        if let Some(b) = self.entries.get(&path.to_path_buf()) {
+            return Ok(b);
         }
         let bands: Vec<Raster<f64>> = read_geotiff_bands(path)
             .map_err(|e| ServeError::Source(format!("failed to read {}: {e}", path.display())))?;
@@ -144,10 +165,15 @@ impl LocalCache {
         }
         let bands: Vec<Raster<f64>> = bands.into_iter().map(nan_nodata).collect();
         let arc = Arc::new(bands);
-        self.entries
-            .lock()
-            .unwrap()
-            .insert(path.to_path_buf(), arc.clone());
+        if bands_bytes(&arc) > self.entries.budget() {
+            return Err(ServeError::Source(format!(
+                "{} needs {} MiB in memory, over the --local-cache-mb budget of {} MiB",
+                path.display(),
+                bands_bytes(&arc) >> 20,
+                self.entries.budget() >> 20
+            )));
+        }
+        self.entries.put(path.to_path_buf(), arc.clone());
         Ok(arc)
     }
 }
@@ -213,7 +239,11 @@ fn crop(bands: &[Raster<f64>], bounds: &Bounds) -> Result<Vec<Raster<f64>>, Serv
 
 impl Source {
     /// Describe the source.
-    pub async fn info(&self, cache: &LocalCache) -> Result<SourceInfo, ServeError> {
+    pub async fn info(
+        &self,
+        cache: &LocalCache,
+        pool: &ReaderPool,
+    ) -> Result<SourceInfo, ServeError> {
         match self {
             Source::Local(path) => {
                 let bands = cache.get_or_load(path)?;
@@ -233,9 +263,7 @@ impl Source {
                 })
             }
             Source::Http(url) => {
-                let reader = CogReader::open(url, CogReaderOptions::default())
-                    .await
-                    .map_err(|e| ServeError::Source(format!("failed to open {url}: {e}")))?;
+                let reader = pool.acquire(url).await?;
                 let m = reader.metadata();
                 let bb = bounds_of(&m.geo_transform, m.height as usize, m.width as usize);
                 Ok(SourceInfo {
@@ -257,6 +285,7 @@ impl Source {
     pub async fn read_window(
         &self,
         cache: &LocalCache,
+        pool: &ReaderPool,
         bounds: &Bounds,
         target_px: usize,
     ) -> Result<Window, ServeError> {
@@ -268,9 +297,7 @@ impl Source {
                 Ok(Window { bands, epsg })
             }
             Source::Http(url) => {
-                let mut reader = CogReader::open(url, CogReaderOptions::default())
-                    .await
-                    .map_err(|e| ServeError::Source(format!("failed to open {url}: {e}")))?;
+                let mut reader = pool.acquire(url).await?;
                 let m = reader.metadata();
                 let epsg = epsg_of(m.crs.as_ref(), "cog")?;
                 // Pick the coarsest overview that still gives at least one
