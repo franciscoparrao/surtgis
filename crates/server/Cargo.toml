@@ -1,0 +1,31 @@
+[package]
+name = "surtgis-server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "SurtGIS Server — analysis-first dynamic tile server (terrain, hydrology and spectral formulas as tile parameters)"
+# Distributed through the `surtgis serve` subcommand (feature `server` of the
+# CLI); not published on its own while the API is pre-1.0.
+publish = false
+
+[dependencies]
+surtgis-core = { path = "../core", features = ["projections"] }
+surtgis-algorithms = { path = "../algorithms", default-features = false }
+surtgis-colormap = { path = "../colormap" }
+surtgis-cloud = { path = "../cloud", features = ["native"] }
+
+axum = { workspace = true }
+tokio = { workspace = true, features = ["net", "macros", "signal"] }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+ndarray = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

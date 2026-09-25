@@ -15,6 +15,7 @@ members = [
     "crates/flow",
     "crates/ffi",
     "crates/ecw",
+    "crates/server",
 ]
 # The `fuzz/` crate is a cargo-fuzz harness; it must NOT be a workspace member
 # (it depends on the unstable `-Z sanitizer` build and its own nightly profile).
@@ -38,6 +39,7 @@ default-members = [
     "crates/flow",
     "crates/ffi",
     "crates/ecw",
+    "crates/server",
 ]
 
 [workspace.package]
@@ -93,6 +95,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Cloud / HTTP
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "http2"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "sync"] }
+axum = "0.8"
+tower-http = { version = "0.7", features = ["cors", "trace"] }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 weezl = "0.1"
 lru = "0.18"

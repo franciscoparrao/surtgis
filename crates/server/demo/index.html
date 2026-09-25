@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SurtGIS Server demo</title>
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+<style>
+  :root { --bg: #14171c; --fg: #e8e6e1; --muted: #9aa0a6; --accent: #d97a2b; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  #map { position: absolute; inset: 0; }
+  #panel { position: absolute; top: 12px; left: 12px; width: 340px; max-width: calc(100% - 24px);
+    background: rgba(20, 23, 28, .92); border: 1px solid #2a2f37; border-radius: 8px;
+    padding: 14px 16px; box-shadow: 0 6px 24px rgba(0,0,0,.4); }
+  h1 { font-size: 15px; margin: 0 0 4px; letter-spacing: .02em; }
+  h1 span { color: var(--accent); }
+  p.sub { margin: 0 0 12px; color: var(--muted); font-size: 12px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 3px; }
+  input, select { width: 100%; box-sizing: border-box; background: #0f1115; color: var(--fg);
+    border: 1px solid #2a2f37; border-radius: 5px; padding: 6px 8px; font: inherit; }
+  button { margin-top: 12px; width: 100%; background: var(--accent); color: #111; border: 0;
+    border-radius: 5px; padding: 8px; font: inherit; font-weight: 600; cursor: pointer; }
+  #status { margin-top: 10px; font-size: 12px; color: var(--muted); white-space: pre-wrap; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="panel">
+  <h1>SurtGIS <span>Server</span></h1>
+  <p class="sub">Analysis-first tiles: the operator is a URL parameter.</p>
+  <label for="url">Source (COG URL or a path under --root)</label>
+  <input id="url" placeholder="dem.tif">
+  <label for="alg">Operator</label>
+  <select id="alg">
+    <option value="hillshade">hillshade</option>
+    <option value="slope">slope</option>
+    <option value="value">value (raw band)</option>
+    <option value="formula">formula (ASI grammar)</option>
+  </select>
+  <label for="formula">Formula and bands (formula only)</label>
+  <input id="formula" placeholder="(N-R)/(N+R)">
+  <input id="bands" placeholder="N:4,R:3" style="margin-top:4px">
+  <label for="params">Params (key:value,…)</label>
+  <input id="params" placeholder="azimuth:315,altitude:45">
+  <label for="cmap">Colormap</label>
+  <select id="cmap"></select>
+  <label for="rescale">Rescale (min,max; empty = operator default)</label>
+  <input id="rescale" placeholder="0,255">
+  <button id="go">Show layer</button>
+  <div id="status"></div>
+</div>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script>
+  const $ = (id) => document.getElementById(id);
+  const map = new maplibregl.Map({
+    container: 'map',
+    style: {
+      version: 8,
+      sources: {
+        osm: { type: 'raster', tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+               tileSize: 256, attribution: '© OpenStreetMap contributors' }
+      },
+      layers: [{ id: 'osm', type: 'raster', source: 'osm', paint: { 'raster-saturation': -0.8 } }]
+    },
+    center: [-70.65, -33.45], zoom: 9
+  });
+  map.addControl(new maplibregl.NavigationControl());
+
+  fetch('/algorithms').then(r => r.json()).then(cat => {
+    for (const name of cat.colormaps) {
+      const o = document.createElement('option'); o.value = name; o.textContent = name;
+      if (name === 'terrain') o.selected = true;
+      $('cmap').appendChild(o);
+    }
+  }).catch(() => {});
+
+  function query() {
+    const p = new URLSearchParams();
+    p.set('url', $('url').value.trim());
+    const alg = $('alg').value;
+    if (alg === 'formula') {
+      p.set('formula', $('formula').value.trim());
+      if ($('bands').value.trim()) p.set('bands', $('bands').value.trim());
+    } else {
+      p.set('alg', alg);
+      if (alg === 'value' && $('bands').value.trim()) p.set('bands', $('bands').value.trim());
+    }
+    if ($('params').value.trim()) p.set('params', $('params').value.trim());
+    p.set('cmap', $('cmap').value);
+    if ($('rescale').value.trim()) p.set('rescale', $('rescale').value.trim());
+    return p.toString();
+  }
+
+  async function show() {
+    const q = query();
+    $('status').textContent = 'Loading TileJSON…';
+    const r = await fetch('/tilejson?' + q);
+    if (!r.ok) { $('status').textContent = 'Error: ' + (await r.text()); return; }
+    const tj = await r.json();
+    if (map.getLayer('surtgis')) map.removeLayer('surtgis');
+    if (map.getSource('surtgis')) map.removeSource('surtgis');
+    map.addSource('surtgis', { type: 'raster', tiles: tj.tiles, tileSize: 256,
+      bounds: tj.bounds, minzoom: tj.minzoom, maxzoom: tj.maxzoom });
+    map.addLayer({ id: 'surtgis', type: 'raster', source: 'surtgis', paint: { 'raster-opacity': 0.92 } });
+    map.fitBounds([[tj.bounds[0], tj.bounds[1]], [tj.bounds[2], tj.bounds[3]]], { padding: 40, duration: 800 });
+    $('status').innerHTML = 'Tiles: <code>' + tj.tiles[0].replace(/&/g, '&amp;') + '</code>';
+  }
+  $('go').addEventListener('click', () => show().catch(e => { $('status').textContent = 'Error: ' + e; }));
+  $('alg').addEventListener('change', () => {
+    const d = { hillshade: 'azimuth:315,altitude:45', slope: 'units:degrees', value: '', formula: '' };
+    $('params').placeholder = d[$('alg').value];
+  });
+</script>
+</body>
+</html>

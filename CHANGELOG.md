@@ -10,6 +10,27 @@ breaking changes only ship in a major version and are called out under a
 
 ### Added
 
+- **SurtGIS Server M0 — `surtgis serve`** (new crate `surtgis-server`,
+  `publish = false`, behind the opt-in `server` feature of the CLI): an
+  analysis-first dynamic tile server. A tile is computed at request time
+  from a remote COG or a local GeoTIFF; the operator is a URL parameter.
+  `GET /tiles/{z}/{x}/{y}.png?url=…&alg=hillshade|slope|value` or
+  `&formula=(N-R)/(N+R)&bands=N:4,R:3` (Awesome Spectral Indices grammar),
+  `&cmap=` (any `surtgis_colormap` scheme), `&rescale=min,max`,
+  `&params=azimuth:135,…`; plus `/tilejson` (TileJSON 3.0, drop-in for
+  MapLibre/Leaflet/QGIS-XYZ), `/info`, `/algorithms`, `/healthz` and a
+  MapLibre demo page at `/`. Pipeline per tile: WebMercatorQuad tile →
+  target grid plus the operator's gutter → `surtgis_core::warp` from the
+  source CRS at the overview closest to the tile resolution → operator →
+  crop → colormap → PNG. Sources are gated by an allowlist of URL prefixes
+  (`--allow`) and a root directory for local files (`--root`); anything
+  else is refused, since `?url=` is a request-forgery vector. Only local
+  and focal operators are served on the fly by design
+  (`docs/surtgis_server_design.md` §3); global ones are materialised
+  offline and served as sources. M0 limits: remote COGs are single-band
+  (formulas need a local multi-band file), local files are read fully into
+  memory, no tile cache yet.
+
 - **`surtgis_core::warp`** (feature `projections`, pulls in proj4rs — pure
   Rust, so it builds natively, in WASM and in a server): the inverse-mapping
   warp kernel that `surtgis reproject` used to keep to itself. `Transformer`

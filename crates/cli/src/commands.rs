@@ -400,6 +400,22 @@ pub enum Commands {
         #[command(subcommand)]
         command: FlowCommands,
     },
+    /// Dynamic tile server: terrain operators and band formulas as XYZ tile parameters (EXPERIMENTAL)
+    #[cfg(feature = "server")]
+    Serve {
+        /// Address to listen on
+        #[arg(long, default_value = "127.0.0.1:8080")]
+        bind: String,
+        /// Directory local sources (`?url=<path>`) must live under
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// URL prefix remote COG sources may start with (repeatable); none = no remote sources
+        #[arg(long = "allow")]
+        allow: Vec<String>,
+        /// Cache-Control max-age for tiles, in seconds
+        #[arg(long, default_value_t = 3600)]
+        max_age: u32,
+    },
     /// Read ER Mapper ECW v2 imagery with the native decoder (no GDAL)
     #[cfg(feature = "ecw")]
     Ecw {

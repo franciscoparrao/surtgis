@@ -19,6 +19,8 @@ pub mod relief;
 #[cfg(feature = "relief-3d")]
 pub mod relief_3d;
 pub mod segmentation;
+#[cfg(feature = "server")]
+pub mod serve;
 // Pipeline workflows depend on STAC for input data acquisition; without
 // the cloud feature there's no useful pipeline operation available, and
 // compiling it triggers unresolved imports for super::stac. Gate the
