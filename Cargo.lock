@@ -6327,6 +6327,7 @@ version = "1.3.0"
 dependencies = [
  "anyhow",
  "axum",
+ "lru 0.18.2",
  "ndarray 0.16.1",
  "serde",
  "serde_json",
