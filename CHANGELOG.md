@@ -27,9 +27,22 @@ breaking changes only ship in a major version and are called out under a
   else is refused, since `?url=` is a request-forgery vector. Only local
   and focal operators are served on the fly by design
   (`docs/surtgis_server_design.md` §3); global ones are materialised
-  offline and served as sources. M0 limits: remote COGs are single-band
-  (formulas need a local multi-band file), local files are read fully into
-  memory.
+  offline and served as sources. M0 limit: remote COGs are single-band
+  (formulas need a local multi-band file).
+
+- **Windowed GeoTIFF reads: `surtgis_core::io::window`.** `geotiff_info`
+  describes a file once (size, bands, georeferencing, and the strip/tile
+  chunking of the full-resolution IFD and every overview), and
+  `read_geotiff_window` / `read_geotiff_window_bands` decode only the
+  chunks a pixel window touches, at any level, through the native `tiff`
+  decoder — no GDAL, memory bounded by the window. `level_for_scale` and
+  `window_for_bounds` do the overview and world-to-pixel arithmetic.
+  Verified against full reads on tiled COGs (windows crossing tile borders,
+  edge tiles) and stripped GeoTIFFs. The tile server's local sources now
+  use it: a 10 000 × 10 000 local COG with five overviews serves hillshade
+  tiles at every zoom in 13–26 ms with the process at 63 MB RSS, where M0
+  loaded the whole file (800 MB as f64); tiles of the benchmark DEM are
+  bit-identical to M0's.
 
 - **SurtGIS Server M1, ECW sources and true-colour tiles.** With the
   CLI built with `--features server,ecw`, a `.ecw` file under `--root` is a
@@ -46,9 +59,7 @@ breaking changes only ship in a major version and are called out under a
   per request: neighbouring uncached tiles of a remote COG went from
   0.4–2.4 s to 7–55 ms. Rendered tiles go to a byte-bounded L1 LRU
   (`--cache-mb`, default 256; `X-Cache: hit|miss`), and a request whose
-  `If-None-Match` carries the tile's ETag gets 304. Local sources held in
-  memory are bounded too (`--local-cache-mb`, default 2048; a file over
-  the budget is refused with a clear message). Limits: per-tile deadline
+  `If-None-Match` carries the tile's ETag gets 304. Limits: per-tile deadline
   (`--timeout-ms`, default 30 s → 504) and a render concurrency cap
   (`--max-inflight`, default 64 → 503 with `Retry-After`). New endpoints:
   `/statistics?url=…&alg=…[&size=512]` evaluates the operator on a coarse
