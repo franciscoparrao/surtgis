@@ -418,6 +418,9 @@ pub enum Commands {
         /// In-memory cache of rendered tiles, in MiB (0 disables)
         #[arg(long, default_value_t = 256)]
         cache_mb: usize,
+        /// Directory for the on-disk tile cache (`{layer}/{z}/{x}/{y}.png`); unset = none
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
         /// Per-tile deadline, in milliseconds
         #[arg(long, default_value_t = 30_000)]
         timeout_ms: u64,

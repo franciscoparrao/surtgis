@@ -112,7 +112,7 @@ fn transparent_png() -> Bytes {
     Bytes::from(rgba_to_png_bytes(TILE_SIZE as u32, TILE_SIZE as u32, &rgba).unwrap_or_default())
 }
 
-fn png_response(bytes: Bytes, etag: &str, max_age: u32, cached: bool) -> Response {
+fn png_response(bytes: Bytes, etag: &str, max_age: u32, cache_state: &'static str) -> Response {
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("image/png"));
     headers.insert(
@@ -124,7 +124,7 @@ fn png_response(bytes: Bytes, etag: &str, max_age: u32, cached: bool) -> Respons
     }
     headers.insert(
         axum::http::HeaderName::from_static("x-cache"),
-        HeaderValue::from_static(if cached { "hit" } else { "miss" }),
+        HeaderValue::from_static(cache_state),
     );
     (StatusCode::OK, headers, bytes).into_response()
 }
@@ -287,6 +287,17 @@ pub async fn render_tile(
     .map_err(|e| ServeError::Compute(format!("render task failed: {e}")))?
 }
 
+/// Hash of everything but the tile address: the folder of the L2 layout.
+fn layer_key(q: &TileQuery) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (
+        &q.url, &q.alg, &q.formula, &q.bands, &q.cmap, &q.rescale, &q.params,
+    )
+        .hash(&mut h);
+    format!("{:016x}", h.finish())
+}
+
 fn etag_for(z: u8, x: u32, y: u32, q: &TileQuery) -> String {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -331,9 +342,19 @@ pub async fn tile(
     if let Some(png) = state.tile_cache.get(&etag) {
         state.metrics.cache_hits.fetch_add(1, Ordering::Relaxed);
         state.metrics.tile(&alg, "cached");
-        return png_response(png, &etag, state.max_age, true);
+        return png_response(png, &etag, state.max_age, "hit");
     }
     state.metrics.cache_misses.fetch_add(1, Ordering::Relaxed);
+    let layer = layer_key(&q);
+    if let Some(bytes) = match &state.disk {
+        Some(disk) => disk.get(&layer, z, x, y).await,
+        None => None,
+    } {
+        let png = Bytes::from(bytes);
+        state.tile_cache.put(etag.clone(), png.clone());
+        state.metrics.tile(&alg, "disk");
+        return png_response(png, &etag, state.max_age, "disk");
+    }
 
     let Ok(_permit) = state.inflight.try_acquire() else {
         state.metrics.rejected.fetch_add(1, Ordering::Relaxed);
@@ -354,13 +375,15 @@ pub async fn tile(
             state.metrics.observe(&alg, elapsed);
             state.metrics.tile(&alg, "ok");
             state.tile_cache.put(etag.clone(), png.clone());
-            png_response(png, &etag, state.max_age, false)
+            spawn_disk_put(&state, layer, z, x, y, png.clone());
+            png_response(png, &etag, state.max_age, "miss")
         }
         Ok(Err(ServeError::Outside)) => {
             state.metrics.tile(&alg, "empty");
             let png = transparent_png();
             state.tile_cache.put(etag.clone(), png.clone());
-            png_response(png, &etag, state.max_age, false)
+            spawn_disk_put(&state, layer, z, x, y, png.clone());
+            png_response(png, &etag, state.max_age, "miss")
         }
         Ok(Err(e)) => {
             state.metrics.tile(&alg, "error");
@@ -374,6 +397,19 @@ pub async fn tile(
             (StatusCode::GATEWAY_TIMEOUT, "tile timed out").into_response()
         }
     }
+}
+
+/// Write a rendered tile to the L2 cache without holding the response.
+fn spawn_disk_put(state: &Arc<AppState>, layer: String, z: u8, x: u32, y: u32, png: Bytes) {
+    if state.disk.is_none() {
+        return;
+    }
+    let state = state.clone();
+    tokio::spawn(async move {
+        if let Some(disk) = &state.disk {
+            disk.put(&layer, z, x, y, &png).await;
+        }
+    });
 }
 
 /// Source bounds in WGS84 as `[w, s, e, n]`.
@@ -536,6 +572,8 @@ pub async fn metrics(State(state): State<Arc<AppState>>) -> Response {
     let (entries, bytes, _, _) = state.tile_cache.stats();
     let files = state.local.len();
     let (urls, readers) = state.pool.stats();
+    let (d_hits, d_misses, d_writes, d_errors) =
+        state.disk.as_ref().map(|d| d.stats()).unwrap_or_default();
     let body = state.metrics.render(&[
         (
             "surtgis_tile_cache_entries",
@@ -561,6 +599,26 @@ pub async fn metrics(State(state): State<Arc<AppState>>) -> Response {
             "surtgis_pool_readers",
             "Open remote readers.",
             readers as f64,
+        ),
+        (
+            "surtgis_disk_cache_hits_total",
+            "Tiles served from the L2 disk cache.",
+            d_hits as f64,
+        ),
+        (
+            "surtgis_disk_cache_misses_total",
+            "L2 disk cache misses.",
+            d_misses as f64,
+        ),
+        (
+            "surtgis_disk_cache_writes_total",
+            "Tiles written to the L2 disk cache.",
+            d_writes as f64,
+        ),
+        (
+            "surtgis_disk_cache_errors_total",
+            "L2 disk cache write failures.",
+            d_errors as f64,
         ),
         (
             "surtgis_inflight_available",
