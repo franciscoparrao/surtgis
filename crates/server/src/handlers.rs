@@ -548,6 +548,36 @@ pub async fn statistics(
     Ok(axum::Json(stats))
 }
 
+/// `POST /jobs` — materialise a pipeline of global operators as a COG.
+pub async fn post_job(
+    State(state): State<Arc<AppState>>,
+    axum::Json(req): axum::Json<crate::jobs::JobRequest>,
+) -> Result<(StatusCode, axum::Json<crate::jobs::JobStatus>), ServeError> {
+    let job = crate::jobs::submit(state, req)?;
+    Ok((StatusCode::ACCEPTED, axum::Json(job)))
+}
+
+/// `GET /jobs/{id}`
+pub async fn get_job(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<axum::Json<crate::jobs::JobStatus>, ServeError> {
+    state
+        .jobs
+        .get(&id)
+        .map(axum::Json)
+        .ok_or_else(|| ServeError::NotFound(format!("no job {id}")))
+}
+
+/// `GET /jobs`
+pub async fn list_jobs(State(state): State<Arc<AppState>>) -> axum::Json<serde_json::Value> {
+    axum::Json(serde_json::json!({
+        "jobs": state.jobs.list(),
+        "steps": crate::jobs::STEPS,
+        "jobs_dir": state.jobs_dir.as_ref().map(|p| p.display().to_string()),
+    }))
+}
+
 /// `GET /info?url=…`
 pub async fn info(
     State(state): State<Arc<AppState>>,
@@ -619,6 +649,26 @@ pub async fn metrics(State(state): State<Arc<AppState>>) -> Response {
             "surtgis_disk_cache_errors_total",
             "L2 disk cache write failures.",
             d_errors as f64,
+        ),
+        (
+            "surtgis_jobs_queued",
+            "Jobs waiting for the worker.",
+            state.jobs.counts().0 as f64,
+        ),
+        (
+            "surtgis_jobs_running",
+            "Jobs running.",
+            state.jobs.counts().1 as f64,
+        ),
+        (
+            "surtgis_jobs_done_total",
+            "Jobs finished successfully.",
+            state.jobs.counts().2 as f64,
+        ),
+        (
+            "surtgis_jobs_failed_total",
+            "Jobs that failed.",
+            state.jobs.counts().3 as f64,
         ),
         (
             "surtgis_inflight_available",

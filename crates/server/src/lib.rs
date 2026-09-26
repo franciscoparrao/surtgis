@@ -9,6 +9,7 @@
 //! GET /tiles/{z}/{x}/{y}.png?url=<COG|path>&alg=hillshade&cmap=terrain
 //! GET /tilejson?url=…&alg=…        TileJSON 3.0 for a MapLibre/Leaflet source
 //! GET /statistics?url=…&alg=…      min/max/mean/percentiles of the operator over the source
+//! POST /jobs  GET /jobs  GET /jobs/{id}   materialise global operators (hydrology) as servable COGs
 //! GET /info?url=…                  source metadata
 //! GET /algorithms                  catalogue (name, class, gutter, params)
 //! GET /metrics                     Prometheus text exposition
@@ -26,6 +27,7 @@ pub mod algorithms;
 pub mod cache;
 pub mod error;
 pub mod handlers;
+pub mod jobs;
 pub mod metrics;
 pub mod pool;
 pub mod source;
@@ -67,6 +69,9 @@ pub struct ServerConfig {
     pub max_inflight: usize,
     /// Open COG readers per URL.
     pub pool_per_url: usize,
+    /// Folder for job outputs; default `<root>/_jobs`. Must lie under
+    /// `root` to be servable.
+    pub jobs_dir: Option<PathBuf>,
 }
 
 impl Default for ServerConfig {
@@ -81,6 +86,7 @@ impl Default for ServerConfig {
             timeout_ms: 30_000,
             max_inflight: 64,
             pool_per_url: 4,
+            jobs_dir: None,
         }
     }
 }
@@ -105,6 +111,12 @@ pub struct AppState {
     pub timeout: Duration,
     /// `Cache-Control: max-age` for tiles.
     pub max_age: u32,
+    /// Materialisation jobs.
+    pub jobs: jobs::JobRegistry,
+    /// Where job outputs go (`None`: jobs disabled).
+    pub jobs_dir: Option<PathBuf>,
+    /// One job at a time.
+    pub job_worker: tokio::sync::Semaphore,
 }
 
 impl AppState {
@@ -120,7 +132,7 @@ impl AppState {
         Ok(Self {
             sources: SourceConfig {
                 allow: cfg.allow.clone(),
-                root,
+                root: root.clone(),
             },
             local: LocalCache::default(),
             pool: pool::ReaderPool::new(cfg.pool_per_url, Duration::from_secs(300)),
@@ -136,6 +148,29 @@ impl AppState {
             inflight: tokio::sync::Semaphore::new(cfg.max_inflight.max(1)),
             timeout: Duration::from_millis(cfg.timeout_ms.max(100)),
             max_age: cfg.max_age,
+            jobs: jobs::JobRegistry::default(),
+            jobs_dir: match (&cfg.jobs_dir, &root) {
+                (Some(dir), Some(root)) => {
+                    std::fs::create_dir_all(dir)
+                        .map_err(|e| anyhow::anyhow!("--jobs-dir {}: {e}", dir.display()))?;
+                    let dir = dir.canonicalize()?;
+                    if !dir.starts_with(root) {
+                        anyhow::bail!(
+                            "--jobs-dir {} must lie under --root {} so outputs can be served",
+                            dir.display(),
+                            root.display()
+                        );
+                    }
+                    Some(dir)
+                }
+                (Some(dir), None) => anyhow::bail!(
+                    "--jobs-dir {} needs --root (outputs are served from under the root)",
+                    dir.display()
+                ),
+                (None, Some(root)) => Some(jobs::default_jobs_dir(root)),
+                (None, None) => None,
+            },
+            job_worker: tokio::sync::Semaphore::new(1),
         })
     }
 }
@@ -150,6 +185,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/info", get(handlers::info))
         .route("/statistics", get(handlers::statistics))
         .route("/tilejson", get(handlers::tilejson))
+        .route("/jobs", get(handlers::list_jobs).post(handlers::post_job))
+        .route("/jobs/{id}", get(handlers::get_job))
         .route("/tiles/{z}/{x}/{y}", get(handlers::tile))
         .layer(CorsLayer::permissive())
         .layer(
