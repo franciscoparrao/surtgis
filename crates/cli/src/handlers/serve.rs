@@ -24,6 +24,8 @@ pub struct Args {
     pub max_inflight: usize,
     /// Open COG readers per URL.
     pub pool_per_url: usize,
+    /// Job outputs folder.
+    pub jobs_dir: Option<PathBuf>,
 }
 
 /// Run the server until Ctrl-C.
@@ -48,5 +50,6 @@ pub fn handle(args: Args) -> Result<()> {
         timeout_ms: args.timeout_ms,
         max_inflight: args.max_inflight,
         pool_per_url: args.pool_per_url,
+        jobs_dir: args.jobs_dir,
     })
 }

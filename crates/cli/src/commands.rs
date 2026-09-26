@@ -430,6 +430,9 @@ pub enum Commands {
         /// Open COG readers kept per URL
         #[arg(long, default_value_t = 4)]
         pool_per_url: usize,
+        /// Folder for materialisation job outputs (default `<root>/_jobs`; must lie under --root)
+        #[arg(long)]
+        jobs_dir: Option<PathBuf>,
     },
     /// Read ER Mapper ECW v2 imagery with the native decoder (no GDAL)
     #[cfg(feature = "ecw")]
