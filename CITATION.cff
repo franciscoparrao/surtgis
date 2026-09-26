@@ -2,11 +2,22 @@ cff-version: 1.2.0
 message: "If you use SurtGIS in your research, please cite the paper below."
 title: "SurtGIS"
 version: 1.4.0
+date-released: "2026-09-25"
+doi: 10.5281/zenodo.22970701
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.22970702
+    description: "Zenodo archive of release v1.4.0"
+  - type: doi
+    value: 10.5281/zenodo.22970701
+    description: "Zenodo concept DOI (resolves to the latest archived release)"
 type: software
 authors:
   - family-names: Parra
     given-names: Francisco
     email: francisco.parra.o@usach.cl
+    affiliation: "Department of Informatics Engineering, Universidad de Santiago de Chile, Santiago, Chile"
+    orcid: "https://orcid.org/0009-0006-0435-1854"
 repository-code: "https://github.com/franciscoparrao/surtgis"
 url: "https://franciscoparrao.github.io/surtgis/book/"
 license: "MIT OR Apache-2.0"

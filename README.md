@@ -1,5 +1,7 @@
 # SurtGIS
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22970701.svg)](https://doi.org/10.5281/zenodo.22970701)
+
 **High-performance geospatial analysis library and CLI in Rust.**
 
 127 algorithms (56 of them also in the browser via WebAssembly), 90 CLI subcommands, streaming I/O for arbitrarily large DEMs, native CRS reprojection, and an end-to-end satellite composite pipeline — all from a single binary with no external dependencies.
@@ -281,6 +283,12 @@ cargo test --test cross_validation
 ```
 
 ## Reproducibility
+
+Each release is archived on Zenodo. Cite the software with the concept DOI
+[10.5281/zenodo.22970701](https://doi.org/10.5281/zenodo.22970701) (always the
+latest release) or a version DOI such as
+[10.5281/zenodo.22970702](https://doi.org/10.5281/zenodo.22970702) for v1.4.0; the
+paper citation is in `CITATION.cff`.
 
 ```bash
 cargo build --release

@@ -1,0 +1,43 @@
+{
+  "title": "SurtGIS: a high-performance raster geospatial analysis library, CLI and dynamic tile server in Rust",
+  "description": "High-performance geospatial analysis library and CLI in Rust: 127 algorithms (56 also available in the browser via WebAssembly), streaming I/O for arbitrarily large DEMs, native CRS reprojection, windowed GeoTIFF and Cloud Optimized GeoTIFF reads, a native ECW decoder, an end-to-end satellite composite pipeline, and — since 1.4.0 — SurtGIS Server, an analysis-first dynamic XYZ tile server (`surtgis serve`) where terrain operators, spectral formulas and colormaps are tile-URL parameters. Covers terrain analysis, hydrology and remote sensing from a single dependency-free binary. This record archives the source of release v1.4.0.",
+  "upload_type": "software",
+  "access_right": "open",
+  "license": "MIT",
+  "language": "eng",
+  "version": "1.4.0",
+  "creators": [
+    {
+      "name": "Parra, Francisco",
+      "affiliation": "Department of Informatics Engineering, Universidad de Santiago de Chile, Santiago, Chile",
+      "orcid": "0009-0006-0435-1854"
+    }
+  ],
+  "keywords": [
+    "GIS",
+    "raster",
+    "terrain analysis",
+    "hydrology",
+    "remote sensing",
+    "digital elevation model",
+    "tile server",
+    "Cloud Optimized GeoTIFF",
+    "Rust",
+    "WebAssembly"
+  ],
+  "communities": [],
+  "related_identifiers": [
+    {
+      "identifier": "10.1016/j.envsoft.2026.107102",
+      "relation": "isSupplementTo",
+      "resource_type": "publication-article",
+      "scheme": "doi"
+    },
+    {
+      "identifier": "https://github.com/franciscoparrao/surtgis/tree/v1.4.0",
+      "relation": "isIdenticalTo",
+      "scheme": "url"
+    }
+  ],
+  "notes": "Dual-licensed MIT OR Apache-2.0 (Zenodo license field records MIT; see LICENSE-MIT and LICENSE-APACHE in the repository). Associated software paper: Parra, F. (2026), 'SurtGIS: A high-performance raster geospatial analysis library in Rust with WebAssembly and Python support', Environmental Modelling & Software 204, 107102, https://doi.org/10.1016/j.envsoft.2026.107102. The archive excludes the paper submission bundle and benchmark result files; both live in the GitHub repository."
+}
