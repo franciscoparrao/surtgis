@@ -30,6 +30,21 @@ breaking changes only ship in a major version and are called out under a
   offline and served as sources. M0 limit: remote COGs are single-band
   (formulas need a local multi-band file).
 
+- **Multi-band COGs in `surtgis_cloud::CogReader`.** Pixel-interleaved
+  COGs with several samples per pixel used to fail the tile-size check
+  (the decoder expected one sample per pixel); RGB imagery and multi-band
+  products now read correctly. New `read_bbox_bands` (every band from one
+  tile fetch and decode), `read_bbox_band(bbox, overview, band)` and
+  `bands()`, with blocking wrappers; `read_bbox` keeps returning band 0.
+  TIFF predictor 2 is undone with the pixel stride
+  (`undo_horizontal_differencing_multi`) and predictor 3 with its
+  multi-sample variant. Planar (`PlanarConfiguration = 2`) files are
+  rejected with a clear message. Integration tests read u8 RGB
+  (predictor 2) and f32 two-band (predictor 3, nodata, overview) fixtures
+  through a local range server and compare every cell with the values
+  written. The tile server reads every band of a remote COG, so
+  `?alg=rgb` and `?formula=` now work on remote imagery too.
+
 - **Windowed GeoTIFF reads: `surtgis_core::io::window`.** `geotiff_info`
   describes a file once (size, bands, georeferencing, and the strip/tile
   chunking of the full-resolution IFD and every overview), and

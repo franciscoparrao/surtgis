@@ -76,6 +76,31 @@ mod inner {
             self.rt.block_on(self.inner.read_bbox(bbox, overview))
         }
 
+        /// Read every band of a bounding box (blocking).
+        pub fn read_bbox_bands<T: RasterElement>(
+            &mut self,
+            bbox: &BBox,
+            overview: Option<usize>,
+        ) -> Result<Vec<Raster<T>>> {
+            self.rt.block_on(self.inner.read_bbox_bands(bbox, overview))
+        }
+
+        /// Read one band (0-based) of a bounding box (blocking).
+        pub fn read_bbox_band<T: RasterElement>(
+            &mut self,
+            bbox: &BBox,
+            overview: Option<usize>,
+            band: usize,
+        ) -> Result<Raster<T>> {
+            self.rt
+                .block_on(self.inner.read_bbox_band(bbox, overview, band))
+        }
+
+        /// Number of bands of the full-resolution IFD.
+        pub fn bands(&self) -> usize {
+            self.inner.bands()
+        }
+
         /// Read the full raster extent (blocking).
         pub fn read_full<T: RasterElement>(
             &mut self,
