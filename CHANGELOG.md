@@ -8,6 +8,8 @@ breaking changes only ship in a major version and are called out under a
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-09-25
+
 ### Added
 
 - **SurtGIS Server M0 — `surtgis serve`** (new crate `surtgis-server`,
@@ -106,6 +108,11 @@ breaking changes only ship in a major version and are called out under a
   WGS84 nearest and bilinear, → Web Mercator bilinear). First building
   block of the tile server (`docs/surtgis_server_design.md`).
 
+- `ZarrReader::read_bbox_partials(bbox, windows)` and the blocking wrapper:
+  partial statistics for several time windows from one fetch of their
+  union, aligned with the input windows (`None` where the store has no step
+  in a window).
+
 ### Changed
 
 - **`stac download-climate` is 5–7× faster** (measured on ERA5-pds from
@@ -132,13 +139,6 @@ breaking changes only ship in a major version and are called out under a
   array and was only used to explain a failure, where it is still fetched.
   `ZarrMetadata::available_variables` is therefore empty after a successful
   open; use `ZarrReader::list_variables` to enumerate.
-
-### Added
-
-- `ZarrReader::read_bbox_partials(bbox, windows)` and the blocking wrapper:
-  partial statistics for several time windows from one fetch of their
-  union, aligned with the input windows (`None` where the store has no step
-  in a window).
 
 ## [1.3.0] - 2026-09-23
 
