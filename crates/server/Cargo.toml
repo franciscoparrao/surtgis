@@ -18,7 +18,7 @@ surtgis-cloud = { path = "../cloud", features = ["native"] }
 surtgis-ecw = { path = "../ecw", optional = true }
 
 axum = { workspace = true }
-tokio = { workspace = true, features = ["net", "macros", "signal"] }
+tokio = { workspace = true, features = ["net", "macros", "signal", "fs"] }
 tower-http = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

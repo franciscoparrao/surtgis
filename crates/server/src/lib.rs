@@ -58,6 +58,9 @@ pub struct ServerConfig {
     pub max_age: u32,
     /// L1 cache of rendered tiles, in MiB (0 disables).
     pub cache_mb: usize,
+    /// L2 cache directory for rendered tiles (`{layer}/{z}/{x}/{y}.png`);
+    /// none disables.
+    pub cache_dir: Option<PathBuf>,
     /// Per-tile deadline, in milliseconds.
     pub timeout_ms: u64,
     /// Tiles rendered concurrently before requests are rejected with 503.
@@ -74,6 +77,7 @@ impl Default for ServerConfig {
             root: None,
             max_age: 3600,
             cache_mb: 256,
+            cache_dir: None,
             timeout_ms: 30_000,
             max_inflight: 64,
             pool_per_url: 4,
@@ -91,6 +95,8 @@ pub struct AppState {
     pub pool: pool::ReaderPool,
     /// Rendered tiles (L1), keyed by the request's ETag.
     pub tile_cache: cache::ByteLru<String, Bytes>,
+    /// Rendered tiles on disk (L2), if configured.
+    pub disk: Option<cache::DiskCache>,
     /// Request counters.
     pub metrics: metrics::Metrics,
     /// Concurrency limit on rendering.
@@ -119,6 +125,13 @@ impl AppState {
             local: LocalCache::default(),
             pool: pool::ReaderPool::new(cfg.pool_per_url, Duration::from_secs(300)),
             tile_cache: cache::ByteLru::new(cfg.cache_mb << 20, |b: &Bytes| b.len()),
+            disk: match &cfg.cache_dir {
+                Some(dir) => Some(
+                    cache::DiskCache::new(dir.clone())
+                        .map_err(|e| anyhow::anyhow!("--cache-dir {}: {e}", dir.display()))?,
+                ),
+                None => None,
+            },
             metrics: metrics::Metrics::default(),
             inflight: tokio::sync::Semaphore::new(cfg.max_inflight.max(1)),
             timeout: Duration::from_millis(cfg.timeout_ms.max(100)),
@@ -156,6 +169,7 @@ pub async fn serve(cfg: ServerConfig) -> anyhow::Result<()> {
         root = ?cfg.root,
         allow = ?cfg.allow,
         cache_mb = cfg.cache_mb,
+        cache_dir = ?cfg.cache_dir,
         max_inflight = cfg.max_inflight,
         "surtgis serve listening"
     );

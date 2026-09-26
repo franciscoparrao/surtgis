@@ -16,6 +16,8 @@ pub struct Args {
     pub max_age: u32,
     /// L1 tile cache, MiB.
     pub cache_mb: usize,
+    /// L2 tile cache directory.
+    pub cache_dir: Option<PathBuf>,
     /// Per-tile deadline, ms.
     pub timeout_ms: u64,
     /// Concurrent renders before 503.
@@ -42,6 +44,7 @@ pub fn handle(args: Args) -> Result<()> {
         root: args.root,
         max_age: args.max_age,
         cache_mb: args.cache_mb,
+        cache_dir: args.cache_dir,
         timeout_ms: args.timeout_ms,
         max_inflight: args.max_inflight,
         pool_per_url: args.pool_per_url,

@@ -1,4 +1,6 @@
-//! Byte-bounded LRU caches: rendered tiles (L1) and in-memory local sources.
+//! Caches: a byte-bounded LRU of rendered tiles (L1) and an on-disk tile
+//! store (L2) laid out as `{layer}/{z}/{x}/{y}.png`, which doubles as a
+//! seed for static pyramids.
 
 use std::hash::Hash;
 use std::sync::Mutex;
@@ -82,6 +84,100 @@ impl<K: Hash + Eq + Clone, V: Clone> ByteLru<K, V> {
     }
 }
 
+/// On-disk tile cache, `{root}/{layer}/{z}/{x}/{y}.png`.
+///
+/// `layer` is a hash of everything in the request except the tile
+/// address (source, operator, params, colormap, rescale), so one folder
+/// per rendered layer holds a plain XYZ pyramid that any static tile
+/// host can serve. Writes are atomic (temp file + rename), reads are
+/// plain file reads; there is no size bound — prune the folder from
+/// outside if disk matters.
+pub struct DiskCache {
+    root: std::path::PathBuf,
+    hits: std::sync::atomic::AtomicU64,
+    misses: std::sync::atomic::AtomicU64,
+    writes: std::sync::atomic::AtomicU64,
+    errors: std::sync::atomic::AtomicU64,
+}
+
+impl DiskCache {
+    /// Cache rooted at `root` (created if missing).
+    pub fn new(root: std::path::PathBuf) -> std::io::Result<Self> {
+        std::fs::create_dir_all(&root)?;
+        Ok(Self {
+            root,
+            hits: Default::default(),
+            misses: Default::default(),
+            writes: Default::default(),
+            errors: Default::default(),
+        })
+    }
+
+    /// Root directory.
+    pub fn root(&self) -> &std::path::Path {
+        &self.root
+    }
+
+    /// Path of a tile.
+    pub fn path_for(&self, layer: &str, z: u8, x: u32, y: u32) -> std::path::PathBuf {
+        self.root
+            .join(layer)
+            .join(z.to_string())
+            .join(x.to_string())
+            .join(format!("{y}.png"))
+    }
+
+    /// Read a cached tile, if any.
+    pub async fn get(&self, layer: &str, z: u8, x: u32, y: u32) -> Option<Vec<u8>> {
+        use std::sync::atomic::Ordering::Relaxed;
+        match tokio::fs::read(self.path_for(layer, z, x, y)).await {
+            Ok(bytes) if !bytes.is_empty() => {
+                self.hits.fetch_add(1, Relaxed);
+                Some(bytes)
+            }
+            _ => {
+                self.misses.fetch_add(1, Relaxed);
+                None
+            }
+        }
+    }
+
+    /// Store a tile atomically (write to a temp file, then rename).
+    pub async fn put(&self, layer: &str, z: u8, x: u32, y: u32, bytes: &[u8]) {
+        use std::sync::atomic::Ordering::Relaxed;
+        let path = self.path_for(layer, z, x, y);
+        let result: std::io::Result<()> = async {
+            if let Some(dir) = path.parent() {
+                tokio::fs::create_dir_all(dir).await?;
+            }
+            let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+            tokio::fs::write(&tmp, bytes).await?;
+            tokio::fs::rename(&tmp, &path).await
+        }
+        .await;
+        match result {
+            Ok(()) => {
+                self.writes.fetch_add(1, Relaxed);
+            }
+            Err(e) => {
+                self.errors.fetch_add(1, Relaxed);
+                tracing::warn!(path = %path.display(), error = %e, "disk cache write failed");
+            }
+        }
+    }
+
+    /// `(hits, misses, writes, errors)`.
+    pub fn stats(&self) -> (u64, u64, u64, u64) {
+        use std::sync::atomic::Ordering::Relaxed;
+        (
+            self.hits.load(Relaxed),
+            self.misses.load(Relaxed),
+            self.writes.load(Relaxed),
+            self.errors.load(Relaxed),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,5 +216,26 @@ mod tests {
         c.put("a", vec![0; 4]);
         c.put("a", vec![0; 6]);
         assert_eq!(c.stats().1, 6);
+    }
+
+    #[tokio::test]
+    async fn disk_cache_roundtrip_layout_and_atomicity() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = DiskCache::new(dir.path().join("tiles")).unwrap();
+        assert!(cache.get("abc", 3, 4, 5).await.is_none());
+        cache.put("abc", 3, 4, 5, b"png-bytes").await;
+        assert_eq!(
+            cache.get("abc", 3, 4, 5).await.as_deref(),
+            Some(&b"png-bytes"[..])
+        );
+        assert!(dir.path().join("tiles/abc/3/4/5.png").is_file());
+        // No temp file left behind; other layers untouched.
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path().join("tiles/abc/3/4"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert_eq!(leftovers, vec!["5.png".to_string()]);
+        assert!(cache.get("other", 3, 4, 5).await.is_none());
+        assert_eq!(cache.stats(), (1, 2, 1, 0));
     }
 }

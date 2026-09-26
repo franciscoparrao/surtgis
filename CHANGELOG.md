@@ -30,6 +30,17 @@ breaking changes only ship in a major version and are called out under a
   offline and served as sources. M0 limit: remote COGs are single-band
   (formulas need a local multi-band file).
 
+- **SurtGIS Server M1, L2 disk cache.** `surtgis serve --cache-dir <dir>`
+  keeps rendered tiles on disk as `{layer}/{z}/{x}/{y}.png`, where `layer`
+  hashes everything in the request except the tile address, so each
+  folder is a plain XYZ pyramid any static host can serve (the seed the
+  design document wanted). Lookup order is L1 memory, L2 disk, render;
+  `X-Cache` reports `hit`, `disk` or `miss`; writes are atomic and off the
+  response path; `/metrics` gains disk hit/miss/write/error counters. No
+  size bound on disk — prune the folder externally. Verified: tiles
+  survive a server restart and are served from disk, bit-identical to a
+  fresh render; a different colormap lands in a different layer folder.
+
 - **Multi-band COGs in `surtgis_cloud::CogReader`.** Pixel-interleaved
   COGs with several samples per pixel used to fail the tile-size check
   (the decoder expected one sample per pixel); RGB imagery and multi-band
