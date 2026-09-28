@@ -260,6 +260,7 @@ pub fn handle(algorithm: ImageryCommands, compress: bool) -> Result<()> {
             output,
             class,
             default,
+            fill_nodata,
         } => {
             let classes: Vec<_> = class
                 .iter()
@@ -272,7 +273,7 @@ pub fn handle(algorithm: ImageryCommands, compress: bool) -> Result<()> {
             };
             let raster = read_dem(&input)?;
             let start = Instant::now();
-            let result = reclassify(
+            let mut result = reclassify(
                 &raster,
                 ReclassifyParams {
                     classes,
@@ -280,6 +281,14 @@ pub fn handle(algorithm: ImageryCommands, compress: bool) -> Result<()> {
                 },
             )
             .context("Failed to reclassify")?;
+            if fill_nodata && default_value.is_finite() {
+                // The algorithm leaves nodata as NaN; --fill-nodata gives
+                // those cells the default too (no other way to "fill nodata
+                // with a value" from the CLI).
+                result
+                    .data_mut()
+                    .mapv_inplace(|v| if v.is_nan() { default_value } else { v });
+            }
             let elapsed = start.elapsed();
             write_result(&result, &output, compress)?;
             done("Reclassify", &output, elapsed);

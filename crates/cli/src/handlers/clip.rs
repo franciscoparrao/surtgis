@@ -108,6 +108,10 @@ pub fn handle_clip(
     Ok(())
 }
 
+/// Rows per strip of the streaming rasterizer: a 20k-column grid is
+/// ~80 MB of f64 per strip, whatever the grid's height.
+const RASTERIZE_STRIP_ROWS: u32 = 512;
+
 pub fn handle_rasterize(
     input: PathBuf,
     output: PathBuf,
@@ -115,29 +119,70 @@ pub fn handle_rasterize(
     attribute: Option<String>,
     compress: bool,
 ) -> Result<()> {
+    use surtgis_core::io::window::geotiff_info;
+    use surtgis_core::io::{StripWriterConfig, write_geotiff_streaming};
+
     let features =
         surtgis_core::vector::read_vector(&input).context("Failed to read vector file")?;
-    let ref_raster = helpers::read_dem(&reference)?;
+    // Only the reference's grid is needed (transform, size, CRS): never its
+    // pixels. Reading a 293 M-cell reference as f64 alone was 2.3 GB.
+    let info = geotiff_info(&reference)
+        .with_context(|| format!("Failed to read reference {}", reference.display()))?;
+    let (rows, cols) = (info.height as usize, info.width as usize);
+    let gt = info.transform;
+    let crs = info.crs.clone();
 
-    let (rows, cols) = ref_raster.shape();
+    // CRS check up front (rasterize_polygons repeats it per strip).
+    if let (Some(v), Some(r)) = (features.crs(), crs.as_ref())
+        && !v.is_equivalent(r)
+    {
+        anyhow::bail!(
+            "vector CRS ({}) does not match raster CRS ({}); reproject the vector data before rasterizing",
+            v.identifier(),
+            r.identifier()
+        );
+    }
+
     let start = Instant::now();
-    let mut result = surtgis_core::vector::rasterize_polygons(
-        &features,
-        ref_raster.transform(),
+    // Streaming: the output is written strip by strip (Float32, NaN outside
+    // every polygon), so memory is one strip, not the whole grid. Each strip
+    // is rasterized on its own sub-grid (same columns, shifted origin).
+    let config = StripWriterConfig {
         rows,
         cols,
-        attribute.as_deref(),
-        ref_raster.crs(),
-    )
+        transform: gt,
+        crs: crs.clone(),
+        nodata: Some(f64::NAN),
+        compress,
+        rows_per_strip: RASTERIZE_STRIP_ROWS,
+    };
+    let rps = RASTERIZE_STRIP_ROWS as usize;
+    let pb = helpers::spinner("Rasterizing...");
+    write_geotiff_streaming(&output, &config, |strip_idx, strip_rows| {
+        let start_row = strip_idx * rps;
+        let (ox, oy) = gt.pixel_to_geo_corner(0, start_row);
+        let strip_gt = surtgis_core::GeoTransform::new(ox, oy, gt.pixel_width, gt.pixel_height);
+        let strip = surtgis_core::vector::rasterize_polygons(
+            &features,
+            &strip_gt,
+            strip_rows,
+            cols,
+            attribute.as_deref(),
+            crs.as_ref(),
+        )?;
+        Ok(strip.data().to_owned())
+    })
     .context("Failed to rasterize")?;
-    // Inherit the reference CRS so the mask stays georeferenced. Without this
-    // the writer emits a bare raster that downstream tools read as LOCAL_CS
-    // (metres), mislabelling geographic (degree) grids and breaking alignment.
-    result.set_crs(ref_raster.crs().cloned());
+    pb.finish_and_clear();
     let elapsed = start.elapsed();
 
-    helpers::write_result(&result, &output, compress)?;
-    println!("{} features rasterized", features.len());
+    println!(
+        "{} features rasterized ({}x{} grid, {} strips)",
+        features.len(),
+        cols,
+        rows,
+        rows.div_ceil(rps)
+    );
     helpers::done("Rasterize", &output, elapsed);
     Ok(())
 }
