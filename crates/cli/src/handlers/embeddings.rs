@@ -3,7 +3,7 @@
 //! PCA false colour, norms, and a look at what a file holds.
 
 use anyhow::{Context, Result, bail};
-use std::path::PathBuf;
+use std::path::Path;
 use std::time::Instant;
 
 use surtgis_algorithms::embeddings::{
@@ -159,7 +159,7 @@ fn parse_bbox(s: &str) -> Result<[f64; 4]> {
 /// through the COG reader's local backend. Nodata becomes NaN and
 /// `dequantize` is applied once here.
 fn read_stack(
-    input: &std::path::Path,
+    input: &Path,
     dequantize: Dequantize,
     bbox: Option<&str>,
 ) -> Result<Vec<Raster<f64>>> {
@@ -200,7 +200,7 @@ fn read_stack(
     Ok(bands)
 }
 
-fn read_native_window(input: &std::path::Path, b: [f64; 4]) -> Result<Vec<Raster<f64>>> {
+fn read_native_window(input: &Path, b: [f64; 4]) -> Result<Vec<Raster<f64>>> {
     use surtgis_core::io::window::{geotiff_info, read_geotiff_window_bands};
     let info = geotiff_info(input).map_err(|e| anyhow::anyhow!("{e}"))?;
     let Some(pw) = info.window_for_bounds(0, b[0], b[1], b[2], b[3]) else {
@@ -210,7 +210,7 @@ fn read_native_window(input: &std::path::Path, b: [f64; 4]) -> Result<Vec<Raster
 }
 
 #[cfg(feature = "cloud")]
-fn read_stack_cog(input: &std::path::Path, bbox: Option<[f64; 4]>) -> Result<Vec<Raster<f64>>> {
+fn read_stack_cog(input: &Path, bbox: Option<[f64; 4]>) -> Result<Vec<Raster<f64>>> {
     use surtgis_cloud::blocking::CogReaderBlocking;
     use surtgis_cloud::{BBox, CogReaderOptions};
     let mut r = CogReaderBlocking::open(&input.display().to_string(), CogReaderOptions::default())?;
@@ -228,7 +228,7 @@ fn read_stack_cog(input: &std::path::Path, bbox: Option<[f64; 4]>) -> Result<Vec
 }
 
 #[cfg(not(feature = "cloud"))]
-fn read_stack_cog(_input: &std::path::Path, _bbox: Option<[f64; 4]>) -> Result<Vec<Raster<f64>>> {
+fn read_stack_cog(_input: &Path, _bbox: Option<[f64; 4]>) -> Result<Vec<Raster<f64>>> {
     bail!("this build has no COG reader (feature `cloud`) for planar/ZSTD/bottom-up files")
 }
 
@@ -325,7 +325,7 @@ fn resolve_reference(
 /// Tiles of the AlphaEarth index covering `(lon, lat)`: the index is a
 /// GeoParquet with one row per tile and `wgs84_*` / `utm_*` bounds,
 /// `year`, `utm_zone` and the `gs://` path.
-fn locate(index: &std::path::Path, lon: f64, lat: f64, year: Option<i64>) -> Result<()> {
+fn locate(index: &Path, lon: f64, lat: f64, year: Option<i64>) -> Result<()> {
     use surtgis_core::vector::AttributeValue;
     let fc = surtgis_core::vector::read_geoparquet(index)
         .with_context(|| format!("reading index {}", index.display()))?;
@@ -407,7 +407,7 @@ fn parse_pair(s: &str, flag: &str) -> Result<(f64, f64)> {
     ))
 }
 
-fn info(input: &std::path::Path, dequantize: Dequantize, bbox: Option<&str>) -> Result<()> {
+fn info(input: &Path, dequantize: Dequantize, bbox: Option<&str>) -> Result<()> {
     let bands = read_stack(input, dequantize, bbox)?;
     let refs: Vec<&Raster<f64>> = bands.iter().collect();
     let (rows, cols) = bands[0].shape();
