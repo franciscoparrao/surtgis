@@ -328,7 +328,10 @@ pub fn index_builder(formula: &str, bands: &HashMap<&str, &Raster<f64>>) -> Resu
     }
 
     // Get dimensions from first band
-    let first = *bands.values().next().unwrap();
+    // Smallest key, not HashMap order: the fallback georeference source
+    // must be the same band every run.
+    let first_key = bands.keys().min().expect("bands non-empty");
+    let first = bands[first_key];
     let (rows, cols) = first.shape();
 
     // Verify all bands have same dimensions

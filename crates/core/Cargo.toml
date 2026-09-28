@@ -45,6 +45,9 @@ tiff.workspace = true
 # `tiff`'s lower-level `DirectoryEncoder` directly instead and compress
 # strips ourselves with the same zlib wrapper `tiff` uses internally.
 flate2.workspace = true
+# Provenance hashes (see src/provenance.rs). Pure-Rust fallback on every
+# target; the SIMD/asm paths are picked up where the C toolchain exists.
+blake3.workspace = true
 
 [dev-dependencies]
 approx.workspace = true

@@ -57,4 +57,10 @@ pub use strip_writer::{StripWriterConfig, write_geotiff_streaming};
 // Cloud-Optimized GeoTIFF (COG) writer — tiled + internal overview
 // pyramid, native (no `gdal` feature required). See `cog_writer` module
 // docs for exactly what "Cloud-Optimized" means here.
-pub use cog_writer::{CogCompression, CogOptions, OverviewResampling, write_cog};
+pub use cog_writer::{
+    CogCompression, CogOptions, OverviewResampling, write_cog, write_cog_with_provenance,
+};
+pub use native::{
+    parse_gdal_metadata_items, raster_data_hash, read_gdal_metadata, read_provenance,
+    write_geotiff_with_provenance,
+};

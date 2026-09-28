@@ -210,10 +210,19 @@ impl StacItem {
             .map(|v| v as u32)
     }
 
+    /// Assets sorted by key. `assets` is a HashMap whose iteration order is
+    /// randomised per instance; "first matching asset" must mean the same
+    /// file every run.
+    fn assets_in_key_order(&self) -> Vec<(&String, &StacAsset)> {
+        let mut v: Vec<(&String, &StacAsset)> = self.assets.iter().collect();
+        v.sort_by(|a, b| a.0.cmp(b.0));
+        v
+    }
+
     /// Find the first asset that looks like a COG (role contains "data" and
     /// media type is GeoTIFF or the href ends in `.tif`/`.tiff`).
     pub fn first_cog_asset(&self) -> Option<(&String, &StacAsset)> {
-        self.assets.iter().find(|(_, a)| {
+        self.assets_in_key_order().into_iter().find(|(_, a)| {
             let is_data_role = a
                 .roles
                 .as_ref()
@@ -233,7 +242,7 @@ impl StacItem {
 
     /// Find the first asset that is a Zarr store.
     pub fn first_zarr_asset(&self) -> Option<(&String, &StacAsset)> {
-        self.assets.iter().find(|(_, a)| {
+        self.assets_in_key_order().into_iter().find(|(_, a)| {
             let is_data_role = a
                 .roles
                 .as_ref()

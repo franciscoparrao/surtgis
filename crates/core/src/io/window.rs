@@ -260,6 +260,7 @@ where
     T: RasterElement,
     P: AsRef<Path>,
 {
+    crate::provenance::observe_input(&path.as_ref().display().to_string());
     let Some(lvl) = info.levels.get(level) else {
         return Err(Error::Other(format!(
             "level {level} out of range (file has {})",

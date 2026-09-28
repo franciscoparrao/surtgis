@@ -101,6 +101,7 @@ pub struct NetCdfReader {
 impl NetCdfReader {
     /// Open a NetCDF file and select a variable for reading.
     pub fn open(path: &Path, variable: &str) -> Result<Self> {
+        surtgis_core::provenance::observe_input(&path.display().to_string());
         let file = netcdf::open(path)
             .map_err(|e| CloudError::NetCdf(format!("failed to open {}: {e}", path.display())))?;
 

@@ -15,6 +15,7 @@
 - [Mosaic rasters in different CRSes](how-to/mosaic-crs.md)
 - [Cache COG tiles for fast re-runs](how-to/cog-cache.md)
 - [Tune the RAM budget](how-to/ram-budget.md)
+- [Verify where a raster came from](how-to/provenance.md)
 - [Debug a stac composite using too much RAM](how-to/debug-stac-ram.md)
 - [Extract patches: points vs polygons](how-to/extract-patches.md)
 - [Prepare training data for a Geospatial Foundation Model](how-to/gfm-prithvi-prep.md)

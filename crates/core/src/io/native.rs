@@ -5,6 +5,7 @@
 
 use super::GeoTiffOptions;
 use crate::error::{Error, Result};
+use crate::provenance::{self, DataDigest, OutputRecord, Provenance};
 use crate::raster::{AnyRaster, GeoTransform, Raster, RasterElement};
 use std::any::{Any, TypeId};
 use std::fs::File;
@@ -30,6 +31,7 @@ where
     T: RasterElement,
     P: AsRef<Path>,
 {
+    provenance::observe_input(&path.as_ref().display().to_string());
     let file = File::open(path.as_ref())?;
     let len = file.metadata().ok().map(|m| m.len());
     decode_geotiff(file, band, len)
@@ -64,6 +66,7 @@ where
 /// rather than failing the read — see [`decode_geotiff_any`] for the
 /// mapping.
 pub fn read_geotiff_any<P: AsRef<Path>>(path: P, band: Option<usize>) -> Result<AnyRaster> {
+    provenance::observe_input(&path.as_ref().display().to_string());
     let file = File::open(path.as_ref())?;
     let len = file.metadata().ok().map(|m| m.len());
     decode_geotiff_any(file, band, len)
@@ -89,6 +92,7 @@ where
     T: RasterElement,
     P: AsRef<Path>,
 {
+    provenance::observe_input(&path.as_ref().display().to_string());
     let file = File::open(path.as_ref())?;
     let len = file.metadata().ok().map(|m| m.len());
     decode_geotiff_bands(file, len)
@@ -951,11 +955,42 @@ where
     [T]: tiff::encoder::TiffValue,
     P: AsRef<Path>,
 {
+    write_geotiff_inner(raster, path.as_ref(), options.as_ref(), None)
+}
+
+/// [`write_geotiff`] with an explicit provenance record embedded as the
+/// `SURTGIS_PROVENANCE` item of `GDAL_METADATA` (tag 42112). The writer
+/// fills [`Provenance::output`] with the digest of the array it writes;
+/// see [`crate::provenance`] for the record and the digest definition.
+pub fn write_geotiff_with_provenance<T, P>(
+    raster: &Raster<T>,
+    path: P,
+    options: Option<GeoTiffOptions>,
+    provenance: &Provenance,
+) -> Result<()>
+where
+    T: RasterElement + NativeGraySample,
+    [T]: tiff::encoder::TiffValue,
+    P: AsRef<Path>,
+{
+    write_geotiff_inner(raster, path.as_ref(), options.as_ref(), Some(provenance))
+}
+
+fn write_geotiff_inner<T>(
+    raster: &Raster<T>,
+    final_path: &Path,
+    options: Option<&GeoTiffOptions>,
+    explicit: Option<&Provenance>,
+) -> Result<()>
+where
+    T: RasterElement + NativeGraySample,
+    [T]: tiff::encoder::TiffValue,
+{
     // Write to temp file first, then atomic rename to prevent corrupt partial files
-    let final_path = path.as_ref();
     let tmp_path = final_path.with_extension("tmp");
     let file = File::create(&tmp_path)?;
-    encode_geotiff(raster, file, options.as_ref())?;
+    let items = provenance_items(&[raster], explicit);
+    encode_geotiff(raster, file, options, &items)?;
     std::fs::rename(&tmp_path, final_path)?;
     Ok(())
 }
@@ -973,7 +1008,8 @@ where
     [T]: tiff::encoder::TiffValue,
 {
     let mut buf = Vec::new();
-    encode_geotiff(raster, Cursor::new(&mut buf), options.as_ref())?;
+    let items = provenance_items(&[raster], None);
+    encode_geotiff(raster, Cursor::new(&mut buf), options.as_ref(), &items)?;
     Ok(buf)
 }
 
@@ -983,6 +1019,7 @@ fn encode_geotiff<T, W>(
     raster: &Raster<T>,
     writer: W,
     options: Option<&GeoTiffOptions>,
+    metadata_items: &[(String, String)],
 ) -> Result<()>
 where
     T: RasterElement + NativeGraySample,
@@ -1004,7 +1041,7 @@ where
         let image = encoder
             .new_image::<T::Gray>(cols as u32, rows as u32)
             .map_err(|e| Error::Other(format!("Cannot create TIFF image: {}", e)))?;
-        write_single_band_image(image, raster)
+        write_single_band_image(image, raster, metadata_items)
     } else {
         let mut encoder = TiffEncoder::new(writer)
             .map_err(|e| Error::Other(format!("TIFF encoder error: {}", e)))?
@@ -1012,7 +1049,7 @@ where
         let image = encoder
             .new_image::<T::Gray>(cols as u32, rows as u32)
             .map_err(|e| Error::Other(format!("Cannot create TIFF image: {}", e)))?;
-        write_single_band_image(image, raster)
+        write_single_band_image(image, raster, metadata_items)
     }
 }
 
@@ -1022,6 +1059,7 @@ where
 fn write_single_band_image<T, W, K>(
     mut image: tiff::encoder::ImageEncoder<'_, W, T::Gray, K>,
     raster: &Raster<T>,
+    metadata_items: &[(String, String)],
 ) -> Result<()>
 where
     T: RasterElement + NativeGraySample,
@@ -1035,6 +1073,7 @@ where
         raster.crs(),
         raster.nodata().and_then(|nd| nd.to_f64()),
     )?;
+    write_gdal_metadata_tag(image.encoder(), metadata_items)?;
 
     // No cast needed: T::Gray::Inner == T, so the raw sample buffer is
     // written verbatim instead of through the old lossy f32 conversion.
@@ -1098,32 +1137,83 @@ where
     // native sample format; anything else falls back to f32 as before.
     if TypeId::of::<T>() == TypeId::of::<u8>() {
         let interleaved: Vec<u8> = interleave_cast(bands, rows, cols, 0u8);
+        let items = provenance_items_interleaved(&interleaved, rows, cols, n_bands, None);
         match n_bands {
-            1 => encode_multiband_image::<Gray8, _>(file, bands[0], &interleaved, compression)?,
-            3 => encode_multiband_image::<RGB8, _>(file, bands[0], &interleaved, compression)?,
-            4 => encode_multiband_image::<RGBA8, _>(file, bands[0], &interleaved, compression)?,
+            1 => encode_multiband_image::<Gray8, _>(
+                file,
+                bands[0],
+                &interleaved,
+                compression,
+                &items,
+            )?,
+            3 => encode_multiband_image::<RGB8, _>(
+                file,
+                bands[0],
+                &interleaved,
+                compression,
+                &items,
+            )?,
+            4 => encode_multiband_image::<RGBA8, _>(
+                file,
+                bands[0],
+                &interleaved,
+                compression,
+                &items,
+            )?,
             _ => unreachable!(),
         }
     } else if TypeId::of::<T>() == TypeId::of::<u16>() {
         let interleaved: Vec<u16> = interleave_cast(bands, rows, cols, 0u16);
+        let items = provenance_items_interleaved(&interleaved, rows, cols, n_bands, None);
         match n_bands {
-            1 => encode_multiband_image::<Gray16, _>(file, bands[0], &interleaved, compression)?,
-            3 => encode_multiband_image::<RGB16, _>(file, bands[0], &interleaved, compression)?,
-            4 => encode_multiband_image::<RGBA16, _>(file, bands[0], &interleaved, compression)?,
+            1 => encode_multiband_image::<Gray16, _>(
+                file,
+                bands[0],
+                &interleaved,
+                compression,
+                &items,
+            )?,
+            3 => encode_multiband_image::<RGB16, _>(
+                file,
+                bands[0],
+                &interleaved,
+                compression,
+                &items,
+            )?,
+            4 => encode_multiband_image::<RGBA16, _>(
+                file,
+                bands[0],
+                &interleaved,
+                compression,
+                &items,
+            )?,
             _ => unreachable!(),
         }
     } else {
         let interleaved: Vec<f32> = interleave_cast(bands, rows, cols, f32::NAN);
+        let items = provenance_items_interleaved(&interleaved, rows, cols, n_bands, None);
         match n_bands {
-            1 => {
-                encode_multiband_image::<Gray32Float, _>(file, bands[0], &interleaved, compression)?
-            }
-            3 => {
-                encode_multiband_image::<RGB32Float, _>(file, bands[0], &interleaved, compression)?
-            }
-            4 => {
-                encode_multiband_image::<RGBA32Float, _>(file, bands[0], &interleaved, compression)?
-            }
+            1 => encode_multiband_image::<Gray32Float, _>(
+                file,
+                bands[0],
+                &interleaved,
+                compression,
+                &items,
+            )?,
+            3 => encode_multiband_image::<RGB32Float, _>(
+                file,
+                bands[0],
+                &interleaved,
+                compression,
+                &items,
+            )?,
+            4 => encode_multiband_image::<RGBA32Float, _>(
+                file,
+                bands[0],
+                &interleaved,
+                compression,
+                &items,
+            )?,
             _ => unreachable!(),
         }
     }
@@ -1159,6 +1249,7 @@ fn encode_multiband_image<CT, W>(
     meta: &Raster<impl RasterElement>,
     interleaved: &[CT::Inner],
     compression: Compression,
+    metadata_items: &[(String, String)],
 ) -> Result<()>
 where
     CT: ColorType,
@@ -1252,6 +1343,7 @@ where
             .write_tag(Tag::Unknown(42113), nodata_str.as_str())
             .map_err(|e| Error::Other(format!("Cannot write nodata tag: {}", e)))?;
     }
+    write_gdal_metadata_tag(image.encoder(), metadata_items)?;
 
     image
         .write_data(interleaved)
@@ -1335,6 +1427,7 @@ where
 
     let final_path = path.as_ref();
     let tmp_path = final_path.with_extension("tmp");
+    let items = provenance_items(bands, None);
     let file = File::create(&tmp_path)?;
 
     if options.bigtiff {
@@ -1349,6 +1442,7 @@ where
             compression,
             bands[0],
             names,
+            &items,
         )?;
     } else {
         let mut encoder = TiffEncoder::new(file)
@@ -1362,6 +1456,7 @@ where
             compression,
             bands[0],
             names,
+            &items,
         )?;
     }
 
@@ -1409,20 +1504,224 @@ fn xml_escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-/// Build the GDAL_METADATA (tag 42112) XML payload carrying per-band
-/// descriptions, in the format GDAL's GTiff driver writes/reads:
-/// `<Item name="DESCRIPTION" sample="i">...</Item>` per band.
-fn gdal_metadata_xml(names: &[&str]) -> String {
+/// One `<Item>` of a `GDAL_METADATA` (tag 42112) payload.
+pub(crate) struct MetadataItem<'a> {
+    pub name: &'a str,
+    pub sample: Option<usize>,
+    pub role: Option<&'a str>,
+    pub value: &'a str,
+}
+
+/// Build the GDAL_METADATA (tag 42112) XML payload in the format GDAL's
+/// GTiff driver writes/reads: `<Item name="…" [sample="i"] [role="…"]>…</Item>`.
+pub(crate) fn gdal_metadata_xml_items(items: &[MetadataItem<'_>]) -> String {
     let mut xml = String::from("<GDALMetadata>");
-    for (i, name) in names.iter().enumerate() {
-        xml.push_str(&format!(
-            "<Item name=\"DESCRIPTION\" sample=\"{}\" role=\"description\">{}</Item>",
-            i,
-            xml_escape(name)
-        ));
+    for it in items {
+        xml.push_str("<Item name=\"");
+        xml.push_str(&xml_escape(it.name));
+        xml.push('"');
+        if let Some(i) = it.sample {
+            xml.push_str(&format!(" sample=\"{i}\""));
+        }
+        if let Some(r) = it.role {
+            xml.push_str(&format!(" role=\"{}\"", xml_escape(r)));
+        }
+        xml.push('>');
+        xml.push_str(&xml_escape(it.value));
+        xml.push_str("</Item>");
     }
     xml.push_str("</GDALMetadata>");
     xml
+}
+
+/// Write `items` as the GDAL_METADATA tag (42112) of `dir`; a no-op when
+/// `items` is empty.
+pub(crate) fn write_gdal_metadata_tag<W, K>(
+    dir: &mut DirectoryEncoder<'_, W, K>,
+    items: &[(String, String)],
+) -> Result<()>
+where
+    W: std::io::Write + std::io::Seek,
+    K: TiffKind,
+{
+    if items.is_empty() {
+        return Ok(());
+    }
+    let xml_items: Vec<MetadataItem<'_>> = items
+        .iter()
+        .map(|(k, v)| MetadataItem {
+            name: k,
+            sample: None,
+            role: None,
+            value: v,
+        })
+        .collect();
+    let xml = gdal_metadata_xml_items(&xml_items);
+    dir.write_tag(Tag::Unknown(42112), xml.as_str())
+        .map_err(|e| Error::Other(format!("Cannot write GDAL_METADATA tag: {}", e)))
+}
+
+fn xml_unescape(s: &str) -> String {
+    s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+}
+
+/// Parse a `GDAL_METADATA` XML payload into `(name, value)` pairs in
+/// document order. Per-band items (`sample="i"`) are returned with their
+/// plain name (e.g. `DESCRIPTION`), one pair per band. Plain string scan,
+/// as GDAL's own output is regular; no XML dependency.
+pub fn parse_gdal_metadata_items(xml: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut rest = xml;
+    while let Some(pos) = rest.find("<Item ") {
+        let after = &rest[pos + 6..];
+        let Some(name_pos) = after.find("name=\"") else {
+            break;
+        };
+        let name_start = &after[name_pos + 6..];
+        let Some(name_end) = name_start.find('"') else {
+            break;
+        };
+        let name = xml_unescape(&name_start[..name_end]);
+        let Some(gt) = after.find('>') else {
+            break;
+        };
+        let body = &after[gt + 1..];
+        let Some(end) = body.find("</Item>") else {
+            break;
+        };
+        out.push((name, xml_unescape(&body[..end])));
+        rest = &body[end + 7..];
+    }
+    out
+}
+
+/// Read the `GDAL_METADATA` (tag 42112) items of a GeoTIFF: band
+/// descriptions, scale/offset, the SurtGIS provenance record and anything
+/// else GDAL or another writer put there. Empty when the tag is absent.
+pub fn read_gdal_metadata<P: AsRef<Path>>(path: P) -> Result<Vec<(String, String)>> {
+    let file = File::open(path.as_ref())?;
+    let mut decoder = Decoder::new(std::io::BufReader::new(file))
+        .map_err(|e| Error::Other(format!("TIFF decode error: {}", e)))?
+        .with_limits(Limits::unlimited());
+    Ok(match decoder.get_tag_ascii_string(Tag::Unknown(42112)) {
+        Ok(xml) => parse_gdal_metadata_items(&xml),
+        Err(_) => Vec::new(),
+    })
+}
+
+/// Read the embedded [`Provenance`] record of a GeoTIFF/COG written by
+/// SurtGIS, `None` when the file carries none.
+///
+/// # Errors
+/// I/O and TIFF errors, and a present record whose schema this build
+/// does not understand.
+pub fn read_provenance<P: AsRef<Path>>(path: P) -> Result<Option<Provenance>> {
+    for (k, v) in read_gdal_metadata(path)? {
+        if k == provenance::METADATA_ITEM {
+            return Provenance::from_json(&v).map(Some);
+        }
+    }
+    Ok(None)
+}
+
+/// Digest of one or more aligned single-band rasters as SurtGIS writes
+/// them (band-sequential; see [`crate::provenance`]). This is the value
+/// [`read_provenance`] must match for a file to verify.
+pub fn raster_data_hash<T>(bands: &[&Raster<T>]) -> OutputRecord
+where
+    T: RasterElement,
+    [T]: tiff::encoder::TiffValue,
+{
+    let (rows, cols) = bands.first().map(|b| b.shape()).unwrap_or((0, 0));
+    let mut d = DataDigest::new(rows, cols, bands.len(), std::any::type_name::<T>());
+    for b in bands {
+        // Hash in row chunks: `TiffValue::data` may copy, so keep it small.
+        for row in b.data().rows() {
+            match row.as_slice() {
+                Some(sl) => d.update(&tiff::encoder::TiffValue::data(sl)),
+                None => {
+                    let owned: Vec<T> = row.iter().copied().collect();
+                    d.update(&tiff::encoder::TiffValue::data(owned.as_slice()));
+                }
+            }
+        }
+    }
+    d.finish()
+}
+
+/// Same digest computed from a pixel-interleaved buffer of `n_bands`.
+fn interleaved_data_hash<S>(
+    interleaved: &[S],
+    rows: usize,
+    cols: usize,
+    n_bands: usize,
+) -> OutputRecord
+where
+    S: Copy,
+    [S]: tiff::encoder::TiffValue,
+{
+    let mut d = DataDigest::new(rows, cols, n_bands, std::any::type_name::<S>());
+    let mut row_buf: Vec<S> = Vec::with_capacity(cols);
+    for b in 0..n_bands {
+        for r in 0..rows {
+            row_buf.clear();
+            row_buf.extend((0..cols).map(|c| interleaved[(r * cols + c) * n_bands + b]));
+            d.update(&tiff::encoder::TiffValue::data(row_buf.as_slice()));
+        }
+    }
+    d.finish()
+}
+
+/// Resolve the record to embed (explicit, else the process provider),
+/// attach the output digest, and return it as GDAL_METADATA items.
+pub(crate) fn provenance_items<T>(
+    bands: &[&Raster<T>],
+    explicit: Option<&Provenance>,
+) -> Vec<(String, String)>
+where
+    T: RasterElement,
+    [T]: tiff::encoder::TiffValue,
+{
+    let Some(mut prov) = explicit.cloned().or_else(provenance::provided_output) else {
+        return Vec::new();
+    };
+    prov.output = Some(raster_data_hash(bands));
+    vec![(provenance::METADATA_ITEM.to_string(), prov.to_json())]
+}
+
+fn provenance_items_interleaved<S>(
+    interleaved: &[S],
+    rows: usize,
+    cols: usize,
+    n_bands: usize,
+    explicit: Option<&Provenance>,
+) -> Vec<(String, String)>
+where
+    S: Copy,
+    [S]: tiff::encoder::TiffValue,
+{
+    let Some(mut prov) = explicit.cloned().or_else(provenance::provided_output) else {
+        return Vec::new();
+    };
+    prov.output = Some(interleaved_data_hash(interleaved, rows, cols, n_bands));
+    vec![(provenance::METADATA_ITEM.to_string(), prov.to_json())]
+}
+
+/// Attach a ready-made [`OutputRecord`] (streaming writers hash as they
+/// go) and return the GDAL_METADATA items to write.
+pub(crate) fn provenance_items_with_output(
+    output: OutputRecord,
+    explicit: Option<&Provenance>,
+) -> Vec<(String, String)> {
+    let Some(mut prov) = explicit.cloned().or_else(provenance::provided_output) else {
+        return Vec::new();
+    };
+    prov.output = Some(output);
+    vec![(provenance::METADATA_ITEM.to_string(), prov.to_json())]
 }
 
 /// Low-level IFD writer behind [`write_geotiff_stack`]: writes every
@@ -1439,6 +1738,7 @@ fn write_stack_ifd<T, W, K>(
     compression: Compression,
     meta: &Raster<T>,
     names: Option<&[&str]>,
+    metadata_items: &[(String, String)],
 ) -> Result<()>
 where
     T: RasterElement + NativeGraySample,
@@ -1521,8 +1821,23 @@ where
         meta.nodata().and_then(|nd| nd.to_f64()),
     )?;
 
+    let mut xml_items: Vec<MetadataItem<'_>> = Vec::new();
     if let Some(names) = names {
-        let xml = gdal_metadata_xml(names);
+        xml_items.extend(names.iter().enumerate().map(|(i, n)| MetadataItem {
+            name: "DESCRIPTION",
+            sample: Some(i),
+            role: Some("description"),
+            value: n,
+        }));
+    }
+    xml_items.extend(metadata_items.iter().map(|(k, v)| MetadataItem {
+        name: k,
+        sample: None,
+        role: None,
+        value: v,
+    }));
+    if !xml_items.is_empty() {
+        let xml = gdal_metadata_xml_items(&xml_items);
         dir.write_tag(Tag::Unknown(42112), xml.as_str())
             .map_err(|e| Error::Other(format!("Cannot write GDAL_METADATA tag: {}", e)))?;
     }

@@ -56,3 +56,19 @@ pub use long_profile::{
 };
 pub use stream_traversal::{StreamGraph, StreamGraphError, build_stream_graph};
 pub use swath_profile::{SwathError, SwathParams, SwathProfile, SwathStats, swath_profile};
+
+/// Stable 64-bit mix (SplitMix64 finaliser over the concatenated parts).
+/// Used as the resampling PRNG of the bootstrap confidence intervals:
+/// unlike `std`'s `DefaultHasher`, whose algorithm is not specified to be
+/// stable across Rust releases, this is a fixed function of `(seed,
+/// group, boot, k)` and reproduces the same CI on any toolchain.
+pub(crate) fn stable_mix(parts: &[u64]) -> u64 {
+    let mut z: u64 = 0x9E37_79B9_7F4A_7C15;
+    for &p in parts {
+        z = z.wrapping_add(p).wrapping_add(0x9E37_79B9_7F4A_7C15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+    }
+    z
+}

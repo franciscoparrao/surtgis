@@ -367,8 +367,6 @@ fn extract_segments(
     bootstrap_n: usize,
     seed: u64,
 ) -> Vec<KsnSegment> {
-    use std::hash::{Hash, Hasher};
-
     let mut segments = Vec::new();
     let mut starts: VecDeque<usize> = VecDeque::new();
 
@@ -432,10 +430,9 @@ fn extract_segments(
             f64::NAN
         };
 
-        // Deterministic bootstrap on the per-cell ksn values. Hash
-        // (seed, segment_id, boot_k, cell_k) for the resampling
-        // index — same recipe as `concavity_index` so results are
-        // reproducible across the suite.
+        // Deterministic bootstrap on the per-cell ksn values:
+        // stable_mix(seed, segment_id, boot_k, cell_k) for the resampling
+        // index — same recipe as `concavity_index`, toolchain-independent.
         let ksn_ci = if bootstrap_n == 0 || count == 0 {
             (ksn_mean, ksn_mean)
         } else {
@@ -444,12 +441,9 @@ fn extract_segments(
             for boot in 0..bootstrap_n {
                 let mut sum_b = 0.0;
                 for k in 0..n {
-                    let mut h = std::collections::hash_map::DefaultHasher::new();
-                    seed.hash(&mut h);
-                    segment_id.hash(&mut h);
-                    boot.hash(&mut h);
-                    k.hash(&mut h);
-                    let idx = (h.finish() as usize) % n;
+                    let idx = (super::stable_mix(&[seed, segment_id as u64, boot as u64, k as u64])
+                        as usize)
+                        % n;
                     sum_b += values[idx];
                 }
                 samples.push(sum_b / n as f64);
