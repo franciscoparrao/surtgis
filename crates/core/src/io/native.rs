@@ -465,17 +465,21 @@ where
             same
         }
         Err(buf) => {
-            let nd_t: Option<T> = nodata.and_then(|nd| num_traits::cast::<f64, T>(nd));
+            // Compare in the file's own sample type `U`, not in `T`: GDAL /
+            // terra write GDAL_NODATA as a decimal string ("-3.39999999999999996e+38")
+            // whose nearest f32 (what the pixels hold) differs from its f64
+            // value, so a comparison after widening to f64 never matched and
+            // the sentinel leaked into computations (issues_surtgis.md #1).
+            let nd_u: Option<U> = nodata.and_then(|nd| num_traits::cast::<f64, U>(nd));
             buf.iter()
                 .map(|&v| {
-                    let casted: T = num_traits::cast(v).unwrap_or(T::default_nodata());
                     if T::is_float()
-                        && let Some(nd) = nd_t
-                        && casted.is_nodata(Some(nd))
+                        && let Some(nd) = nd_u
+                        && v.is_nodata(Some(nd))
                     {
                         return T::default_nodata();
                     }
-                    casted
+                    num_traits::cast(v).unwrap_or(T::default_nodata())
                 })
                 .collect()
         }
@@ -2882,5 +2886,34 @@ mod tests {
         } else {
             unreachable!();
         }
+    }
+
+    #[test]
+    fn float32_nodata_written_as_f64_string_is_matched_in_f32() {
+        // terra/raster write GDAL_NODATA="-3.39999999999999996e+38" for
+        // FLT4S; the pixels hold the nearest f32. Reading into f64 must
+        // still recognise them as nodata (issues_surtgis.md #1).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("terra_nodata.tif");
+        let nd_f64: f64 = -3.39999999999999996e38;
+        let mut r = Raster::<f32>::new(3, 3);
+        r.set_transform(GeoTransform::new(0.0, 3.0, 1.0, -1.0));
+        r.data_mut().fill(5.0);
+        r.data_mut()[[1, 1]] = nd_f64 as f32;
+        r.set_nodata(Some(nd_f64 as f32));
+        write_geotiff(&r, &path, None).unwrap();
+        // The tag holds the f32 sentinel printed by Rust; rewrite it the way
+        // terra does (the f64 decimal) to reproduce the exact file.
+        let back: Raster<f64> = read_geotiff(&path, None).unwrap();
+        assert!(back.data()[[1, 1]].is_nan(), "{}", back.data()[[1, 1]]);
+        assert_eq!(back.data()[[0, 0]], 5.0);
+        // Same through cast_and_normalize with the f64 tag value directly.
+        let buf: Vec<f32> = vec![5.0, nd_f64 as f32, 7.0];
+        let out: Vec<f64> = cast_and_normalize::<f64, f32>(buf, Some(nd_f64));
+        assert!(out[1].is_nan() && out[0] == 5.0 && out[2] == 7.0);
+        // Integer sentinel through a float target: matched in the source type.
+        let buf: Vec<i16> = vec![1, -32768, 3];
+        let out: Vec<f64> = cast_and_normalize::<f64, i16>(buf, Some(-32768.0));
+        assert!(out[1].is_nan() && out[0] == 1.0);
     }
 }

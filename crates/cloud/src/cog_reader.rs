@@ -828,9 +828,16 @@ impl CogReader {
         // sparse tiles were pre-filled with NaN — the same raster mixes both
         // conventions and NaN-checking kernels see the sentinel as valid
         // data (audit R4, H4). No-op for integer `T`.
+        // The GDAL_NODATA string is decimal; the pixels hold the nearest
+        // value of the file's sample type, so compare against that (a terra
+        // "-3.39999999999999996e+38" tag vs f32 pixels never matched in f64).
+        let nodata_in_samples = self.geo_meta.nodata.map(|nd| match (sf, bps) {
+            (3, 32) => (nd as f32) as f64,
+            _ => nd,
+        });
         for output in outputs.iter_mut() {
             if let Some(slice) = output.as_slice_mut() {
-                surtgis_core::io::normalize_any_float_nodata(slice, self.geo_meta.nodata);
+                surtgis_core::io::normalize_any_float_nodata(slice, nodata_in_samples);
             }
         }
 

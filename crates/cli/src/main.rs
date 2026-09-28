@@ -77,6 +77,7 @@ fn run(cli: Cli) -> Result<()> {
         .transpose()?;
 
     helpers::setup_logging(verbose);
+    helpers::set_output_f32(cli.output_dtype == "f32");
 
     if !cli.no_provenance && !provenance::disabled_by_env() {
         provenance::install(std::env::args().collect());

@@ -87,13 +87,31 @@ pub fn write_opts(compress: bool) -> GeoTiffOptions {
     }
 }
 
+/// Sample type of Float64 outputs, set once from `--output-dtype`.
+static OUTPUT_F32: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Make every Float64 output written through [`write_result`] Float32.
+pub fn set_output_f32(on: bool) {
+    OUTPUT_F32.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
 pub fn write_result(
     raster: &surtgis_core::Raster<f64>,
     path: &PathBuf,
     compress: bool,
 ) -> Result<()> {
     let pb = spinner("Writing output...");
-    write_geotiff(raster, path, Some(write_opts(compress))).context("Failed to write output")?;
+    if OUTPUT_F32.load(std::sync::atomic::Ordering::Relaxed) {
+        // Half the file: nodata sentinels cast with the data (NaN stays NaN).
+        let (rows, cols) = raster.shape();
+        let mut out = raster.with_same_meta::<f32>(rows, cols);
+        *out.data_mut() = raster.data().mapv(|v| v as f32);
+        out.set_nodata(raster.nodata().map(|nd| nd as f32));
+        write_geotiff(&out, path, Some(write_opts(compress))).context("Failed to write output")?;
+    } else {
+        write_geotiff(raster, path, Some(write_opts(compress)))
+            .context("Failed to write output")?;
+    }
     pb.finish_and_clear();
     Ok(())
 }

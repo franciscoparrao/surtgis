@@ -27,6 +27,11 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub max_memory: Option<String>,
 
+    /// Sample type of Float64 outputs: `f64` (default) or `f32` (half
+    /// the size; nodata stays NaN)
+    #[arg(long, global = true, default_value = "f64", value_parser = ["f32", "f64"])]
+    pub output_dtype: String,
+
     /// Do not embed a provenance record (command, hashed inputs, output
     /// digest) in the written GeoTIFFs, and skip hashing the inputs.
     /// Also honoured as SURTGIS_NO_PROVENANCE=1.
@@ -1679,12 +1684,16 @@ pub enum ImageryCommands {
     Reclassify {
         input: PathBuf,
         output: PathBuf,
-        /// Class definition as "min,max,value" (repeatable)
-        #[arg(long, value_name = "MIN,MAX,VALUE")]
+        /// Class definition as "min,max,value" (repeatable; negative bounds
+        /// are fine: `--class -0.5,0.5,1`)
+        #[arg(long, value_name = "MIN,MAX,VALUE", allow_hyphen_values = true)]
         class: Vec<String>,
-        /// Default value for unclassified cells
-        #[arg(long, default_value = "NaN")]
+        /// Default value for valid cells that match no class
+        #[arg(long, default_value = "NaN", allow_hyphen_values = true)]
         default: String,
+        /// Also give nodata (NaN) cells the default value, i.e. fill nodata
+        #[arg(long)]
+        fill_nodata: bool,
     },
     /// Per-pixel median composite across multiple rasters
     MedianComposite {
