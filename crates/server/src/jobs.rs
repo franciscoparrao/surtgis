@@ -11,7 +11,7 @@
 //!
 //! | step | needs | produces | params |
 //! |---|---|---|---|
-//! | `fill_sinks` | DEM | filled DEM (becomes the DEM) | `min_slope` (1e-5) |
+//! | `fill_sinks` | DEM | filled DEM (becomes the DEM) | `min_slope` (0) |
 //! | `flow_direction` | DEM | D8 codes | |
 //! | `flow_accumulation` | D8 (derived if missing) | cell counts | |
 //! | `stream_network` | accumulation (derived) | 0/1 mask | `threshold` (1000) |
@@ -19,6 +19,16 @@
 //! | `twi` | DEM, accumulation (derived) | wetness index | |
 //!
 //! The output is the product of the last step.
+//!
+//! `fill_sinks` fills to exact flats by default (`min_slope` 0, as TauDEM's
+//! `pitremove`): `flow_direction` then routes each filled depression with
+//! the Garbrecht–Martz double gradient
+//! ([`resolve_flats`](surtgis_algorithms::hydrology::resolve_flats)), which
+//! converges on the spill cell. A positive `min_slope` (the CLI default,
+//! 1e-5) imposes a Planchon–Darboux ramp instead; D8 then follows the ramp's
+//! uniform tilt and drains the depression as parallel lines that leave it
+//! wherever the tilt meets the rim, which is the artefact this default
+//! avoids.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -207,8 +217,11 @@ pub fn run_pipeline(
         let t0 = Instant::now();
         match step.as_str() {
             "fill_sinks" => {
-                let mut p = FillSinksParams::default();
-                p.min_slope = param(params, "min_slope", p.min_slope);
+                // Exact flats (0), not the crate default ramp (1e-5): see
+                // the module docs.
+                let p = FillSinksParams {
+                    min_slope: param(params, "min_slope", 0.0),
+                };
                 dem = fill_sinks(&dem, p).map_err(compute)?;
                 dir = None;
                 acc = None;
@@ -502,5 +515,70 @@ mod tests {
         assert!(info.levels[0].tiled);
         assert!(info.levels.len() >= 2, "{:?}", info.levels);
         assert_eq!(info.crs.and_then(|c| c.epsg()), Some(32719));
+    }
+
+    /// Sloping plane (down to the south) with a closed bowl in the middle.
+    /// Returns the DEM and the number of bowl cells.
+    fn bowl(rows: usize, cols: usize) -> (Raster<f64>, usize) {
+        let mut r = Raster::<f64>::new(rows, cols);
+        let (cr, cc) = (rows as f64 / 2.0, cols as f64 / 2.0);
+        let mut n = 0;
+        for i in 0..rows {
+            for j in 0..cols {
+                let plane = 200.0 - i as f64 * 0.5;
+                let d = ((i as f64 - cr).powi(2) + (j as f64 - cc).powi(2)).sqrt();
+                r.data_mut()[[i, j]] = if d < 8.0 {
+                    n += 1;
+                    plane - (8.0 - d) * 3.0
+                } else {
+                    plane
+                };
+            }
+        }
+        r.set_transform(GeoTransform::new(500_000.0, 6_300_000.0, 10.0, -10.0));
+        (r, n)
+    }
+
+    /// Largest accumulation on any single cell of the plane just south of
+    /// the bowl: the whole bowl if it drains through one outlet.
+    fn outlet_peak(dem: &Raster<f64>, params: &HashMap<String, f64>) -> f64 {
+        let (acc, _) = run_pipeline(
+            dem.clone(),
+            &["fill_sinks".into(), "flow_accumulation".into()],
+            params,
+        )
+        .unwrap();
+        let (rows, cols) = acc.shape();
+        let row = rows / 2 + 8;
+        (0..cols)
+            .map(|j| acc.data()[[row, j]])
+            .fold(f64::MIN, f64::max)
+    }
+
+    #[test]
+    fn filled_depressions_drain_convergently_by_default() {
+        let (dem, bowl_cells) = bowl(24, 30);
+        // Default: exact flats, Garbrecht–Martz routes the bowl to one spill.
+        let (filled, _) =
+            run_pipeline(dem.clone(), &["fill_sinks".into()], &HashMap::new()).unwrap();
+        let floor = filled.data()[[12, 15]];
+        let flat = filled.data().iter().filter(|v| **v == floor).count();
+        assert!(
+            flat > bowl_cells / 2,
+            "exact flat expected, {flat} cells at floor level"
+        );
+        let peak = outlet_peak(&dem, &HashMap::new());
+        assert!(
+            peak >= bowl_cells as f64,
+            "one outlet should collect the bowl ({bowl_cells}), got {peak}"
+        );
+        // Ramp: D8 follows the tilt, the bowl leaves as parallel lines
+        // through several rim cells. Kept reachable through `min_slope`.
+        let ramp = HashMap::from([("min_slope".to_string(), 1e-5)]);
+        let peak_ramp = outlet_peak(&dem, &ramp);
+        assert!(
+            peak_ramp < 0.7 * bowl_cells as f64,
+            "ramp splits the bowl, got {peak_ramp} of {bowl_cells}"
+        );
     }
 }
