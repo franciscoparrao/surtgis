@@ -14,6 +14,8 @@ pub mod compression {
     pub const LZW: u16 = 5;
     /// DEFLATE (zlib) compression.
     pub const DEFLATE: u16 = 8;
+    /// ZSTD (GDAL `COMPRESS=ZSTD`, libtiff code 50000).
+    pub const ZSTD: u16 = 50000;
     /// Adobe's DEFLATE variant (same codec, different tag value).
     pub const ADOBE_DEFLATE: u16 = 32946;
 }
@@ -103,6 +105,18 @@ pub fn decompress_tile(
 
         #[cfg(not(feature = "lzw"))]
         compression::LZW => Err(CloudError::UnsupportedCompression(compression_code)),
+
+        #[cfg(feature = "zstd")]
+        compression::ZSTD => {
+            let cap = decompress_cap(expected_raw_size);
+            let decoder = ruzstd::decoding::StreamingDecoder::new(data)
+                .map_err(|e| CloudError::Decompress(format!("ZSTD: {e}")))?;
+            inflate_capped(decoder, expected_raw_size, cap)
+                .map_err(|e| CloudError::Decompress(format!("ZSTD: {e}")))
+        }
+
+        #[cfg(not(feature = "zstd"))]
+        compression::ZSTD => Err(CloudError::UnsupportedCompression(compression_code)),
 
         _ => Err(CloudError::UnsupportedCompression(compression_code)),
     }

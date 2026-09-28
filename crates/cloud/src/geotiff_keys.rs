@@ -148,9 +148,10 @@ fn extract_nodata(entries: &[RawTagEntry], resolved: &[(u16, Vec<u8>)]) -> Optio
     let entry = entries.iter().find(|e| e.tag == tags::GDAL_NODATA)?;
 
     if entry.inline {
-        // Unlikely for ASCII, but handle 4-byte inline case
-        let bytes = entry.value_or_offset.to_le_bytes();
-        let s = std::str::from_utf8(&bytes).ok()?;
+        // Short strings live in the value field (4 bytes classic, 8 BigTIFF:
+        // "-128\0" of the AlphaEarth tiles is inline there).
+        let n = (entry.count as usize).min(entry.value_bytes.len());
+        let s = std::str::from_utf8(&entry.value_bytes[..n]).ok()?;
         return s.trim_end_matches('\0').trim().parse::<f64>().ok();
     }
 
@@ -171,11 +172,17 @@ fn find_resolved_f64(
     tag_id: u16,
 ) -> Option<Vec<f64>> {
     let entry = entries.iter().find(|e| e.tag == tag_id)?;
-    let data = resolved
-        .iter()
-        .find(|(tag, _)| *tag == tag_id)?
-        .1
-        .as_slice();
+    let inline_bytes;
+    let data = if entry.inline {
+        inline_bytes = entry.value_bytes;
+        &inline_bytes[..]
+    } else {
+        resolved
+            .iter()
+            .find(|(tag, _)| *tag == tag_id)?
+            .1
+            .as_slice()
+    };
     let values = ifd::read_offset_values_f64(byte_order, entry, data);
     if values.is_empty() {
         None
@@ -198,6 +205,7 @@ mod tests {
             type_id: 12, // DOUBLE
             count: 3,
             value_or_offset: 0,
+            value_bytes: [0u8; 8],
             inline: false,
         };
         let tiepoint_entry = RawTagEntry {
@@ -205,6 +213,7 @@ mod tests {
             type_id: 12,
             count: 6,
             value_or_offset: 0,
+            value_bytes: [0u8; 8],
             inline: false,
         };
 

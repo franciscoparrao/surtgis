@@ -27,6 +27,67 @@ pub(crate) fn normalize_url(url: &str) -> Cow<'_, str> {
     Cow::Borrowed(url)
 }
 
+/// A local file behind a `file://` URL or a plain path: the COG reader
+/// then serves it with the same tile machinery it uses over HTTP (range
+/// reads), which is how planar, ZSTD or bottom-up GeoTIFFs the `tiff`-crate
+/// readers cannot decode are still read locally.
+pub(crate) fn local_path(url: &str) -> Option<std::path::PathBuf> {
+    if let Some(p) = url.strip_prefix("file://") {
+        return Some(std::path::PathBuf::from(p));
+    }
+    if url.contains("://") {
+        return None;
+    }
+    Some(std::path::PathBuf::from(url))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_local_range(path: &std::path::Path, offset: u64, length: u64) -> Result<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).map_err(|e| CloudError::Http {
+        status: None,
+        msg: format!("{}: {e}", path.display()),
+    })?;
+    let size = f
+        .metadata()
+        .map(|m| m.len())
+        .map_err(|e| CloudError::Http {
+            status: None,
+            msg: format!("{}: {e}", path.display()),
+        })?;
+    if length == 0 {
+        return Ok(Vec::new());
+    }
+    if offset >= size {
+        return Err(CloudError::RangeNotSupported {
+            url: path.display().to_string(),
+        });
+    }
+    let len = length.min(size - offset) as usize;
+    f.seek(SeekFrom::Start(offset))
+        .map_err(|e| CloudError::Http {
+            status: None,
+            msg: format!("{}: {e}", path.display()),
+        })?;
+    let mut buf = vec![0u8; len];
+    f.read_exact(&mut buf).map_err(|e| CloudError::Http {
+        status: None,
+        msg: format!("{}: {e}", path.display()),
+    })?;
+    Ok(buf)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn read_local_range(path: &std::path::Path, _offset: u64, _length: u64) -> Result<Vec<u8>> {
+    Err(CloudError::Http {
+        status: None,
+        msg: format!(
+            "{}: local files are not readable in the browser",
+            path.display()
+        ),
+    })
+}
+
 /// HTTP client for fetching byte ranges from remote files.
 pub struct HttpClient {
     client: Client,
@@ -88,6 +149,18 @@ impl HttpClient {
 
     /// Send a HEAD request to discover file size and Range support.
     pub async fn head(&self, url: &str, auth: &dyn CloudAuth) -> Result<HeadInfo> {
+        if let Some(path) = local_path(url) {
+            let len = std::fs::metadata(&path)
+                .map(|m| m.len())
+                .map_err(|e| CloudError::Http {
+                    status: None,
+                    msg: format!("{}: {e}", path.display()),
+                })?;
+            return Ok(HeadInfo {
+                content_length: Some(len),
+                accept_ranges: true,
+            });
+        }
         let url_norm = normalize_url(url);
         let url = url_norm.as_ref();
         let mut auth_headers = Vec::new();
@@ -129,6 +202,9 @@ impl HttpClient {
         length: u64,
         auth: &dyn CloudAuth,
     ) -> Result<Vec<u8>> {
+        if let Some(path) = local_path(url) {
+            return read_local_range(&path, offset, length);
+        }
         let url_norm = normalize_url(url);
         let url = url_norm.as_ref();
         let mut auth_headers = Vec::new();

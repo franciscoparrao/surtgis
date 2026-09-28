@@ -117,6 +117,10 @@ pub struct AppState {
     pub jobs_dir: Option<PathBuf>,
     /// One job at a time.
     pub job_worker: tokio::sync::Semaphore,
+    /// Resolved `?ref=lon,lat` vectors, keyed by source and location.
+    pub ref_cache: std::sync::Mutex<std::collections::HashMap<String, Vec<f64>>>,
+    /// PCA fits, keyed by source.
+    pub pca_cache: std::sync::Mutex<std::collections::HashMap<String, Arc<algorithms::PcaFit>>>,
 }
 
 impl AppState {
@@ -149,6 +153,8 @@ impl AppState {
             timeout: Duration::from_millis(cfg.timeout_ms.max(100)),
             max_age: cfg.max_age,
             jobs: jobs::JobRegistry::default(),
+            ref_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
+            pca_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
             jobs_dir: match (&cfg.jobs_dir, &root) {
                 (Some(dir), Some(root)) => {
                     std::fs::create_dir_all(dir)

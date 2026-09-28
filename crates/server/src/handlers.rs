@@ -16,10 +16,11 @@ use surtgis_core::Raster;
 use surtgis_core::warp::{self, Bounds, GridSpec, Resampling, Transformer};
 
 use crate::AppState;
-use crate::algorithms::{self, Op};
+use crate::algorithms::{self, Op, PcaFit, Reference};
 use crate::error::ServeError;
 use crate::source::Source;
 use crate::tiles::{self, TILE_EPSG, TILE_SIZE};
+use surtgis_algorithms::embeddings::{PcaModel, mean_vector};
 
 /// Query string of `/tiles`, `/tilejson` and `/statistics`.
 #[derive(Debug, Clone, Deserialize)]
@@ -41,6 +42,12 @@ pub struct TileQuery {
     pub params: Option<String>,
     /// `/statistics` only: side of the sampling grid in pixels (default 512).
     pub size: Option<usize>,
+    /// `similarity`: reference location `lon,lat` (EPSG:4326); its cell in
+    /// the source supplies the reference vector.
+    #[serde(rename = "ref")]
+    pub reference: Option<String>,
+    /// `similarity`: explicit reference vector `v1,v2,…` (one per band).
+    pub vec: Option<String>,
 }
 
 /// Query string of `/info`.
@@ -227,6 +234,225 @@ async fn render_rgb(
     .map_err(|e| ServeError::Compute(format!("render task failed: {e}")))?
 }
 
+/// Turn a `?ref=lon,lat` similarity reference into the vector of that
+/// cell in the source (mean of the ≤ 2×2 cells the location touches),
+/// cached per source and location.
+async fn resolve_reference(state: &AppState, req: &mut Request) -> Result<(), ServeError> {
+    let Op::Similarity {
+        reference: Reference::LonLat(lon, lat),
+        ..
+    } = &req.op
+    else {
+        return Ok(());
+    };
+    let (lon, lat) = (*lon, *lat);
+    let key = format!("{}|{lon}|{lat}", req.source.key());
+    if let Some(v) = state
+        .ref_cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&key)
+        .cloned()
+    {
+        set_reference(&mut req.op, v);
+        return Ok(());
+    }
+    let info = req.source.info(&state.local, &state.pool).await?;
+    let (x, y) = if info.epsg == 4326 {
+        (lon, lat)
+    } else {
+        Transformer::new(4326, info.epsg)
+            .map_err(|e| ServeError::Source(e.to_string()))?
+            .forward(lon, lat)
+            .ok_or_else(|| {
+                ServeError::BadRequest(format!(
+                    "ref {lon},{lat} has no image in EPSG:{}",
+                    info.epsg
+                ))
+            })?
+    };
+    let half = info.pixel_size;
+    let bounds = Bounds {
+        min_x: x - half,
+        min_y: y - half,
+        max_x: x + half,
+        max_y: y + half,
+    };
+    let window = match req
+        .source
+        .read_window(&state.local, &state.pool, &bounds, 2)
+        .await
+    {
+        Ok(w) => w,
+        Err(ServeError::Outside) => {
+            return Err(ServeError::BadRequest(format!(
+                "ref {lon},{lat} lies outside the source"
+            )));
+        }
+        Err(e) => return Err(e),
+    };
+    let mut cells_bands = window.bands;
+    req.op.dequantize().apply_stack(&mut cells_bands);
+    let refs: Vec<&Raster<f64>> = cells_bands.iter().collect();
+    let (rows, cols) = refs
+        .first()
+        .map(|b| b.shape())
+        .ok_or_else(|| ServeError::Source("source has no bands".into()))?;
+    let cells: Vec<(usize, usize)> = (0..rows)
+        .flat_map(|r| (0..cols).map(move |c| (r, c)))
+        .collect();
+    let v = mean_vector(&refs, &cells).map_err(|_| {
+        ServeError::BadRequest(format!("ref {lon},{lat}: the source is nodata there"))
+    })?;
+    state
+        .ref_cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(key, v.clone());
+    set_reference(&mut req.op, v);
+    Ok(())
+}
+
+fn set_reference(op: &mut Op, v: Vec<f64>) {
+    if let Op::Similarity { reference, .. } = op {
+        *reference = Reference::Vector(v);
+    }
+}
+
+/// The PCA of a source: fitted once on a coarse sample of the whole
+/// extent (≈ `samples` vectors), cached by source key.
+async fn pca_for_source(
+    state: &AppState,
+    source: &Source,
+    samples: usize,
+    dequantize: surtgis_algorithms::embeddings::Dequantize,
+) -> Result<Arc<PcaFit>, ServeError> {
+    let key = format!("{}|{:?}", source.key(), dequantize);
+    if let Some(fit) = state
+        .pca_cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&key)
+        .cloned()
+    {
+        return Ok(fit);
+    }
+    let info = source.info(&state.local, &state.pool).await?;
+    if info.bands < 2 {
+        return Err(ServeError::BadRequest(
+            "pca needs a multi-band source (bands = embedding dimensions)".into(),
+        ));
+    }
+    let bounds = Bounds {
+        min_x: info.bounds[0],
+        min_y: info.bounds[1],
+        max_x: info.bounds[2],
+        max_y: info.bounds[3],
+    };
+    // A grid of about samples cells over the whole source: the coarsest
+    // overview that still gives one source pixel per sample cell.
+    let side = (samples as f64).sqrt().ceil() as usize;
+    let window = source
+        .read_window(&state.local, &state.pool, &bounds, side.max(16))
+        .await?;
+    let fit = tokio::task::spawn_blocking(move || -> Result<PcaFit, ServeError> {
+        let refs: Vec<&Raster<f64>> = window.bands.iter().collect();
+        let model = PcaModel::fit_with(&refs, 3.min(refs.len()), Some(samples), dequantize)
+            .map_err(|e| ServeError::Compute(format!("pca fit: {e}")))?;
+        let scores = model
+            .project(&refs)
+            .map_err(|e| ServeError::Compute(format!("pca sample projection: {e}")))?;
+        let ranges = scores
+            .iter()
+            .map(|s| {
+                let mut v: Vec<f64> = s.data().iter().copied().filter(|x| x.is_finite()).collect();
+                if v.is_empty() {
+                    return (-1.0, 1.0);
+                }
+                v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                let n = v.len();
+                let (lo, hi) = (v[(n - 1) * 2 / 100], v[(n - 1) * 98 / 100]);
+                if hi > lo {
+                    (lo, hi)
+                } else {
+                    (lo - 1.0, hi + 1.0)
+                }
+            })
+            .collect();
+        Ok(PcaFit { model, ranges })
+    })
+    .await
+    .map_err(|e| ServeError::Compute(format!("pca task failed: {e}")))??;
+    let fit = Arc::new(fit);
+    state
+        .pca_cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(key, fit.clone());
+    Ok(fit)
+}
+
+/// PCA false-colour tile: warp every band, project with the source's
+/// fit, stretch each component over its own sample range (or `rescale`
+/// for all three) and pack as RGBA.
+async fn render_pca(
+    state: &AppState,
+    req: &Request,
+    grid: GridSpec,
+    samples: usize,
+    dequantize: surtgis_algorithms::embeddings::Dequantize,
+) -> Result<Bytes, ServeError> {
+    let fit = pca_for_source(state, &req.source, samples, dequantize).await?;
+    let info = req.source.info(&state.local, &state.pool).await?;
+    let tf =
+        Transformer::new(info.epsg, grid.epsg).map_err(|e| ServeError::Source(e.to_string()))?;
+    let src_bounds =
+        warp::source_window(&grid, &tf, 2).map_err(|e| ServeError::Source(e.to_string()))?;
+    let window = req
+        .source
+        .read_window(&state.local, &state.pool, &src_bounds, grid.cols)
+        .await?;
+    let rescale = req.rescale;
+    tokio::task::spawn_blocking(move || -> Result<Bytes, ServeError> {
+        let warped = warp_window(&window.bands, &tf, &grid)?;
+        let refs: Vec<&Raster<f64>> = warped.iter().collect();
+        let scores = fit
+            .model
+            .project(&refs)
+            .map_err(|e| ServeError::Compute(e.to_string()))?;
+        let n = TILE_SIZE * TILE_SIZE;
+        let mut rgba = vec![0u8; n * 4];
+        for r in 0..TILE_SIZE {
+            for c in 0..TILE_SIZE {
+                let px = (r * TILE_SIZE + c) * 4;
+                let mut ok = true;
+                let mut out = [0u8; 3];
+                for (k, slot) in out.iter_mut().enumerate() {
+                    let v = scores.get(k).map(|s| s.data()[[r, c]]).unwrap_or(0.0);
+                    if !v.is_finite() {
+                        ok = false;
+                        break;
+                    }
+                    let (lo, hi) =
+                        rescale.unwrap_or(fit.ranges.get(k).copied().unwrap_or((-1.0, 1.0)));
+                    *slot = ((v - lo) / (hi - lo) * 255.0).round().clamp(0.0, 255.0) as u8;
+                }
+
+                if !ok {
+                    continue;
+                }
+                rgba[px..px + 3].copy_from_slice(&out);
+                rgba[px + 3] = 255;
+            }
+        }
+        rgba_to_png_bytes(TILE_SIZE as u32, TILE_SIZE as u32, &rgba)
+            .map(Bytes::from)
+            .map_err(|e| ServeError::Compute(e.to_string()))
+    })
+    .await
+    .map_err(|e| ServeError::Compute(format!("render task failed: {e}")))?
+}
+
 /// Parsed request pieces shared by the endpoints.
 struct Request {
     source: Source,
@@ -243,6 +469,8 @@ fn parse_request(state: &AppState, q: &TileQuery) -> Result<Request, ServeError>
             q.formula.as_deref(),
             q.bands.as_deref(),
             q.params.as_deref(),
+            q.reference.as_deref(),
+            q.vec.as_deref(),
         )?,
         scheme: parse_cmap(q.cmap.as_deref())?,
         rescale: parse_rescale(q.rescale.as_deref())?,
@@ -264,11 +492,15 @@ pub async fn render_tile(
             "tile {z}/{x}/{y} does not exist"
         )));
     }
-    let req = parse_request(state, q)?;
+    let mut req = parse_request(state, q)?;
+    resolve_reference(state, &mut req).await?;
     let gutter = req.op.gutter();
     let grid = tiles::grid(z, x, y, gutter);
     if let Some(bands) = req.op.rgb_bands() {
         return render_rgb(state, &req, grid, bands).await;
+    }
+    if let Some((samples, dequantize)) = req.op.pca_request() {
+        return render_pca(state, &req, grid, samples, dequantize).await;
     }
     let result = compute_grid(state, &req.source, &req.op, grid).await?;
     let (scheme, rescale, default_range) = (req.scheme, req.rescale, req.op.default_range());
@@ -292,7 +524,15 @@ fn layer_key(q: &TileQuery) -> String {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     (
-        &q.url, &q.alg, &q.formula, &q.bands, &q.cmap, &q.rescale, &q.params,
+        &q.url,
+        &q.alg,
+        &q.formula,
+        &q.bands,
+        &q.cmap,
+        &q.rescale,
+        &q.params,
+        &q.reference,
+        &q.vec,
     )
         .hash(&mut h);
     format!("{:016x}", h.finish())
@@ -302,7 +542,18 @@ fn etag_for(z: u8, x: u32, y: u32, q: &TileQuery) -> String {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     (
-        z, x, y, &q.url, &q.alg, &q.formula, &q.bands, &q.cmap, &q.rescale, &q.params,
+        z,
+        x,
+        y,
+        &q.url,
+        &q.alg,
+        &q.formula,
+        &q.bands,
+        &q.cmap,
+        &q.rescale,
+        &q.params,
+        &q.reference,
+        &q.vec,
     )
         .hash(&mut h);
     format!("{:016x}", h.finish())
@@ -485,7 +736,13 @@ pub async fn statistics(
     State(state): State<Arc<AppState>>,
     Query(q): Query<TileQuery>,
 ) -> Result<axum::Json<serde_json::Value>, ServeError> {
-    let req = parse_request(&state, &q)?;
+    let mut req = parse_request(&state, &q)?;
+    resolve_reference(&state, &mut req).await?;
+    if req.op.pca_request().is_some() {
+        return Err(ServeError::BadRequest(
+            "statistics: pca renders RGB tiles and has no single-band statistics".into(),
+        ));
+    }
     let size = q.size.unwrap_or(512).clamp(16, 2048);
     let info = req.source.info(&state.local, &state.pool).await?;
     let tf =
@@ -694,4 +951,141 @@ pub async fn healthz() -> &'static str {
 /// `GET /` — the MapLibre demo page.
 pub async fn demo() -> axum::response::Html<&'static str> {
     axum::response::Html(include_str!("../demo/index.html"))
+}
+
+#[cfg(test)]
+mod embedding_tests {
+    //! End to end on a local 4-band "embedding" source: similarity by
+    //! location and by vector, and PCA false colour, through `render_tile`.
+
+    use super::*;
+    use crate::ServerConfig;
+    use surtgis_core::GeoTransform;
+    use surtgis_core::io::{GeoTiffOptions, write_geotiff_stack};
+
+    /// 4 bands, two regions with distinct vector directions (west/east).
+    fn embedding_source(dir: &std::path::Path) -> (std::path::PathBuf, f64, f64) {
+        let (rows, cols) = (64, 64);
+        let dirs = [[1.0, 0.2, 0.0, 0.1], [0.0, 0.1, 1.0, 0.3]];
+        let mut bands: Vec<Raster<f64>> = (0..4).map(|_| Raster::<f64>::new(rows, cols)).collect();
+        for r in 0..rows {
+            for c in 0..cols {
+                let d = if c < cols / 2 { dirs[0] } else { dirs[1] };
+                for (k, b) in bands.iter_mut().enumerate() {
+                    b.data_mut()[[r, c]] = 100.0 * d[k] + ((r * 7 + c * 3) % 5) as f64;
+                }
+            }
+        }
+        let gt = GeoTransform::new(350_000.0, 6_300_000.0, 10.0, -10.0);
+        for b in &mut bands {
+            b.set_transform(gt);
+            b.set_crs(Some(surtgis_core::CRS::from_epsg(32719)));
+        }
+        let path = dir.join("emb.tif");
+        let refs: Vec<&Raster<f64>> = bands.iter().collect();
+        write_geotiff_stack(&refs, None, &path, &GeoTiffOptions::default()).unwrap();
+        // A location in the western half, as lon/lat.
+        let (x, y) = gt.pixel_to_geo(10, 32);
+        let (lon, lat) = Transformer::new(32719, 4326)
+            .unwrap()
+            .forward(x, y)
+            .unwrap();
+        (path, lon, lat)
+    }
+
+    fn state(root: &std::path::Path) -> Arc<AppState> {
+        let cfg = ServerConfig {
+            root: Some(root.to_path_buf()),
+            ..ServerConfig::default()
+        };
+        Arc::new(AppState::new(&cfg).unwrap())
+    }
+
+    fn query(alg: &str, reference: Option<&str>, vec: Option<&str>) -> TileQuery {
+        TileQuery {
+            url: "emb.tif".into(),
+            alg: Some(alg.into()),
+            formula: None,
+            bands: None,
+            cmap: None,
+            rescale: None,
+            params: None,
+            size: None,
+            reference: reference.map(str::to_string),
+            vec: vec.map(str::to_string),
+        }
+    }
+
+    #[tokio::test]
+    async fn similarity_and_pca_tiles_render() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, lon, lat) = embedding_source(dir.path());
+        let state = state(dir.path());
+        let z = 14;
+        let (x, y) = tiles::tile_for(lon, lat, z);
+
+        // Similarity to the cell at lon/lat: a PNG, and the reference cached.
+        let q = query("similarity", Some(&format!("{lon},{lat}")), None);
+        let png = render_tile(&state, z, x, y, &q).await.unwrap();
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+        assert_eq!(state.ref_cache.lock().unwrap().len(), 1);
+        let cached: Vec<f64> = state
+            .ref_cache
+            .lock()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap()
+            .clone();
+        assert_eq!(cached.len(), 4);
+        assert!(cached[0] > cached[2], "western direction: {cached:?}");
+
+        // Statistics of the same request: cosine in [-1, 1], max ≈ 1.
+        let stats = statistics(State(state.clone()), Query(q.clone()))
+            .await
+            .unwrap()
+            .0;
+        assert!(stats["max"].as_f64().unwrap() > 0.99, "{stats}");
+        assert!(stats["min"].as_f64().unwrap() >= -1.0);
+
+        // Explicit vector, wrong length → 400; right length → tile.
+        let bad = query("similarity", None, Some("1,0"));
+        assert!(matches!(
+            render_tile(&state, z, x, y, &bad).await,
+            Err(ServeError::BadRequest(_))
+        ));
+        let ok = query("similarity", None, Some("1,0.2,0,0.1"));
+        assert!(render_tile(&state, z, x, y, &ok).await.is_ok());
+
+        // Outside the source → 400 with a clear message.
+        let out = query("similarity", Some("0,0"), None);
+        match render_tile(&state, z, x, y, &out).await {
+            Err(ServeError::BadRequest(m)) => {
+                assert!(m.contains("outside") || m.contains("no image"), "{m}")
+            }
+            other => panic!("{other:?}"),
+        }
+
+        // PCA: fit cached per source, three ranges, PNG out.
+        let q = query("pca", None, None);
+        let png = render_tile(&state, z, x, y, &q).await.unwrap();
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+        let fit = state
+            .pca_cache
+            .lock()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap()
+            .clone();
+        assert_eq!(fit.model.n_bands(), 4);
+        assert_eq!(fit.ranges.len(), 3);
+        assert!(fit.model.variance_explained[0] > 0.5);
+        assert!(render_tile(&state, z, x, y, &q).await.is_ok());
+        assert_eq!(state.pca_cache.lock().unwrap().len(), 1);
+        assert!(matches!(
+            statistics(State(state.clone()), Query(q)).await,
+            Err(ServeError::BadRequest(_))
+        ));
+    }
 }

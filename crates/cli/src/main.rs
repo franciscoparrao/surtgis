@@ -275,6 +275,7 @@ fn run(cli: Cli) -> Result<()> {
             handlers::classification::handle(algorithm, compress)?
         }
         Commands::Texture { algorithm } => handlers::texture::handle(algorithm, compress)?,
+        Commands::Embeddings { command } => handlers::embeddings::handle(command, compress)?,
         Commands::Segmentation { algorithm } => {
             handlers::segmentation::handle(algorithm, compress)?
         }

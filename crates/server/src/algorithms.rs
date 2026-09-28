@@ -7,6 +7,9 @@
 
 use std::collections::HashMap;
 
+use surtgis_algorithms::embeddings::{
+    Dequantize, PcaModel, SimilarityMetric, SimilarityParams, similarity,
+};
 use surtgis_algorithms::imagery::index_builder;
 use surtgis_algorithms::terrain::{HillshadeParams, SlopeParams, SlopeUnits, hillshade, slope};
 use surtgis_core::Raster;
@@ -78,7 +81,43 @@ pub fn catalog() -> Vec<AlgoSpec> {
             params: vec![],
             default_range: None,
         },
+        AlgoSpec {
+            name: "similarity",
+            class: "local",
+            gutter: 0,
+            description: "Similarity of every cell's vector (all bands = embedding dimensions) to a reference: `?ref=lon,lat` (a cell of the source, EPSG:4326) or `?vec=v1,v2,…`",
+            params: vec![("metric", "cosine".into()), ("dequantize", "none".into())],
+            default_range: Some([-1.0, 1.0]),
+        },
+        AlgoSpec {
+            name: "pca",
+            class: "local",
+            gutter: 0,
+            description: "False colour from the first three principal components of the embedding field, fitted once per source on a sample (same colours on every tile)",
+            params: vec![("samples", "4096".into()), ("dequantize", "none".into())],
+            default_range: None,
+        },
     ]
+}
+
+/// The reference vector of a similarity request.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Reference {
+    /// Explicit vector, one value per band.
+    Vector(Vec<f64>),
+    /// A location (EPSG:4326) whose cell in the source supplies the vector;
+    /// resolved by the handler before the operator runs.
+    LonLat(f64, f64),
+}
+
+/// A PCA fitted on a sample of one source, with the display range
+/// (2nd–98th percentile of the sample scores) of each component.
+#[derive(Debug, Clone)]
+pub struct PcaFit {
+    /// The model.
+    pub model: PcaModel,
+    /// Per-component `(low, high)` for the RGB stretch.
+    pub ranges: Vec<(f64, f64)>,
 }
 
 /// A parsed operator ready to run on a window.
@@ -105,6 +144,24 @@ pub enum Op {
         /// Formula band names → 1-based band indices.
         bands: Vec<(String, usize)>,
     },
+    /// Similarity of every cell to a reference vector; all bands are the
+    /// vector's dimensions.
+    Similarity {
+        /// The reference.
+        reference: Reference,
+        /// Comparison metric.
+        metric: SimilarityMetric,
+        /// Stored-value code (`dequantize:alphaearth` for AlphaEarth tiles).
+        dequantize: Dequantize,
+    },
+    /// First three principal components as RGB (rendered by the handler
+    /// from a per-source fit).
+    Pca {
+        /// Vectors used for the fit.
+        samples: usize,
+        /// Stored-value code.
+        dequantize: Dequantize,
+    },
 }
 
 fn parse_kv(params: Option<&str>) -> Result<HashMap<String, String>, ServeError> {
@@ -129,6 +186,31 @@ fn take_f64(map: &HashMap<String, String>, key: &str, default: f64) -> Result<f6
             ServeError::BadRequest(format!("params: {key} must be a number, got '{v}'"))
         }),
     }
+}
+
+fn take_dequantize(map: &HashMap<String, String>) -> Result<Dequantize, ServeError> {
+    match map.get("dequantize") {
+        None => Ok(Dequantize::None),
+        Some(s) => Dequantize::parse(s).ok_or_else(|| {
+            ServeError::BadRequest(format!(
+                "params: dequantize '{s}' (none|alphaearth|linear:SCALE[,OFFSET])"
+            ))
+        }),
+    }
+}
+
+fn parse_lonlat(s: &str) -> Result<(f64, f64), ServeError> {
+    let parts: Vec<&str> = s.split(',').collect();
+    let bad = || ServeError::BadRequest("ref: lon,lat in EPSG:4326".into());
+    if parts.len() != 2 {
+        return Err(bad());
+    }
+    let lon: f64 = parts[0].trim().parse().map_err(|_| bad())?;
+    let lat: f64 = parts[1].trim().parse().map_err(|_| bad())?;
+    if !(-180.0..=180.0).contains(&lon) || !(-90.0..=90.0).contains(&lat) {
+        return Err(bad());
+    }
+    Ok((lon, lat))
 }
 
 /// Parse `bands=N:4,R:3` (name → 1-based index) or `bands=4` (single index).
@@ -161,6 +243,8 @@ impl Op {
         formula: Option<&str>,
         bands: Option<&str>,
         params: Option<&str>,
+        reference: Option<&str>,
+        vec: Option<&str>,
     ) -> Result<Op, ServeError> {
         let map = parse_kv(params)?;
         if let Some(expr) = formula {
@@ -228,10 +312,88 @@ impl Op {
                 p.normalized = false;
                 Ok(Op::Hillshade(p))
             }
+            "similarity" => {
+                let dequantize = take_dequantize(&map)?;
+                let metric = match map.get("metric") {
+                    None => SimilarityMetric::default(),
+                    Some(m) => SimilarityMetric::parse(m).ok_or_else(|| {
+                        ServeError::BadRequest(format!(
+                            "params: metric '{m}' (cosine|dot|euclidean)"
+                        ))
+                    })?,
+                };
+                let reference = match (reference, vec) {
+                    (Some(_), Some(_)) => {
+                        return Err(ServeError::BadRequest(
+                            "similarity takes ref=lon,lat or vec=…, not both".into(),
+                        ));
+                    }
+                    (Some(ll), None) => {
+                        let (lon, lat) = parse_lonlat(ll)?;
+                        Reference::LonLat(lon, lat)
+                    }
+                    (None, Some(v)) => {
+                        let values: Vec<f64> = v
+                            .split(',')
+                            .map(|s| s.trim().parse::<f64>())
+                            .collect::<Result<_, _>>()
+                            .map_err(|_| {
+                                ServeError::BadRequest("vec: comma-separated numbers".into())
+                            })?;
+                        if values.is_empty() || !values.iter().all(|x| x.is_finite()) {
+                            return Err(ServeError::BadRequest(
+                                "vec: needs one finite value per band".into(),
+                            ));
+                        }
+                        Reference::Vector(values)
+                    }
+                    (None, None) => {
+                        return Err(ServeError::BadRequest(
+                            "similarity needs ref=lon,lat or vec=v1,v2,…".into(),
+                        ));
+                    }
+                };
+                Ok(Op::Similarity {
+                    reference,
+                    metric,
+                    dequantize,
+                })
+            }
+            "pca" => {
+                let samples = take_f64(&map, "samples", 4096.0)?;
+                if !(64.0..=1_000_000.0).contains(&samples) {
+                    return Err(ServeError::BadRequest(
+                        "params: samples must be in 64..=1000000".into(),
+                    ));
+                }
+                Ok(Op::Pca {
+                    samples: samples as usize,
+                    dequantize: take_dequantize(&map)?,
+                })
+            }
             "formula" => Err(ServeError::BadRequest("formula needs ?formula=...".into())),
             other => Err(ServeError::BadRequest(format!(
                 "unknown alg '{other}'; see /algorithms"
             ))),
+        }
+    }
+
+    /// Sample size and code of a PCA request, if this is one.
+    pub fn pca_request(&self) -> Option<(usize, Dequantize)> {
+        match self {
+            Op::Pca {
+                samples,
+                dequantize,
+            } => Some((*samples, *dequantize)),
+            _ => None,
+        }
+    }
+
+    /// The stored-value code of an embedding request (identity otherwise).
+    pub fn dequantize(&self) -> Dequantize {
+        match self {
+            Op::Similarity { dequantize, .. } | Op::Pca { dequantize, .. } => *dequantize,
+            _ => Dequantize::None,
         }
     }
 
@@ -246,7 +408,11 @@ impl Op {
     /// Extra cells around the tile the operator needs.
     pub fn gutter(&self) -> usize {
         match self {
-            Op::Value { .. } | Op::Rgb { .. } | Op::Formula { .. } => 0,
+            Op::Value { .. }
+            | Op::Rgb { .. }
+            | Op::Formula { .. }
+            | Op::Similarity { .. }
+            | Op::Pca { .. } => 0,
             Op::Slope(_) | Op::Hillshade(_) => 1,
         }
     }
@@ -258,6 +424,11 @@ impl Op {
             Op::Rgb { bands } => *bands.iter().max().unwrap_or(&1),
             Op::Slope(_) | Op::Hillshade(_) => 1,
             Op::Formula { bands, .. } => bands.iter().map(|(_, i)| *i).max().unwrap_or(1),
+            Op::Similarity {
+                reference: Reference::Vector(v),
+                ..
+            } => v.len(),
+            Op::Similarity { .. } | Op::Pca { .. } => 1,
         }
     }
 
@@ -273,6 +444,8 @@ impl Op {
             }),
             Op::Hillshade(_) => Some((0.0, 255.0)),
             Op::Formula { .. } => Some((-1.0, 1.0)),
+            Op::Similarity { metric, .. } => metric.default_range(),
+            Op::Pca { .. } => None,
         }
     }
 
@@ -301,6 +474,32 @@ impl Op {
                     .collect();
                 index_builder(expr, &lookup).map_err(|e| ServeError::Compute(e.to_string()))
             }
+            Op::Similarity {
+                reference,
+                metric,
+                dequantize,
+            } => {
+                let Reference::Vector(v) = reference else {
+                    return Err(ServeError::Compute(
+                        "similarity reference was not resolved".into(),
+                    ));
+                };
+                if v.len() != bands.len() {
+                    return Err(ServeError::BadRequest(format!(
+                        "vec has {} values, source has {} bands",
+                        v.len(),
+                        bands.len()
+                    )));
+                }
+                let refs: Vec<&Raster<f64>> = bands.iter().collect();
+                let mut p = SimilarityParams::default();
+                p.metric = *metric;
+                p.dequantize = *dequantize;
+                similarity(&refs, v, p).map_err(|e| ServeError::Compute(e.to_string()))
+            }
+            Op::Pca { .. } => Err(ServeError::BadRequest(
+                "pca renders an RGB tile; it has no single-band form".into(),
+            )),
         }
     }
 }
@@ -316,6 +515,8 @@ mod tests {
             None,
             None,
             Some("azimuth:135, altitude:30"),
+            None,
+            None,
         )
         .unwrap()
         {
@@ -326,11 +527,11 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-        match Op::parse(Some("slope"), None, None, Some("units:percent")).unwrap() {
+        match Op::parse(Some("slope"), None, None, Some("units:percent"), None, None).unwrap() {
             Op::Slope(p) => assert!(matches!(p.units, SlopeUnits::Percent)),
             other => panic!("{other:?}"),
         }
-        match Op::parse(None, Some("(N-R)/(N+R)"), Some("N:4,R:3"), None).unwrap() {
+        match Op::parse(None, Some("(N-R)/(N+R)"), Some("N:4,R:3"), None, None, None).unwrap() {
             Op::Formula { expr, bands } => {
                 assert_eq!(expr, "(N-R)/(N+R)");
                 assert_eq!(bands, vec![("N".to_string(), 4), ("R".to_string(), 3)]);
@@ -338,14 +539,14 @@ mod tests {
             other => panic!("{other:?}"),
         }
         assert!(matches!(
-            Op::parse(None, None, Some("2"), None).unwrap(),
+            Op::parse(None, None, Some("2"), None, None, None).unwrap(),
             Op::Value { band: 2 }
         ));
-        assert!(Op::parse(Some("slope"), None, None, Some("z_factor:abc")).is_err());
-        assert!(Op::parse(Some("slope"), Some("N"), Some("N:1"), None).is_err());
-        assert!(Op::parse(None, Some("N"), None, None).is_err());
-        assert!(Op::parse(Some("nope"), None, None, None).is_err());
-        assert!(Op::parse(None, None, Some("0"), None).is_err());
+        assert!(Op::parse(Some("slope"), None, None, Some("z_factor:abc"), None, None).is_err());
+        assert!(Op::parse(Some("slope"), Some("N"), Some("N:1"), None, None, None).is_err());
+        assert!(Op::parse(None, Some("N"), None, None, None, None).is_err());
+        assert!(Op::parse(Some("nope"), None, None, None, None, None).is_err());
+        assert!(Op::parse(None, None, Some("0"), None, None, None).is_err());
     }
 
     #[test]
@@ -354,12 +555,12 @@ mod tests {
         let mut b = Raster::<f64>::new(2, 2);
         a.data_mut().fill(3.0);
         b.data_mut().fill(1.0);
-        let op = Op::parse(None, Some("(N-R)/(N+R)"), Some("N:1,R:2"), None).unwrap();
+        let op = Op::parse(None, Some("(N-R)/(N+R)"), Some("N:1,R:2"), None, None, None).unwrap();
         let out = op.run(&[a.clone(), b.clone()]).unwrap();
         assert!((out.data()[[0, 0]] - 0.5).abs() < 1e-12);
-        let op = Op::parse(None, None, Some("2"), None).unwrap();
+        let op = Op::parse(None, None, Some("2"), None, None, None).unwrap();
         assert_eq!(op.run(&[a, b]).unwrap().data()[[1, 1]], 1.0);
-        let op = Op::parse(Some("slope"), None, None, None).unwrap();
+        let op = Op::parse(Some("slope"), None, None, None, None, None).unwrap();
         assert!(op.run(&[]).is_err());
     }
 
@@ -367,10 +568,95 @@ mod tests {
     fn catalogue_matches_gutters() {
         for spec in catalog() {
             let op = match spec.name {
-                "formula" => Op::parse(None, Some("N"), Some("N:1"), None).unwrap(),
-                n => Op::parse(Some(n), None, None, None).unwrap(),
+                "formula" => Op::parse(None, Some("N"), Some("N:1"), None, None, None).unwrap(),
+                "similarity" => {
+                    Op::parse(Some("similarity"), None, None, None, None, Some("1")).unwrap()
+                }
+                n => Op::parse(Some(n), None, None, None, None, None).unwrap(),
             };
             assert_eq!(op.gutter(), spec.gutter, "{}", spec.name);
         }
+    }
+
+    #[test]
+    fn parses_similarity_and_pca() {
+        match Op::parse(
+            Some("similarity"),
+            None,
+            None,
+            None,
+            Some("-70.6,-33.4"),
+            None,
+        )
+        .unwrap()
+        {
+            Op::Similarity {
+                reference: Reference::LonLat(lon, lat),
+                metric,
+                ..
+            } => {
+                assert_eq!((lon, lat), (-70.6, -33.4));
+                assert_eq!(metric, SimilarityMetric::Cosine);
+            }
+            other => panic!("{other:?}"),
+        }
+        match Op::parse(
+            Some("similarity"),
+            None,
+            None,
+            Some("metric:euclidean"),
+            None,
+            Some("1,0,0.5"),
+        )
+        .unwrap()
+        {
+            Op::Similarity {
+                reference: Reference::Vector(v),
+                metric,
+                ..
+            } => {
+                assert_eq!(v, vec![1.0, 0.0, 0.5]);
+                assert_eq!(metric, SimilarityMetric::Euclidean);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(Op::parse(Some("similarity"), None, None, None, None, None).is_err());
+        assert!(Op::parse(Some("similarity"), None, None, None, Some("1,2"), Some("1")).is_err());
+        assert!(Op::parse(Some("similarity"), None, None, None, Some("200,0"), None).is_err());
+        assert!(
+            Op::parse(
+                Some("similarity"),
+                None,
+                None,
+                Some("metric:x"),
+                None,
+                Some("1")
+            )
+            .is_err()
+        );
+        assert_eq!(
+            Op::parse(
+                Some("pca"),
+                None,
+                None,
+                Some("dequantize:alphaearth"),
+                None,
+                None
+            )
+            .unwrap()
+            .pca_request(),
+            Some((4096, Dequantize::AlphaEarth))
+        );
+        assert!(Op::parse(Some("pca"), None, None, Some("dequantize:x"), None, None).is_err());
+        assert!(Op::parse(Some("pca"), None, None, Some("samples:1"), None, None).is_err());
+        // Similarity on a 3-band window with an explicit vector.
+        let mut b = Raster::<f64>::new(2, 2);
+        b.data_mut().fill(1.0);
+        let bands = vec![b.clone(), b.clone(), b];
+        let op = Op::parse(Some("similarity"), None, None, None, None, Some("1,1,1")).unwrap();
+        let out = op.run(&bands).unwrap();
+        assert!((out.data()[[0, 0]] - 1.0).abs() < 1e-12);
+        let op = Op::parse(Some("similarity"), None, None, None, None, Some("1,1")).unwrap();
+        assert!(op.run(&bands).is_err());
     }
 }

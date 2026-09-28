@@ -41,6 +41,7 @@ pub use geo_types;
 pub use ndarray;
 
 pub mod classification;
+pub mod embeddings;
 pub mod fluvial;
 pub mod hydrology;
 pub mod imagery;

@@ -145,6 +145,8 @@ pub struct Window {
 #[derive(Default)]
 pub struct LocalCache {
     entries: std::sync::Mutex<std::collections::HashMap<PathBuf, Arc<GeoTiffInfo>>>,
+    /// Paths the native reader cannot decode; served via the COG reader.
+    cog_fallback: std::sync::Mutex<std::collections::HashSet<PathBuf>>,
 }
 
 impl LocalCache {
@@ -156,6 +158,17 @@ impl LocalCache {
     /// Whether no local source has been described yet.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Whether the native window reader declined `path` (planar, ZSTD,
+    /// bottom-up… layouts it does not decode) so the source is served
+    /// through the COG reader's local backend instead.
+    fn is_cog_fallback(&self, path: &Path) -> bool {
+        self.cog_fallback.lock().unwrap().contains(path)
+    }
+
+    fn mark_cog_fallback(&self, path: &Path) {
+        self.cog_fallback.lock().unwrap().insert(path.to_path_buf());
     }
 
     fn describe(&self, path: &Path) -> Result<Arc<GeoTiffInfo>, ServeError> {
@@ -210,7 +223,24 @@ impl Source {
     ) -> Result<SourceInfo, ServeError> {
         match self {
             Source::Local(path) => {
-                let info = cache.describe(path)?;
+                if cache.is_cog_fallback(path) {
+                    return Self::info_via_pool(pool, &path.display().to_string()).await;
+                }
+                let info = match cache.describe(path) {
+                    Ok(i) => i,
+                    Err(native_err) => {
+                        // Planar / ZSTD / bottom-up GeoTIFFs: the COG reader
+                        // decodes them from the local file.
+                        let url = path.display().to_string();
+                        return match Self::info_via_pool(pool, &url).await {
+                            Ok(i) => {
+                                cache.mark_cog_fallback(path);
+                                Ok(i)
+                            }
+                            Err(_) => Err(native_err),
+                        };
+                    }
+                };
                 let bb = bounds_of(&info.transform, info.height as usize, info.width as usize);
                 Ok(SourceInfo {
                     epsg: epsg_of(info.crs.as_ref(), "local")?,
@@ -229,22 +259,25 @@ impl Source {
             Source::Ecw(_) => Err(ServeError::BadRequest(
                 "ECW sources need a build with the `ecw` feature".into(),
             )),
-            Source::Http(url) => {
-                let reader = pool.acquire(url).await?;
-                let m = reader.metadata();
-                let bb = bounds_of(&m.geo_transform, m.height as usize, m.width as usize);
-                Ok(SourceInfo {
-                    epsg: epsg_of(m.crs.as_ref(), "cog")?,
-                    bounds: [bb.min_x, bb.min_y, bb.max_x, bb.max_y],
-                    width: m.width as usize,
-                    height: m.height as usize,
-                    pixel_size: m.geo_transform.pixel_width.abs(),
-                    bands: reader.bands(),
-                    overviews: m.num_overviews,
-                    nodata: m.nodata,
-                })
-            }
+            Source::Http(url) => Self::info_via_pool(pool, url).await,
         }
+    }
+
+    /// Describe a source through the COG reader (remote URL or local path).
+    async fn info_via_pool(pool: &ReaderPool, url: &str) -> Result<SourceInfo, ServeError> {
+        let reader = pool.acquire(url).await?;
+        let m = reader.metadata();
+        let bb = bounds_of(&m.geo_transform, m.height as usize, m.width as usize);
+        Ok(SourceInfo {
+            epsg: epsg_of(m.crs.as_ref(), "cog")?,
+            bounds: [bb.min_x, bb.min_y, bb.max_x, bb.max_y],
+            width: m.width as usize,
+            height: m.height as usize,
+            pixel_size: m.geo_transform.pixel_width.abs(),
+            bands: reader.bands(),
+            overviews: m.num_overviews,
+            nodata: m.nodata,
+        })
     }
 
     /// Read the source cells covering `bounds` (source CRS), at a
@@ -257,6 +290,10 @@ impl Source {
         target_px: usize,
     ) -> Result<Window, ServeError> {
         match self {
+            Source::Local(path) if cache.is_cog_fallback(path) => {
+                Self::read_window_via_pool(pool, &path.display().to_string(), bounds, target_px)
+                    .await
+            }
             Source::Local(path) => {
                 let info = cache.describe(path)?;
                 let epsg = epsg_of(info.crs.as_ref(), "local")?;
@@ -291,7 +328,19 @@ impl Source {
             Source::Ecw(_) => Err(ServeError::BadRequest(
                 "ECW sources need a build with the `ecw` feature".into(),
             )),
-            Source::Http(url) => {
+            Source::Http(url) => Self::read_window_via_pool(pool, url, bounds, target_px).await,
+        }
+    }
+
+    /// Read a window through the COG reader (remote URL or local path).
+    async fn read_window_via_pool(
+        pool: &ReaderPool,
+        url: &str,
+        bounds: &Bounds,
+        target_px: usize,
+    ) -> Result<Window, ServeError> {
+        {
+            {
                 let mut reader = pool.acquire(url).await?;
                 let m = reader.metadata();
                 let epsg = epsg_of(m.crs.as_ref(), "cog")?;

@@ -51,7 +51,7 @@ ecw = ["dep:surtgis-ecw", "surtgis-server?/ecw"]
 server = ["dep:surtgis-server"]
 
 [dependencies]
-surtgis-core = { version = "1.0", path = "../core", features = ["shapefile", "geopackage"] }
+surtgis-core = { version = "1.0", path = "../core", features = ["shapefile", "geopackage", "parquet"] }
 surtgis-algorithms = { version = "1.0", path = "../algorithms", features = ["unstable"] }
 surtgis-parallel = { version = "1.0", path = "../parallel" }
 surtgis-relief = { version = "1.0", path = "../relief" }

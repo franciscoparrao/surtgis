@@ -258,3 +258,177 @@ fn no_provenance_flag_writes_plain_files() {
         .success();
     assert!(surtgis_core::io::read_provenance(&out2).unwrap().is_none());
 }
+
+// ─── Embeddings ────────────────────────────────────────────────────────
+
+/// A 4-band "embedding" stack: west and east halves point in different
+/// directions in vector space.
+fn synth_embeddings(dir: &Path) -> PathBuf {
+    let (rows, cols) = (20, 20);
+    let dirs = [[1.0, 0.2, 0.0, 0.1], [0.0, 0.1, 1.0, 0.3]];
+    let mut bands: Vec<Raster<f64>> = (0..4).map(|_| Raster::<f64>::new(rows, cols)).collect();
+    for r in 0..rows {
+        for c in 0..cols {
+            let d = if c < cols / 2 { dirs[0] } else { dirs[1] };
+            for (k, b) in bands.iter_mut().enumerate() {
+                b.data_mut()[[r, c]] = 100.0 * d[k] + ((r * 7 + c * 3) % 5) as f64;
+            }
+        }
+    }
+    for b in &mut bands {
+        b.set_transform(GeoTransform::new(350_000.0, 6_300_000.0, 10.0, -10.0));
+        b.set_crs(Some(surtgis_core::CRS::from_epsg(32719)));
+    }
+    let path = dir.join("emb.tif");
+    let refs: Vec<&Raster<f64>> = bands.iter().collect();
+    surtgis_core::io::write_geotiff_stack(
+        &refs,
+        None,
+        &path,
+        &surtgis_core::io::GeoTiffOptions::default(),
+    )
+    .unwrap();
+    path
+}
+
+#[test]
+fn embeddings_similarity_pca_norm_info() {
+    let dir = tempfile::tempdir().unwrap();
+    let emb = synth_embeddings(dir.path());
+
+    surtgis_cmd()
+        .args(["embeddings", "info"])
+        .arg(&emb)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Bands (dimensions): 4"))
+        .stdout(predicate::str::contains("L2 norm"));
+
+    // Similarity to a western cell: west ≈ 1, east clearly lower.
+    let sim = dir.path().join("sim.tif");
+    surtgis_cmd()
+        .args(["embeddings", "similarity"])
+        .arg(&emb)
+        .arg(&sim)
+        .args(["--ref-cell", "5,3"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Reference: cell (5, 3)"));
+    let s: Raster<f64> = surtgis_core::io::read_geotiff(&sim, None).unwrap();
+    assert!(s.data()[[5, 3]] > 0.999);
+    assert!(s.data()[[5, 15]] < 0.8, "east {}", s.data()[[5, 15]]);
+    // The same reference as lon/lat (centre of cell (5,3)) and as a vector.
+    let gt = GeoTransform::new(350_000.0, 6_300_000.0, 10.0, -10.0);
+    let (x, y) = gt.pixel_to_geo(3, 5);
+    let (lon, lat) = surtgis_core::warp::Transformer::new(32719, 4326)
+        .unwrap()
+        .forward(x, y)
+        .unwrap();
+    let sim2 = dir.path().join("sim2.tif");
+    surtgis_cmd()
+        .args(["embeddings", "similarity"])
+        .arg(&emb)
+        .arg(&sim2)
+        .args(["--ref-lonlat", &format!("{lon},{lat}")])
+        .assert()
+        .success();
+    let s2: Raster<f64> = surtgis_core::io::read_geotiff(&sim2, None).unwrap();
+    assert_eq!(s.data(), s2.data());
+    surtgis_cmd()
+        .args(["embeddings", "similarity"])
+        .arg(&emb)
+        .arg(dir.path().join("sim3.tif"))
+        .args(["--ref-vec", "1,0.2,0,0.1", "--metric", "euclidean"])
+        .assert()
+        .success();
+    // Exactly one reference flag.
+    surtgis_cmd()
+        .args(["embeddings", "similarity"])
+        .arg(&emb)
+        .arg(dir.path().join("x.tif"))
+        .assert()
+        .failure();
+
+    // PCA: 3-band stack, model saved and reusable.
+    let pca = dir.path().join("pca.tif");
+    let model = dir.path().join("pca.json");
+    surtgis_cmd()
+        .args(["embeddings", "pca"])
+        .arg(&emb)
+        .arg(&pca)
+        .args(["--components", "3", "--save-model"])
+        .arg(&model)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("PC1: eigenvalue"));
+    let pcs: Vec<Raster<f64>> = surtgis_core::io::read_geotiff_bands(&pca).unwrap();
+    assert_eq!(pcs.len(), 3);
+    assert!(model.exists());
+    surtgis_cmd()
+        .args(["embeddings", "pca"])
+        .arg(&emb)
+        .arg(dir.path().join("pca2.tif"))
+        .args(["--model"])
+        .arg(&model)
+        .assert()
+        .success();
+    let pcs2: Vec<Raster<f64>> =
+        surtgis_core::io::read_geotiff_bands(dir.path().join("pca2.tif")).unwrap();
+    assert_eq!(pcs[0].data(), pcs2[0].data());
+
+    let n = dir.path().join("norm.tif");
+    surtgis_cmd()
+        .args(["embeddings", "norm"])
+        .arg(&emb)
+        .arg(&n)
+        .assert()
+        .success();
+    let nr: Raster<f64> = surtgis_core::io::read_geotiff(&n, None).unwrap();
+    assert!(nr.data()[[0, 0]] > 100.0);
+
+    // Every output carries provenance naming the stack.
+    surtgis_cmd().arg("verify").arg(&sim).assert().success();
+}
+
+/// A multi-band feature raster (an embedding stack) expands to one
+/// feature per band in `extract`, next to ordinary single-band features.
+#[test]
+fn extract_expands_multiband_features() {
+    let dir = tempfile::tempdir().unwrap();
+    let feats = dir.path().join("features");
+    std::fs::create_dir_all(&feats).unwrap();
+    let emb = synth_embeddings(&feats);
+    // One single-band feature on the same grid.
+    let mut single: Raster<f64> = Raster::new(20, 20);
+    single.set_transform(GeoTransform::new(350_000.0, 6_300_000.0, 10.0, -10.0));
+    single.set_crs(Some(surtgis_core::CRS::from_epsg(32719)));
+    single.data_mut().fill(7.0);
+    surtgis_core::io::write_geotiff(&single, feats.join("single.tif"), None).unwrap();
+    let _ = emb;
+    // Two labelled points in the raster CRS.
+    let points = dir.path().join("pts.geojson");
+    std::fs::write(
+        &points,
+        r#"{"type":"FeatureCollection","features":[
+          {"type":"Feature","properties":{"cls":1},"geometry":{"type":"Point","coordinates":[350035.0,6299945.0]}},
+          {"type":"Feature","properties":{"cls":2},"geometry":{"type":"Point","coordinates":[350155.0,6299945.0]}}]}"#,
+    )
+    .unwrap();
+    let out = dir.path().join("table.csv");
+    surtgis_cmd()
+        .args(["extract", "--features-dir"])
+        .arg(&feats)
+        .arg("--points")
+        .arg(&points)
+        .args(["--target", "cls"])
+        .arg(&out)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("4 feature(s)"));
+    let csv = std::fs::read_to_string(&out).unwrap();
+    let header = csv.lines().next().unwrap();
+    for col in ["emb:b1", "emb:b2", "emb:b3", "emb:b4", "single"] {
+        assert!(header.contains(col), "header {header}");
+    }
+    assert_eq!(csv.lines().count(), 3, "{csv}");
+}
