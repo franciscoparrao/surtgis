@@ -22,7 +22,12 @@ breaking changes only ship in a major version and are called out under a
   queued/running/done/failed with per-step timings, `GET /jobs` lists
   everything; one job runs at a time and the rest queue; `/metrics` gains
   job gauges. Sources: local GeoTIFFs and allow-listed COGs (ECW is
-  imagery, rejected).
+  imagery, rejected). The job's `fill_sinks` fills to exact flats
+  (`min_slope` 0, as TauDEM's `pitremove`) so that `flow_direction` routes
+  each filled depression with Garbrecht–Martz towards its spill; the
+  library/CLI ramp default (1e-5) made D8 drain filled depressions as
+  parallel lines leaving through several rim cells. Pass `min_slope` to
+  get the ramp back.
 
 ## [1.4.0] - 2026-09-25
 
