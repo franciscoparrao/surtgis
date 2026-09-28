@@ -44,6 +44,7 @@ pub struct GribReader {
 impl GribReader {
     /// Open a GRIB2 file and index all messages.
     pub fn open(path: &Path) -> Result<Self> {
+        surtgis_core::provenance::observe_input(&path.display().to_string());
         let data = std::fs::read(path)
             .map_err(|e| CloudError::Grib(format!("failed to read {}: {e}", path.display())))?;
         Self::from_bytes(data, &path.display().to_string())

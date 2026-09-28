@@ -17,7 +17,10 @@ pub struct KmeansParams {
     pub max_iterations: usize,
     /// Convergence threshold — stop when centroids move less than this (default: 0.001)
     pub convergence: f64,
-    /// Random seed for initial centroid selection
+    /// Reserved. Initial centroids are the `k` quantiles of the data
+    /// (deterministic, no randomness), so this value currently has no
+    /// effect on the result; it is kept for a future randomised
+    /// initialisation.
     pub seed: u64,
 }
 

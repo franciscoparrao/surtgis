@@ -46,6 +46,8 @@ tract-onnx = { version = "0.23", optional = true }
 approx.workspace = true
 tempfile.workspace = true
 criterion.workspace = true
+# tests/determinism.rs runs the suite under thread pools of different sizes.
+rayon.workspace = true
 
 [[bench]]
 name = "terrain"

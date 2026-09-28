@@ -205,6 +205,7 @@ pub struct ZarrReader {
 impl ZarrReader {
     /// Open a Zarr store and select a variable for reading.
     pub async fn open(store_url: &str, variable: &str, options: ZarrReaderOptions) -> Result<Self> {
+        surtgis_core::provenance::observe_input(&format!("{store_url}#{variable}"));
         let store = zarr_auth::build_zarr_store(store_url, options.sas_token.as_deref()).await?;
 
         // Open root group. Climate stores are overwhelmingly Zarr v2, and

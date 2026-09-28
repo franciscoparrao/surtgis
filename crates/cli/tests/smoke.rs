@@ -158,3 +158,103 @@ fn completions_rejects_unknown_shell() {
         .assert()
         .code(2);
 }
+
+// ─── Provenance ────────────────────────────────────────────────────────
+
+/// Every output carries a record of how it was made; `provenance` shows
+/// it, `verify` recomputes the output digest and re-hashes the inputs.
+#[test]
+fn outputs_carry_verifiable_provenance() {
+    let dir = tempfile::tempdir().unwrap();
+    let dem = synth_dem(dir.path());
+    let out = dir.path().join("slope.tif");
+    surtgis_cmd()
+        .args(["terrain", "slope"])
+        .arg(&dem)
+        .arg(&out)
+        .assert()
+        .success();
+
+    surtgis_cmd()
+        .arg("provenance")
+        .arg(&out)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Operation: terrain slope"))
+        .stdout(predicate::str::contains("dem.tif"))
+        .stdout(predicate::str::contains("blake3:"));
+
+    surtgis_cmd()
+        .args(["provenance", "--json"])
+        .arg(&out)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"schema\": \"surtgis-provenance/1\"",
+        ));
+
+    surtgis_cmd()
+        .arg("verify")
+        .arg(&out)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Output  OK"))
+        .stdout(predicate::str::contains("Input   OK"));
+
+    // Touching the input breaks the lineage check but not the output one.
+    let mut d: Raster<f64> = surtgis_core::io::read_geotiff(&dem, None).unwrap();
+    d.set(0, 0, 123.0).unwrap();
+    surtgis_core::io::write_geotiff(&d, &dem, None).unwrap();
+    surtgis_cmd()
+        .arg("verify")
+        .arg(&out)
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("Output  OK"))
+        .stdout(predicate::str::contains("Input   MISMATCH"));
+
+    // The digest follows the pixels: rewriting the output with one pixel
+    // changed (same record passed in) yields a different recorded digest,
+    // so a file whose pixels were altered behind the record cannot verify.
+    let before = surtgis_core::io::read_provenance(&out).unwrap().unwrap();
+    let mut o: Raster<f64> = surtgis_core::io::read_geotiff(&out, None).unwrap();
+    o.set(1, 1, 99.0).unwrap();
+    surtgis_core::io::write_geotiff_with_provenance(&o, &out, None, &before).unwrap();
+    let after = surtgis_core::io::read_provenance(&out).unwrap().unwrap();
+    assert_ne!(
+        before.output.unwrap().data_blake3,
+        after.output.unwrap().data_blake3
+    );
+}
+
+/// `--no-provenance` (and the env var) writes plain files.
+#[test]
+fn no_provenance_flag_writes_plain_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let dem = synth_dem(dir.path());
+    let out = dir.path().join("plain.tif");
+    surtgis_cmd()
+        .args(["--no-provenance", "terrain", "slope"])
+        .arg(&dem)
+        .arg(&out)
+        .assert()
+        .success();
+    assert!(surtgis_core::io::read_provenance(&out).unwrap().is_none());
+    surtgis_cmd()
+        .arg("provenance")
+        .arg(&out)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("no provenance record"));
+    surtgis_cmd().arg("verify").arg(&out).assert().failure();
+
+    let out2 = dir.path().join("plain2.tif");
+    surtgis_cmd()
+        .env("SURTGIS_NO_PROVENANCE", "1")
+        .args(["terrain", "slope"])
+        .arg(&dem)
+        .arg(&out2)
+        .assert()
+        .success();
+    assert!(surtgis_core::io::read_provenance(&out2).unwrap().is_none());
+}

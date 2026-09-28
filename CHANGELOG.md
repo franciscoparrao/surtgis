@@ -10,6 +10,51 @@ breaking changes only ship in a major version and are called out under a
 
 ### Added
 
+- **Embedded, verifiable provenance in every output.** Each GeoTIFF/COG
+  SurtGIS writes now carries a `SURTGIS_PROVENANCE` item in its
+  `GDAL_METADATA` tag (42112, so `gdalinfo`, rasterio and QGIS show it as
+  ordinary metadata): engine version, operation, command line, working
+  directory, thread count, every input with its BLAKE3 digest and size,
+  and a BLAKE3 digest of the pixel array as written. `surtgis provenance
+  <file>` prints it (`--json` for the raw record); `surtgis verify
+  <file>` recomputes the array digest and re-hashes the inputs, exiting
+  non-zero on any mismatch. `--no-provenance` / `SURTGIS_NO_PROVENANCE=1`
+  writes plain files. Library: `surtgis_core::provenance` (record,
+  digests, opt-in process hooks), `io::write_geotiff_with_provenance`,
+  `io::write_cog_with_provenance`, `io::read_provenance`,
+  `io::read_gdal_metadata`, `io::raster_data_hash`. Without hooks or an
+  explicit record the writers are unchanged. Server jobs embed the
+  request (url, pipeline, params) and the hashed source. Pixels are never
+  affected by the tag.
+- **Determinism contract.** `crates/algorithms/tests/determinism.rs`
+  runs 24 algorithms (terrain, hydrology, focal/zonal/Moran, diversity,
+  k-means, SLIC, Felzenszwalb, GLCM) under 1 and 4 worker threads and
+  twice in one process, and requires bit-identical outputs through the
+  same digest `surtgis verify` uses. Passes; see Fixed for what had to
+  change to get there.
+
+### Fixed
+
+- **Results that depended on `HashMap` iteration order** (randomised per
+  instance, so they differed run to run by the last ULPs or, for
+  categorical outputs, by whole classes): Shannon and Simpson diversity
+  rasters and the SHDI/SIDI of `landscape_metrics` now sum in class
+  order; zonal `majority`/`minority` break frequency ties towards the
+  smallest class value; SLIC's small-segment reassignment breaks vote
+  ties towards the smallest label; the `index_builder` fallback
+  georeference comes from the smallest band key; `first_cog_asset` /
+  `first_zarr_asset` scan STAC assets in key order and the composite
+  asset resolver's case-insensitive match picks the smallest key.
+- **Bootstrap confidence intervals of `concavity_index` and `ksn`** used
+  `std`'s `DefaultHasher` as the resampling PRNG, whose algorithm is not
+  guaranteed stable across Rust releases. They now use a fixed SplitMix64
+  mix of `(seed, group, boot, k)`; CI values change once, then stay
+  reproducible on any toolchain.
+- Felzenszwalb sorts edges with a stable sort so equal weights keep
+  raster order (labels no longer depend on the sort algorithm's
+  tie order). `KmeansParams::seed` is documented as currently unused
+  (initial centroids are data quantiles).
+
 - **SurtGIS Server M1.5, materialisation jobs.** Global operators cannot be
   tiled on the fly (a cell depends on the whole basin upstream), so they
   run as jobs: `POST /jobs {"url", "pipeline", "output", "params"}` runs a

@@ -17,6 +17,15 @@ pub fn handle(input: PathBuf) -> Result<()> {
 
     println!("File: {}", input.display());
     println!("Data type: {}", dtype);
+    if let Ok(Some(p)) = surtgis_core::io::read_provenance(&input) {
+        println!(
+            "Provenance: {} {} on {}, {} input(s) — `surtgis provenance` for details",
+            p.engine.name,
+            p.engine.version,
+            p.created,
+            p.inputs.len()
+        );
+    }
     println!("Dimensions: {} x {} ({} cells)", cols, rows, rows * cols);
     dispatch_any!(&any, r => {
         println!("Cell size: {}", r.cell_size());

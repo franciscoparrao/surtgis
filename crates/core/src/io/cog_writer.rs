@@ -77,8 +77,9 @@
 //!   writer. `gdalinfo`/`rasterio` (both installed on real GDAL/OGR
 //!   toolchains) are the primary empirical validation instead.
 
-use super::native::NativeGraySample;
+use super::native::{NativeGraySample, provenance_items, write_gdal_metadata_tag};
 use crate::error::{Error, Result};
+use crate::provenance::Provenance;
 use crate::raster::{Raster, RasterElement};
 use std::fs::File;
 use std::path::Path;
@@ -169,6 +170,37 @@ where
     [T]: tiff::encoder::TiffValue,
     P: AsRef<Path>,
 {
+    write_cog_inner(raster, path.as_ref(), options, None)
+}
+
+/// [`write_cog`] with an explicit provenance record embedded in the main
+/// IFD's `GDAL_METADATA` tag (see [`crate::provenance`]). The digest in
+/// [`Provenance::output`] is of the full-resolution array; overviews are
+/// derived and not hashed.
+pub fn write_cog_with_provenance<T, P>(
+    raster: &Raster<T>,
+    path: P,
+    options: &CogOptions,
+    provenance: &Provenance,
+) -> Result<()>
+where
+    T: RasterElement + NativeGraySample,
+    [T]: tiff::encoder::TiffValue,
+    P: AsRef<Path>,
+{
+    write_cog_inner(raster, path.as_ref(), options, Some(provenance))
+}
+
+fn write_cog_inner<T>(
+    raster: &Raster<T>,
+    final_path: &Path,
+    options: &CogOptions,
+    explicit: Option<&Provenance>,
+) -> Result<()>
+where
+    T: RasterElement + NativeGraySample,
+    [T]: tiff::encoder::TiffValue,
+{
     let tile_size = options.tile_size as usize;
     if tile_size == 0 || !tile_size.is_multiple_of(16) {
         return Err(Error::Other(format!(
@@ -179,8 +211,8 @@ where
     }
 
     let levels = build_pyramid(raster, tile_size, options)?;
+    let items = provenance_items(&[raster], explicit);
 
-    let final_path = path.as_ref();
     let tmp_path = final_path.with_extension("tmp");
     let file = File::create(&tmp_path)?;
 
@@ -198,6 +230,7 @@ where
                 options.compression,
                 idx == 0,
                 raster,
+                &items,
             )?;
         }
     } else {
@@ -212,6 +245,7 @@ where
                 options.compression,
                 idx == 0,
                 raster,
+                &items,
             )?;
         }
     }
@@ -453,6 +487,7 @@ fn write_level_ifd<T, W, K>(
     compression: CogCompression,
     is_main: bool,
     raster: &Raster<T>,
+    metadata_items: &[(String, String)],
 ) -> Result<()>
 where
     T: RasterElement + NativeGraySample,
@@ -569,6 +604,7 @@ where
             dir.write_tag(Tag::GdalNodata, nodata_str.as_str())
                 .map_err(|e| Error::Other(format!("Cannot write nodata tag: {}", e)))?;
         }
+        write_gdal_metadata_tag(&mut dir, metadata_items)?;
     }
 
     dir.finish()

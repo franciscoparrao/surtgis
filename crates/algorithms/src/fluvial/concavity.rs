@@ -32,7 +32,6 @@
 //! without pulling the `rand` crate.
 
 use std::collections::{HashSet, VecDeque};
-use std::hash::{Hash, Hasher};
 
 use surtgis_core::{Raster, Result};
 
@@ -258,16 +257,13 @@ pub fn concavity_index(
             let n = valid_node_indices.len();
             let mut samples: Vec<f64> = Vec::with_capacity(params.bootstrap_n);
             for boot in 0..params.bootstrap_n {
-                // Deterministic resample-with-replacement: hash(seed, basin, boot, k)
-                // → index in 0..n.
+                // Deterministic resample-with-replacement: stable_mix(seed,
+                // basin, boot, k) → index in 0..n (toolchain-independent).
                 let resampled_idx: Vec<usize> = (0..n)
                     .map(|k| {
-                        let mut h = std::collections::hash_map::DefaultHasher::new();
-                        params.seed.hash(&mut h);
-                        bid.hash(&mut h);
-                        boot.hash(&mut h);
-                        k.hash(&mut h);
-                        (h.finish() as usize) % n
+                        (super::stable_mix(&[params.seed, bid as u64, boot as u64, k as u64])
+                            as usize)
+                            % n
                     })
                     .collect();
                 let (t_b, _) =

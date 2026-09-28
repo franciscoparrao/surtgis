@@ -118,14 +118,24 @@ fn categorical_stats(values: &[f64]) -> (f64, f64, usize) {
         entry.1 += 1;
     }
 
+    // Ties are broken towards the smallest class value, so the answer is a
+    // function of the data and not of HashMap iteration order (which is
+    // randomised per instance and would flip the class run to run).
+    let by_count_then_value = |a: &&(f64, usize), b: &&(f64, usize)| {
+        a.1.cmp(&b.1)
+            .then_with(|| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal))
+    };
     let majority = freq
         .values()
-        .max_by_key(|(_, count)| *count)
+        .max_by(by_count_then_value)
         .map(|(v, _)| *v)
         .unwrap_or(f64::NAN);
     let minority = freq
         .values()
-        .min_by_key(|(_, count)| *count)
+        .min_by(|a, b| {
+            a.1.cmp(&b.1)
+                .then_with(|| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+        })
         .map(|(v, _)| *v)
         .unwrap_or(f64::NAN);
     let variety = freq.len();

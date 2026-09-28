@@ -65,6 +65,8 @@ thiserror = "2"
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Embedded provenance (core::provenance): BLAKE3 of inputs and output arrays.
+blake3 = "1"
 
 # Geospatial
 geo = "0.29"

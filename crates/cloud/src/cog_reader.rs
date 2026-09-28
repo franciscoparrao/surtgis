@@ -200,6 +200,7 @@ impl CogReader {
     /// backing a catalog item do not change mid-run; it is not safe to rely
     /// on for URLs whose content can mutate during a process's lifetime.
     pub async fn open(url: &str, options: CogReaderOptions) -> Result<Self> {
+        surtgis_core::provenance::observe_input(url);
         let client = Self::client_for(&options)?;
         let auth = options.auth.as_ref();
 

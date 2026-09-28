@@ -15,6 +15,7 @@ pub mod interpolation;
 pub mod landscape;
 pub mod morphology;
 pub mod mosaic;
+pub mod provenance;
 pub mod relief;
 #[cfg(feature = "relief-3d")]
 pub mod relief_3d;

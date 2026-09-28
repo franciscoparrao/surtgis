@@ -27,6 +27,12 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub max_memory: Option<String>,
 
+    /// Do not embed a provenance record (command, hashed inputs, output
+    /// digest) in the written GeoTIFFs, and skip hashing the inputs.
+    /// Also honoured as SURTGIS_NO_PROVENANCE=1.
+    #[arg(long, global = true)]
+    pub no_provenance: bool,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -37,6 +43,25 @@ pub enum Commands {
     Info {
         /// Input raster file
         input: PathBuf,
+    },
+    /// Show the provenance record embedded in a SurtGIS output (engine,
+    /// command, hashed inputs, output digest)
+    Provenance {
+        /// GeoTIFF/COG written by SurtGIS
+        input: PathBuf,
+        /// Print the raw JSON record
+        #[arg(long)]
+        json: bool,
+    },
+    /// Verify a SurtGIS output against its embedded provenance: recompute
+    /// the digest of the pixel array and re-hash the recorded inputs.
+    /// Exits non-zero on any mismatch.
+    Verify {
+        /// GeoTIFF/COG written by SurtGIS
+        input: PathBuf,
+        /// Only check the output digest, not the inputs
+        #[arg(long)]
+        skip_inputs: bool,
     },
     /// Terrain analysis algorithms
     Terrain {

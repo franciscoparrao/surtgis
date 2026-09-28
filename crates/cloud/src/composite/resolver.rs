@@ -67,10 +67,15 @@ impl AssetResolver for DefaultAssetResolver {
         }
         // Case-insensitive exact match (QA_PIXEL vs qa_pixel).
         let key_lower = key.to_lowercase();
-        for (asset_key, asset) in &item.assets {
-            if asset_key.to_lowercase() == key_lower {
-                return Some(asset.href.clone());
-            }
+        // Smallest matching key, not HashMap order, if two keys differ
+        // only in case.
+        if let Some((_, asset)) = item
+            .assets
+            .iter()
+            .filter(|(k, _)| k.to_lowercase() == key_lower)
+            .min_by(|a, b| a.0.cmp(b.0))
+        {
+            return Some(asset.href.clone());
         }
         // Alias table.
         for &(name, alt_keys) in ALIASES {

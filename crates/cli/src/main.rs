@@ -4,6 +4,7 @@ mod commands;
 mod handlers;
 mod helpers;
 mod memory;
+mod provenance;
 // streaming + stac_introspect import from surtgis_cloud unconditionally
 // and are consumed only by the cog/stac handlers (both cloud-gated).
 // Gate them too so --no-default-features builds cleanly.
@@ -77,6 +78,10 @@ fn run(cli: Cli) -> Result<()> {
 
     helpers::setup_logging(verbose);
 
+    if !cli.no_provenance && !provenance::disabled_by_env() {
+        provenance::install(std::env::args().collect());
+    }
+
     match cli.command {
         Commands::Completions { shell } => {
             clap_complete::generate(
@@ -87,6 +92,10 @@ fn run(cli: Cli) -> Result<()> {
             );
         }
         Commands::Info { input } => handlers::info::handle(input)?,
+        Commands::Provenance { input, json } => handlers::provenance::show(input, json)?,
+        Commands::Verify { input, skip_inputs } => {
+            handlers::provenance::verify(input, skip_inputs)?
+        }
         Commands::Terrain { algorithm } => {
             handlers::terrain::handle(algorithm, compress, streaming, mem_limit_bytes)?
         }

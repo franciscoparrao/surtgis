@@ -42,7 +42,8 @@ use surtgis_algorithms::hydrology::{
 };
 use surtgis_algorithms::terrain::{SlopeParams, SlopeUnits, slope, twi};
 use surtgis_core::Raster;
-use surtgis_core::io::{CogCompression, CogOptions, write_cog};
+use surtgis_core::io::{CogCompression, CogOptions, write_cog, write_cog_with_provenance};
+use surtgis_core::provenance::{InputRecord, Provenance};
 
 use crate::AppState;
 use crate::error::ServeError;
@@ -291,8 +292,14 @@ fn ensure_acc(
     Ok(a)
 }
 
-/// Write the product as a tiled, deflate-compressed COG with overviews.
-pub fn write_output(raster: &Raster<f64>, path: &Path) -> Result<(), ServeError> {
+/// Write the product as a tiled, deflate-compressed COG with overviews,
+/// embedding `provenance` (source, pipeline, parameters, output digest)
+/// when given — see [`surtgis_core::provenance`].
+pub fn write_output(
+    raster: &Raster<f64>,
+    path: &Path,
+    provenance: Option<&Provenance>,
+) -> Result<(), ServeError> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)
             .map_err(|e| ServeError::Compute(format!("cannot create {}: {e}", dir.display())))?;
@@ -301,7 +308,55 @@ pub fn write_output(raster: &Raster<f64>, path: &Path) -> Result<(), ServeError>
         compression: CogCompression::Deflate,
         ..CogOptions::default()
     };
-    write_cog(raster, path, &opts).map_err(|e| ServeError::Compute(format!("write COG: {e}")))
+    match provenance {
+        Some(p) => write_cog_with_provenance(raster, path, &opts, p),
+        None => write_cog(raster, path, &opts),
+    }
+    .map_err(|e| ServeError::Compute(format!("write COG: {e}")))
+}
+
+/// The provenance record of a job: the request as parameters, the source
+/// as input (hashed when local), thread count of the blocking pool.
+fn job_provenance(req: &JobRequest, source: &Source, id: &str) -> Provenance {
+    let mut p = Provenance::new()
+        .with_operation("serve job")
+        .with_parameters(serde_json::json!({
+            "job_id": id,
+            "url": req.url,
+            "pipeline": req.pipeline,
+            "params": req.params,
+            "output": req.output,
+        }))
+        .with_threads(
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1),
+        );
+    match source {
+        Source::Local(path) => {
+            if p.push_input_file(path, Some("source")).is_err() {
+                p.push_input(InputRecord {
+                    source: path.display().to_string(),
+                    blake3: None,
+                    bytes: None,
+                    role: Some("source".into()),
+                });
+            }
+        }
+        Source::Http(url) => p.push_input(InputRecord {
+            source: url.clone(),
+            blake3: None,
+            bytes: None,
+            role: Some("source".into()),
+        }),
+        Source::Ecw(path) => p.push_input(InputRecord {
+            source: path.display().to_string(),
+            blake3: None,
+            bytes: None,
+            role: Some("source".into()),
+        }),
+    }
+    p
 }
 
 /// Read the whole source as one f64 band (band 0), nodata as NaN.
@@ -399,9 +454,10 @@ pub fn submit(state: Arc<AppState>, req: JobRequest) -> Result<JobStatus, ServeE
                 req.params.clone(),
                 output_path.clone(),
             );
+            let prov = job_provenance(&req, &source, &job_id);
             tokio::task::spawn_blocking(move || {
                 let (product, reports) = run_pipeline(dem, &pipeline, &params)?;
-                write_output(&product, &out)?;
+                write_output(&product, &out, Some(&prov))?;
                 let (r, c) = product.shape();
                 Ok((reports, [r, c]))
             })
@@ -509,7 +565,7 @@ mod tests {
         let (out, _) =
             run_pipeline(valley(700, 1100), &["fill_sinks".into()], &HashMap::new()).unwrap();
         let path = dir.path().join("_jobs").join("filled.tif");
-        write_output(&out, &path).unwrap();
+        write_output(&out, &path, None).unwrap();
         let info = surtgis_core::io::window::geotiff_info(&path).unwrap();
         assert_eq!((info.width, info.height), (1100, 700));
         assert!(info.levels[0].tiled);

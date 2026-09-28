@@ -110,6 +110,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 - **Cloud native** — COG reader with HTTP range requests, STAC client for Planetary Computer / Earth Search
 - **Cross-platform** — compiles to native (Rayon), WebAssembly (browser), Python (PyO3)
 - **No external dependencies** — native GeoTIFF I/O with DEFLATE compression, no GDAL required
+- **Verifiable outputs** — every file embeds its provenance (command, hashed inputs, output digest); `surtgis verify` checks it, and a CI contract keeps results bit-identical across thread counts and runs
 
 ## Architecture
 
