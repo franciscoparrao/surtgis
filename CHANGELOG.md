@@ -8,6 +8,22 @@ breaking changes only ship in a major version and are called out under a
 
 ## [Unreleased]
 
+### Added
+
+- **SurtGIS Server M1.5, materialisation jobs.** Global operators cannot be
+  tiled on the fly (a cell depends on the whole basin upstream), so they
+  run as jobs: `POST /jobs {"url", "pipeline", "output", "params"}` runs a
+  pipeline over the whole source — `fill_sinks`, `flow_direction`,
+  `flow_accumulation`, `stream_network`, `hand`, `twi`, each deriving the
+  stages it needs — and writes the last product as a tiled, deflate
+  compressed COG with overviews under `<root>/_jobs/` (or `--jobs-dir`,
+  which must lie under the root), where it is served by the ordinary tile
+  endpoints as `?url=_jobs/<output>.tif`. `GET /jobs/{id}` reports
+  queued/running/done/failed with per-step timings, `GET /jobs` lists
+  everything; one job runs at a time and the rest queue; `/metrics` gains
+  job gauges. Sources: local GeoTIFFs and allow-listed COGs (ECW is
+  imagery, rejected).
+
 ## [1.4.0] - 2026-09-25
 
 ### Added

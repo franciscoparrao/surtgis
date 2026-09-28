@@ -181,7 +181,7 @@ fn epsg_of(crs: Option<&surtgis_core::CRS>, what: &str) -> Result<u32, ServeErro
 
 /// Replace a finite nodata sentinel with NaN so resampling and the
 /// algorithms never blend it with real values.
-fn nan_nodata(mut r: Raster<f64>) -> Raster<f64> {
+pub(crate) fn nan_nodata(mut r: Raster<f64>) -> Raster<f64> {
     if let Some(nd) = r.nodata().filter(|nd| nd.is_finite()) {
         r.data_mut()
             .mapv_inplace(|v| if v == nd { f64::NAN } else { v });

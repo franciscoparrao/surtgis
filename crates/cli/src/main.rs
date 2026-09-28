@@ -107,6 +107,7 @@ fn run(cli: Cli) -> Result<()> {
             timeout_ms,
             max_inflight,
             pool_per_url,
+            jobs_dir,
         } => handlers::serve::handle(handlers::serve::Args {
             bind,
             root,
@@ -117,6 +118,7 @@ fn run(cli: Cli) -> Result<()> {
             timeout_ms,
             max_inflight,
             pool_per_url,
+            jobs_dir,
         })?,
         #[cfg(feature = "ecw")]
         Commands::Ecw { action } => handlers::ecw::handle(action, compress)?,
