@@ -317,23 +317,26 @@ fn embeddings_similarity_pca_norm_info() {
     let s: Raster<f64> = surtgis_core::io::read_geotiff(&sim, None).unwrap();
     assert!(s.data()[[5, 3]] > 0.999);
     assert!(s.data()[[5, 15]] < 0.8, "east {}", s.data()[[5, 15]]);
-    // The same reference as lon/lat (centre of cell (5,3)) and as a vector.
-    let gt = GeoTransform::new(350_000.0, 6_300_000.0, 10.0, -10.0);
-    let (x, y) = gt.pixel_to_geo(3, 5);
-    let (lon, lat) = surtgis_core::warp::Transformer::new(32719, 4326)
-        .unwrap()
-        .forward(x, y)
-        .unwrap();
-    let sim2 = dir.path().join("sim2.tif");
-    surtgis_cmd()
-        .args(["embeddings", "similarity"])
-        .arg(&emb)
-        .arg(&sim2)
-        .args(["--ref-lonlat", &format!("{lon},{lat}")])
-        .assert()
-        .success();
-    let s2: Raster<f64> = surtgis_core::io::read_geotiff(&sim2, None).unwrap();
-    assert_eq!(s.data(), s2.data());
+    // The same reference as lon/lat (centre of cell (5,3)): needs the
+    // `projections` feature of the CLI (off in the no-default-features job).
+    if cfg!(feature = "projections") {
+        let gt = GeoTransform::new(350_000.0, 6_300_000.0, 10.0, -10.0);
+        let (x, y) = gt.pixel_to_geo(3, 5);
+        let (lon, lat) = surtgis_core::warp::Transformer::new(32719, 4326)
+            .unwrap()
+            .forward(x, y)
+            .unwrap();
+        let sim2 = dir.path().join("sim2.tif");
+        surtgis_cmd()
+            .args(["embeddings", "similarity"])
+            .arg(&emb)
+            .arg(&sim2)
+            .args(["--ref-lonlat", &format!("{lon},{lat}")])
+            .assert()
+            .success();
+        let s2: Raster<f64> = surtgis_core::io::read_geotiff(&sim2, None).unwrap();
+        assert_eq!(s.data(), s2.data());
+    }
     surtgis_cmd()
         .args(["embeddings", "similarity"])
         .arg(&emb)
