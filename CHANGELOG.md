@@ -8,6 +8,16 @@ breaking changes only ship in a major version and are called out under a
 
 ## [Unreleased]
 
+### Fixed
+
+- **`resample` loaded the source and the reference whole** (~12 B per
+  cell; 3.4 GB to bring a 293 M-cell 10 m raster to a 121 m grid, and
+  `--streaming` changed nothing). It now reads only the two grids'
+  metadata, streams the output in Float32 strips and reads, per strip,
+  the source window under it plus a kernel margin — strips are sized so
+  that window is about 512 source rows. Same values as the in-memory
+  path. (issues_surtgis.md #7)
+
 ## [1.5.0] - 2026-09-29
 
 ### Added

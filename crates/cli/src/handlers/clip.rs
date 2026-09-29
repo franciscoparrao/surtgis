@@ -203,21 +203,75 @@ pub fn handle_resample(
         }
     };
 
-    let source = helpers::read_dem(&input)?;
-    let ref_raster = helpers::read_dem(&reference)?;
+    use surtgis_core::io::window::{geotiff_info, read_geotiff_window_bands};
+    use surtgis_core::io::{StripWriterConfig, write_geotiff_streaming};
 
-    let (src_rows, src_cols) = source.shape();
-    let (ref_rows, ref_cols) = ref_raster.shape();
+    // Neither raster is loaded whole: the reference gives the grid, the
+    // source is read window by window (issues_surtgis.md #7 — reading the
+    // whole source was ~12 B/cell, 3.4 GB for a 293 M-cell LOCC).
+    let src_info =
+        geotiff_info(&input).with_context(|| format!("Failed to read {}", input.display()))?;
+    let ref_info = geotiff_info(&reference)
+        .with_context(|| format!("Failed to read reference {}", reference.display()))?;
+    let (src_rows, src_cols) = (src_info.height as usize, src_info.width as usize);
+    let (ref_rows, ref_cols) = (ref_info.height as usize, ref_info.width as usize);
+    let ref_gt = ref_info.transform;
+    let src_px = src_info
+        .transform
+        .pixel_width
+        .abs()
+        .max(src_info.transform.pixel_height.abs());
+    let ref_px = ref_gt.pixel_width.abs().max(ref_gt.pixel_height.abs());
+
+    // Strips sized so that the source window behind each one is about 512
+    // source rows: downsampling 10 m → 121 m gives ~42 output rows per strip.
+    let rows_per_strip = ((512.0 * src_px / ref_px).floor() as usize).clamp(1, 4096);
+    let margin = 2.0 * src_px.max(ref_px);
 
     let start = Instant::now();
-    let result = surtgis_core::resample_to_grid(&source, &ref_raster, method)
-        .context("Failed to resample")?;
+    let config = StripWriterConfig {
+        rows: ref_rows,
+        cols: ref_cols,
+        transform: ref_gt,
+        crs: ref_info.crs.clone(),
+        nodata: Some(f64::NAN),
+        compress,
+        rows_per_strip: rows_per_strip as u32,
+    };
+    let pb = helpers::spinner("Resampling...");
+    write_geotiff_streaming(&output, &config, |strip_idx, strip_rows| {
+        let start_row = strip_idx * rows_per_strip;
+        let (ox, oy) = ref_gt.pixel_to_geo_corner(0, start_row);
+        let strip_gt =
+            surtgis_core::GeoTransform::new(ox, oy, ref_gt.pixel_width, ref_gt.pixel_height);
+        // Geographic footprint of the strip plus a margin for the kernel.
+        let (bx0, by0, bx1, by1) = strip_gt.bounds(ref_cols, strip_rows);
+        let Some(pw) =
+            src_info.window_for_bounds(0, bx0 - margin, by0 - margin, bx1 + margin, by1 + margin)
+        else {
+            return Ok(ndarray::Array2::from_elem((strip_rows, ref_cols), f64::NAN));
+        };
+        let src_window = read_geotiff_window_bands::<f64, _>(&input, &src_info, 0, &pw)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| surtgis_core::Error::Other("source has no bands".into()))?;
+        let mut template = surtgis_core::Raster::<f64>::new(strip_rows, ref_cols);
+        template.set_transform(strip_gt);
+        let out = surtgis_core::resample_to_grid(&src_window, &template, method)?;
+        Ok(out.data().to_owned())
+    })
+    .context("Failed to resample")?;
+    pb.finish_and_clear();
     let elapsed = start.elapsed();
 
-    helpers::write_result(&result, &output, compress)?;
     println!(
-        "Resampled: {} x {} → {} x {}",
-        src_cols, src_rows, ref_cols, ref_rows
+        "Resampled: {} x {} → {} x {} ({} strips of {} rows)",
+        src_cols,
+        src_rows,
+        ref_cols,
+        ref_rows,
+        ref_rows.div_ceil(rows_per_strip),
+        rows_per_strip
     );
     helpers::done("Resample", &output, elapsed);
     Ok(())
