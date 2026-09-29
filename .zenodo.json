@@ -1,6 +1,6 @@
 {
   "title": "SurtGIS: a high-performance raster geospatial analysis library, CLI and dynamic tile server in Rust",
-  "description": "High-performance geospatial analysis library and CLI in Rust: 127 algorithms (56 also available in the browser via WebAssembly), streaming I/O for arbitrarily large DEMs, native CRS reprojection, windowed GeoTIFF and Cloud Optimized GeoTIFF reads, a native ECW decoder, an end-to-end satellite composite pipeline, and — since 1.4.0 — SurtGIS Server, an analysis-first dynamic XYZ tile server (`surtgis serve`) where terrain operators, spectral formulas and colormaps are tile-URL parameters. Covers terrain analysis, hydrology and remote sensing from a single dependency-free binary. This record archives the source of release v1.4.0.",
+  "description": "High-performance geospatial analysis library, CLI and dynamic tile server in Rust: 127 algorithms (56 also available in the browser via WebAssembly), streaming I/O for arbitrarily large DEMs, native CRS reprojection, windowed GeoTIFF and Cloud Optimized GeoTIFF reads (including ZSTD, band-interleaved, bottom-up and BigTIFF files such as the AlphaEarth Foundations embedding tiles), a native ECW decoder, an end-to-end satellite composite pipeline, foundation-model embeddings as first-class rasters (similarity maps, PCA false colour), embedded verifiable provenance in every output with a bit-exact determinism contract, and SurtGIS Server (`surtgis serve`), an analysis-first XYZ tile server with materialisation jobs where terrain operators, spectral formulas and embedding operators are tile-URL parameters. Covers terrain analysis, hydrology and remote sensing from a single dependency-free binary. This record archives the source of release v1.5.0.",
   "upload_type": "software",
   "access_right": "open",
   "license": "MIT",
@@ -23,7 +23,10 @@
     "tile server",
     "Cloud Optimized GeoTIFF",
     "Rust",
-    "WebAssembly"
+    "WebAssembly",
+    "embeddings",
+    "provenance",
+    "reproducibility"
   ],
   "communities": [],
   "related_identifiers": [
