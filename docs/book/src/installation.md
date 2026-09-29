@@ -26,18 +26,18 @@ The precompiled binary has the feature set `cloud,zarr,projections`:
 STAC, COG, climate-data Zarr readers, and UTM reprojection. This covers
 every tutorial and every how-to in this book.
 
-## 2. `cargo install --git` (for the full feature set)
+## 2. `cargo install` (for the full feature set)
 
 If you have the Rust toolchain and want `netcdf` / `grib` support on top,
-build the release from git. The CLI is **not** on crates.io: the `surtgis`
-crate there is a yanked 0.18.0, because the tool depends on workspace crates
-that are not published yet (`surtgis-flow`, `surtgis-ecw`, `surtgis-server`,
-`surtgis-relief-3d`). The library crates are on crates.io at the current
-release.
+install from [crates.io](https://crates.io/crates/surtgis):
 
 ```bash
-cargo install --git https://github.com/franciscoparrao/surtgis --tag v1.5.0 surtgis --all-features
+cargo install surtgis --all-features
 ```
+
+The crates.io release has no `ecw` feature (the ECW decoder crate is not
+published while its licensing review is open); the precompiled binaries and
+a `--git` build with `--features ecw` include it.
 
 System libraries required for `--all-features`:
 
@@ -46,10 +46,10 @@ System libraries required for `--all-features`:
 | `netcdf` | `libnetcdf-dev` | `brew install netcdf` | not supported |
 | `grib` | libgribapi or eccodes | `brew install eccodes` | not supported |
 
-If you only need the same feature set as the precompiled binary:
+If you only need the same feature set as the precompiled binary (minus ECW):
 
 ```bash
-cargo install --git https://github.com/franciscoparrao/surtgis --tag v1.5.0 surtgis
+cargo install surtgis --features server
 ```
 
 ## 3. From source (for contributors)
@@ -77,7 +77,7 @@ surtgis terrain --help               # terrain subcommand list
 
 If the binary runs but a specific command fails with "feature not enabled",
 you're on the precompiled binary and the command needs `netcdf` / `grib` /
-`gdal`. Rebuild from source with `cargo install --git https://github.com/franciscoparrao/surtgis surtgis --all-features`.
+`gdal`. Rebuild from source with `cargo install surtgis --all-features`.
 
 ## Next step
 

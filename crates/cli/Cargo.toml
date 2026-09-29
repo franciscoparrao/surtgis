@@ -35,19 +35,17 @@ relief-3d = ["dep:surtgis-relief-3d"]
 # SPEC_SURTGIS_ONNX_INFERENCE.md still a scaffold upstream
 # (`OnnxModel::load`/`infer` are stubs in surtgis-algorithms).
 onnx = ["surtgis-algorithms/onnx"]
-# `surtgis flow` — debris-flow solver (SWE + Voellmy), spec surtgis-flow v1.0.
-# Off by default while the 0.18.0 surface is in 1.0-freeze soak: the default
-# binary keeps its frozen command set; GEODEO/dev builds opt in with
-# `--features flow`. NOTE: surtgis-flow is publish = false, so this feature
-# must be resolved (publish the crate, or keep the feature off) before the
-# next crates.io release of surtgis-cli.
+# `surtgis flow` — debris-flow solver (SWE + Voellmy), spec surtgis-flow v1.1.
+# Off by default: the default binary keeps its command set; GEODEO/dev builds
+# opt in with `--features flow`.
 flow = ["dep:surtgis-flow"]
-# `surtgis ecw` — native ECW v2 decoder (no GDAL, no Hexagon SDK). Same
-# path-only situation as flow: surtgis-ecw is publish = false until its
-# licensing review is signed off, so the feature is opt-in.
-ecw = ["dep:surtgis-ecw", "surtgis-server?/ecw"]
+# `surtgis ecw` — native ECW v2 decoder (no GDAL, no Hexagon SDK). Opt-in,
+# and ABSENT from the crates.io release of this crate: surtgis-ecw is not
+# published (licensing review pending, docs/ecw_format.md), so
+# scripts/publish-crates.sh strips the lines marked `# @ecw-only` for the
+# publish. The GitHub Release binaries are built from this tree and keep it.
+ecw = ["dep:surtgis-ecw", "surtgis-server?/ecw"] # @ecw-only
 # `surtgis serve` — analysis-first dynamic tile server (docs/surtgis_server_design.md).
-# Same path-only pattern as flow/ecw: surtgis-server is publish = false.
 server = ["dep:surtgis-server"]
 
 [dependencies]
@@ -55,15 +53,11 @@ surtgis-core = { version = "1.0", path = "../core", features = ["shapefile", "ge
 surtgis-algorithms = { version = "1.0", path = "../algorithms", features = ["unstable"] }
 surtgis-parallel = { version = "1.0", path = "../parallel" }
 surtgis-relief = { version = "1.0", path = "../relief" }
-surtgis-relief-3d = { version = "1.0", path = "../relief-3d", optional = true }
-# Path-only on purpose: surtgis-flow is publish = false until the 1.0 freeze
-# resolves (see the `flow` feature note above).
-surtgis-flow = { path = "../flow", optional = true }
-# Path-only on purpose: surtgis-ecw is publish = false (licensing review
-# pending — see docs/ecw_format.md and the `ecw` feature note above).
-surtgis-ecw = { path = "../ecw", optional = true }
-# Path-only on purpose: surtgis-server is publish = false (pre-1.0 API).
-surtgis-server = { path = "../server", optional = true }
+surtgis-relief-3d = { version = "1.5", path = "../relief-3d", optional = true }
+surtgis-flow = { version = "1.5", path = "../flow", optional = true }
+# Path-only: surtgis-ecw is not on crates.io (see the `ecw` feature note).
+surtgis-ecw = { path = "../ecw", optional = true } # @ecw-only
+surtgis-server = { version = "1.5", path = "../server", optional = true }
 surtgis-cloud = { version = "1.0", path = "../cloud", features = ["native", "unstable"], optional = true }
 clap.workspace = true
 clap_complete.workspace = true

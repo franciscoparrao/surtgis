@@ -92,7 +92,7 @@ Trade-offs of this choice:
   LZW, big/little endian, tiled and stripped), but not every ancient file
   your grandfather's theodolite produced.
 
-A `gdal` feature flag exists as an escape hatch — `cargo install --git https://github.com/franciscoparrao/surtgis surtgis --features gdal`
+A `gdal` feature flag exists as an escape hatch — `cargo install surtgis --features gdal`
 — which falls back to the GDAL crate for I/O when the native path can't
 handle something. Most users never need it.
 

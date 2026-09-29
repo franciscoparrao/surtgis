@@ -12,7 +12,6 @@ categories = ["science::geo", "graphics", "rendering"]
 # Distributed as a compiled binary, like `gui`: wgpu drags system libs, so
 # it is excluded from default-members, the MSRV job and crates.io. Marked
 # non-publishable so it stays out of the verified 1.0 published surface.
-publish = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]

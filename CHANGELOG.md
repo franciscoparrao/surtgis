@@ -8,6 +8,19 @@ breaking changes only ship in a major version and are called out under a
 
 ## [Unreleased]
 
+### Added
+
+- **The CLI is back on crates.io.** `cargo install surtgis` resolves a
+  current version again. `surtgis-flow`, `surtgis-server` and
+  `surtgis-relief-3d` are published (marked experimental: their library
+  APIs may change in minor releases; the CLI subcommands are the stable
+  surface). The crates.io release of the CLI and of `surtgis-server` has
+  no `ecw` feature — `surtgis-ecw` stays unpublished while its licensing
+  review is open — so `scripts/publish-crates.sh` strips the lines marked
+  `# @ecw-only` from the two manifests for the publish; the GitHub
+  Release binaries keep ECW. Every 0.x version of the CLI on crates.io
+  was yanked (they predate 1.0 and `cargo install` fell back to them).
+
 ### Fixed
 
 - **`resample` loaded the source and the reference whole** (~12 B per

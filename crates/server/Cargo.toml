@@ -6,16 +6,21 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "SurtGIS Server — analysis-first dynamic tile server (terrain, hydrology and spectral formulas as tile parameters)"
-# Distributed through the `surtgis serve` subcommand (feature `server` of the
-# CLI); not published on its own while the API is pre-1.0.
-publish = false
+# Published as EXPERIMENTAL: the HTTP API (docs/surtgis_server_design.md) is
+# pre-1.0 and may change in minor releases; `surtgis serve` is the stable
+# entry point. The published crate has no `ecw` feature — the lines marked
+# `# @ecw-only` below are stripped by scripts/publish-crates.sh because
+# surtgis-ecw is not on crates.io (licensing review pending).
+rust-version.workspace = true
+keywords = ["gis", "tiles", "tile-server", "cog", "terrain"]
+categories = ["science::geo", "web-programming::http-server"]
 
 [dependencies]
-surtgis-core = { path = "../core", features = ["projections"] }
-surtgis-algorithms = { path = "../algorithms", default-features = false }
-surtgis-colormap = { path = "../colormap" }
-surtgis-cloud = { path = "../cloud", features = ["native"] }
-surtgis-ecw = { path = "../ecw", optional = true }
+surtgis-core = { version = "1.5", path = "../core", features = ["projections"] }
+surtgis-algorithms = { version = "1.5", path = "../algorithms", default-features = false }
+surtgis-colormap = { version = "1.5", path = "../colormap" }
+surtgis-cloud = { version = "1.5", path = "../cloud", features = ["native"] }
+surtgis-ecw = { path = "../ecw", optional = true } # @ecw-only
 
 axum = { workspace = true }
 tokio = { workspace = true, features = ["net", "macros", "signal", "fs"] }
@@ -31,7 +36,7 @@ lru = { workspace = true }
 
 [features]
 # ECW (ER Mapper) orthomosaics as a local source, through the native decoder.
-ecw = ["dep:surtgis-ecw"]
+ecw = ["dep:surtgis-ecw"] # @ecw-only
 
 [dev-dependencies]
 tempfile = { workspace = true }
