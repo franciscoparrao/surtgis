@@ -48,6 +48,41 @@ breaking changes only ship in a major version and are called out under a
   covering struct, lists, maps) instead of failing the whole file; the
   scalar columns are still read.
 
+- `imagery calc` / `index_builder` grammar: comparisons (`<`, `<=`, `>`,
+  `>=`, `==`, `!=` → 1/0, NaN when a side is NaN) and the functions
+  `min`, `max`, `abs`, `sqrt`, `exp`, `ln`/`log`, `log10`, `isnan(x)`
+  and `if(cond, a, b)`; a formula that calls `isnan` sees nodata cells as
+  NaN instead of yielding NaN, so `if(isnan(A), 0, A)` fills nodata.
+  Band names that coincide with a function name still work when not
+  followed by `(`.
+- `imagery reclassify --fill-nodata` gives nodata cells the `--default`
+  value; `--class` and `--default` accept negative numbers without `=`.
+- Global `--output-dtype f32`: Float64 outputs written through the common
+  writer are stored as Float32 (half the size; nodata stays NaN).
+- `info` prints the file's GDAL_NODATA next to the in-memory NaN
+  ("NoData: -9999 (file tag; NaN in memory)") instead of only "NaN".
+
+### Fixed
+
+- **Float32 nodata written as an f64 decimal was never matched.** terra
+  / raster write `GDAL_NODATA="-3.39999999999999996e+38"` for FLT4S
+  files; the pixels hold the nearest f32, and SurtGIS compared after
+  widening to f64, so every nodata cell entered computations (a bilinear
+  `reproject` smeared −3.4e38 over borders). The native readers now
+  compare in the file's sample type before casting, and the COG reader
+  casts the tag through the sample type. (issues_surtgis.md #1)
+- **CRS compared by string.** An ESRI `.prj` (`WGS_1984_UTM_Zone_19S`)
+  was rejected against a raster in EPSG:32719. `CRS::epsg()` now infers
+  the code from WKT — trailing `AUTHORITY["EPSG",…]`, or the WGS 84 /
+  UTM / Web Mercator names in ESRI and OGC spelling — and
+  `is_equivalent` compares resolved codes. (#4)
+- **`rasterize` loaded the whole grid.** It read the reference raster's
+  pixels as f64 and held the full output plus the writer's copy: ~26 B
+  per cell, 7.6 GB for a 293 M-cell grid. It now takes only the
+  reference's grid (`geotiff_info`) and writes Float32 strips of 512
+  rows through the streaming writer, rasterizing each strip on its own
+  sub-grid; memory is one strip. (#3)
+
 ### Changed
 
 - Low-level `surtgis_cloud::ifd` types widened for BigTIFF:

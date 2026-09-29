@@ -435,3 +435,125 @@ fn extract_expands_multiband_features() {
     }
     assert_eq!(csv.lines().count(), 3, "{csv}");
 }
+
+// ─── issues_surtgis.md (riesgo_tal_tal, 2026-09-28) ─────────────────────
+
+/// #1: a Float32 file whose GDAL_NODATA is the f64 decimal terra writes
+/// must have its nodata recognised (stats exclude it, `info` names it).
+#[test]
+fn float32_terra_nodata_is_recognised() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("terra.tif");
+    let nd = -3.39999999999999996e38_f64;
+    let mut r: Raster<f32> = Raster::new(4, 4);
+    r.set_transform(GeoTransform::new(0.0, 4.0, 1.0, -1.0));
+    r.data_mut().fill(10.0);
+    r.data_mut()[[0, 0]] = nd as f32;
+    r.set_nodata(Some(nd as f32));
+    surtgis_core::io::write_geotiff(&r, &path, None).unwrap();
+    surtgis_cmd()
+        .arg("info")
+        .arg(&path)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("file tag; NaN in memory"))
+        .stdout(predicate::str::contains("Min: 10.0000"));
+}
+
+/// #3: rasterize streams by strips and never reads the reference pixels;
+/// #4: an ESRI .prj naming the UTM zone equals the raster's EPSG code.
+#[test]
+fn rasterize_streams_and_accepts_esri_prj() {
+    let dir = tempfile::tempdir().unwrap();
+    let reference = dir.path().join("ref.tif");
+    let mut r: Raster<f64> = Raster::new(1100, 40);
+    r.set_transform(GeoTransform::new(500_000.0, 6_300_000.0, 10.0, -10.0));
+    r.set_crs(Some(surtgis_core::CRS::from_epsg(32719)));
+    surtgis_core::io::write_geotiff(&r, &reference, None).unwrap();
+    // A polygon covering rows 100..600 (strip boundary at 512 inside it),
+    // columns 10..30, with a CRS as ESRI WKT (no AUTHORITY).
+    let geojson = dir.path().join("poly.geojson");
+    std::fs::write(
+        &geojson,
+        r#"{"type":"FeatureCollection","crs":{"type":"name","properties":{"name":"PROJCS[\"WGS_1984_UTM_Zone_19S\",GEOGCS[\"GCS_WGS_1984\",DATUM[\"D_WGS_1984\",SPHEROID[\"WGS_1984\",6378137.0,298.257223563]],PRIMEM[\"Greenwich\",0.0],UNIT[\"Degree\",0.0174532925199433]],PROJECTION[\"Transverse_Mercator\"],UNIT[\"Meter\",1.0]]"}},"features":[{"type":"Feature","properties":{"cls":7},"geometry":{"type":"Polygon","coordinates":[[[500100,6299000],[500300,6299000],[500300,6294000],[500100,6294000],[500100,6299000]]]}}]}"#,
+    )
+    .unwrap();
+    let out = dir.path().join("mask.tif");
+    surtgis_cmd()
+        .arg("rasterize")
+        .arg(&geojson)
+        .arg(&out)
+        .arg("--reference")
+        .arg(&reference)
+        .args(["--attribute", "cls"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("3 strips"));
+    let m: Raster<f32> = surtgis_core::io::read_geotiff(&out, None).unwrap();
+    assert_eq!(m.shape(), (1100, 40));
+    assert_eq!(m.data()[[300, 20]], 7.0);
+    assert_eq!(m.data()[[511, 20]], 7.0);
+    assert_eq!(m.data()[[512, 20]], 7.0);
+    assert!(m.data()[[50, 20]].is_nan());
+    assert!(m.data()[[700, 20]].is_nan());
+    assert!(m.data()[[300, 5]].is_nan());
+    let back = surtgis_core::io::read_geotiff::<f32, _>(&out, None).unwrap();
+    assert_eq!(back.crs().and_then(|c| c.epsg()), Some(32719));
+}
+
+/// #5: `reclassify` takes negative bounds and can fill nodata;
+/// `imagery calc` has comparisons, if() and isnan(); `--output-dtype f32`.
+#[test]
+fn reclassify_calc_and_output_dtype_ergonomics() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("v.tif");
+    let mut r: Raster<f64> = Raster::new(3, 3);
+    r.set_transform(GeoTransform::new(0.0, 3.0, 1.0, -1.0));
+    for (i, v) in r.data_mut().iter_mut().enumerate() {
+        *v = i as f64 * 0.25 - 1.0; // -1 .. 1
+    }
+    r.data_mut()[[2, 2]] = f64::NAN;
+    r.set_nodata(Some(f64::NAN));
+    surtgis_core::io::write_geotiff(&r, &src, None).unwrap();
+
+    let out = dir.path().join("cls.tif");
+    surtgis_cmd()
+        .args(["imagery", "reclassify"])
+        .arg(&src)
+        .arg(&out)
+        .args(["--class", "-0.5,0.5,1", "--default", "-9", "--fill-nodata"])
+        .assert()
+        .success();
+    let c: Raster<f64> = surtgis_core::io::read_geotiff(&out, None).unwrap();
+    assert_eq!(c.data()[[1, 1]], 1.0); // 0.0 in [-0.5, 0.5)
+    assert_eq!(c.data()[[0, 0]], -9.0); // -1.0 outside
+    assert_eq!(c.data()[[2, 2]], -9.0); // nodata filled
+
+    let calc = dir.path().join("calc.tif");
+    surtgis_cmd()
+        .args([
+            "imagery",
+            "calc",
+            "-e",
+            "if(isnan(A), 0, if(A > 0, 1, 0))",
+            "-b",
+        ])
+        .arg(format!("A={}", src.display()))
+        .arg(&calc)
+        .assert()
+        .success();
+    let k: Raster<f64> = surtgis_core::io::read_geotiff(&calc, None).unwrap();
+    assert_eq!(k.data()[[2, 2]], 0.0);
+    assert_eq!(k.data()[[2, 1]], 1.0);
+    assert_eq!(k.data()[[0, 0]], 0.0);
+
+    let slope32 = dir.path().join("slope32.tif");
+    surtgis_cmd()
+        .args(["--output-dtype", "f32", "terrain", "slope"])
+        .arg(&src)
+        .arg(&slope32)
+        .assert()
+        .success();
+    let any = surtgis_core::io::read_geotiff_any(&slope32, None).unwrap();
+    assert_eq!(any.dtype(), surtgis_core::DataType::F32);
+}

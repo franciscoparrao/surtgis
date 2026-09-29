@@ -35,6 +35,52 @@ enum Token {
     Pow,      // **
     LParen,
     RParen,
+    /// `<`, `<=`, `>`, `>=`, `==`, `!=`
+    Cmp(&'static str),
+    Comma,
+    /// Identifier immediately followed by `(`: a function call.
+    Func(String),
+}
+
+/// Built-in functions of the formula grammar (an extension over the ASI
+/// catalogue's pure arithmetic): comparisons and these let a formula
+/// express masks and fills — `if(B > 0.3, 1, 0)`, `if(isnan(A), 0, A)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Func {
+    Min,
+    Max,
+    Abs,
+    Sqrt,
+    Exp,
+    Ln,
+    Log10,
+    IsNan,
+    If,
+}
+
+impl Func {
+    fn parse(name: &str) -> Option<Func> {
+        Some(match name {
+            "min" => Func::Min,
+            "max" => Func::Max,
+            "abs" => Func::Abs,
+            "sqrt" => Func::Sqrt,
+            "exp" => Func::Exp,
+            "ln" | "log" => Func::Ln,
+            "log10" => Func::Log10,
+            "isnan" => Func::IsNan,
+            "if" => Func::If,
+            _ => return None,
+        })
+    }
+
+    fn arity(self) -> usize {
+        match self {
+            Func::Min | Func::Max => 2,
+            Func::If => 3,
+            _ => 1,
+        }
+    }
 }
 
 /// A node in the expression AST
@@ -51,6 +97,16 @@ enum Expr {
         right: Box<Expr>,
     },
     Neg(Box<Expr>),
+    /// Comparison: 1.0 when true, 0.0 when false, NaN when either side is NaN.
+    Cmp {
+        op: &'static str,
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
+    Call {
+        func: Func,
+        args: Vec<Expr>,
+    },
 }
 
 /// Tokenize a formula string
@@ -70,6 +126,29 @@ fn tokenize(formula: &str) -> Result<Vec<Token>> {
             }
             '+' | '-' | '*' | '/' => {
                 tokens.push(Token::Op(chars[i]));
+                i += 1;
+            }
+            '<' | '>' | '=' | '!' => {
+                let two = i + 1 < chars.len() && chars[i + 1] == '=';
+                let op: &'static str = match (chars[i], two) {
+                    ('<', true) => "<=",
+                    ('<', false) => "<",
+                    ('>', true) => ">=",
+                    ('>', false) => ">",
+                    ('=', true) => "==",
+                    ('!', true) => "!=",
+                    (c, false) => {
+                        return Err(Error::Algorithm(format!(
+                            "Unexpected character '{c}' in formula (did you mean '{c}=')"
+                        )));
+                    }
+                    _ => unreachable!(),
+                };
+                tokens.push(Token::Cmp(op));
+                i += if two { 2 } else { 1 };
+            }
+            ',' => {
+                tokens.push(Token::Comma);
                 i += 1;
             }
             '(' => {
@@ -97,7 +176,17 @@ fn tokenize(formula: &str) -> Result<Vec<Token>> {
                     i += 1;
                 }
                 let name: String = chars[start..i].iter().collect();
-                tokens.push(Token::Band(name));
+                // An identifier followed by `(` is a call, e.g. `min(A, B)`;
+                // a band may still be named `min` when not followed by `(`.
+                let mut j = i;
+                while j < chars.len() && chars[j] == ' ' {
+                    j += 1;
+                }
+                if j < chars.len() && chars[j] == '(' && Func::parse(&name).is_some() {
+                    tokens.push(Token::Func(name));
+                } else {
+                    tokens.push(Token::Band(name));
+                }
             }
             c => {
                 return Err(Error::Algorithm(format!(
@@ -117,6 +206,9 @@ struct Parser {
     pos: usize,
     /// Band names in order of first appearance; `Expr::Band` indexes here.
     band_names: Vec<String>,
+    /// The formula calls `isnan(...)`: nodata cells must reach the
+    /// evaluator as NaN instead of short-circuiting to a NaN result.
+    uses_isnan: bool,
 }
 
 impl Parser {
@@ -125,6 +217,7 @@ impl Parser {
             tokens,
             pos: 0,
             band_names: Vec::new(),
+            uses_isnan: false,
         }
     }
 
@@ -152,7 +245,23 @@ impl Parser {
     }
 
     /// Parse: expr = term (('+' | '-') term)*
+    /// Lowest precedence: comparisons over additive expressions.
     fn parse_expr(&mut self) -> Result<Expr> {
+        let mut left = self.parse_additive()?;
+        while let Some(Token::Cmp(op)) = self.peek() {
+            let op = *op;
+            self.advance();
+            let right = self.parse_additive()?;
+            left = Expr::Cmp {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+        Ok(left)
+    }
+
+    fn parse_additive(&mut self) -> Result<Expr> {
         let mut left = self.parse_term()?;
 
         while let Some(Token::Op(op @ ('+' | '-'))) = self.peek() {
@@ -235,6 +344,39 @@ impl Parser {
                 let idx = self.band_index(name);
                 Ok(Expr::Band(idx))
             }
+            Some(Token::Func(name)) => {
+                self.advance();
+                let func = Func::parse(&name)
+                    .ok_or_else(|| Error::Algorithm(format!("Unknown function '{name}'")))?;
+                match self.advance() {
+                    Some(Token::LParen) => {}
+                    _ => return Err(Error::Algorithm(format!("Expected '(' after {name}"))),
+                }
+                let mut args = Vec::new();
+                loop {
+                    args.push(self.parse_expr()?);
+                    match self.advance() {
+                        Some(Token::Comma) => continue,
+                        Some(Token::RParen) => break,
+                        _ => {
+                            return Err(Error::Algorithm(format!(
+                                "Expected ',' or ')' in {name}(...)"
+                            )));
+                        }
+                    }
+                }
+                if args.len() != func.arity() {
+                    return Err(Error::Algorithm(format!(
+                        "{name}() takes {} argument(s), got {}",
+                        func.arity(),
+                        args.len()
+                    )));
+                }
+                if func == Func::IsNan {
+                    self.uses_isnan = true;
+                }
+                Ok(Expr::Call { func, args })
+            }
             Some(Token::LParen) => {
                 self.advance();
                 let expr = self.parse_expr()?;
@@ -275,6 +417,49 @@ fn eval(expr: &Expr, values: &[f64]) -> f64 {
             }
         }
         Expr::Neg(inner) => -eval(inner, values),
+        Expr::Cmp { op, left, right } => {
+            let l = eval(left, values);
+            let r = eval(right, values);
+            if l.is_nan() || r.is_nan() {
+                return f64::NAN;
+            }
+            let t = match *op {
+                "<" => l < r,
+                "<=" => l <= r,
+                ">" => l > r,
+                ">=" => l >= r,
+                "==" => l == r,
+                "!=" => l != r,
+                _ => return f64::NAN,
+            };
+            if t { 1.0 } else { 0.0 }
+        }
+        Expr::Call { func, args } => match func {
+            Func::Min => eval(&args[0], values).min(eval(&args[1], values)),
+            Func::Max => eval(&args[0], values).max(eval(&args[1], values)),
+            Func::Abs => eval(&args[0], values).abs(),
+            Func::Sqrt => eval(&args[0], values).sqrt(),
+            Func::Exp => eval(&args[0], values).exp(),
+            Func::Ln => eval(&args[0], values).ln(),
+            Func::Log10 => eval(&args[0], values).log10(),
+            Func::IsNan => {
+                if eval(&args[0], values).is_nan() {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
+            Func::If => {
+                let c = eval(&args[0], values);
+                if c.is_nan() {
+                    f64::NAN
+                } else if c != 0.0 {
+                    eval(&args[1], values)
+                } else {
+                    eval(&args[2], values)
+                }
+            }
+        },
     }
 }
 
@@ -284,7 +469,11 @@ fn eval(expr: &Expr, values: &[f64]) -> f64 {
 /// * `formula` - Arithmetic expression referencing band names.
 ///   Supports: `+`, `-`, `*`, `/`, `**` (right-associative power),
 ///   parentheses, unary minus and numeric constants — the full grammar of
-///   the Awesome Spectral Indices catalogue (Montero et al., 2023).
+///   the Awesome Spectral Indices catalogue (Montero et al., 2023) — plus
+///   comparisons (`<`, `<=`, `>`, `>=`, `==`, `!=`, giving 1/0) and the
+///   functions `min(a,b)`, `max(a,b)`, `abs`, `sqrt`, `exp`, `ln`/`log`,
+///   `log10`, `isnan(x)` and `if(cond, a, b)`, so a formula can express a
+///   mask (`if(NDVI > 0.3, 1, 0)`) or a fill (`if(isnan(A), 0, A)`).
 ///   Example: `"(NIR - Red) / (NIR + Red + Blue)"`
 /// * `bands` - Map of band name → raster. All rasters must have
 ///   the same dimensions.
@@ -314,6 +503,7 @@ pub fn index_builder(formula: &str, bands: &HashMap<&str, &Raster<f64>>) -> Resu
             formula
         )));
     }
+    let uses_isnan = parser.uses_isnan;
     let referenced = parser.band_names;
 
     // Validate all referenced bands exist
@@ -363,12 +553,14 @@ pub fn index_builder(formula: &str, bands: &HashMap<&str, &Raster<f64>>) -> Resu
         'cell: for (col, out_val) in out_row.iter_mut().enumerate() {
             for (i, band) in band_refs.iter().enumerate() {
                 let val = unsafe { band.get_unchecked(row, col) };
-                if val.is_nan() {
-                    continue 'cell;
-                }
-                if let Some(nd) = nodatas[i]
-                    && val == nd
-                {
+                let is_nodata = val.is_nan() || nodatas[i].is_some_and(|nd| val == nd);
+                if is_nodata {
+                    // Formulas that test isnan() see the cell as NaN and
+                    // decide; every other formula yields NaN here.
+                    if uses_isnan {
+                        values[i] = f64::NAN;
+                        continue;
+                    }
                     continue 'cell;
                 }
                 values[i] = val;
@@ -715,5 +907,66 @@ mod tests {
         let by_formula = index_builder("((N - R) / (N + R + 0.5)) * (1.0 + 0.5)", &bands).unwrap();
 
         assert_bit_identical(&by_formula, &by_hand);
+    }
+
+    #[test]
+    fn comparisons_functions_and_if() {
+        let a = make_band(2, 2, 0.4);
+        let mut b = make_band(2, 2, 2.0);
+        b.set(0, 0, f64::NAN).unwrap();
+        let mut bands: HashMap<&str, &Raster<f64>> = HashMap::new();
+        bands.insert("A", &a);
+        bands.insert("B", &b);
+        let v = |f: &str| index_builder(f, &bands).unwrap().get(1, 1).unwrap();
+        assert_eq!(v("A > 0.3"), 1.0);
+        assert_eq!(v("A >= 0.4"), 1.0);
+        assert_eq!(v("A < 0.3"), 0.0);
+        assert_eq!(v("A == 0.4"), 1.0);
+        assert_eq!(v("A != 0.4"), 0.0);
+        assert_eq!(v("if(A > 0.3, 1, 0)"), 1.0);
+        assert_eq!(v("if(A > 0.5, 1, 0)"), 0.0);
+        assert_eq!(v("min(A, B)"), 0.4);
+        assert_eq!(v("max(A, B)"), 2.0);
+        assert_eq!(v("abs(-A)"), 0.4);
+        assert!((v("sqrt(B * 2)") - 2.0).abs() < 1e-12);
+        assert!((v("exp(ln(B))") - 2.0).abs() < 1e-12);
+        assert!((v("log10(B * 50)") - 2.0).abs() < 1e-12);
+        // Precedence: comparison below arithmetic.
+        assert_eq!(v("A + 1 > B - 1"), 1.0);
+        // Nodata: a plain formula is NaN there; isnan() sees it and fills.
+        let plain = index_builder("A + B", &bands).unwrap();
+        assert!(plain.get(0, 0).unwrap().is_nan());
+        let filled = index_builder("if(isnan(B), 0, B)", &bands).unwrap();
+        assert_eq!(filled.get(0, 0).unwrap(), 0.0);
+        assert_eq!(filled.get(1, 1).unwrap(), 2.0);
+        assert_eq!(
+            index_builder("isnan(B)", &bands)
+                .unwrap()
+                .get(0, 0)
+                .unwrap(),
+            1.0
+        );
+        // A comparison against NaN is NaN, and if() of NaN is NaN.
+        assert!(
+            index_builder("B > 1", &bands)
+                .unwrap()
+                .get(0, 0)
+                .unwrap()
+                .is_nan()
+        );
+        // Errors: arity, unknown function, lone '='.
+        assert!(index_builder("if(A, 1)", &bands).is_err());
+        assert!(index_builder("foo(A)", &bands).is_err());
+        assert!(index_builder("A = 1", &bands).is_err());
+        // A band named like a function still works without parentheses.
+        let mut bands2: HashMap<&str, &Raster<f64>> = HashMap::new();
+        bands2.insert("min", &a);
+        assert_eq!(
+            index_builder("min * 2", &bands2)
+                .unwrap()
+                .get(0, 0)
+                .unwrap(),
+            0.8
+        );
     }
 }
