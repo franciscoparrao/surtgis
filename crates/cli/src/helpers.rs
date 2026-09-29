@@ -10,7 +10,7 @@ use surtgis_algorithms::imagery::{BandMathOp, ReclassEntry};
 use surtgis_algorithms::landscape::Connectivity;
 use surtgis_algorithms::morphology::StructuringElement;
 use surtgis_algorithms::terrain::AdvancedCurvatureType;
-use surtgis_core::io::{GeoTiffOptions, read_geotiff, write_geotiff};
+use surtgis_core::io::{GeoTiffOptions, read_geotiff, read_geotiff_bands, write_geotiff};
 
 #[cfg(feature = "cloud")]
 use surtgis_cloud::BBox;
@@ -51,6 +51,27 @@ pub fn read_u8(path: &PathBuf) -> Result<surtgis_core::Raster<u8>> {
         read_geotiff(path, None).context("Failed to read raster")?;
     pb.finish_and_clear();
     Ok(raster)
+}
+
+/// Read a feature raster as one or more named features. A single-band
+/// file is the feature `name`; a multi-band file (an embedding stack such
+/// as AlphaEarth's 64 bands, or any band stack) becomes `name:b1`,
+/// `name:b2`, … one feature per band, in band order.
+pub fn read_feature_bands(
+    path: &std::path::Path,
+    name: &str,
+) -> Result<Vec<(String, surtgis_core::Raster<f64>)>> {
+    let bands: Vec<surtgis_core::Raster<f64>> = read_geotiff_bands(path)
+        .with_context(|| format!("Failed to read raster: {}", path.display()))?;
+    match bands.len() {
+        0 => anyhow::bail!("{}: no bands", path.display()),
+        1 => Ok(vec![(name.to_string(), bands.into_iter().next().unwrap())]),
+        _ => Ok(bands
+            .into_iter()
+            .enumerate()
+            .map(|(i, b)| (format!("{name}:b{}", i + 1), b))
+            .collect()),
+    }
 }
 
 pub fn write_opts(compress: bool) -> GeoTiffOptions {

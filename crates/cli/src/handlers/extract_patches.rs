@@ -227,10 +227,10 @@ fn load_single_timestamp(dir: &Path) -> Result<(Vec<String>, Vec<surtgis_core::R
                     continue;
                 }
                 let canonical = p.canonicalize().unwrap_or_else(|_| p.clone());
-                let r = surtgis_core::io::read_geotiff::<f64, _>(&p, None)
-                    .with_context(|| format!("Failed to read raster: {}", p.display()))?;
-                feature_names.push(name.to_string());
-                rasters.push(r);
+                for (n, r) in crate::helpers::read_feature_bands(&p, name)? {
+                    feature_names.push(n);
+                    rasters.push(r);
+                }
                 loaded_paths.insert(canonical);
             }
         }
@@ -245,10 +245,12 @@ fn load_single_timestamp(dir: &Path) -> Result<(Vec<String>, Vec<surtgis_core::R
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "unnamed".to_string());
-        match surtgis_core::io::read_geotiff::<f64, _>(&tif, None) {
-            Ok(r) => {
-                feature_names.push(name);
-                rasters.push(r);
+        match crate::helpers::read_feature_bands(&tif, &name) {
+            Ok(loaded) => {
+                for (n, r) in loaded {
+                    feature_names.push(n);
+                    rasters.push(r);
+                }
                 loaded_paths.insert(canonical);
             }
             Err(e) => eprintln!("  WARNING: skipping {}: {}", tif.display(), e),

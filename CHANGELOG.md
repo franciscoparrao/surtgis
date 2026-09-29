@@ -10,6 +10,54 @@ breaking changes only ship in a major version and are called out under a
 
 ### Added
 
+- **Foundation-model embeddings as first-class rasters.** New module
+  `surtgis_algorithms::embeddings`: a multi-band stack is a field of
+  vectors (bands = dimensions). `similarity` (cosine, dot, Euclidean) to
+  a reference vector, `vector_at` / `mean_vector` references, `norm`,
+  and `PcaModel` — fitted once on a regular sample, projected anywhere,
+  JSON-serialisable so colours match across tiles and years — plus
+  `Dequantize` for stored codes (`alphaearth`: `sign(v)·(v/127.5)²`
+  restoring unit-norm vectors; `linear:scale,offset`). CLI `surtgis
+  embeddings info | similarity | pca | norm | locate` with `--bbox`,
+  `--dequantize`, `--ref-lonlat/--ref-cell/--ref-vec`, `--save-model` /
+  `--model`; `locate` finds the AlphaEarth tile for a lon/lat in the
+  product's GeoParquet index. `surtgis extract` / `extract-patches`
+  expand a multi-band feature raster into one feature per band
+  (`name:b1`…). Server operators `alg=similarity` (`ref=lon,lat` resolved
+  once per source and cached, or `vec=…`; `params=metric:…,dequantize:…`)
+  and `alg=pca` (RGB from the first three components, fitted once per
+  source on a coarse sample with a per-component 2–98 % stretch);
+  `/statistics` works for similarity. Book: how-to/embeddings.md.
+- **COG reader: ZSTD, planar and bottom-up files, local backend.** The
+  layout the AlphaEarth tiles are published in — `Int8` × 64 bands,
+  `COMPRESS=ZSTD`, `INTERLEAVE=BAND`, positive pixel height — now reads
+  through `surtgis_cloud::CogReader`: ZSTD tiles decode in pure Rust
+  (`ruzstd`, feature `zstd`, default), planar files read one tile per
+  band plane, and bottom-up files are presented north-up (rows mirrored
+  on read, transform normalised; `CogReader::is_bottom_up`). A plain path
+  or `file://` URL is read from disk with the same tile machinery, so the
+  CLI (`embeddings`) and `surtgis serve` (local sources) fall back to it
+  when the `tiff`-crate readers decline a layout. **BigTIFF** (magic 43:
+  64-bit offsets and counts, 20-byte IFD entries) is parsed too — the
+  published tiles are 3.6 GB BigTIFFs. Validated on a real AlphaEarth
+  tile (2024, UTM 19S, Santiago): a 2 km window de-quantises to unit-norm
+  vectors (median 1.0001), and the classic/BigTIFF planar fixtures match
+  the same window rewritten north-up and pixel-interleaved by GDAL,
+  decoded by the independent `tiff`-crate reader.
+- `read_geoparquet` skips nested columns (a GeoParquet 1.1 `*_bbox`
+  covering struct, lists, maps) instead of failing the whole file; the
+  scalar columns are still read.
+
+### Changed
+
+- Low-level `surtgis_cloud::ifd` types widened for BigTIFF:
+  `RawTagEntry::{count, value_or_offset}`, `TiffHeader::first_ifd_offset`
+  and `RawIfd::next_ifd_offset` are `u64`; `RawTagEntry` gains
+  `value_bytes` (the raw value field) and `TiffHeader` gains `bigtiff`;
+  `parse_ifd_with` takes the flag (`parse_ifd` keeps the classic
+  behaviour). Code that only reads these through `CogReader` is
+  unaffected.
+
 - **Embedded, verifiable provenance in every output.** Each GeoTIFF/COG
   SurtGIS writes now carries a `SURTGIS_PROVENANCE` item in its
   `GDAL_METADATA` tag (42112, so `gdalinfo`, rasterio and QGIS show it as

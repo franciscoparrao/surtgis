@@ -366,6 +366,12 @@ pub enum Commands {
         #[command(subcommand)]
         algorithm: TextureCommands,
     },
+    /// Foundation-model embeddings (AlphaEarth, TESSERA, your own encoder)
+    /// as rasters: similarity maps, PCA false colour, norms
+    Embeddings {
+        #[command(subcommand)]
+        command: EmbeddingsCommands,
+    },
     /// Image segmentation: SLIC superpixels and Felzenszwalb-Huttenlocher
     Segmentation {
         #[command(subcommand)]
@@ -470,6 +476,116 @@ pub enum Commands {
     Completions {
         /// Target shell
         shell: clap_complete::Shell,
+    },
+}
+
+// ─── Embeddings subcommands ─────────────────────────────────────────────
+
+/// Subcommands of `surtgis embeddings`. The input is a multi-band raster
+/// whose bands are the dimensions of one vector per cell (e.g. the 64
+/// bands of an AlphaEarth tile). Nodata in any band makes the cell
+/// nodata.
+#[derive(Subcommand)]
+pub enum EmbeddingsCommands {
+    /// Describe a stack: dimensions, valid vectors, L2 norm statistics
+    /// (is it unit-normalised?), variance captured by the first PCs
+    Info {
+        /// Embedding stack (multi-band GeoTIFF/COG)
+        input: PathBuf,
+        /// Read only this window, `min_x,min_y,max_x,max_y` in the stack's
+        /// CRS (an AlphaEarth tile is 8192² × 64 bands: 34 GB as f64)
+        #[arg(long, value_name = "MINX,MINY,MAXX,MAXY", allow_hyphen_values = true)]
+        bbox: Option<String>,
+        /// Stored-value code: none | alphaearth | linear:SCALE[,OFFSET]
+        #[arg(long, default_value = "none")]
+        dequantize: String,
+    },
+    /// Similarity of every cell to a reference vector ("more like this")
+    Similarity {
+        /// Embedding stack (multi-band GeoTIFF/COG)
+        input: PathBuf,
+        /// Read only this window, `min_x,min_y,max_x,max_y` in the stack's
+        /// CRS (an AlphaEarth tile is 8192² × 64 bands: 34 GB as f64)
+        #[arg(long, value_name = "MINX,MINY,MAXX,MAXY", allow_hyphen_values = true)]
+        bbox: Option<String>,
+        /// Output similarity raster (Float64)
+        output: PathBuf,
+        /// Stored-value code: none | alphaearth | linear:SCALE[,OFFSET].
+        /// AlphaEarth int8 tiles need `alphaearth` (non-linear code).
+        #[arg(long, default_value = "none")]
+        dequantize: String,
+        /// Reference as a longitude,latitude (EPSG:4326) inside the stack
+        #[arg(long, value_name = "LON,LAT", allow_hyphen_values = true)]
+        ref_lonlat: Option<String>,
+        /// Reference as a row,col cell of the stack
+        #[arg(long, value_name = "ROW,COL")]
+        ref_cell: Option<String>,
+        /// Reference as an explicit vector, one value per band
+        #[arg(long, value_name = "V1,V2,...", allow_hyphen_values = true)]
+        ref_vec: Option<String>,
+        /// cosine (scale-free, [-1,1]) | dot | euclidean
+        #[arg(long, default_value = "cosine")]
+        metric: String,
+    },
+    /// Principal components of the field: fit on a sample, project every
+    /// cell, write one band per component (PC1..PCn; view the first three
+    /// as RGB)
+    Pca {
+        /// Embedding stack (multi-band GeoTIFF/COG)
+        input: PathBuf,
+        /// Read only this window, `min_x,min_y,max_x,max_y` in the stack's
+        /// CRS (an AlphaEarth tile is 8192² × 64 bands: 34 GB as f64)
+        #[arg(long, value_name = "MINX,MINY,MAXX,MAXY", allow_hyphen_values = true)]
+        bbox: Option<String>,
+        /// Output stack of component scores
+        output: PathBuf,
+        /// Stored-value code: none | alphaearth | linear:SCALE[,OFFSET]
+        #[arg(long, default_value = "none")]
+        dequantize: String,
+        /// Components to keep
+        #[arg(long, default_value = "3")]
+        components: usize,
+        /// Vectors used for the fit (regular subsample)
+        #[arg(long, default_value = "200000")]
+        samples: usize,
+        /// Reuse a model saved with --save-model instead of fitting (same
+        /// colours across tiles and years)
+        #[arg(long)]
+        model: Option<PathBuf>,
+        /// Save the fitted model as JSON
+        #[arg(long)]
+        save_model: Option<PathBuf>,
+    },
+    /// Find the AlphaEarth tile(s) covering a location in the product's
+    /// GeoParquet index (`aef_index.parquet`, next to the annual folders)
+    Locate {
+        /// `aef_index.parquet` (download once from
+        /// https://storage.googleapis.com/alphaearth_foundations/satellite_embedding/v1/annual/aef_index.parquet)
+        #[arg(long)]
+        index: PathBuf,
+        /// Longitude (EPSG:4326)
+        #[arg(long, allow_hyphen_values = true)]
+        lon: f64,
+        /// Latitude (EPSG:4326)
+        #[arg(long, allow_hyphen_values = true)]
+        lat: f64,
+        /// Year (default: every year in the index)
+        #[arg(long)]
+        year: Option<i64>,
+    },
+    /// L2 norm of the vector at every cell
+    Norm {
+        /// Embedding stack (multi-band GeoTIFF/COG)
+        input: PathBuf,
+        /// Read only this window, `min_x,min_y,max_x,max_y` in the stack's
+        /// CRS (an AlphaEarth tile is 8192² × 64 bands: 34 GB as f64)
+        #[arg(long, value_name = "MINX,MINY,MAXX,MAXY", allow_hyphen_values = true)]
+        bbox: Option<String>,
+        /// Output raster (Float64)
+        output: PathBuf,
+        /// Stored-value code: none | alphaearth | linear:SCALE[,OFFSET]
+        #[arg(long, default_value = "none")]
+        dequantize: String,
     },
 }
 

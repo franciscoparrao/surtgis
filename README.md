@@ -111,6 +111,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 - **Cross-platform** — compiles to native (Rayon), WebAssembly (browser), Python (PyO3)
 - **No external dependencies** — native GeoTIFF I/O with DEFLATE compression, no GDAL required
 - **Verifiable outputs** — every file embeds its provenance (command, hashed inputs, output digest); `surtgis verify` checks it, and a CI contract keeps results bit-identical across thread counts and runs
+- **Embeddings as rasters** — AlphaEarth/TESSERA-style stacks: similarity maps, PCA false colour and per-band features in the CLI, and `similarity`/`pca` tiles in `surtgis serve`; reads the AlphaEarth COGs as published (ZSTD, band-interleaved, bottom-up)
 
 ## Architecture
 

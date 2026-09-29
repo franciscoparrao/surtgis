@@ -81,12 +81,18 @@ pub fn handle(
                 let canonical = raster_path
                     .canonicalize()
                     .unwrap_or_else(|_| raster_path.clone());
-                let raster = surtgis_core::io::read_geotiff::<f64, _>(&raster_path, None)
-                    .with_context(|| format!("Failed to read raster: {}", raster_path.display()))?;
-                println!("  Loaded: {} ({}x{})", name, raster.cols(), raster.rows());
-
-                feature_names.push(name.to_string());
-                rasters.push(raster);
+                let loaded = crate::helpers::read_feature_bands(&raster_path, name)?;
+                println!(
+                    "  Loaded: {} ({}x{}, {} feature(s))",
+                    name,
+                    loaded[0].1.cols(),
+                    loaded[0].1.rows(),
+                    loaded.len()
+                );
+                for (n, r) in loaded {
+                    feature_names.push(n);
+                    rasters.push(r);
+                }
                 loaded_paths.insert(canonical);
             }
         }
@@ -109,14 +115,22 @@ pub fn handle(
             .to_string_lossy()
             .replace(std::path::MAIN_SEPARATOR, "/");
 
-        match surtgis_core::io::read_geotiff::<f64, _>(tif_path, None) {
-            Ok(raster) => {
+        match crate::helpers::read_feature_bands(tif_path, &name) {
+            Ok(loaded) => {
                 if extra_count == 0 {
                     println!("\nAuto-discovered rasters:");
                 }
-                println!("  Loaded: {} ({}x{})", name, raster.cols(), raster.rows());
-                feature_names.push(name);
-                rasters.push(raster);
+                println!(
+                    "  Loaded: {} ({}x{}, {} feature(s))",
+                    name,
+                    loaded[0].1.cols(),
+                    loaded[0].1.rows(),
+                    loaded.len()
+                );
+                for (n, r) in loaded {
+                    feature_names.push(n);
+                    rasters.push(r);
+                }
                 loaded_paths.insert(canonical);
                 extra_count += 1;
             }

@@ -2,6 +2,7 @@ pub mod classification;
 pub mod clip;
 #[cfg(feature = "ecw")]
 pub mod ecw;
+pub mod embeddings;
 pub mod extract;
 pub mod extract_patches;
 #[cfg(feature = "flow")]

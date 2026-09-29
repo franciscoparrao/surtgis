@@ -39,8 +39,10 @@
     <option value="rgb">rgb (true colour, orthomosaics)</option>
     <option value="value">value (raw band)</option>
     <option value="formula">formula (ASI grammar)</option>
+    <option value="similarity">similarity (embeddings: ref=lon,lat)</option>
+    <option value="pca">pca (embeddings: false colour)</option>
   </select>
-  <label for="formula">Formula and bands (formula only)</label>
+  <label for="formula">Formula and bands (formula) · lon,lat or vector (similarity)</label>
   <input id="formula" placeholder="(N-R)/(N+R)">
   <input id="bands" placeholder="N:4,R:3" style="margin-top:4px">
   <label for="params">Params (key:value,…)</label>
@@ -84,6 +86,11 @@
     if (alg === 'formula') {
       p.set('formula', $('formula').value.trim());
       if ($('bands').value.trim()) p.set('bands', $('bands').value.trim());
+    } else if (alg === 'similarity') {
+      p.set('alg', alg);
+      const ref = $('formula').value.trim();
+      // Two numbers = a location; more = an explicit vector.
+      p.set(ref.split(',').length === 2 ? 'ref' : 'vec', ref);
     } else {
       p.set('alg', alg);
       if ((alg === 'value' || alg === 'rgb') && $('bands').value.trim()) p.set('bands', $('bands').value.trim());
@@ -110,8 +117,10 @@
   }
   $('go').addEventListener('click', () => show().catch(e => { $('status').textContent = 'Error: ' + e; }));
   $('alg').addEventListener('change', () => {
-    const d = { hillshade: 'azimuth:315,altitude:45', slope: 'units:degrees', rgb: '', value: '', formula: '' };
+    const d = { hillshade: 'azimuth:315,altitude:45', slope: 'units:degrees', rgb: '', value: '', formula: '',
+                similarity: 'metric:cosine', pca: 'samples:4096' };
     $('params').placeholder = d[$('alg').value];
+    $('formula').placeholder = $('alg').value === 'similarity' ? '-70.65,-33.45' : '(N-R)/(N+R)';
   });
 </script>
 </body>

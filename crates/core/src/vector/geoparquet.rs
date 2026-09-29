@@ -785,6 +785,10 @@ pub fn read_geoparquet<P: AsRef<Path>>(path: P) -> Result<FeatureCollection> {
                 Field::Short(x) => AttributeValue::Int(*x as i64),
                 Field::Byte(x) => AttributeValue::Int(*x as i64),
                 Field::Str(s) => AttributeValue::String(s.clone()),
+                // Nested columns (a GeoParquet 1.1 `*_bbox` covering struct,
+                // lists, maps) have no attribute representation: skipped, the
+                // scalar columns of the row are still read.
+                Field::Group(_) | Field::ListInternal(_) | Field::MapInternal(_) => continue,
                 other => {
                     return Err(Error::Other(format!(
                         "geoparquet: unsupported type {:?} in column '{}'",

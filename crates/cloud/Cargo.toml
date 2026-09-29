@@ -11,9 +11,12 @@ keywords = ["cog", "stac", "geotiff", "cloud", "satellite"]
 categories = ["science::geo", "web-programming"]
 
 [features]
-default = ["deflate", "lzw"]
+default = ["deflate", "lzw", "zstd"]
 deflate = ["dep:flate2"]
 lzw = ["dep:weezl"]
+# ZSTD-compressed tiles (GDAL COMPRESS=ZSTD; e.g. the AlphaEarth
+# embedding COGs), decoded in pure Rust.
+zstd = ["dep:ruzstd"]
 native = ["reqwest/rustls-tls"]
 wasm = ["dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:js-sys"]
 zarr = ["dep:zarrs", "dep:zarrs_object_store", "dep:zarrs_storage", "dep:object_store", "dep:chrono"]
@@ -40,6 +43,7 @@ futures.workspace = true
 # Compression (optional)
 flate2 = { workspace = true, optional = true }
 weezl = { workspace = true, optional = true }
+ruzstd = { workspace = true, optional = true }
 
 # WASM (optional)
 wasm-bindgen = { workspace = true, optional = true }
