@@ -14,18 +14,24 @@
 
 ## Quick start
 
-Install from crates.io:
+Download a precompiled binary from the
+[GitHub Releases](https://github.com/franciscoparrao/surtgis/releases) (Linux,
+macOS, Windows; built with `server` and `ecw`), or install the Python package
+(`pip install surtgis`), or build the current release from git — name the
+`surtgis` package explicitly (the repo ships two binaries, `surtgis` and
+`surtgis-gui`):
 
 ```bash
-cargo install surtgis
+cargo install --git https://github.com/franciscoparrao/surtgis --tag v1.5.0 surtgis
 ```
 
-Or build the latest from git — name the `surtgis` package explicitly (the repo
-ships two binaries, `surtgis` and `surtgis-gui`):
-
-```bash
-cargo install --git https://github.com/franciscoparrao/surtgis surtgis
-```
+> **The CLI is not on crates.io.** The `surtgis` crate there is 0.18.0
+> (July 2026) and has been yanked: the command-line tool depends on
+> workspace crates that are not published yet (`surtgis-flow`, `surtgis-ecw`,
+> `surtgis-server`, `surtgis-relief-3d`), so `cargo install surtgis` cannot
+> resolve a current version. The library crates (`surtgis-core`,
+> `surtgis-algorithms`, `surtgis-cloud`, …) are on crates.io at the current
+> release.
 
 The default feature set reads NetCDF/HDF5, so the system libraries must be
 present (the `netcdf-sys` / `hdf5-metno-sys` build scripts need them):
@@ -38,7 +44,7 @@ brew install hdf5 netcdf
 ```
 
 To skip those (and the C dependencies entirely), build without default
-features: `cargo install surtgis --no-default-features --features cloud,projections`.
+features: `cargo install --git https://github.com/franciscoparrao/surtgis surtgis --no-default-features --features cloud,projections`.
 
 Some subcommands are opt-in features, **not** included by default —
 installing without them yields `error: unrecognized subcommand`:
@@ -47,7 +53,7 @@ installing without them yields `error: unrecognized subcommand`:
 # `surtgis flow run` — debris-flow solver (EXPERIMENTAL pre-1.0, git only)
 cargo install --git https://github.com/franciscoparrao/surtgis surtgis --features flow
 # `surtgis relief-3d` — 3D rayshader-style renders (pulls a wgpu stack)
-cargo install surtgis --features relief-3d
+cargo install --git https://github.com/franciscoparrao/surtgis surtgis --features relief-3d
 ```
 
 End-to-end: download a cloud-free Sentinel-2 composite over a small

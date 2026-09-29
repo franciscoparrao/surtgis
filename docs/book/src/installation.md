@@ -26,13 +26,17 @@ The precompiled binary has the feature set `cloud,zarr,projections`:
 STAC, COG, climate-data Zarr readers, and UTM reprojection. This covers
 every tutorial and every how-to in this book.
 
-## 2. `cargo install` (for the full feature set)
+## 2. `cargo install --git` (for the full feature set)
 
 If you have the Rust toolchain and want `netcdf` / `grib` support on top,
-install from [crates.io](https://crates.io/crates/surtgis):
+build the release from git. The CLI is **not** on crates.io: the `surtgis`
+crate there is a yanked 0.18.0, because the tool depends on workspace crates
+that are not published yet (`surtgis-flow`, `surtgis-ecw`, `surtgis-server`,
+`surtgis-relief-3d`). The library crates are on crates.io at the current
+release.
 
 ```bash
-cargo install surtgis --all-features
+cargo install --git https://github.com/franciscoparrao/surtgis --tag v1.5.0 surtgis --all-features
 ```
 
 System libraries required for `--all-features`:
@@ -45,7 +49,7 @@ System libraries required for `--all-features`:
 If you only need the same feature set as the precompiled binary:
 
 ```bash
-cargo install surtgis
+cargo install --git https://github.com/franciscoparrao/surtgis --tag v1.5.0 surtgis
 ```
 
 ## 3. From source (for contributors)
@@ -73,7 +77,7 @@ surtgis terrain --help               # terrain subcommand list
 
 If the binary runs but a specific command fails with "feature not enabled",
 you're on the precompiled binary and the command needs `netcdf` / `grib` /
-`gdal`. Rebuild from source with `cargo install surtgis --all-features`.
+`gdal`. Rebuild from source with `cargo install --git https://github.com/franciscoparrao/surtgis surtgis --all-features`.
 
 ## Next step
 

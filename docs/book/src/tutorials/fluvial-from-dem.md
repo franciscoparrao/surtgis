@@ -17,7 +17,7 @@ By the end you will have:
 - Working intuition for which knob to turn when an output looks off.
 
 **Prerequisites:** SurtGIS ≥ 0.10.1 installed
-(`cargo install surtgis` or `pip install surtgis`). A DEM in a
+(a binary from the GitHub Releases, `cargo install --git https://github.com/franciscoparrao/surtgis surtgis`, or `pip install surtgis`). A DEM in a
 **projected** coordinate system in metres — UTM is the standard
 choice. If yours is in EPSG:4326 (latitude/longitude), reproject first:
 `surtgis reproject dem_wgs84.tif --to EPSG:32719 dem.tif`.
