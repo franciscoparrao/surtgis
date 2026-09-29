@@ -557,3 +557,75 @@ fn reclassify_calc_and_output_dtype_ergonomics() {
     let any = surtgis_core::io::read_geotiff_any(&slope32, None).unwrap();
     assert_eq!(any.dtype(), surtgis_core::DataType::F32);
 }
+
+/// #7: `resample` streams — same values as the in-memory resampler,
+/// nearest and bilinear, across strip boundaries, with nodata.
+#[test]
+fn resample_streams_and_matches_in_memory() {
+    let dir = tempfile::tempdir().unwrap();
+    let src_path = dir.path().join("src.tif");
+    let ref_path = dir.path().join("ref.tif");
+    // 10 m source, 400×300, smooth field with a nodata block.
+    let mut src: Raster<f64> = Raster::new(400, 300);
+    src.set_transform(GeoTransform::new(500_000.0, 6_300_000.0, 10.0, -10.0));
+    src.set_crs(Some(surtgis_core::CRS::from_epsg(32719)));
+    for r in 0..400 {
+        for c in 0..300 {
+            src.data_mut()[[r, c]] = (r as f64 * 0.7).sin() * 50.0 + c as f64 * 0.3;
+        }
+    }
+    for r in 100..140 {
+        for c in 50..90 {
+            src.data_mut()[[r, c]] = f64::NAN;
+        }
+    }
+    src.set_nodata(Some(f64::NAN));
+    surtgis_core::io::write_geotiff(&src, &src_path, None).unwrap();
+    // 37 m reference grid, offset so cells straddle source pixels.
+    let mut reference: Raster<f64> = Raster::new(105, 78);
+    reference.set_transform(GeoTransform::new(500_015.0, 6_299_990.0, 37.0, -37.0));
+    reference.set_crs(Some(surtgis_core::CRS::from_epsg(32719)));
+    surtgis_core::io::write_geotiff(&reference, &ref_path, None).unwrap();
+
+    for method in ["nearest", "bilinear"] {
+        let out = dir.path().join(format!("out_{method}.tif"));
+        surtgis_cmd()
+            .arg("resample")
+            .arg(&src_path)
+            .arg(&out)
+            .arg("--reference")
+            .arg(&ref_path)
+            .args(["--method", method])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("strips of"));
+        let got: Raster<f32> = surtgis_core::io::read_geotiff(&out, None).unwrap();
+        assert_eq!(got.shape(), (105, 78));
+        let m = if method == "nearest" {
+            surtgis_core::ResampleMethod::NearestNeighbor
+        } else {
+            surtgis_core::ResampleMethod::Bilinear
+        };
+        let want = surtgis_core::resample_to_grid(&src, &reference, m).unwrap();
+        let mut valid = 0;
+        for r in 0..105 {
+            for c in 0..78 {
+                let (g, w) = (got.data()[[r, c]] as f64, want.data()[[r, c]]);
+                match (g.is_nan(), w.is_nan()) {
+                    (true, true) => {}
+                    (false, false) => {
+                        valid += 1;
+                        assert!(
+                            (g - w).abs() <= 1e-5 * w.abs().max(1.0),
+                            "{method} ({r},{c}): {g} vs {w}"
+                        );
+                    }
+                    _ => panic!("{method} ({r},{c}): nodata mismatch {g} vs {w}"),
+                }
+            }
+        }
+        assert!(valid > 7000, "{method}: {valid} valid cells");
+        assert_eq!(got.transform().origin_x, 500_015.0);
+        assert_eq!(got.crs().and_then(|c| c.epsg()), Some(32719));
+    }
+}
