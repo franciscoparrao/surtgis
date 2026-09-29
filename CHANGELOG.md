@@ -8,6 +8,8 @@ breaking changes only ship in a major version and are called out under a
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-29
+
 ### Added
 
 - **Foundation-model embeddings as first-class rasters.** New module
@@ -44,10 +46,6 @@ breaking changes only ship in a major version and are called out under a
   vectors (median 1.0001), and the classic/BigTIFF planar fixtures match
   the same window rewritten north-up and pixel-interleaved by GDAL,
   decoded by the independent `tiff`-crate reader.
-- `read_geoparquet` skips nested columns (a GeoParquet 1.1 `*_bbox`
-  covering struct, lists, maps) instead of failing the whole file; the
-  scalar columns are still read.
-
 - `imagery calc` / `index_builder` grammar: comparisons (`<`, `<=`, `>`,
   `>=`, `==`, `!=` → 1/0, NaN when a side is NaN) and the functions
   `min`, `max`, `abs`, `sqrt`, `exp`, `ln`/`log`, `log10`, `isnan(x)`
@@ -59,40 +57,6 @@ breaking changes only ship in a major version and are called out under a
   value; `--class` and `--default` accept negative numbers without `=`.
 - Global `--output-dtype f32`: Float64 outputs written through the common
   writer are stored as Float32 (half the size; nodata stays NaN).
-- `info` prints the file's GDAL_NODATA next to the in-memory NaN
-  ("NoData: -9999 (file tag; NaN in memory)") instead of only "NaN".
-
-### Fixed
-
-- **Float32 nodata written as an f64 decimal was never matched.** terra
-  / raster write `GDAL_NODATA="-3.39999999999999996e+38"` for FLT4S
-  files; the pixels hold the nearest f32, and SurtGIS compared after
-  widening to f64, so every nodata cell entered computations (a bilinear
-  `reproject` smeared −3.4e38 over borders). The native readers now
-  compare in the file's sample type before casting, and the COG reader
-  casts the tag through the sample type. (issues_surtgis.md #1)
-- **CRS compared by string.** An ESRI `.prj` (`WGS_1984_UTM_Zone_19S`)
-  was rejected against a raster in EPSG:32719. `CRS::epsg()` now infers
-  the code from WKT — trailing `AUTHORITY["EPSG",…]`, or the WGS 84 /
-  UTM / Web Mercator names in ESRI and OGC spelling — and
-  `is_equivalent` compares resolved codes. (#4)
-- **`rasterize` loaded the whole grid.** It read the reference raster's
-  pixels as f64 and held the full output plus the writer's copy: ~26 B
-  per cell, 7.6 GB for a 293 M-cell grid. It now takes only the
-  reference's grid (`geotiff_info`) and writes Float32 strips of 512
-  rows through the streaming writer, rasterizing each strip on its own
-  sub-grid; memory is one strip. (#3)
-
-### Changed
-
-- Low-level `surtgis_cloud::ifd` types widened for BigTIFF:
-  `RawTagEntry::{count, value_or_offset}`, `TiffHeader::first_ifd_offset`
-  and `RawIfd::next_ifd_offset` are `u64`; `RawTagEntry` gains
-  `value_bytes` (the raw value field) and `TiffHeader` gains `bigtiff`;
-  `parse_ifd_with` takes the flag (`parse_ifd` keeps the classic
-  behaviour). Code that only reads these through `CogReader` is
-  unaffected.
-
 - **Embedded, verifiable provenance in every output.** Each GeoTIFF/COG
   SurtGIS writes now carries a `SURTGIS_PROVENANCE` item in its
   `GDAL_METADATA` tag (42112, so `gdalinfo`, rasterio and QGIS show it as
@@ -115,9 +79,60 @@ breaking changes only ship in a major version and are called out under a
   twice in one process, and requires bit-identical outputs through the
   same digest `surtgis verify` uses. Passes; see Fixed for what had to
   change to get there.
+- **SurtGIS Server M1.5, materialisation jobs.** Global operators cannot be
+  tiled on the fly (a cell depends on the whole basin upstream), so they
+  run as jobs: `POST /jobs {"url", "pipeline", "output", "params"}` runs a
+  pipeline over the whole source — `fill_sinks`, `flow_direction`,
+  `flow_accumulation`, `stream_network`, `hand`, `twi`, each deriving the
+  stages it needs — and writes the last product as a tiled, deflate
+  compressed COG with overviews under `<root>/_jobs/` (or `--jobs-dir`,
+  which must lie under the root), where it is served by the ordinary tile
+  endpoints as `?url=_jobs/<output>.tif`. `GET /jobs/{id}` reports
+  queued/running/done/failed with per-step timings, `GET /jobs` lists
+  everything; one job runs at a time and the rest queue; `/metrics` gains
+  job gauges. Sources: local GeoTIFFs and allow-listed COGs (ECW is
+  imagery, rejected). The job's `fill_sinks` fills to exact flats
+  (`min_slope` 0, as TauDEM's `pitremove`) so that `flow_direction` routes
+  each filled depression with Garbrecht–Martz towards its spill; the
+  library/CLI ramp default (1e-5) made D8 drain filled depressions as
+  parallel lines leaving through several rim cells. Pass `min_slope` to
+  get the ramp back.
+
+### Changed
+
+- `info` prints the file's GDAL_NODATA next to the in-memory NaN
+  ("NoData: -9999 (file tag; NaN in memory)") instead of only "NaN".
+- Low-level `surtgis_cloud::ifd` types widened for BigTIFF:
+  `RawTagEntry::{count, value_or_offset}`, `TiffHeader::first_ifd_offset`
+  and `RawIfd::next_ifd_offset` are `u64`; `RawTagEntry` gains
+  `value_bytes` (the raw value field) and `TiffHeader` gains `bigtiff`;
+  `parse_ifd_with` takes the flag (`parse_ifd` keeps the classic
+  behaviour). Code that only reads these through `CogReader` is
+  unaffected.
 
 ### Fixed
 
+- `read_geoparquet` skips nested columns (a GeoParquet 1.1 `*_bbox`
+  covering struct, lists, maps) instead of failing the whole file; the
+  scalar columns are still read.
+- **Float32 nodata written as an f64 decimal was never matched.** terra
+  / raster write `GDAL_NODATA="-3.39999999999999996e+38"` for FLT4S
+  files; the pixels hold the nearest f32, and SurtGIS compared after
+  widening to f64, so every nodata cell entered computations (a bilinear
+  `reproject` smeared −3.4e38 over borders). The native readers now
+  compare in the file's sample type before casting, and the COG reader
+  casts the tag through the sample type. (issues_surtgis.md #1)
+- **CRS compared by string.** An ESRI `.prj` (`WGS_1984_UTM_Zone_19S`)
+  was rejected against a raster in EPSG:32719. `CRS::epsg()` now infers
+  the code from WKT — trailing `AUTHORITY["EPSG",…]`, or the WGS 84 /
+  UTM / Web Mercator names in ESRI and OGC spelling — and
+  `is_equivalent` compares resolved codes. (#4)
+- **`rasterize` loaded the whole grid.** It read the reference raster's
+  pixels as f64 and held the full output plus the writer's copy: ~26 B
+  per cell, 7.6 GB for a 293 M-cell grid. It now takes only the
+  reference's grid (`geotiff_info`) and writes Float32 strips of 512
+  rows through the streaming writer, rasterizing each strip on its own
+  sub-grid; memory is one strip. (#3)
 - **Results that depended on `HashMap` iteration order** (randomised per
   instance, so they differed run to run by the last ULPs or, for
   categorical outputs, by whole classes): Shannon and Simpson diversity
@@ -137,25 +152,6 @@ breaking changes only ship in a major version and are called out under a
   raster order (labels no longer depend on the sort algorithm's
   tie order). `KmeansParams::seed` is documented as currently unused
   (initial centroids are data quantiles).
-
-- **SurtGIS Server M1.5, materialisation jobs.** Global operators cannot be
-  tiled on the fly (a cell depends on the whole basin upstream), so they
-  run as jobs: `POST /jobs {"url", "pipeline", "output", "params"}` runs a
-  pipeline over the whole source — `fill_sinks`, `flow_direction`,
-  `flow_accumulation`, `stream_network`, `hand`, `twi`, each deriving the
-  stages it needs — and writes the last product as a tiled, deflate
-  compressed COG with overviews under `<root>/_jobs/` (or `--jobs-dir`,
-  which must lie under the root), where it is served by the ordinary tile
-  endpoints as `?url=_jobs/<output>.tif`. `GET /jobs/{id}` reports
-  queued/running/done/failed with per-step timings, `GET /jobs` lists
-  everything; one job runs at a time and the rest queue; `/metrics` gains
-  job gauges. Sources: local GeoTIFFs and allow-listed COGs (ECW is
-  imagery, rejected). The job's `fill_sinks` fills to exact flats
-  (`min_slope` 0, as TauDEM's `pitremove`) so that `flow_direction` routes
-  each filled depression with Garbrecht–Martz towards its spill; the
-  library/CLI ramp default (1e-5) made D8 drain filled depressions as
-  parallel lines leaving through several rim cells. Pass `min_slope` to
-  get the ramp back.
 
 ## [1.4.0] - 2026-09-25
 
