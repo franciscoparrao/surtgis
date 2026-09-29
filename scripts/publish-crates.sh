@@ -13,7 +13,7 @@
 # Usage: scripts/publish-crates.sh [--dry-run] [extra cargo publish flags]
 set -euo pipefail
 cd "$(dirname "$0")/.."
-if [ -n "$(git status --porcelain)" ]; then
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
   echo "publish-crates: the working tree must be clean (the tag must match what is published)" >&2
   exit 1
 fi
