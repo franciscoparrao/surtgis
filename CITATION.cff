@@ -6,6 +6,9 @@ date-released: "2026-09-29"
 doi: 10.5281/zenodo.22970701
 identifiers:
   - type: doi
+    value: 10.5281/zenodo.23047088
+    description: "Zenodo archive of release v1.5.1"
+  - type: doi
     value: 10.5281/zenodo.23042861
     description: "Zenodo archive of release v1.5.0"
   - type: doi
