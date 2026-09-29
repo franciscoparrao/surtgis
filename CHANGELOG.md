@@ -8,6 +8,8 @@ breaking changes only ship in a major version and are called out under a
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-09-29
+
 ### Added
 
 - **The CLI is back on crates.io.** `cargo install surtgis` resolves a

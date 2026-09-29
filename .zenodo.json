@@ -1,11 +1,11 @@
 {
   "title": "SurtGIS: a high-performance raster geospatial analysis library, CLI and dynamic tile server in Rust",
-  "description": "High-performance geospatial analysis library, CLI and dynamic tile server in Rust: 127 algorithms (56 also available in the browser via WebAssembly), streaming I/O for arbitrarily large DEMs, native CRS reprojection, windowed GeoTIFF and Cloud Optimized GeoTIFF reads (including ZSTD, band-interleaved, bottom-up and BigTIFF files such as the AlphaEarth Foundations embedding tiles), a native ECW decoder, an end-to-end satellite composite pipeline, foundation-model embeddings as first-class rasters (similarity maps, PCA false colour), embedded verifiable provenance in every output with a bit-exact determinism contract, and SurtGIS Server (`surtgis serve`), an analysis-first XYZ tile server with materialisation jobs where terrain operators, spectral formulas and embedding operators are tile-URL parameters. Covers terrain analysis, hydrology and remote sensing from a single dependency-free binary. This record archives the source of release v1.5.0.",
+  "description": "High-performance geospatial analysis library, CLI and dynamic tile server in Rust: 127 algorithms (56 also available in the browser via WebAssembly), streaming I/O for arbitrarily large DEMs, native CRS reprojection, windowed GeoTIFF and Cloud Optimized GeoTIFF reads (including ZSTD, band-interleaved, bottom-up and BigTIFF files such as the AlphaEarth Foundations embedding tiles), a native ECW decoder, an end-to-end satellite composite pipeline, foundation-model embeddings as first-class rasters (similarity maps, PCA false colour), embedded verifiable provenance in every output with a bit-exact determinism contract, and SurtGIS Server (`surtgis serve`), an analysis-first XYZ tile server with materialisation jobs where terrain operators, spectral formulas and embedding operators are tile-URL parameters. Covers terrain analysis, hydrology and remote sensing from a single dependency-free binary. This record archives the source of release v1.5.1.",
   "upload_type": "software",
   "access_right": "open",
   "license": "MIT",
   "language": "eng",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "creators": [
     {
       "name": "Parra, Francisco",

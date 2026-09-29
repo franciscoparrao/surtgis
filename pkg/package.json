@@ -5,7 +5,7 @@
     "Francisco Parra"
   ],
   "description": "High-performance geospatial analysis in the browser via WebAssembly",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "license": "MIT OR Apache-2.0",
   "repository": {
     "type": "git",

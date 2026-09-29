@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use SurtGIS in your research, please cite the paper below."
 title: "SurtGIS"
-version: 1.5.0
+version: 1.5.1
 date-released: "2026-09-29"
 doi: 10.5281/zenodo.22970701
 identifiers:
