@@ -50,7 +50,7 @@ pub use drainage_density::{DrainageDensityParams, drainage_density};
 pub use energy_cone::{EnergyConeParams, energy_cone};
 pub use fill_sinks::{FillSinksParams, fill_sinks};
 pub use flats::{FlatResolutionStats, resolve_flats};
-pub use flow_accumulation::flow_accumulation;
+pub use flow_accumulation::{flow_accumulation, flow_accumulation_weighted};
 pub use flow_direction::flow_direction;
 pub use flow_direction_dinf::{DinfResult, flow_accumulation_dinf, flow_dinf, flow_direction_dinf};
 pub use flow_direction_mfd::{MfdParams, flow_accumulation_mfd};

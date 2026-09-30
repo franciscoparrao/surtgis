@@ -8,8 +8,8 @@ use surtgis_algorithms::hydrology::{
     LaharzFlowType, LaharzParams, MfdParams, PriorityFloodParams, SedimentConnectivityParams,
     StreamNetworkParams, WatershedParams, basin_morphometry, breach_depressions, drainage_density,
     energy_cone, fill_sinks, flow_accumulation, flow_accumulation_dinf, flow_accumulation_mfd,
-    flow_direction, flow_direction_dinf, hand, hypsometric_integral, laharz, melton_ruggedness,
-    priority_flood, sediment_connectivity, stream_network, watershed,
+    flow_accumulation_weighted, flow_direction, flow_direction_dinf, hand, hypsometric_integral,
+    laharz, melton_ruggedness, priority_flood, sediment_connectivity, stream_network, watershed,
 };
 use surtgis_algorithms::terrain::{SlopeParams, SlopeUnits, slope, twi};
 
@@ -48,14 +48,57 @@ pub fn handle(
             done("Flow direction", &output, elapsed);
         }
 
-        HydrologyCommands::FlowAccumulation { input, output } => {
+        HydrologyCommands::FlowAccumulation {
+            input,
+            output,
+            weights,
+            include_self,
+        } => {
             let flow_dir = read_u8(&input)?;
             let start = Instant::now();
-            let result =
-                flow_accumulation(&flow_dir).context("Failed to calculate flow accumulation")?;
+            let result = match weights {
+                Some(ref wpath) => {
+                    let w: surtgis_core::Raster<f32> = surtgis_core::io::read_geotiff(wpath, None)
+                        .with_context(|| format!("Failed to read weights {}", wpath.display()))?;
+                    let (a, b) = (flow_dir.transform(), w.transform());
+                    let same_grid = (a.origin_x - b.origin_x).abs() < 1e-6
+                        && (a.origin_y - b.origin_y).abs() < 1e-6
+                        && (a.pixel_width - b.pixel_width).abs() < 1e-9
+                        && (a.pixel_height - b.pixel_height).abs() < 1e-9;
+                    if w.shape() != flow_dir.shape() || !same_grid {
+                        anyhow::bail!(
+                            "{} is not on the flow-direction grid ({}x{} vs {}x{}); resample it first",
+                            wpath.display(),
+                            w.cols(),
+                            w.rows(),
+                            flow_dir.cols(),
+                            flow_dir.rows()
+                        );
+                    }
+                    flow_accumulation_weighted(&flow_dir, &w, include_self)
+                        .context("Failed to calculate weighted flow accumulation")?
+                }
+                None if include_self => {
+                    let mut r = flow_accumulation(&flow_dir)
+                        .context("Failed to calculate flow accumulation")?;
+                    r.data_mut().mapv_inplace(|v| v + 1.0);
+                    r
+                }
+                None => {
+                    flow_accumulation(&flow_dir).context("Failed to calculate flow accumulation")?
+                }
+            };
             let elapsed = start.elapsed();
             write_result(&result, &output, compress)?;
-            done("Flow accumulation", &output, elapsed);
+            done(
+                if weights.is_some() {
+                    "Weighted flow accumulation"
+                } else {
+                    "Flow accumulation"
+                },
+                &output,
+                elapsed,
+            );
         }
 
         HydrologyCommands::Watershed {
