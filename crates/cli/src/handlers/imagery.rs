@@ -138,18 +138,31 @@ pub fn handle(algorithm: ImageryCommands, compress: bool) -> Result<()> {
             output,
         } => {
             let assignments = parse_band_assignments(&band)?;
-            let mut rasters: Vec<(String, surtgis_core::Raster<f64>)> = Vec::new();
-            for (name, path) in &assignments {
-                let r = read_dem(path)?;
-                rasters.push((name.clone(), r));
-            }
-            let band_refs: HashMap<&str, &surtgis_core::Raster<f64>> =
-                rasters.iter().map(|(name, r)| (name.as_str(), r)).collect();
+            let names: Vec<String> = assignments.iter().map(|(n, _)| n.clone()).collect();
+            let paths: Vec<std::path::PathBuf> =
+                assignments.iter().map(|(_, p)| p.clone()).collect();
             let start = Instant::now();
-            let result =
-                index_builder(&expression, &band_refs).context("Failed to evaluate expression")?;
+            // Strip by strip: the expression is evaluated on each strip of the
+            // aligned inputs and streamed out as Float32 (issues_surtgis.md #8).
+            let (rows, cols, strips) =
+                crate::helpers::stream_aligned(&paths, &output, compress, "Calc", |_, bands| {
+                    let band_refs: HashMap<&str, &surtgis_core::Raster<f64>> = names
+                        .iter()
+                        .zip(bands)
+                        .map(|(n, r)| (n.as_str(), r))
+                        .collect();
+                    let r = index_builder(&expression, &band_refs)
+                        .context("Failed to evaluate expression")?;
+                    Ok(r.data().to_owned())
+                })?;
             let elapsed = start.elapsed();
-            write_result(&result, &output, compress)?;
+            println!(
+                "Calc: {} x {} ({} strips, {} bands)",
+                cols,
+                rows,
+                strips,
+                paths.len()
+            );
             done("Calc", &output, elapsed);
         }
 
@@ -271,26 +284,32 @@ pub fn handle(algorithm: ImageryCommands, compress: bool) -> Result<()> {
             } else {
                 default.parse().context("Invalid default value")?
             };
-            let raster = read_dem(&input)?;
             let start = Instant::now();
-            let mut result = reclassify(
-                &raster,
-                ReclassifyParams {
-                    classes,
-                    default_value,
+            let (rows, cols, strips) = crate::helpers::stream_aligned(
+                std::slice::from_ref(&input),
+                &output,
+                compress,
+                "Reclassify",
+                |_, bands| {
+                    let mut r = reclassify(
+                        &bands[0],
+                        ReclassifyParams {
+                            classes: classes.clone(),
+                            default_value,
+                        },
+                    )
+                    .context("Failed to reclassify")?;
+                    if fill_nodata && default_value.is_finite() {
+                        // The algorithm leaves nodata as NaN; --fill-nodata gives
+                        // those cells the default too.
+                        r.data_mut()
+                            .mapv_inplace(|v| if v.is_nan() { default_value } else { v });
+                    }
+                    Ok(r.data().to_owned())
                 },
-            )
-            .context("Failed to reclassify")?;
-            if fill_nodata && default_value.is_finite() {
-                // The algorithm leaves nodata as NaN; --fill-nodata gives
-                // those cells the default too (no other way to "fill nodata
-                // with a value" from the CLI).
-                result
-                    .data_mut()
-                    .mapv_inplace(|v| if v.is_nan() { default_value } else { v });
-            }
+            )?;
             let elapsed = start.elapsed();
-            write_result(&result, &output, compress)?;
+            println!("Reclassify: {} x {} ({} strips)", cols, rows, strips);
             done("Reclassify", &output, elapsed);
         }
 

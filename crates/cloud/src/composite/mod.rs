@@ -43,7 +43,7 @@ pub use budget::{BudgetPermit, MemoryBudget, TrackedRaster, raster_bytes};
 #[cfg(feature = "native")]
 pub use engine::{
     AssetResolver, CompositeEngine, CompositeProgress, CompositeReport, MaskApplier, NoProgress,
-    StripSink,
+    StripSink, s2_boa_offset_dn,
 };
 #[cfg(feature = "native")]
 pub use resolver::DefaultAssetResolver;

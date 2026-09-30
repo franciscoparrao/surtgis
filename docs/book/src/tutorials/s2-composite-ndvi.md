@@ -90,6 +90,16 @@ output extent is slightly larger than the bbox you requested — the
 composite rounds to the Sentinel-2 native 10-metre grid, so you get a
 couple of extra pixels of padding.
 
+**Reflectance scale.** The bands are stored as digital numbers with
+`reflectance = DN / 10000` for every scene, whatever its date. ESA changed
+the Sentinel-2 L2A encoding in January 2022 (processing baseline 04.00
+added `BOA_ADD_OFFSET = -1000`), and Planetary Computer serves those DN as
+produced; the composite applies that offset per scene before mosaicking,
+so pre- and post-2022 scenes land on the same scale (Earth Search already
+serves them offset-corrected and is left alone). The run log reports how
+many tiles were shifted. Pass `--no-harmonize` if you need the DN exactly
+as the catalog serves them.
+
 ## 4. Compute NDVI
 
 NDVI = (NIR − Red) / (NIR + Red). It's a vegetation index: roughly, higher

@@ -629,3 +629,97 @@ fn resample_streams_and_matches_in_memory() {
         assert_eq!(got.crs().and_then(|c| c.epsg()), Some(32719));
     }
 }
+
+/// #8: `imagery calc` and `reclassify` stream by strips; the result equals
+/// the in-memory evaluation (5 bands, strips forced to 7 rows).
+#[test]
+fn calc_and_reclassify_stream_by_strips() {
+    use surtgis_algorithms::imagery::index_builder;
+    let dir = tempfile::tempdir().unwrap();
+    let mut paths = Vec::new();
+    let mut rasters = Vec::new();
+    for k in 0..5 {
+        let mut r: Raster<f64> = Raster::new(50, 30);
+        r.set_transform(GeoTransform::new(500_000.0, 6_300_000.0, 10.0, -10.0));
+        r.set_crs(Some(surtgis_core::CRS::from_epsg(32719)));
+        for i in 0..50 {
+            for j in 0..30 {
+                r.data_mut()[[i, j]] = ((i * 7 + j * 3 + k * 11) % 13) as f64 * 0.1;
+            }
+        }
+        if k == 2 {
+            r.data_mut()[[20, 5]] = f64::NAN;
+            r.set_nodata(Some(f64::NAN));
+        }
+        let p = dir.path().join(format!("b{k}.tif"));
+        surtgis_core::io::write_geotiff(&r, &p, None).unwrap();
+        paths.push(p);
+        rasters.push(r);
+    }
+    let out = dir.path().join("mean.tif");
+    let mut cmd = surtgis_cmd();
+    cmd.env("SURTGIS_STRIP_ROWS", "7")
+        .args(["imagery", "calc", "-e", "(A+B+C+D+E)/5"]);
+    for (k, p) in paths.iter().enumerate() {
+        let name = ["A", "B", "C", "D", "E"][k];
+        cmd.arg("-b").arg(format!("{name}={}", p.display()));
+    }
+    cmd.arg(&out)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("8 strips, 5 bands"));
+    let got: Raster<f32> = surtgis_core::io::read_geotiff(&out, None).unwrap();
+    let refs: std::collections::HashMap<&str, &Raster<f64>> = ["A", "B", "C", "D", "E"]
+        .iter()
+        .copied()
+        .zip(rasters.iter())
+        .collect();
+    let want = index_builder("(A+B+C+D+E)/5", &refs).unwrap();
+    for i in 0..50 {
+        for j in 0..30 {
+            let (g, w) = (got.data()[[i, j]] as f64, want.data()[[i, j]]);
+            assert!(
+                (g.is_nan() && w.is_nan()) || (g - w).abs() < 1e-6,
+                "({i},{j}): {g} vs {w}"
+            );
+        }
+    }
+    assert!(got.data()[[20, 5]].is_nan());
+    assert_eq!(got.transform().origin_y, 6_300_000.0);
+    assert_eq!(got.crs().and_then(|c| c.epsg()), Some(32719));
+
+    // Misaligned input is refused, not silently combined.
+    let mut off: Raster<f64> = Raster::new(50, 30);
+    off.set_transform(GeoTransform::new(500_005.0, 6_300_000.0, 10.0, -10.0));
+    let off_path = dir.path().join("off.tif");
+    surtgis_core::io::write_geotiff(&off, &off_path, None).unwrap();
+    surtgis_cmd()
+        .args(["imagery", "calc", "-e", "A+B", "-b"])
+        .arg(format!("A={}", paths[0].display()))
+        .arg("-b")
+        .arg(format!("B={}", off_path.display()))
+        .arg(dir.path().join("x.tif"))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("same grid"));
+
+    // Reclassify streams too: strip boundaries invisible in the classes.
+    let cls = dir.path().join("cls.tif");
+    surtgis_cmd()
+        .env("SURTGIS_STRIP_ROWS", "7")
+        .args(["imagery", "reclassify"])
+        .arg(&paths[0])
+        .arg(&cls)
+        .args(["--class", "0,0.5,1", "--class", "0.5,2,2", "--default", "0"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("8 strips"));
+    let c: Raster<f32> = surtgis_core::io::read_geotiff(&cls, None).unwrap();
+    for i in 0..50 {
+        for j in 0..30 {
+            let v = rasters[0].data()[[i, j]];
+            let want = if v < 0.5 { 1.0 } else { 2.0 };
+            assert_eq!(c.data()[[i, j]], want, "({i},{j}) v={v}");
+        }
+    }
+}
