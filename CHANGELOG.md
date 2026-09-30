@@ -8,6 +8,8 @@ breaking changes only ship in a major version and are called out under a
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-09-30
+
 ### Fixed
 
 - **`stac composite` returned raw Sentinel-2 L2A digital numbers from
