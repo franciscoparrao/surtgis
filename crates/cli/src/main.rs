@@ -28,7 +28,7 @@ mod streaming;
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use anyhow::Result;
-use clap::{CommandFactory, Parser};
+
 use std::process::ExitCode;
 
 use commands::{Cli, Commands};
@@ -54,7 +54,11 @@ fn exit_code_for(err: &anyhow::Error) -> u8 {
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let cli = {
+        use clap::FromArgMatches;
+        let mut matches = commands::cli_command().get_matches();
+        Cli::from_arg_matches_mut(&mut matches).unwrap_or_else(|e| e.exit())
+    };
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -87,7 +91,7 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Completions { shell } => {
             clap_complete::generate(
                 shell,
-                &mut commands::Cli::command(),
+                &mut commands::cli_command(),
                 "surtgis",
                 &mut std::io::stdout(),
             );

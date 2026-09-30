@@ -1501,11 +1501,23 @@ pub(crate) fn deflate_compress_bytes(data: &[u8], level: DeflateLevel) -> Result
 
 /// Escape the handful of characters that are meaningful in XML text
 /// content/attribute values.
+/// Escape `s` for an XML attribute or text node of the `GDAL_METADATA`
+/// payload. The payload is stored in a TIFF ASCII tag, which cannot hold
+/// UTF-8 bytes, so every non-ASCII character becomes a numeric character
+/// reference (`&#xF1;`); [`xml_unescape`] turns it back.
 fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            c if c.is_ascii() => out.push(c),
+            c => out.push_str(&format!("&#x{:X};", c as u32)),
+        }
+    }
+    out
 }
 
 /// One `<Item>` of a `GDAL_METADATA` (tag 42112) payload.
@@ -1566,11 +1578,50 @@ where
 }
 
 fn xml_unescape(s: &str) -> String {
-    s.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&amp;", "&")
+    if !s.contains('&') {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(pos) = rest.find('&') {
+        out.push_str(&rest[..pos]);
+        let tail = &rest[pos..];
+        let decoded = tail.find(';').filter(|&end| end <= 12).and_then(|end| {
+            let ent = &tail[1..end];
+            let ch = match ent {
+                "lt" => Some('<'),
+                "gt" => Some('>'),
+                "quot" => Some('"'),
+                "apos" => Some('\''),
+                "amp" => Some('&'),
+                _ => {
+                    let code = if let Some(hex) =
+                        ent.strip_prefix("#x").or_else(|| ent.strip_prefix("#X"))
+                    {
+                        u32::from_str_radix(hex, 16).ok()
+                    } else if let Some(dec) = ent.strip_prefix('#') {
+                        dec.parse::<u32>().ok()
+                    } else {
+                        None
+                    };
+                    code.and_then(char::from_u32)
+                }
+            };
+            ch.map(|c| (c, end))
+        });
+        match decoded {
+            Some((c, end)) => {
+                out.push(c);
+                rest = &tail[end + 1..];
+            }
+            None => {
+                out.push('&');
+                rest = &tail[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Parse a `GDAL_METADATA` XML payload into `(name, value)` pairs in
@@ -2915,5 +2966,43 @@ mod tests {
         let buf: Vec<i16> = vec![1, -32768, 3];
         let out: Vec<f64> = cast_and_normalize::<f64, i16>(buf, Some(-32768.0));
         assert!(out[1].is_nan() && out[0] == 1.0);
+    }
+    #[test]
+    fn gdal_metadata_non_ascii_is_escaped_and_round_trips() {
+        let items = [MetadataItem {
+            name: "DESCRIPTION",
+            sample: Some(0),
+            role: None,
+            value: "Chañaral <río> & Aysén 𝛼",
+        }];
+        let xml = gdal_metadata_xml_items(&items);
+        assert!(xml.is_ascii(), "{xml}");
+        let parsed = parse_gdal_metadata_items(&xml);
+        assert_eq!(
+            parsed,
+            vec![(
+                "DESCRIPTION".to_string(),
+                "Chañaral <río> & Aysén 𝛼".to_string()
+            )]
+        );
+        // A stray ampersand GDAL might leave unescaped survives verbatim.
+        assert_eq!(xml_unescape("a & b &#zz; &#xF1;"), "a & b &#zz; ñ");
+    }
+
+    #[test]
+    fn provenance_with_non_ascii_paths_writes_and_verifies() {
+        use crate::provenance::Provenance;
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("chañaral");
+        std::fs::create_dir_all(&sub).unwrap();
+        let path = sub.join("dem_Ñuble.tif");
+        let mut r: Raster<f32> = Raster::new(4, 5);
+        r.set_transform(crate::GeoTransform::new(0.0, 4.0, 1.0, -1.0));
+        let mut p = Provenance::new();
+        p.command = vec!["surtgis".into(), path.display().to_string()];
+        write_geotiff_with_provenance(&r, &path, None, &p).unwrap();
+        let back = read_provenance(&path).unwrap().expect("record present");
+        assert_eq!(back.command, p.command);
+        assert_eq!(back.output, Some(raster_data_hash(&[&r])));
     }
 }

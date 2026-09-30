@@ -8,6 +8,47 @@ breaking changes only ship in a major version and are called out under a
 
 ## [Unreleased]
 
+### Added
+
+- **Weighted flow accumulation**: `surtgis hydrology flow-accumulation
+  --weights <raster>` gives each cell the sum of the weights of every
+  cell upstream of it — susceptible source area routed downstream
+  (source → propagation), runoff, sediment or pollutant loads.
+  `--include-self` adds the cell's own weight (1 without weights), the
+  convention of `terra::flowAccumulation` and WhiteboxTools. Weights must
+  share the flow-direction grid (checked); NaN/nodata weights contribute
+  nothing but still pass flow through — unlike terra, which turns every
+  cell downstream of an NA weight into NA. Validated against terra
+  1.8.60 on 1 M cells: the count is identical cell by cell, the weighted
+  sum agrees to 6e-8 relative (f32 weights). Library:
+  `hydrology::flow_accumulation_weighted`. (issues_surtgis.md #12)
+
+### Changed
+
+- D8 flow accumulation needs about half the memory (one byte of
+  in-degree per cell, 4-byte queue indices): 877 MB → 478 MB peak on
+  25 M cells, output identical cell by cell.
+
+### Fixed
+
+- **Any command writing a GeoTIFF failed when an input or output path
+  had a non-ASCII character** (`chañaral/dem.tif`: `Cannot write
+  GDAL_METADATA tag: format error: image contains invalid tag`). The
+  provenance record and the other `GDAL_METADATA` items live in a TIFF
+  ASCII tag; the record is now serialised as pure-ASCII JSON (`\u00f1`
+  escapes, which every JSON reader — GDAL, Python, R — decodes back to
+  `ñ`) and any other non-ASCII item text (band descriptions) as XML
+  numeric character references, decoded by `read_gdal_metadata`. The
+  payload is ASCII by construction, so this can no longer abort a
+  write. (issues_surtgis.md #10)
+- **`--bbox` with negative coordinates needed the `--bbox=` form** in
+  `clip`, `stac` and most other commands (`unexpected argument '-7'`).
+  Negative values are now accepted by rule over the whole command tree:
+  every `--bbox` and every comma-list option takes values starting with
+  `-`, and every subcommand accepts negative numbers (clap does not
+  propagate that setting). A test walks all options so a new command
+  cannot miss it. (issues_surtgis.md #11)
+
 ## [1.5.2] - 2026-09-30
 
 ### Fixed

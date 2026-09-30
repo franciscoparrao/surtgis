@@ -723,3 +723,111 @@ fn calc_and_reclassify_stream_by_strips() {
         }
     }
 }
+
+/// #10: paths with ñ/accents (Chañaral, Ñuble) must not break the
+/// provenance record, and the written file must verify.
+#[test]
+fn non_ascii_paths_write_and_verify() {
+    let dir = tempfile::tempdir().unwrap();
+    let src_dir = dir.path().join("chañaral");
+    std::fs::create_dir_all(&src_dir).unwrap();
+    let dem = synth_dem(&src_dir);
+    let out = dir.path().join("salida_ñ").join("pendiente_Aysén.tif");
+    std::fs::create_dir_all(out.parent().unwrap()).unwrap();
+    surtgis_cmd()
+        .args(["terrain", "slope"])
+        .arg(&dem)
+        .arg(&out)
+        .assert()
+        .success();
+    surtgis_cmd()
+        .arg("verify")
+        .arg(&out)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("chañaral"));
+}
+
+/// #11: `--bbox` with negative (west/south) coordinates parses without
+/// the `--bbox=` form.
+#[test]
+fn clip_bbox_accepts_negative_coordinates_without_equals() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut r: Raster<f64> = Raster::new(30, 40);
+    r.set_transform(GeoTransform::new(-71.0, -25.0, 0.01, -0.01));
+    r.set_crs(Some(surtgis_core::CRS::from_epsg(4326)));
+    let input = dir.path().join("geo.tif");
+    surtgis_core::io::write_geotiff(&r, &input, None).unwrap();
+    let out = dir.path().join("clip.tif");
+    surtgis_cmd()
+        .arg("clip")
+        .arg(&input)
+        .args(["--bbox", "-70.95,-25.15,-70.90,-25.10"])
+        .arg(&out)
+        .assert()
+        .success();
+    let c: Raster<f64> = surtgis_core::io::read_geotiff(&out, None).unwrap();
+    assert!(c.rows() > 0 && c.rows() < 30 && c.cols() > 0 && c.cols() < 40);
+}
+
+/// #12: weighted flow accumulation; constant weights scale the count.
+#[test]
+fn flow_accumulation_weights_and_include_self() {
+    let dir = tempfile::tempdir().unwrap();
+    let dem = synth_dem(dir.path());
+    let fdir = dir.path().join("fdir.tif");
+    surtgis_cmd()
+        .args(["hydrology", "flow-direction"])
+        .arg(&dem)
+        .arg(&fdir)
+        .assert()
+        .success();
+    let mut w: Raster<f32> = Raster::new(20, 20);
+    w.set_transform(GeoTransform::new(0.0, 20.0, 1.0, -1.0));
+    w.data_mut().fill(2.5);
+    let wpath = dir.path().join("w.tif");
+    surtgis_core::io::write_geotiff(&w, &wpath, None).unwrap();
+
+    let count = dir.path().join("count.tif");
+    let weighted = dir.path().join("weighted.tif");
+    surtgis_cmd()
+        .args(["hydrology", "flow-accumulation"])
+        .arg(&fdir)
+        .arg(&count)
+        .assert()
+        .success();
+    surtgis_cmd()
+        .args(["hydrology", "flow-accumulation"])
+        .arg(&fdir)
+        .arg(&weighted)
+        .arg("--weights")
+        .arg(&wpath)
+        .arg("--include-self")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Weighted flow accumulation"));
+    let n: Raster<f64> = surtgis_core::io::read_geotiff(&count, None).unwrap();
+    let a: Raster<f64> = surtgis_core::io::read_geotiff(&weighted, None).unwrap();
+    assert!(n.data().iter().any(|&v| v > 5.0), "flow must converge");
+    for (cnt, acc) in n.data().iter().zip(a.data()) {
+        assert!(
+            (acc - 2.5 * (cnt + 1.0)).abs() < 1e-9,
+            "{acc} vs 2.5*({cnt}+1)"
+        );
+    }
+
+    // A weight raster on another grid is refused.
+    let mut off: Raster<f32> = Raster::new(20, 21);
+    off.set_transform(GeoTransform::new(0.0, 20.0, 1.0, -1.0));
+    let off_path = dir.path().join("off.tif");
+    surtgis_core::io::write_geotiff(&off, &off_path, None).unwrap();
+    surtgis_cmd()
+        .args(["hydrology", "flow-accumulation"])
+        .arg(&fdir)
+        .arg(dir.path().join("x.tif"))
+        .arg("--weights")
+        .arg(&off_path)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("resample it first"));
+}
