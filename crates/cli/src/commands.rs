@@ -2360,6 +2360,12 @@ pub enum StacCommands {
         /// affected). Multi-band composites (--asset with commas) only.
         #[arg(long, default_value = "0")]
         max_tile_failures: usize,
+        /// Keep Sentinel-2 L2A digital numbers as served. By default tiles
+        /// with processing baseline >= 04.00 get ESA's BOA_ADD_OFFSET (-1000)
+        /// applied when the catalog has not (Planetary Computer), so every
+        /// scene is on the pre-2022 scale: reflectance = DN / 10000.
+        #[arg(long)]
+        no_harmonize: bool,
         /// Output GeoTIFF file
         output: PathBuf,
     },
@@ -2392,6 +2398,9 @@ pub enum StacCommands {
         /// Align output to this raster's grid (e.g., a DEM)
         #[arg(long)]
         align_to: Option<PathBuf>,
+        /// Keep Sentinel-2 L2A digital numbers as served (see `composite`)
+        #[arg(long)]
+        no_harmonize: bool,
         /// Output directory (one GeoTIFF per interval)
         output: PathBuf,
     },

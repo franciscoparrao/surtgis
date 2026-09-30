@@ -8,6 +8,31 @@ breaking changes only ship in a major version and are called out under a
 
 ## [Unreleased]
 
+### Fixed
+
+- **`stac composite` returned raw Sentinel-2 L2A digital numbers from
+  2022 on.** Processing baseline 04.00 (2022-01-25) introduced
+  `BOA_ADD_OFFSET = -1000` (`reflectance = (DN + offset) / 10000`);
+  Planetary Computer serves those DN as produced, so every composite of
+  a post-2022 scene sat 1000 DN too high (ocean at ~1100 instead of
+  ~100) and every normalised index or reflectance-scaled constant was
+  biased. The engine now adds the offset per tile before compositing
+  when the item's `s2:processing_baseline` is ≥ 04.00 and the catalog
+  has not applied it (Earth Search marks
+  `earthsearch:boa_offset_applied: true`), so all scenes are on the
+  pre-2022 scale (`reflectance = DN / 10000`, as GEE's HARMONIZED
+  collection). `--no-harmonize` keeps DN as served;
+  `CompositeEngine::set_harmonize` in the library; the run log says how
+  many tiles were offset, and the flag is part of the embedded
+  provenance record. (issues_surtgis.md #9)
+- **`imagery calc` and `imagery reclassify` loaded every band whole**
+  (~55 B per cell for five bands; ~16 GB for 293 M cells, and
+  `--streaming` changed nothing). Both now run strip by strip over the
+  aligned inputs — one strip is ~64 MB of f64 across all bands — and stream the
+  result as Float32. Inputs must share one grid (checked; resample
+  first otherwise). `SURTGIS_STRIP_ROWS` overrides the strip height.
+  (issues_surtgis.md #8)
+
 ## [1.5.1] - 2026-09-29
 
 ### Added

@@ -940,6 +940,7 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             strip_rows: cli_strip_rows,
             band_chunk_size,
             max_tile_failures,
+            no_harmonize,
             output,
         } => {
             // Both single- and multi-band composites run through the same
@@ -964,6 +965,7 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                 band_chunk_size,
                 compress,
                 max_tile_failures,
+                !no_harmonize,
             );
         }
 
@@ -1104,6 +1106,7 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             scl_asset,
             max_scenes,
             align_to,
+            no_harmonize,
             output,
         } => {
             // Multi-band support: --asset "red,nir,swir16,blue"
@@ -1132,6 +1135,7 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                         align_to.as_ref(),
                         &band_outdir,
                         compress,
+                        !no_harmonize,
                     )?;
                 }
                 println!(
@@ -1152,6 +1156,7 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                     align_to.as_ref(),
                     &output,
                     compress,
+                    !no_harmonize,
                 )?;
             }
         }
@@ -1886,6 +1891,7 @@ fn run_engine_composite(
     use_cache: bool,
     compress: bool,
     max_tile_failures: usize,
+    harmonize: bool,
     progress: &mut dyn surtgis_cloud::composite::CompositeProgress,
 ) -> Result<surtgis_cloud::composite::CompositeReport> {
     use surtgis_cloud::composite::{CompositeEngine, CompositeSpec, OutputGrid};
@@ -1947,6 +1953,7 @@ fn run_engine_composite(
 
     // --- Run the engine, then assemble the streamed scratch into GeoTIFFs ---
     let mut engine = CompositeEngine::new(spec).context("Failed to create composite engine")?;
+    engine.set_harmonize(harmonize);
     let report = engine
         .run(&CliResolver, &mask_applier, &mut sink, progress)
         .context("Composite run failed")?;
@@ -1976,6 +1983,7 @@ fn handle_multiband_composite(
     band_chunk_size: usize,
     compress: bool,
     max_tile_failures: usize,
+    harmonize: bool,
 ) -> Result<()> {
     use surtgis_cloud::composite::{CompositeProgress, OutputGrid, StripPlan};
 
@@ -2031,6 +2039,21 @@ fn handle_multiband_composite(
         rss_peak: RssPeakTracker,
     }
     impl CompositeProgress for CliProgress {
+        fn harmonize_summary(
+            &mut self,
+            offset_tiles: usize,
+            total_tiles: usize,
+            offset_dn: f64,
+            enabled: bool,
+        ) {
+            if !enabled {
+                eprintln!("  Radiometric harmonisation OFF (--no-harmonize): DN as served");
+            } else if offset_tiles > 0 {
+                eprintln!(
+                    "  Radiometric harmonisation: BOA offset {offset_dn:+} DN applied to {offset_tiles}/{total_tiles} tiles (Sentinel-2 L2A, processing baseline >= 04.00; reflectance = DN / 10000)"
+                );
+            }
+        }
         fn search_done(&mut self, items: usize, dates_total: usize, dates_used: usize) {
             println!(
                 "Found {} items across {} dates (using {} dates)",
@@ -2151,6 +2174,7 @@ fn handle_multiband_composite(
         use_cache,
         compress,
         max_tile_failures,
+        harmonize,
         &mut progress,
     )?;
     println!(); // newline after the \r strip progress
@@ -2206,6 +2230,7 @@ fn handle_time_series(
     align_to: Option<&std::path::PathBuf>,
     outdir: &std::path::PathBuf,
     compress: bool,
+    harmonize: bool,
 ) -> Result<()> {
     // Parse datetime range "YYYY-MM-DD/YYYY-MM-DD"
     let parts: Vec<&str> = datetime.split('/').collect();
@@ -2274,6 +2299,7 @@ fn handle_time_series(
             false,
             compress,
             0, // max_tile_failures: never abort, just gap-fill (as before)
+            harmonize,
             &mut progress,
         );
 

@@ -108,6 +108,18 @@ pub trait CompositeProgress {
     fn ram_checkpoint(&mut self, label: &str) {}
     /// A tile download failed after retries.
     fn tile_failed(&mut self, msg: &str) {}
+    /// Radiometric harmonisation decided: `offset_tiles` of `total_tiles`
+    /// get `offset_dn` added (Sentinel-2 L2A, baseline ≥ 04.00, offset not
+    /// applied by the catalog); `enabled` is false when the caller turned
+    /// it off.
+    fn harmonize_summary(
+        &mut self,
+        offset_tiles: usize,
+        total_tiles: usize,
+        offset_dn: f64,
+        enabled: bool,
+    ) {
+    }
 }
 
 /// A [`CompositeProgress`] that does nothing.
@@ -144,6 +156,9 @@ struct TileRef {
     original_mask_href: String,
     epsg: Option<u32>,
     signed_at: Instant,
+    /// Added to every valid DN of this tile's data bands before compositing
+    /// (see [`s2_boa_offset_dn`]); 0 when nothing is to be applied.
+    dn_offset: f64,
 }
 
 /// One scene date with its resolved tiles.
@@ -158,6 +173,58 @@ pub struct CompositeEngine {
     spec: CompositeSpec,
     client: StacClientBlocking,
     runtime: tokio::runtime::Runtime,
+    harmonize: bool,
+}
+
+/// Sentinel-2 L2A radiometric offset, in DN, that puts a tile on the
+/// pre-04.00 scale (`reflectance = DN / 10000`).
+///
+/// Since processing baseline 04.00 (2022-01-25) ESA ships L2A with
+/// `BOA_ADD_OFFSET = -1000`: `reflectance = (DN + offset) / 10000`. Catalogs
+/// differ in what their COGs hold: Planetary Computer serves the DN as
+/// produced (offset **not** applied) and exposes `s2:processing_baseline`;
+/// Earth Search applies it when building its COGs and says so with
+/// `earthsearch:boa_offset_applied: true`. Without this correction every
+/// scene from 2022 on sits 1000 DN too high — ocean at ~1100 instead of
+/// ~100, and every normalised index or reflectance-scaled constant biased.
+///
+/// Returns `-1000.0` for a Sentinel-2 L2A item with baseline ≥ 04.00 whose
+/// offset is not already applied, `0.0` otherwise (older baselines, other
+/// collections, unknown baseline — nothing is guessed).
+pub fn s2_boa_offset_dn(item: &StacItem, collection: &str) -> f64 {
+    let coll = item
+        .collection
+        .as_deref()
+        .unwrap_or(collection)
+        .to_ascii_lowercase();
+    if !(coll.contains("sentinel-2") || coll.contains("sentinel2")) || !coll.contains("l2a") {
+        return 0.0;
+    }
+    let extra = &item.properties.extra;
+    if extra
+        .get("earthsearch:boa_offset_applied")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        return 0.0;
+    }
+    let baseline = extra
+        .get("s2:processing_baseline")
+        .and_then(|v| v.as_str())
+        .and_then(|b| b.trim().parse::<f64>().ok());
+    match baseline {
+        Some(pb) if pb >= 4.0 => -1000.0,
+        _ => 0.0,
+    }
+}
+
+/// Add `offset` to every finite cell (nodata is already NaN here).
+fn apply_dn_offset(mut r: Raster<f64>, offset: f64) -> Raster<f64> {
+    if offset != 0.0 {
+        r.data_mut()
+            .mapv_inplace(|v| if v.is_finite() { v + offset } else { v });
+    }
+    r
 }
 
 impl CompositeEngine {
@@ -181,7 +248,15 @@ impl CompositeEngine {
             spec,
             client,
             runtime,
+            harmonize: true,
         })
+    }
+
+    /// Whether Sentinel-2 L2A tiles get the BOA offset of their processing
+    /// baseline applied before compositing (see [`s2_boa_offset_dn`]).
+    /// Default `true`; `false` reproduces the pre-1.5.2 raw-DN behaviour.
+    pub fn set_harmonize(&mut self, on: bool) {
+        self.harmonize = on;
     }
 
     /// Run the composite, streaming each band strip to `sink`.
@@ -313,12 +388,18 @@ impl CompositeEngine {
                 if scene_epsg.is_none() {
                     scene_epsg = tile_epsg;
                 }
+                let dn_offset = if self.harmonize {
+                    s2_boa_offset_dn(item, collection)
+                } else {
+                    0.0
+                };
                 tiles.push(TileRef {
                     band_hrefs,
                     mask_href,
                     original_mask_href,
                     epsg: tile_epsg,
                     signed_at: Instant::now(),
+                    dn_offset,
                 });
             }
 
@@ -337,6 +418,13 @@ impl CompositeEngine {
             ));
         }
         progress.scenes_resolved(scenes.len(), self.spec.n_bands());
+        let (n_tiles, n_offset) = scenes
+            .iter()
+            .flat_map(|s| s.tiles.iter())
+            .fold((0usize, 0usize), |(n, k), t| {
+                (n + 1, k + usize::from(t.dn_offset != 0.0))
+            });
+        progress.harmonize_summary(n_offset, n_tiles, -1000.0, self.harmonize);
         Ok(scenes)
     }
 
@@ -486,6 +574,7 @@ impl CompositeEngine {
                     self.refresh_tokens_if_stale(scene);
                     let mut all_tasks: Vec<(String, BBox)> = Vec::new();
                     let mut task_band_local: Vec<usize> = Vec::new();
+                    let mut task_offset: Vec<f64> = Vec::new();
                     for (bi_local, &bi) in chunk_bands.iter().enumerate() {
                         for tile in &scene.tiles {
                             let Some((signed, _)) = tile.band_hrefs.get(bi) else {
@@ -499,6 +588,7 @@ impl CompositeEngine {
                                 tile_task_bbox(tile.epsg, out_epsg, &tile_bb),
                             ));
                             task_band_local.push(bi_local);
+                            task_offset.push(tile.dn_offset);
                         }
                     }
 
@@ -514,10 +604,15 @@ impl CompositeEngine {
 
                     let mut per_band: Vec<Vec<Raster<f64>>> =
                         (0..chunk_k).map(|_| Vec::new()).collect();
-                    for (outcome, &bi_local) in all_rasters.into_iter().zip(task_band_local.iter())
+                    for ((outcome, &bi_local), &off) in all_rasters
+                        .into_iter()
+                        .zip(task_band_local.iter())
+                        .zip(task_offset.iter())
                     {
                         match outcome {
-                            TileOutcome::Data(r) => per_band[bi_local].push(r),
+                            TileOutcome::Data(r) => {
+                                per_band[bi_local].push(apply_dn_offset(r, off))
+                            }
                             TileOutcome::Failed(msg) => {
                                 failed_tiles += 1;
                                 failed_dates.insert(scene.date.clone());
@@ -834,4 +929,72 @@ fn cache_write(path: &std::path::Path, raster: &Raster<f64>) {
             ..Default::default()
         }),
     );
+}
+
+#[cfg(test)]
+mod harmonize_tests {
+    use super::*;
+
+    fn item(collection: &str, props: serde_json::Value) -> StacItem {
+        let v = serde_json::json!({
+            "type": "Feature", "stac_version": "1.0.0", "id": "x",
+            "collection": collection,
+            "geometry": null, "bbox": [0.0, 0.0, 1.0, 1.0],
+            "properties": props, "assets": {}, "links": []
+        });
+        serde_json::from_value(v).expect("item")
+    }
+
+    #[test]
+    fn offset_rule_matches_the_catalogs() {
+        // Planetary Computer: baseline in the item, offset not applied.
+        let pc = item(
+            "sentinel-2-l2a",
+            serde_json::json!({"datetime": "2024-04-17T14:37:49Z", "s2:processing_baseline": "05.10"}),
+        );
+        assert_eq!(s2_boa_offset_dn(&pc, "sentinel-2-l2a"), -1000.0);
+        // Pre-04.00 baseline: nothing to add.
+        let old = item(
+            "sentinel-2-l2a",
+            serde_json::json!({"datetime": "2021-06-01T00:00:00Z", "s2:processing_baseline": "03.01"}),
+        );
+        assert_eq!(s2_boa_offset_dn(&old, "sentinel-2-l2a"), 0.0);
+        // Earth Search applied it when building the COG.
+        let es = item(
+            "sentinel-2-l2a",
+            serde_json::json!({"datetime": "2024-04-20T00:00:00Z", "s2:processing_baseline": "05.10", "earthsearch:boa_offset_applied": true}),
+        );
+        assert_eq!(s2_boa_offset_dn(&es, "sentinel-2-l2a"), 0.0);
+        // Unknown baseline: do not guess.
+        let unk = item(
+            "sentinel-2-l2a",
+            serde_json::json!({"datetime": "2024-04-20T00:00:00Z"}),
+        );
+        assert_eq!(s2_boa_offset_dn(&unk, "sentinel-2-l2a"), 0.0);
+        // Other collections are untouched even with a baseline field.
+        let ls = item(
+            "landsat-c2-l2",
+            serde_json::json!({"datetime": "2024-04-20T00:00:00Z", "s2:processing_baseline": "05.10"}),
+        );
+        assert_eq!(s2_boa_offset_dn(&ls, "landsat-c2-l2"), 0.0);
+        // Item without collection falls back to the search collection.
+        let mut noc = pc.clone();
+        noc.collection = None;
+        assert_eq!(s2_boa_offset_dn(&noc, "sentinel-2-l2a"), -1000.0);
+    }
+
+    #[test]
+    fn offset_is_added_to_valid_cells_only() {
+        let mut r = Raster::<f64>::new(1, 3);
+        r.data_mut()[[0, 0]] = 1088.0;
+        r.data_mut()[[0, 1]] = f64::NAN;
+        r.data_mut()[[0, 2]] = 3500.0;
+        let out = apply_dn_offset(r, -1000.0);
+        assert_eq!(out.data()[[0, 0]], 88.0);
+        assert!(out.data()[[0, 1]].is_nan());
+        assert_eq!(out.data()[[0, 2]], 2500.0);
+        let mut r = Raster::<f64>::new(1, 1);
+        r.data_mut()[[0, 0]] = 7.0;
+        assert_eq!(apply_dn_offset(r, 0.0).data()[[0, 0]], 7.0);
+    }
 }
