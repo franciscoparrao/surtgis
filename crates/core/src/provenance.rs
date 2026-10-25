@@ -213,9 +213,13 @@ impl Provenance {
         Ok(())
     }
 
-    /// Serialise to compact JSON.
+    /// Serialise to compact, pure-ASCII JSON: every non-ASCII character
+    /// (a path under `chañaral/`, an argument with an accent) is written
+    /// as a `\uXXXX` escape. The record lives in a TIFF ASCII tag, which
+    /// cannot hold UTF-8 bytes; any JSON reader turns the escapes back
+    /// into the original text.
     pub fn to_json(&self) -> String {
-        serde_json::to_string(self).expect("provenance serialises")
+        ascii_json(&serde_json::to_string(self).expect("provenance serialises"))
     }
 
     /// Serialise to indented JSON.
@@ -223,7 +227,8 @@ impl Provenance {
         serde_json::to_string_pretty(self).expect("provenance serialises")
     }
 
-    /// Parse a record; the schema must be one this crate understands.
+    /// Parse a record (UTF-8 or `\u`-escaped); the schema must be one
+    /// this crate understands.
     pub fn from_json(json: &str) -> Result<Self> {
         let p: Provenance = serde_json::from_str(json)
             .map_err(|e| Error::Other(format!("provenance: invalid JSON record: {e}")))?;
@@ -381,6 +386,27 @@ pub fn rfc3339_utc(unix_secs: i64) -> String {
     )
 }
 
+/// Rewrite every non-ASCII character of a serialised JSON document as a
+/// `\uXXXX` escape (UTF-16 surrogate pairs above the BMP). Non-ASCII can
+/// only occur inside JSON strings, where the escape is equivalent.
+fn ascii_json(json: &str) -> String {
+    if json.is_ascii() {
+        return json.to_string();
+    }
+    let mut out = String::with_capacity(json.len() + 16);
+    for c in json.chars() {
+        if c.is_ascii() {
+            out.push(c);
+        } else {
+            let mut buf = [0u16; 2];
+            for unit in c.encode_utf16(&mut buf) {
+                out.push_str(&format!("\\u{unit:04x}"));
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -445,5 +471,17 @@ mod tests {
         set_input_observer(None);
         set_output_provider(None);
         assert!(provided_output().is_none());
+    }
+    #[test]
+    fn json_is_ascii_and_round_trips_non_ascii_paths() {
+        let mut p = Provenance::new();
+        p.command = vec!["surtgis".into(), "/datos/chañaral/Aysén/dem 𝛼.tif".into()];
+        p.cwd = Some("/home/usuario/Ñuble".into());
+        let json = p.to_json();
+        assert!(json.is_ascii(), "{json}");
+        assert!(json.contains("cha\\u00f1aral"), "{json}");
+        assert!(json.contains("\\ud835\\udefc"), "surrogate pair: {json}");
+        let back = Provenance::from_json(&json).unwrap();
+        assert_eq!(back, p);
     }
 }
