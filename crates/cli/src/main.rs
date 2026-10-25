@@ -237,8 +237,17 @@ fn run(cli: Cli) -> Result<()> {
             input,
             polygon,
             bbox,
+            keep_extent,
             output,
-        } => handlers::clip::handle_clip(input, polygon, bbox, output, compress, mem_limit_bytes)?,
+        } => handlers::clip::handle_clip(
+            input,
+            polygon,
+            bbox,
+            keep_extent,
+            output,
+            compress,
+            mem_limit_bytes,
+        )?,
         #[cfg(feature = "projections")]
         Commands::Reproject {
             input,

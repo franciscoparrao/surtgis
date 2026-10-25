@@ -684,3 +684,47 @@ def test_gil_released_during_compute():
     # With the GIL held throughout, counter would be ~0 (the main thread is
     # frozen). Require clear evidence of concurrent progress.
     assert counter > 1000, f"main thread only advanced {counter} steps: GIL not released"
+
+
+# --- Course-material report (2026-10): silent failures in 1.5.2 ---------
+
+
+def test_cost_distance_scales_by_cell_size():
+    c = np.ones((21, 21))
+    d1 = np.asarray(surtgis.cost_distance_compute(c, cell_size=1.0, source_row=10, source_col=10))
+    d30 = np.asarray(surtgis.cost_distance_compute(c, cell_size=30.0, source_row=10, source_col=10))
+    assert d1[10, 20] == pytest.approx(10.0)
+    assert d30[10, 20] == pytest.approx(300.0)
+    assert d30[20, 20] == pytest.approx(300.0 * np.sqrt(2.0))
+
+
+def test_twi_has_no_nan_inside_a_dem_without_nodata():
+    r, c = np.mgrid[0:120, 0:100]
+    dem = 300.0 - 0.8 * r - 0.3 * c + 5.0 * np.sin(r / 7.0) * np.cos(c / 9.0)
+    t = np.asarray(surtgis.twi_compute(dem, cell_size=30.0))
+    inner = t[1:-1, 1:-1]
+    assert np.isfinite(inner).all(), f"{np.isnan(inner).mean():.3f} NaN inside"
+    assert 0.0 < np.nanmedian(inner) < 20.0
+
+
+@pytest.mark.parametrize("dt", ["int64", "uint64", "int32", "uint32", "float64", "float32"])
+def test_extract_at_points_accepts_any_1d_numeric_array(dt):
+    dem = np.arange(10000, dtype="float64").reshape(100, 100)
+    v = surtgis.extract_at_points([dem], np.array([10, 20], dtype=dt), np.array([10, 20], dtype=dt))
+    assert v.ravel().tolist() == [1010.0, 2020.0]
+
+
+def test_extract_at_points_lists_floor_and_shape_check():
+    dem = np.arange(10000, dtype="float64").reshape(100, 100)
+    assert surtgis.extract_at_points([dem], [10.9], [20.2]).ravel().tolist() == [2010.0]
+    assert surtgis.extract_at_points([dem], [-0.5], [3]).shape == (0, 1)
+    with pytest.raises(ValueError, match="1-D"):
+        surtgis.extract_at_points([dem], np.zeros((2, 2)), np.zeros((2, 2)))
+
+
+def test_interpolation_values_accept_n_and_n1():
+    xy = np.array([[10.0, 10.0], [50.0, 50.0], [90.0, 20.0]])
+    vals = np.array([1.0, 2.0, 3.0])
+    a = np.asarray(surtgis.idw_interpolation(xy, vals, grid_rows=10, grid_cols=10, cellsize=10.0))
+    b = np.asarray(surtgis.idw_interpolation(xy, vals.reshape(-1, 1), grid_rows=10, grid_cols=10, cellsize=10.0))
+    np.testing.assert_array_equal(a, b)

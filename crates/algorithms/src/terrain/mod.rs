@@ -100,7 +100,7 @@ pub use circular_variance_aspect::{
 };
 pub use contour::{ContourParams, contour_lines};
 pub use convergence::{ConvergenceParams, ConvergenceStreaming, convergence_index};
-pub use cost_distance::{CostDistanceParams, cost_distance};
+pub use cost_distance::{CostDistanceParams, cost_distance, cost_distance_map_units};
 pub use curvature::{
     CurvatureFormula, CurvatureParams, CurvatureStreaming, CurvatureType, DerivativeMethod,
     curvature,

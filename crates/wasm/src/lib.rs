@@ -173,13 +173,20 @@ pub fn tri_compute(tiff_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
 pub fn twi_compute(tiff_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
     let dem = read_geotiff_from_buffer::<f64>(tiff_bytes, None)
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let filled = fill_sinks(&dem, FillSinksParams::default())
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    // Same pipeline as the CLI's `hydrology twi`.
+    let filled = surtgis_algorithms::hydrology::priority_flood(&dem, {
+        let mut p = PriorityFloodParams::default();
+        p.epsilon = 0.0001;
+        p
+    })
+    .map_err(|e| JsValue::from_str(&e.to_string()))?;
     let fdir = flow_direction(&filled).map_err(|e| JsValue::from_str(&e.to_string()))?;
     let facc = flow_accumulation(&fdir).map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let slp = compute_slope(&dem, {
+    // `twi` takes radians, on the filled DEM like the CLI's `hydrology twi`;
+    // degrees left ~45 % NaN.
+    let slp = compute_slope(&filled, {
         let mut p = SlopeParams::default();
-        p.units = SlopeUnits::Degrees;
+        p.units = SlopeUnits::Radians;
         p.z_factor = 1.0;
         p
     })

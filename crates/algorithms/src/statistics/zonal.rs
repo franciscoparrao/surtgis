@@ -154,10 +154,28 @@ fn categorical_stats(values: &[f64]) -> (f64, f64, usize) {
 ///
 /// # Returns
 /// HashMap mapping zone_id → ZonalResult
+///
+/// Zone `0` is background and is not reported, nor are cells equal to the
+/// zone raster's nodata value or whose value is NaN. Use
+/// [`zonal_statistics_with`] to report zone 0 (or to pick another
+/// background value).
 pub fn zonal_statistics(
     values: &Raster<f64>,
     zones: &Raster<i32>,
 ) -> Result<HashMap<i32, ZonalResult>> {
+    zonal_statistics_with(values, zones, Some(0))
+}
+
+/// [`zonal_statistics`] with an explicit background zone: cells of zone
+/// `background` are skipped (`None` reports every zone, including 0).
+/// Cells equal to the zone raster's nodata value and NaN values are
+/// always skipped.
+pub fn zonal_statistics_with(
+    values: &Raster<f64>,
+    zones: &Raster<i32>,
+    background: Option<i32>,
+) -> Result<HashMap<i32, ZonalResult>> {
+    let zone_nodata = zones.nodata();
     let (rows_v, cols_v) = values.shape();
     let (rows_z, cols_z) = zones.shape();
 
@@ -180,8 +198,8 @@ pub fn zonal_statistics(
             let zone = unsafe { zones.get_unchecked(row, col) };
             let val = unsafe { values.get_unchecked(row, col) };
 
-            if zone == 0 || val.is_nan() {
-                continue; // Skip nodata zones (0) and NaN values
+            if Some(zone) == background || Some(zone) == zone_nodata || val.is_nan() {
+                continue;
             }
 
             zone_values.entry(zone).or_default().push(val);
@@ -247,12 +265,26 @@ pub fn zonal_statistics(
 ///
 /// # Returns
 /// Raster where each cell contains the zone statistic
+///
+/// Background (zone 0) and nodata zone cells are NaN; see
+/// [`zonal_statistics_raster_with`] to choose the background.
 pub fn zonal_statistics_raster(
     values: &Raster<f64>,
     zones: &Raster<i32>,
     statistic: ZonalStatistic,
 ) -> Result<Raster<f64>> {
-    let stats = zonal_statistics(values, zones)?;
+    zonal_statistics_raster_with(values, zones, statistic, Some(0))
+}
+
+/// [`zonal_statistics_raster`] with an explicit background zone (`None`
+/// maps every zone, including 0).
+pub fn zonal_statistics_raster_with(
+    values: &Raster<f64>,
+    zones: &Raster<i32>,
+    statistic: ZonalStatistic,
+    background: Option<i32>,
+) -> Result<Raster<f64>> {
+    let stats = zonal_statistics_with(values, zones, background)?;
     let (rows, cols) = values.shape();
 
     let mut output = values.with_same_meta::<f64>(rows, cols);
@@ -427,5 +459,27 @@ mod tests {
         assert_eq!(majority_raster.get(0, 0).unwrap(), 1.0);
         assert_eq!(minority_raster.get(0, 0).unwrap(), 3.0);
         assert_eq!(variety_raster.get(0, 0).unwrap(), 3.0);
+    }
+    #[test]
+    fn background_zone_is_configurable_and_nodata_is_skipped() {
+        let values = Raster::filled(4, 4, 2.0_f64);
+        let mut zones: Raster<i32> = Raster::new(4, 4);
+        for r in 0..4 {
+            for c in 0..4 {
+                zones.set(r, c, if c < 2 { 0 } else { 1 }).unwrap();
+            }
+        }
+        zones.set(3, 3, -9999).unwrap();
+        zones.set_nodata(Some(-9999));
+        let default = zonal_statistics(&values, &zones).unwrap();
+        assert_eq!(default.len(), 1, "zone 0 is background by default");
+        assert_eq!(default[&1].count, 7, "nodata cell skipped");
+        let all = zonal_statistics_with(&values, &zones, None).unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[&0].count, 8);
+        assert!(!all.contains_key(&-9999), "nodata is never a zone");
+        let r = zonal_statistics_raster_with(&values, &zones, ZonalStatistic::Count, None).unwrap();
+        assert_eq!(r.get(0, 0).unwrap(), 8.0);
+        assert!(r.get(3, 3).unwrap().is_nan());
     }
 }
