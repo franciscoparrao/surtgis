@@ -722,8 +722,11 @@ pub fn handle(
             input,
             sources,
             output,
+            map_units,
         } => {
-            use surtgis_algorithms::terrain::{CostDistanceParams, cost_distance};
+            use surtgis_algorithms::terrain::{
+                CostDistanceParams, cost_distance, cost_distance_map_units,
+            };
             let cost = read_dem(&input)?;
             let pb = spinner("Reading sources...");
             let src: surtgis_core::Raster<f64> = surtgis_core::io::read_geotiff(&sources, None)
@@ -744,14 +747,28 @@ pub fn handle(
             println!("  {} source cells", src_positions.len());
             let start = Instant::now();
             let pb = spinner("Cost distance...");
-            let result = cost_distance(
-                &cost,
-                CostDistanceParams {
-                    sources: src_positions,
-                },
-            )
+            let params = CostDistanceParams {
+                sources: src_positions,
+            };
+            let result = if map_units {
+                cost_distance_map_units(&cost, params)
+            } else {
+                cost_distance(&cost, params)
+            }
             .context("Cost distance failed")?;
             pb.finish_and_clear();
+            if map_units {
+                let t = cost.transform();
+                println!(
+                    "  steps in map units ({} x {} per cell)",
+                    t.pixel_width.abs(),
+                    t.pixel_height.abs()
+                );
+            } else {
+                println!(
+                    "  steps in cells (1 cardinal, √2 diagonal); --map-units scales by pixel size"
+                );
+            }
             write_result(&result, &output, compress)?;
             done("Cost distance", &output, start.elapsed());
         }
@@ -914,6 +931,19 @@ pub fn handle(
             use surtgis_algorithms::terrain::twi;
             let fa = read_dem(&flow_acc)?;
             let sl = read_dem(&slope_path)?;
+            let max_slope = sl
+                .data()
+                .iter()
+                .copied()
+                .filter(|v| v.is_finite())
+                .fold(f64::NEG_INFINITY, f64::max);
+            if max_slope > std::f64::consts::FRAC_PI_2 + 1e-6 {
+                anyhow::bail!(
+                    "{} reaches {max_slope:.3}, above π/2: it is not a slope in radians \
+                     (degrees or percent?). Recompute it with `surtgis terrain slope --units radians`",
+                    slope_path.display()
+                );
+            }
             let start = Instant::now();
             let result = twi(&fa, &sl).context("TWI failed")?;
             write_result(&result, &output, compress)?;

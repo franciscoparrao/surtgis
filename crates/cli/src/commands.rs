@@ -261,6 +261,11 @@ pub enum Commands {
         lod: bool,
     },
     /// Clip a raster by polygon or bounding box
+    ///
+    /// With --polygon, cells outside the polygons become NaN and the output
+    /// is cropped to the polygons' extent (like `gdalwarp -crop_to_cutline`);
+    /// --keep-extent keeps the input grid and only masks. Polygons and bbox
+    /// must use the raster's CRS. A clip that leaves no valid cell fails.
     Clip {
         /// Input raster file
         input: PathBuf,
@@ -270,6 +275,9 @@ pub enum Commands {
         /// Bounding box: xmin,ymin,xmax,ymax (same CRS as input)
         #[arg(long)]
         bbox: Option<String>,
+        /// With --polygon: mask only, keeping the input's full extent
+        #[arg(long)]
+        keep_extent: bool,
         /// Output file
         output: PathBuf,
     },
@@ -968,6 +976,12 @@ pub enum TerrainCommands {
         base: f64,
     },
     /// Cost distance from source points
+    /// Accumulated cost distance from source cells (8-connected Dijkstra)
+    ///
+    /// By default each step costs the mean cost of the two cells times the
+    /// step length in cells (1 cardinal, √2 diagonal). --map-units uses the
+    /// pixel size instead (metres on a projected grid), so a uniform cost
+    /// of 1 gives distance in metres.
     CostDistance {
         /// Cost surface raster
         input: PathBuf,
@@ -976,6 +990,9 @@ pub enum TerrainCommands {
         sources: PathBuf,
         /// Output accumulated cost raster
         output: PathBuf,
+        /// Scale steps by the pixel size (map units) instead of cell steps
+        #[arg(long)]
+        map_units: bool,
     },
     /// Shape index (concavity/convexity, -1 to +1)
     ShapeIndex { input: PathBuf, output: PathBuf },
@@ -1052,7 +1069,8 @@ pub enum TerrainCommands {
         /// Flow accumulation raster
         #[arg(long)]
         flow_acc: PathBuf,
-        /// Slope raster (radians)
+        /// Slope raster in RADIANS (`terrain slope --units radians`); a
+        /// raster with values above π/2 is refused as degrees or percent
         #[arg(long)]
         slope: PathBuf,
         output: PathBuf,
@@ -3136,17 +3154,30 @@ pub enum StatisticsCommands {
         #[arg(long)]
         circular: bool,
     },
-    /// Zonal statistics (JSON output by zone)
+    /// Zonal statistics per zone, written as JSON (or CSV)
+    ///
+    /// Zone 0 is background and is skipped unless --include-zero is given;
+    /// cells equal to the zone raster's nodata and NaN values are always
+    /// skipped.
     Zonal {
         /// Input values raster
         input: PathBuf,
         /// Zone raster (integer classes)
         #[arg(long)]
         zones: PathBuf,
-        /// Output JSON file
+        /// Output file: JSON, or CSV when the name ends in .csv
         output: PathBuf,
+        /// Output format; by default taken from the output extension
+        /// (.csv → csv, anything else → json)
+        #[arg(long, value_parser = ["json", "csv"])]
+        format: Option<String>,
+        /// Report zone 0 as a zone instead of treating it as background
+        #[arg(long)]
+        include_zero: bool,
     },
     /// Zonal statistics as raster (each cell = zone statistic)
+    ///
+    /// Zone 0 is background (NaN in the output) unless --include-zero.
     ZonalRaster {
         /// Input values raster
         input: PathBuf,
@@ -3158,6 +3189,9 @@ pub enum StatisticsCommands {
         /// Statistic: mean, std, min, max, range, sum, count, median
         #[arg(short, long, default_value = "mean")]
         stat: String,
+        /// Map zone 0 as a zone instead of treating it as background
+        #[arg(long)]
+        include_zero: bool,
     },
     /// Global Moran's I spatial autocorrelation (prints result)
     MoransI {

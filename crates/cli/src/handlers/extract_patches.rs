@@ -716,11 +716,10 @@ pub fn handle(
                 while r <= row_max {
                     let mut c = col_min;
                     while c <= col_max {
-                        // Convert (c, r) pixel origin to geo, then add a half-pixel offset
-                        // to land at the cell centre for the point-in-polygon test.
-                        let (x0, y0) = canonical.pixel_to_geo(c, r);
-                        let x = x0 + 0.5 * gt.pixel_width;
-                        let y = y0 + 0.5 * gt.pixel_height;
+                        // Cell centre for the point-in-polygon test
+                        // (`pixel_to_geo` already returns the centre; the
+                        // extra half pixel used to land on its corner).
+                        let (x, y) = canonical.pixel_to_geo(c, r);
                         let pt = geo::Point::new(x, y);
                         if poly.contains(&pt) {
                             specs.push(PatchSpec {
@@ -957,9 +956,7 @@ pub fn handle(
         "source_idx",
     ])?;
     for (i, (spec, _)) in kept.iter().enumerate() {
-        let (x0, y0) = canonical.pixel_to_geo(spec.center_col, spec.center_row);
-        let x = x0 + 0.5 * gt.pixel_width;
-        let y = y0 + 0.5 * gt.pixel_height;
+        let (x, y) = canonical.pixel_to_geo(spec.center_col, spec.center_row);
         let label_str = match spec.label_raw {
             LabelValue::Int(v) => v.to_string(),
             LabelValue::Float(v) => format!("{}", v),

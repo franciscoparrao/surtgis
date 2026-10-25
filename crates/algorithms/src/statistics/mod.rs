@@ -15,4 +15,7 @@ pub mod zonal;
 
 pub use autocorrelation::{GetisOrdResult, MoransIResult, global_morans_i, local_getis_ord};
 pub use focal::{FocalParams, FocalStatistic, focal_statistics};
-pub use zonal::{ZonalResult, ZonalStatistic, zonal_statistics, zonal_statistics_raster};
+pub use zonal::{
+    ZonalResult, ZonalStatistic, zonal_statistics, zonal_statistics_raster,
+    zonal_statistics_raster_with, zonal_statistics_with,
+};

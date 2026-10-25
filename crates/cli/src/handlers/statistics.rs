@@ -3,11 +3,10 @@
 use anyhow::{Context, Result};
 use std::time::Instant;
 
-use surtgis_algorithms::statistics::zonal::zonal_statistics_raster;
 use surtgis_algorithms::statistics::{
-    FocalParams, FocalStatistic, ZonalStatistic, focal_statistics, global_morans_i,
-    local_getis_ord, zonal_statistics,
+    FocalParams, FocalStatistic, ZonalStatistic, focal_statistics, global_morans_i, local_getis_ord,
 };
+use surtgis_algorithms::statistics::{zonal_statistics_raster_with, zonal_statistics_with};
 use surtgis_core::io::read_geotiff;
 
 use crate::commands::StatisticsCommands;
@@ -77,6 +76,8 @@ pub fn handle(algorithm: StatisticsCommands, compress: bool) -> Result<()> {
             input,
             output,
             zones,
+            format,
+            include_zero,
         } => {
             let values = read_dem(&input)?;
             let pb = spinner("Reading zones...");
@@ -86,23 +87,82 @@ pub fn handle(algorithm: StatisticsCommands, compress: bool) -> Result<()> {
 
             let start = Instant::now();
             let pb = spinner("Computing zonal statistics...");
-            let results =
-                zonal_statistics(&values, &zone_raster).context("Zonal statistics failed")?;
+            let background = if include_zero { None } else { Some(0) };
+            let results = zonal_statistics_with(&values, &zone_raster, background)
+                .context("Zonal statistics failed")?;
             pb.finish_and_clear();
 
-            // Write as CSV (zone_id,count,mean,std,min,max,median)
-            let mut csv = String::from("zone_id,count,sum,mean,std_dev,min,max,range,median\n");
+            let csv = match format.as_deref() {
+                Some(f) => f == "csv",
+                None => output
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("csv")),
+            };
             let mut zone_ids: Vec<&i32> = results.keys().collect();
             zone_ids.sort();
-            for id in &zone_ids {
-                let z = &results[id];
-                csv.push_str(&format!(
-                    "{},{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}\n",
-                    z.zone_id, z.count, z.sum, z.mean, z.std_dev, z.min, z.max, z.range, z.median
-                ));
-            }
-            std::fs::write(&output, &csv).context("Failed to write output")?;
-            println!("  {} zones computed", results.len());
+            let text = if csv {
+                let mut csv = String::from("zone_id,count,sum,mean,std_dev,min,max,range,median\n");
+                for id in &zone_ids {
+                    let z = &results[id];
+                    csv.push_str(&format!(
+                        "{},{},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6}\n",
+                        z.zone_id,
+                        z.count,
+                        z.sum,
+                        z.mean,
+                        z.std_dev,
+                        z.min,
+                        z.max,
+                        z.range,
+                        z.median
+                    ));
+                }
+                csv
+            } else {
+                let num = |v: f64| {
+                    if v.is_finite() {
+                        serde_json::json!(v)
+                    } else {
+                        serde_json::Value::Null
+                    }
+                };
+                let zones_json: Vec<serde_json::Value> = zone_ids
+                    .iter()
+                    .map(|id| {
+                        let z = &results[id];
+                        serde_json::json!({
+                            "zone_id": z.zone_id,
+                            "count": z.count,
+                            "sum": num(z.sum),
+                            "mean": num(z.mean),
+                            "std_dev": num(z.std_dev),
+                            "min": num(z.min),
+                            "max": num(z.max),
+                            "range": num(z.range),
+                            "median": num(z.median),
+                        })
+                    })
+                    .collect();
+                let doc = serde_json::json!({
+                    "input": input.display().to_string(),
+                    "zones": zones.display().to_string(),
+                    "background_zone": background,
+                    "zones_computed": zones_json.len(),
+                    "statistics": zones_json,
+                });
+                serde_json::to_string_pretty(&doc).expect("serialisable") + "\n"
+            };
+            std::fs::write(&output, &text).context("Failed to write output")?;
+            println!(
+                "  {} zones computed ({}{})",
+                results.len(),
+                if csv { "CSV" } else { "JSON" },
+                if include_zero {
+                    ""
+                } else {
+                    "; zone 0 treated as background"
+                }
+            );
             done("Zonal Statistics", &output, start.elapsed());
         }
 
@@ -111,6 +171,7 @@ pub fn handle(algorithm: StatisticsCommands, compress: bool) -> Result<()> {
             output,
             zones,
             stat,
+            include_zero,
         } => {
             let values = read_dem(&input)?;
             let pb = spinner("Reading zones...");
@@ -121,7 +182,8 @@ pub fn handle(algorithm: StatisticsCommands, compress: bool) -> Result<()> {
             let start = Instant::now();
             let statistic = parse_zonal_stat(&stat);
             let pb = spinner(&format!("Zonal {} (raster output)...", stat));
-            let result = zonal_statistics_raster(&values, &zone_raster, statistic)
+            let background = if include_zero { None } else { Some(0) };
+            let result = zonal_statistics_raster_with(&values, &zone_raster, statistic, background)
                 .context("Zonal statistics raster failed")?;
             pb.finish_and_clear();
             write_result(&result, &output, compress)?;

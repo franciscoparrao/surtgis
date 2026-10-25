@@ -8,6 +8,9 @@ breaking changes only ship in a major version and are called out under a
 
 ## [Unreleased]
 
+Silent failures found while preparing course material on 1.5.2: each
+one finished, wrote a file and reported success.
+
 ### Added
 
 - **Weighted flow accumulation**: `surtgis hydrology flow-accumulation
@@ -22,6 +25,15 @@ breaking changes only ship in a major version and are called out under a
   1.8.60 on 1 M cells: the count is identical cell by cell, the weighted
   sum agrees to 6e-8 relative (f32 weights). Library:
   `hydrology::flow_accumulation_weighted`. (issues_surtgis.md #12)
+
+- `terrain::cost_distance_map_units` / `surtgis terrain cost-distance
+  --map-units`: steps scaled by the pixel size (`|pixel_width|`,
+  `|pixel_height|`, their hypotenuse on diagonals), so a uniform cost of
+  1 gives the distance in map units. `cost_distance` keeps cell steps.
+- `statistics::zonal_statistics_with` / `zonal_statistics_raster_with`
+  with an explicit background zone; `statistics zonal|zonal-raster
+  --include-zero` in the CLI.
+- `statistics zonal --format json|csv`.
 
 ### Changed
 
@@ -48,6 +60,59 @@ breaking changes only ship in a major version and are called out under a
   `-`, and every subcommand accepts negative numbers (clap does not
   propagate that setting). A test walks all options so a new command
   cannot miss it. (issues_surtgis.md #11)
+
+- **`resample` wrote an all-NaN raster and exited 0 when input and
+  reference CRSs differed.** It sampled the source with coordinates of
+  the other CRS. Different EPSG codes are now reprojected on the fly
+  onto the reference grid (verified against `gdalwarp` on the same grid:
+  same coverage, 96 % of nearest-neighbour cells identical, the rest at
+  projection-library ties). A CRS pair that cannot be reprojected fails
+  and says to run `surtgis reproject`; an output with no valid cell is an
+  error and no file is left.
+- **`statistics zonal` wrote CSV although the help promised JSON.** The
+  output is JSON unless the file ends in `.csv` (or `--format csv`).
+  Zone 0 is still background by default, now documented in the help
+  and in the run line.
+- **`clip --polygon` masked but did not crop.** The output is cropped to
+  the polygons' extent, as `gdalwarp -crop_to_cutline` does;
+  `--keep-extent` keeps the old masking on the full grid. A clip that
+  leaves no valid cell (polygon in another CRS, or outside the raster)
+  fails instead of writing an empty raster.
+- **`clip --bbox` placed its output half a cell off**: the new origin
+  was the centre of the first cell instead of its corner (all versions
+  up to 1.5.2). Re-run clips made with `--bbox` if sub-pixel
+  georeferencing matters.
+- **`extract-patches` polygon mode tested cell corners, not centres,**
+  and wrote corner coordinates to `center_x`/`center_y` of the
+  manifest (half a cell south-east of the true centre).
+- **Python `twi_compute` returned ~45 % NaN** (and WASM `twi_compute`
+  too): the slope was passed in degrees to a formula that takes
+  radians. Both now use the CLI pipeline (priority-flood fill, slope in
+  radians on the filled DEM) and give the same result as `hydrology twi`
+  cell by cell; only the one-cell border is NaN. `terrain twi` refuses a
+  slope raster whose values exceed π/2.
+- **Python `cost_distance_compute` ignored `cell_size`**: distances are
+  now in the units of `cell_size` (300 at ten 30 m cells).
+- **Python `extract_at_points` rejected every NumPy array**: its
+  coordinate arguments were typed as 2-D arrays. They now take any 1-D
+  array-like of any numeric dtype (or a list); fractional indices are
+  floored, so -0.5 is outside. The docstring now names the real
+  arguments (`points_col`, `points_row`) and its rasterio example no
+  longer swaps rows and columns (`rowcol` returns `(rows, cols)`).
+- Python IDW, nearest-neighbour, natural-neighbour and kriging
+  interpolation accept `values` as `(N,)`, as documented, not only
+  `(N, 1)`.
+- Zonal statistics skip cells equal to the zone raster's nodata value;
+  before, a nodata value such as -9999 was reported as a zone.
+
+### Notes
+
+- `fill_sinks` (Python `fill_depressions`, WASM `fill_depressions`) has
+  been unchanged since 0.18.0, so 1.2.5 builds already have the current
+  behaviour. Older builds (≤ 0.17) used `min_slope = 0.01`, which raised
+  filled depressions far more than SAGA or WhiteboxTools; rebuild
+  anything made with them.
+
 
 ## [1.5.2] - 2026-09-30
 
@@ -1192,6 +1257,11 @@ Each produced plausible-but-wrong output with no error — **outputs from
 
 #### Other fixes (audit D7, parity sprint)
 
+- `fill_sinks` default `min_slope` lowered from `0.01` to `1e-5` (audit
+  D7), matching `priority_flood`. This changes the output of the library,
+  the Python `fill_depressions` and the WASM `fill_depressions`, which
+  raised filled depressions far more than SAGA or WhiteboxTools before
+  (entry added after 1.5.2; the change itself shipped here).
 - CLI `hydrology fill-sinks --min-slope` default aligned with the library
   default (`0.01` → `1e-5`, audit D7 — the library was fixed in the
   Sprint-1 round but the CLI kept the old value, giving different results

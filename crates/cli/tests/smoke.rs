@@ -724,6 +724,266 @@ fn calc_and_reclassify_stream_by_strips() {
     }
 }
 
+fn write_raster(
+    path: &Path,
+    rows: usize,
+    cols: usize,
+    gt: GeoTransform,
+    epsg: u32,
+    f: impl Fn(usize, usize) -> f64,
+) {
+    let mut r: Raster<f64> = Raster::new(rows, cols);
+    r.set_transform(gt);
+    r.set_crs(Some(surtgis_core::CRS::from_epsg(epsg)));
+    for i in 0..rows {
+        for j in 0..cols {
+            r.set(i, j, f(i, j)).unwrap();
+        }
+    }
+    surtgis_core::io::write_geotiff(&r, path, None).unwrap();
+}
+
+/// Course report #1: `resample` with input and reference in different CRSs
+/// wrote an all-NaN raster and exited 0. It now reprojects on the fly (or,
+/// in a build without `projections`, fails and says to reproject first).
+#[test]
+fn resample_reprojects_when_crs_differs_and_fails_without_overlap() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("dem_4326.tif");
+    // ~6 x 6 km around (-70.0, -25.0), 0.001° cells; value encodes position.
+    write_raster(
+        &src,
+        60,
+        60,
+        GeoTransform::new(-70.03, -24.97, 0.001, -0.001),
+        4326,
+        |i, j| (i * 100 + j) as f64,
+    );
+    let reference = dir.path().join("ref_32719.tif");
+    // UTM 19S, 100 m cells; -70.0,-25.0 is about (399 100, 7 234 900).
+    write_raster(
+        &reference,
+        20,
+        20,
+        GeoTransform::new(398_100.0, 7_235_900.0, 100.0, -100.0),
+        32719,
+        |_, _| 0.0,
+    );
+    let out = dir.path().join("out.tif");
+    let run = surtgis_cmd()
+        .args(["resample", "-m", "nearest", "--reference"])
+        .arg(&reference)
+        .arg(&src)
+        .arg(&out)
+        .assert();
+    if cfg!(feature = "projections") {
+        run.success()
+            .stdout(predicate::str::contains("EPSG:4326 -> EPSG:32719"));
+        let r: Raster<f64> = surtgis_core::io::read_geotiff(&out, None).unwrap();
+        let valid = r.data().iter().filter(|v| v.is_finite()).count();
+        assert_eq!(valid, 400, "the reference lies inside the source");
+        assert_eq!(r.crs().and_then(|c| c.epsg()), Some(32719));
+    } else {
+        run.failure()
+            .stderr(predicate::str::contains("surtgis reproject"));
+    }
+
+    // A reference that misses the source is an error, and no file is left.
+    let far = dir.path().join("far.tif");
+    write_raster(
+        &far,
+        10,
+        10,
+        GeoTransform::new(10.0, 50.0, 0.001, -0.001),
+        4326,
+        |_, _| 0.0,
+    );
+    let out2 = dir.path().join("out2.tif");
+    surtgis_cmd()
+        .args(["resample", "--reference"])
+        .arg(&far)
+        .arg(&src)
+        .arg(&out2)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("does not overlap"));
+    assert!(!out2.exists());
+}
+
+/// Course report #2: `statistics zonal` wrote CSV under a JSON help text,
+/// and zone 0 was dropped without saying so.
+#[test]
+fn zonal_writes_json_or_csv_and_zero_is_opt_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let gt = GeoTransform::new(0.0, 10.0, 1.0, -1.0);
+    let values = dir.path().join("v.tif");
+    write_raster(&values, 10, 10, gt, 32719, |i, _| i as f64);
+    let mut z: Raster<i32> = Raster::new(10, 10);
+    z.set_transform(gt);
+    z.set_crs(Some(surtgis_core::CRS::from_epsg(32719)));
+    for i in 0..10 {
+        for j in 0..10 {
+            z.set(i, j, if i < 5 { 0 } else { 1 }).unwrap();
+        }
+    }
+    let zones = dir.path().join("z.tif");
+    surtgis_core::io::write_geotiff(&z, &zones, None).unwrap();
+
+    let json = dir.path().join("out.json");
+    surtgis_cmd()
+        .args(["statistics", "zonal", "--zones"])
+        .arg(&zones)
+        .arg(&values)
+        .arg(&json)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("zone 0 treated as background"));
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&json).unwrap()).unwrap();
+    assert_eq!(doc["zones_computed"], 1);
+    assert_eq!(doc["statistics"][0]["zone_id"], 1);
+    assert_eq!(doc["statistics"][0]["count"], 50);
+    assert_eq!(doc["statistics"][0]["mean"], 7.0);
+
+    let csv = dir.path().join("out.csv");
+    surtgis_cmd()
+        .args(["statistics", "zonal", "--include-zero", "--zones"])
+        .arg(&zones)
+        .arg(&values)
+        .arg(&csv)
+        .assert()
+        .success();
+    let text = std::fs::read_to_string(&csv).unwrap();
+    assert!(text.starts_with("zone_id,count,"), "{text}");
+    assert!(
+        text.contains("\n0,50,") && text.contains("\n1,50,"),
+        "{text}"
+    );
+}
+
+/// Course report #3: `clip --polygon` masked but kept the full extent.
+#[test]
+fn clip_polygon_crops_to_the_polygon_extent() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("dnbr.tif");
+    write_raster(
+        &input,
+        40,
+        40,
+        GeoTransform::new(300_000.0, 6_000_400.0, 10.0, -10.0),
+        32718,
+        |_, _| 1.0,
+    );
+    let poly = dir.path().join("box.geojson");
+    // Cells 10..20 x 10..20 exactly (100 cells).
+    std::fs::write(
+        &poly,
+        r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},
+        "geometry":{"type":"Polygon","coordinates":[[[300100,6000300],[300200,6000300],
+        [300200,6000200],[300100,6000200],[300100,6000300]]]}}]}"#,
+    )
+    .unwrap();
+    let out = dir.path().join("crop.tif");
+    surtgis_cmd()
+        .arg("clip")
+        .arg(&input)
+        .arg("--polygon")
+        .arg(&poly)
+        .arg(&out)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Clipped: 10 x 10 (100.0% valid cells)",
+        ));
+    let c: Raster<f64> = surtgis_core::io::read_geotiff(&out, None).unwrap();
+    assert_eq!(c.shape(), (10, 10));
+    assert_eq!(c.transform().origin_x, 300_100.0);
+    assert_eq!(c.transform().origin_y, 6_000_300.0);
+
+    let masked = dir.path().join("mask.tif");
+    surtgis_cmd()
+        .arg("clip")
+        .arg(&input)
+        .args(["--keep-extent", "--polygon"])
+        .arg(&poly)
+        .arg(&masked)
+        .assert()
+        .success();
+    let m: Raster<f64> = surtgis_core::io::read_geotiff(&masked, None).unwrap();
+    assert_eq!(m.shape(), (40, 40));
+    assert_eq!(m.data().iter().filter(|v| v.is_finite()).count(), 100);
+
+    // A polygon in other coordinates (lon/lat) misses the grid: an error.
+    let lonlat = dir.path().join("ll.geojson");
+    std::fs::write(
+        &lonlat,
+        r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},
+        "geometry":{"type":"Polygon","coordinates":[[[-70,-25],[-69.9,-25],[-69.9,-25.1],[-70,-25]]]}}]}"#,
+    )
+    .unwrap();
+    surtgis_cmd()
+        .arg("clip")
+        .arg(&input)
+        .arg("--polygon")
+        .arg(&lonlat)
+        .arg(dir.path().join("x.tif"))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("same CRS"));
+}
+
+/// `terrain twi` refuses a slope that is not in radians, and
+/// `cost-distance --map-units` scales by the pixel size.
+#[test]
+fn twi_rejects_degrees_and_cost_distance_map_units() {
+    let dir = tempfile::tempdir().unwrap();
+    let dem = synth_dem(dir.path());
+    let slope_deg = dir.path().join("slope_deg.tif");
+    surtgis_cmd()
+        .args(["terrain", "slope"])
+        .arg(&dem)
+        .arg(&slope_deg)
+        .assert()
+        .success();
+    let facc = dir.path().join("facc.tif");
+    write_raster(
+        &facc,
+        20,
+        20,
+        GeoTransform::new(0.0, 20.0, 1.0, -1.0),
+        32719,
+        |_, _| 3.0,
+    );
+    surtgis_cmd()
+        .args(["terrain", "twi", "--flow-acc"])
+        .arg(&facc)
+        .arg("--slope")
+        .arg(&slope_deg)
+        .arg(dir.path().join("twi.tif"))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--units radians"));
+
+    let gt = GeoTransform::new(0.0, 630.0, 30.0, -30.0);
+    let cost = dir.path().join("cost.tif");
+    write_raster(&cost, 21, 21, gt, 32719, |_, _| 1.0);
+    let src = dir.path().join("src.tif");
+    write_raster(&src, 21, 21, gt, 32719, |i, j| {
+        if (i, j) == (10, 10) { 1.0 } else { 0.0 }
+    });
+    let out = dir.path().join("cd.tif");
+    surtgis_cmd()
+        .args(["terrain", "cost-distance", "--map-units", "--sources"])
+        .arg(&src)
+        .arg(&cost)
+        .arg(&out)
+        .assert()
+        .success();
+    let d: Raster<f64> = surtgis_core::io::read_geotiff(&out, None).unwrap();
+    assert!((d.get(10, 20).unwrap() - 300.0).abs() < 1e-6);
+    assert!((d.get(20, 20).unwrap() - 300.0 * std::f64::consts::SQRT_2).abs() < 1e-6);
+}
+
 /// #10: paths with ñ/accents (Chañaral, Ñuble) must not break the
 /// provenance record, and the written file must verify.
 #[test]
