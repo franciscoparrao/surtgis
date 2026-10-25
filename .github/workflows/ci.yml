@@ -22,7 +22,10 @@ env:
 jobs:
   check:
     name: Check & Clippy
-    runs-on: ubuntu-latest
+    # Pinned: --all-features builds the optional `gdal` feature, and the
+    # gdal 0.17 crate does not compile against GDAL 3.12 (ubuntu-latest is
+    # 26.04 since 2026-10). Unpin when the gdal crate is upgraded.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       # The PyPI wheel version (crates/python/pyproject.toml) is independent of
