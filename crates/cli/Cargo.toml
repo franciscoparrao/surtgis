@@ -49,8 +49,8 @@ ecw = ["dep:surtgis-ecw", "surtgis-server?/ecw"] # @ecw-only
 server = ["dep:surtgis-server"]
 
 [dependencies]
-surtgis-core = { version = "1.0", path = "../core", features = ["shapefile", "geopackage", "parquet"] }
-surtgis-algorithms = { version = "1.0", path = "../algorithms", features = ["unstable"] }
+surtgis-core = { version = "1.6", path = "../core", features = ["shapefile", "geopackage", "parquet"] }
+surtgis-algorithms = { version = "1.6", path = "../algorithms", features = ["unstable"] }
 surtgis-parallel = { version = "1.0", path = "../parallel" }
 surtgis-relief = { version = "1.0", path = "../relief" }
 surtgis-relief-3d = { version = "1.5", path = "../relief-3d", optional = true }
@@ -58,7 +58,7 @@ surtgis-flow = { version = "1.5", path = "../flow", optional = true }
 # Path-only: surtgis-ecw is not on crates.io (see the `ecw` feature note).
 surtgis-ecw = { path = "../ecw", optional = true } # @ecw-only
 surtgis-server = { version = "1.5", path = "../server", optional = true }
-surtgis-cloud = { version = "1.0", path = "../cloud", features = ["native", "unstable"], optional = true }
+surtgis-cloud = { version = "1.6", path = "../cloud", features = ["native", "unstable"], optional = true }
 clap.workspace = true
 clap_complete.workspace = true
 anyhow.workspace = true

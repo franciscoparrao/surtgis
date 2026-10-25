@@ -17,8 +17,8 @@ crate-type = ["cdylib", "rlib"]
 default = []
 
 [dependencies]
-surtgis-core = { version = "1.0", path = "../core", default-features = false }
-surtgis-algorithms = { version = "1.0", path = "../algorithms", default-features = false, features = [
+surtgis-core = { version = "1.6", path = "../core", default-features = false }
+surtgis-algorithms = { version = "1.6", path = "../algorithms", default-features = false, features = [
     "unstable",
 ] }
 surtgis-relief = { version = "1.0", path = "../relief" }

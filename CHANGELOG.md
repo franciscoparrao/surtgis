@@ -8,8 +8,13 @@ breaking changes only ship in a major version and are called out under a
 
 ## [Unreleased]
 
-Silent failures found while preparing course material on 1.5.2: each
-one finished, wrote a file and reported success.
+## [1.6.0] - 2026-10-25
+
+Weighted flow accumulation and the fixes reported from the Tal_Tal risk
+project (issues_surtgis.md #10–#12); six silent failures found while
+preparing course material on 1.5.2 (each finished, wrote a file and
+reported success), two half-cell georeferencing slips found while
+testing them; and patches for eight RUSTSEC advisories.
 
 ### Added
 
@@ -104,6 +109,16 @@ one finished, wrote a file and reported success.
   `(N, 1)`.
 - Zonal statistics skip cells equal to the zone raster's nodata value;
   before, a nodata value such as -9999 was reported as a zone.
+
+### Security
+
+- Patched eight RUSTSEC advisories published after 1.5.2.
+  RUSTSEC-2026-0344 is the one that matters most here: a decompression
+  bomb in `ruzstd`, which decodes ZSTD tiles in the COG reader for
+  remote files (0.8.3 → 0.9.1). Also `rustls` 0.23.46
+  (RUSTSEC-2026-0346/0347/0348/0349), `rustls-webpki` 0.103.16
+  (RUSTSEC-2026-0382), `webpki-roots` 1.0.11 (RUSTSEC-2026-0381) and
+  `tokio` 1.54.1 (RUSTSEC-2026-0386).
 
 ### Notes
 
