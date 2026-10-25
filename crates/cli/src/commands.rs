@@ -1276,8 +1276,20 @@ pub enum HydrologyCommands {
     FlowAccumulation {
         /// Input flow direction raster (D8 codes)
         input: PathBuf,
-        /// Output file (upstream cell count)
+        /// Output file (upstream cell count, or upstream weight sum with
+        /// --weights)
         output: PathBuf,
+        /// Weight raster on the same grid: each cell receives the sum of
+        /// the weights of every cell upstream of it (susceptible source
+        /// area, runoff, sediment or pollutant load). NaN/nodata weights
+        /// contribute nothing but still pass flow through. Read as f32.
+        #[arg(long, value_name = "RASTER")]
+        weights: Option<PathBuf>,
+        /// Add each cell's own weight (1 without --weights) to its result.
+        /// This is the convention of terra::flowAccumulation and
+        /// WhiteboxTools; without it a headwater cell is 0.
+        #[arg(long)]
+        include_self: bool,
     },
     /// Watershed delineation from flow direction
     Watershed {
@@ -3366,4 +3378,118 @@ pub enum FluvialCommands {
         #[arg(long)]
         keep_crs: bool,
     },
+}
+
+/// Whether an option takes values that may legitimately start with `-`:
+/// every `--bbox` and every comma-separated list (`MINX,MINY,…`,
+/// `LON,LAT`, `MIN,MAX,VALUE`). West/south coordinates are negative, and
+/// clap would otherwise read `-70.5,-25.4` as an unknown flag `-7`.
+fn takes_hyphen_values(a: &clap::Arg) -> bool {
+    if a.is_positional() || !a.get_action().takes_values() {
+        return false;
+    }
+    a.get_id() == "bbox"
+        || a.get_value_names()
+            .is_some_and(|names| names.iter().any(|n| n.contains(',')))
+}
+
+fn relax_negative_values(cmd: clap::Command) -> clap::Command {
+    cmd.allow_negative_numbers(true)
+        .mut_args(|a| {
+            if takes_hyphen_values(&a) {
+                a.allow_hyphen_values(true)
+            } else {
+                a
+            }
+        })
+        .mut_subcommands(relax_negative_values)
+}
+
+/// The full command tree with negative values accepted everywhere:
+/// `allow_negative_numbers` on every subcommand (clap does not propagate
+/// it) so `--latitude -27.5` or `--offset -1000` parse, and
+/// `allow_hyphen_values` on every `--bbox` and comma-list option so
+/// `--bbox -70.53,-25.48,-70.38,-25.36` works without the `=` form.
+/// Applied as a rule rather than per argument, so a new subcommand cannot
+/// forget it.
+pub fn cli_command() -> clap::Command {
+    use clap::CommandFactory;
+    relax_negative_values(Cli::command())
+}
+
+#[cfg(test)]
+mod negative_values_tests {
+    use super::*;
+    use clap::FromArgMatches;
+
+    /// The command tree is deep enough to overflow the 2 MB default stack
+    /// of test threads; `main` runs on the 8 MB main thread.
+    fn with_stack<F: FnOnce() + Send + 'static>(f: F) {
+        std::thread::Builder::new()
+            .stack_size(64 << 20)
+            .spawn(f)
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
+        let mut m = cli_command().try_get_matches_from(args)?;
+        Cli::from_arg_matches_mut(&mut m)
+    }
+
+    #[test]
+    fn every_bbox_and_comma_list_accepts_leading_hyphen() {
+        with_stack(|| {
+            fn walk(cmd: &clap::Command, path: &str, bad: &mut Vec<String>) {
+                for a in cmd.get_arguments() {
+                    if takes_hyphen_values(a) && !a.is_allow_hyphen_values_set() {
+                        bad.push(format!("{path} --{}", a.get_id()));
+                    }
+                }
+                for s in cmd.get_subcommands() {
+                    walk(s, &format!("{path} {}", s.get_name()), bad);
+                }
+            }
+            let mut bad = Vec::new();
+            let cmd = cli_command();
+            walk(&cmd, "surtgis", &mut bad);
+            assert!(bad.is_empty(), "options rejecting negative values: {bad:?}");
+        });
+    }
+
+    #[test]
+    fn negative_bbox_without_equals_sign_parses() {
+        with_stack(|| {
+            #[allow(unused_mut)] // only pushed to with the `cloud` feature
+            let mut cases: Vec<&[&str]> = vec![&[
+                "surtgis",
+                "clip",
+                "in.tif",
+                "--bbox",
+                "-70.53,-25.48,-70.38,-25.36",
+                "out.tif",
+            ]];
+            #[cfg(feature = "cloud")]
+            cases.push(&[
+                "surtgis",
+                "stac",
+                "composite",
+                "--bbox",
+                "-70.62,-25.50,-70.58,-25.47",
+                "--collection",
+                "sentinel-2-l2a",
+                "--asset",
+                "red",
+                "--datetime",
+                "2024-01-01/2024-01-20",
+                "out.tif",
+            ]);
+            for args in cases {
+                if let Err(e) = parse(args) {
+                    panic!("{args:?}: {e}");
+                }
+            }
+        });
+    }
 }
