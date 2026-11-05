@@ -16,10 +16,10 @@ keywords = ["gis", "tiles", "tile-server", "cog", "terrain"]
 categories = ["science::geo", "web-programming::http-server"]
 
 [dependencies]
-surtgis-core = { version = "1.5", path = "../core", features = ["projections"] }
+surtgis-core = { version = "1.7", path = "../core", features = ["projections"] }
 surtgis-algorithms = { version = "1.5", path = "../algorithms", default-features = false }
 surtgis-colormap = { version = "1.5", path = "../colormap" }
-surtgis-cloud = { version = "1.5", path = "../cloud", features = ["native"] }
+surtgis-cloud = { version = "1.7", path = "../cloud", features = ["native"] }
 surtgis-ecw = { path = "../ecw", optional = true } # @ecw-only
 
 axum = { workspace = true }

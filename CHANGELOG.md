@@ -8,6 +8,12 @@ breaking changes only ship in a major version and are called out under a
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-11-05
+
+Provenance that can answer "did this output use the items my provider
+served wrong?", a fix for signed URLs leaking into every remote-input
+record since 1.5.0, and eleven RUSTSEC patches.
+
 ### Added
 
 - **STAC items in the provenance record.** `stac composite`,
@@ -40,6 +46,18 @@ breaking changes only ship in a major version and are called out under a
   written by 1.5.0–1.6.0 when printing them. The tokens already inside
   older files remain there: rewrite or strip the `SURTGIS_PROVENANCE`
   metadata item before sharing a 1.5–1.6 composite outside your team.
+- Patched six RUSTSEC advisories published after 1.6.0:
+  `zstd` 0.13.4 (RUSTSEC-2026-0391), `zstd-safe` 7.4.0
+  (RUSTSEC-2026-0398/0403), `zstd-sys` 2.1.2 (RUSTSEC-2026-0410),
+  `libz-sys` 1.1.31 (RUSTSEC-2026-0418), and `hyper` 1.12.0, which drops
+  the unmaintained `pin-utils` (RUSTSEC-2026-0441).
+
+### Fixed
+
+- `cargo install surtgis --no-default-features --features
+  cloud,projections`, the README's install path without C libraries,
+  did not compile since 1.5.0 (`parse_aggregate` used a type that only
+  exists with `zarr`). CI now builds that feature set.
 
 ## [1.6.0] - 2026-10-25
 
