@@ -8,6 +8,17 @@ breaking changes only ship in a major version and are called out under a
 
 ## [Unreleased]
 
+### Fixed
+
+- **The COG reader could not read any tile of `alos-dem` (ALOS AW3D30)
+  on Planetary Computer**: its LZW tiles encode slightly more than the
+  tile holds, and the decompression-bomb guard rejected them as
+  malformed. LZW now keeps the first tile-size bytes and ignores the
+  rest, as libtiff does (the cap still bounds the allocation), and
+  decodes in a loop: a single `decode_bytes` call can stop after a
+  prefix. Checked against GDAL on the same COG window: 78,554 of 78,554
+  cells identical.
+
 ## [1.7.0] - 2026-11-05
 
 Provenance that can answer "did this output use the items my provider
