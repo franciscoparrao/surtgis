@@ -609,6 +609,7 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             let href = client
                 .sign_asset_href(&stac_asset.href, item.collection.as_deref().unwrap_or(""))
                 .context("Failed to sign asset URL")?;
+            record_stac_item(&client, item, &asset_key);
 
             match format {
                 #[cfg(feature = "zarr")]
@@ -806,6 +807,7 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                 let href = client
                     .sign_asset_href(&stac_asset.href, item.collection.as_deref().unwrap_or(""))
                     .context("Failed to sign asset URL")?;
+                record_stac_item(&client, item, &asset_key);
 
                 // Open + read under retry: the HTTP client only retries at
                 // the request level (connect/429/503), but a tile fetch can
@@ -3017,4 +3019,25 @@ fn generate_intervals(
     }
 
     intervals
+}
+
+/// Report a STAC item read by `stac fetch` / `fetch-mosaic` to the
+/// provenance record (the composite engine reports its own items).
+fn record_stac_item(
+    client: &surtgis_cloud::blocking::StacClientBlocking,
+    item: &surtgis_cloud::StacItem,
+    asset: &str,
+) {
+    let search_url = client.catalog().search_url();
+    let root = search_url.strip_suffix("/search").unwrap_or(&search_url);
+    let mut rec = surtgis_core::provenance::StacItemRecord::new(
+        root,
+        item.collection.as_deref().unwrap_or(""),
+        item.id.as_str(),
+    )
+    .with_assets([asset.to_string()]);
+    if let Some(dt) = &item.properties.datetime {
+        rec = rec.with_datetime(dt.clone());
+    }
+    surtgis_core::provenance::observe_stac_item(rec);
 }

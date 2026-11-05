@@ -12,7 +12,13 @@ The record holds:
 - the operation and the command line as typed, plus the working directory;
 - the number of worker threads (and the seed, for stochastic algorithms);
 - every input the command read, with its size and BLAKE3 digest when it
-  was a local file (URLs are recorded without a digest);
+  was a local file (URLs are recorded without a digest, and without their
+  query string: signed URLs such as Planetary Computer SAS tokens or S3
+  presigned URLs carry credentials there);
+- for STAC-driven commands (`stac composite`, `stac time-series`,
+  `stac fetch`, `stac fetch-mosaic`), every STAC item read: catalog,
+  collection, item id, the item's datetime, the assets read and the time
+  they were accessed;
 - a BLAKE3 digest of the output pixel array as written, with its shape,
   band count and sample type.
 
@@ -21,7 +27,12 @@ The record holds:
 ```bash
 surtgis provenance slope.tif
 surtgis provenance --json slope.tif   # the raw record
+surtgis provenance --stac composite.tif  # as STAC Processing v1.3 fields
 ```
+
+`--stac` prints `processing:software`, `processing:datetime` and
+`processing:lineage`, plus a `derived_from` link to each STAC item read,
+ready to merge into the STAC Item that describes the output.
 
 `surtgis info` prints a one-line summary when a record is present.
 
@@ -37,6 +48,26 @@ relative to the recorded working directory). It exits non-zero on any
 mismatch. Inputs that were not hashed at write time, or that are no longer
 on disk, are reported as unverifiable but do not fail the check; pass
 `--skip-inputs` to check only the output.
+
+## Check an output against a list of bad source items
+
+Data providers sometimes publish the items they served wrong. Planetary
+Computer, for example, served 26,116 corrupted Sentinel-2 L2A items
+between 2026-10-26 and 2026-10-30 and published their ids
+([issue #516](https://github.com/microsoft/PlanetaryComputer/issues/516)).
+`verify --against` tells whether an output read any of them:
+
+```bash
+surtgis verify composite.tif --against affected-items.txt \
+    --affected-from 2026-10-26T12:07:00Z --affected-to 2026-10-30T00:07:00Z
+```
+
+The list holds one item id per line; item URLs and `collection/id` are
+accepted and `#` starts a comment. Without the window every item on the
+list counts. With it, an item counts only when it was accessed inside the
+window: the same item read after the provider fixed it passes. The command
+exits non-zero when any listed item counts. Files written before SurtGIS
+1.7 have no STAC item record and are reported as unverifiable.
 
 ## Opt out
 

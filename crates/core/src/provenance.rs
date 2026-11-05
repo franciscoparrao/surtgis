@@ -52,6 +52,11 @@ use crate::error::{Error, Result};
 
 /// Version of the record layout.
 pub const SCHEMA: &str = "surtgis-provenance/1";
+/// Schema URL of the STAC Processing extension targeted by
+/// [`Provenance::to_stac_processing`].
+pub const PROCESSING_EXTENSION: &str =
+    "https://stac-extensions.github.io/processing/v1.3.0/schema.json";
+
 /// Name of the `GDAL_METADATA` item carrying the JSON record.
 pub const METADATA_ITEM: &str = "SURTGIS_PROVENANCE";
 /// Version of the output-array digest definition (see module docs).
@@ -81,6 +86,73 @@ pub struct InputRecord {
     /// Free-form role (`dem`, `release`, `band:red`, …).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
+}
+
+/// One STAC item whose assets an operation read (a scene of a composite).
+///
+/// Lets a record answer "did this output use item X, read when?" after
+/// the fact — e.g. against a provider's list of corrupted items. Signed
+/// asset URLs are never stored: only the catalog root, the item identity
+/// and the asset keys.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct StacItemRecord {
+    /// STAC API root (`https://planetarycomputer.microsoft.com/api/stac/v1`).
+    pub catalog: String,
+    /// Collection id (`sentinel-2-l2a`).
+    pub collection: String,
+    /// Item id.
+    pub id: String,
+    /// The item's nominal `datetime`, when it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub datetime: Option<String>,
+    /// Assets read from the item, as the operation named them (band
+    /// names such as `red`, `scl`; the collection profile maps them to the
+    /// item's asset keys).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assets: Vec<String>,
+    /// RFC 3339 UTC time the item's assets were resolved for reading.
+    pub accessed: String,
+}
+
+impl StacItemRecord {
+    /// A record for `collection/id` in `catalog`, accessed now.
+    pub fn new(
+        catalog: impl Into<String>,
+        collection: impl Into<String>,
+        id: impl Into<String>,
+    ) -> Self {
+        Self {
+            catalog: catalog.into(),
+            collection: collection.into(),
+            id: id.into(),
+            datetime: None,
+            assets: Vec::new(),
+            accessed: rfc3339_utc_now(),
+        }
+    }
+
+    /// Set the item's nominal datetime.
+    pub fn with_datetime(mut self, datetime: impl Into<String>) -> Self {
+        self.datetime = Some(datetime.into());
+        self
+    }
+
+    /// Set the asset keys read.
+    pub fn with_assets(mut self, assets: impl IntoIterator<Item = String>) -> Self {
+        self.assets = assets.into_iter().collect();
+        self
+    }
+
+    /// The item's STAC API URL (`<catalog>/collections/<c>/items/<id>`).
+    pub fn href(&self) -> String {
+        format!(
+            "{}/collections/{}/items/{}",
+            self.catalog.trim_end_matches('/'),
+            self.collection,
+            self.id
+        )
+    }
 }
 
 /// Digest of the output array, filled in by the writer.
@@ -120,6 +192,10 @@ pub struct Provenance {
     /// Inputs read.
     #[serde(default)]
     pub inputs: Vec<InputRecord>,
+    /// STAC items whose assets were read (empty when none, and in records
+    /// written before 1.7).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stac_items: Vec<StacItemRecord>,
     /// Output digest, set by the writer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<OutputRecord>,
@@ -151,6 +227,7 @@ impl Provenance {
             command: Vec::new(),
             parameters: serde_json::Value::Null,
             inputs: Vec::new(),
+            stac_items: Vec::new(),
             output: None,
             threads: None,
             seed: None,
@@ -196,8 +273,52 @@ impl Provenance {
     }
 
     /// Append an input described by hand (remote URL, in-memory buffer…).
-    pub fn push_input(&mut self, input: InputRecord) {
+    /// The source goes through [`redact_source`]: a signed URL never
+    /// reaches the record.
+    pub fn push_input(&mut self, mut input: InputRecord) {
+        input.source = redact_source(&input.source);
         self.inputs.push(input);
+    }
+
+    /// Append a STAC item read by the operation.
+    pub fn push_stac_item(&mut self, item: StacItemRecord) {
+        self.stac_items.push(item);
+    }
+
+    /// The record as STAC Processing extension v1.3 fields, ready to merge
+    /// into the STAC Item that describes the output: `processing:*`
+    /// properties and a `derived_from` link per STAC item read.
+    pub fn to_stac_processing(&self) -> serde_json::Value {
+        let mut props = serde_json::Map::new();
+        props.insert(
+            "processing:software".into(),
+            serde_json::json!({ &self.engine.name: &self.engine.version }),
+        );
+        props.insert("processing:datetime".into(), self.created.clone().into());
+        if let Some(op) = &self.operation {
+            let mut lineage = format!("{} {}", self.engine.name, op);
+            if !self.command.is_empty() {
+                lineage = format!("{lineage}: `{}`", self.command.join(" "));
+            }
+            props.insert("processing:lineage".into(), lineage.into());
+        }
+        let links: Vec<serde_json::Value> = self
+            .stac_items
+            .iter()
+            .map(|i| {
+                serde_json::json!({
+                    "rel": "derived_from",
+                    "href": i.href(),
+                    "type": "application/geo+json",
+                    "title": format!("{} (accessed {})", i.id, i.accessed),
+                })
+            })
+            .collect();
+        serde_json::json!({
+            "stac_extensions": [PROCESSING_EXTENSION],
+            "properties": props,
+            "links": links,
+        })
     }
 
     /// Append a local file as input, hashing its bytes. Fails only if the
@@ -310,10 +431,50 @@ impl DataDigest {
 // ─── Process-level hooks ──────────────────────────────────────────────
 
 type InputObserver = dyn Fn(&str) + Send + Sync;
+type StacItemObserver = dyn Fn(StacItemRecord) + Send + Sync;
 type OutputProvider = dyn Fn() -> Option<Provenance> + Send + Sync;
 
 static INPUT_OBSERVER: RwLock<Option<Arc<InputObserver>>> = RwLock::new(None);
+static STAC_ITEM_OBSERVER: RwLock<Option<Arc<StacItemObserver>>> = RwLock::new(None);
 static OUTPUT_PROVIDER: RwLock<Option<Arc<OutputProvider>>> = RwLock::new(None);
+
+/// Install (or clear) the process-wide STAC item observer. STAC-driven
+/// readers (the composite engine) call it once per item they read.
+pub fn set_stac_item_observer(observer: Option<Arc<StacItemObserver>>) {
+    *STAC_ITEM_OBSERVER
+        .write()
+        .unwrap_or_else(|e| e.into_inner()) = observer;
+}
+
+/// Called by STAC-driven readers: report an item to the installed
+/// observer, if any.
+pub fn observe_stac_item(item: StacItemRecord) {
+    let obs = STAC_ITEM_OBSERVER
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    if let Some(obs) = obs {
+        obs(item);
+    }
+}
+
+/// `source` as it may be stored in a record: URLs lose their query string
+/// (signed URLs — Planetary Computer SAS tokens, S3 presigned URLs, GCS
+/// signatures — carry credentials there, and tokens change on every run);
+/// a `#fragment` is kept. Local paths are returned unchanged.
+pub fn redact_source(source: &str) -> String {
+    if !source.contains("://") {
+        return source.to_string();
+    }
+    let Some(q) = source.find('?') else {
+        return source.to_string();
+    };
+    let fragment = source[q..]
+        .find('#')
+        .map(|f| &source[q + f..])
+        .unwrap_or("");
+    format!("{}{}", &source[..q], fragment)
+}
 
 /// Install (or clear) the process-wide input observer. Every native
 /// reader that opens a path or URL calls it once with that source.
@@ -329,13 +490,15 @@ pub fn set_output_provider(provider: Option<Arc<OutputProvider>>) {
 }
 
 /// Called by readers: report a source to the installed observer, if any.
+/// URLs are passed through [`redact_source`] first, so no observer ever
+/// sees (or stores) a signed query string.
 pub fn observe_input(source: &str) {
     let obs = INPUT_OBSERVER
         .read()
         .unwrap_or_else(|e| e.into_inner())
         .clone();
     if let Some(obs) = obs {
-        obs(source);
+        obs(&redact_source(source));
     }
 }
 
@@ -483,5 +646,65 @@ mod tests {
         assert!(json.contains("\\ud835\\udefc"), "surrogate pair: {json}");
         let back = Provenance::from_json(&json).unwrap();
         assert_eq!(back, p);
+    }
+    #[test]
+    fn signed_urls_lose_their_query_string() {
+        let sas = "https://acct.blob.core.windows.net/c/T19JCM_B04_10m.tif?st=2026&se=2026&sp=rl&sig=SECRET";
+        assert_eq!(
+            redact_source(sas),
+            "https://acct.blob.core.windows.net/c/T19JCM_B04_10m.tif"
+        );
+        let s3 = "https://b.s3.amazonaws.com/k.tif?X-Amz-Signature=abc&X-Amz-Expires=60#band1";
+        assert_eq!(redact_source(s3), "https://b.s3.amazonaws.com/k.tif#band1");
+        assert_eq!(redact_source("s3://b/k.zarr#t2m"), "s3://b/k.zarr#t2m");
+        assert_eq!(
+            redact_source("/data/a?b.tif"),
+            "/data/a?b.tif",
+            "local paths untouched"
+        );
+    }
+
+    #[test]
+    fn stac_items_round_trip_and_map_to_processing_extension() {
+        let mut p = Provenance::new().with_operation("stac composite");
+        p.command = vec!["surtgis".into(), "stac".into(), "composite".into()];
+        let item = StacItemRecord::new(
+            "https://planetarycomputer.microsoft.com/api/stac/v1/",
+            "sentinel-2-l2a",
+            "S2B_MSIL2A_20240101T144729_R139_T19JCM_20240101T201759",
+        )
+        .with_datetime("2024-01-01T14:47:29Z")
+        .with_assets(["B04".to_string(), "SCL".to_string()]);
+        p.push_stac_item(item);
+        let back = Provenance::from_json(&p.to_json()).unwrap();
+        assert_eq!(back, p);
+
+        // Records written before stac_items existed still parse.
+        let old = Provenance::from_json(&Provenance::new().to_json()).unwrap();
+        assert!(old.stac_items.is_empty());
+
+        let stac = p.to_stac_processing();
+        assert_eq!(stac["stac_extensions"][0], PROCESSING_EXTENSION);
+        assert_eq!(
+            stac["properties"]["processing:software"]["surtgis"],
+            env!("CARGO_PKG_VERSION")
+        );
+        assert_eq!(stac["links"][0]["rel"], "derived_from");
+        assert_eq!(
+            stac["links"][0]["href"],
+            "https://planetarycomputer.microsoft.com/api/stac/v1/collections/sentinel-2-l2a/items/S2B_MSIL2A_20240101T144729_R139_T19JCM_20240101T201759"
+        );
+    }
+    #[test]
+    fn push_input_redacts_signed_urls() {
+        let mut p = Provenance::new();
+        p.push_input(InputRecord {
+            source: "https://h/x.tif?sig=SECRET".into(),
+            blake3: None,
+            bytes: None,
+            role: None,
+        });
+        assert_eq!(p.inputs[0].source, "https://h/x.tif");
+        assert!(!p.to_json().contains("SECRET"));
     }
 }

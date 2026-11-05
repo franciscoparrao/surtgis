@@ -332,6 +332,11 @@ impl CompositeEngine {
         progress: &mut dyn CompositeProgress,
     ) -> Result<Vec<Scene>> {
         let collection = &self.spec.collection;
+        let search_url = self.client.catalog().search_url();
+        let catalog_root = search_url
+            .strip_suffix("/search")
+            .unwrap_or(&search_url)
+            .to_string();
         let mut scenes: Vec<Scene> = Vec::new();
 
         for date in dates {
@@ -393,6 +398,25 @@ impl CompositeEngine {
                 } else {
                     0.0
                 };
+                // Provenance: which STAC item (never the signed URL) this
+                // output reads, and when — so a record can later be checked
+                // against a provider's list of bad items.
+                let mut assets = self.spec.band_keys.clone();
+                if !original_mask_href.is_empty()
+                    && let Some(mk) = &self.spec.mask_key
+                {
+                    assets.push(mk.clone());
+                }
+                let mut rec = surtgis_core::provenance::StacItemRecord::new(
+                    catalog_root.as_str(),
+                    item.collection.as_deref().unwrap_or(collection),
+                    item.id.as_str(),
+                )
+                .with_assets(assets);
+                if let Some(dt) = &item.properties.datetime {
+                    rec = rec.with_datetime(dt.clone());
+                }
+                surtgis_core::provenance::observe_stac_item(rec);
                 tiles.push(TileRef {
                     band_hrefs,
                     mask_href,

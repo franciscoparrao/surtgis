@@ -54,9 +54,14 @@ pub enum Commands {
     Provenance {
         /// GeoTIFF/COG written by SurtGIS
         input: PathBuf,
-        /// Print the raw JSON record
+        /// Print the raw JSON record (URL query strings removed)
         #[arg(long)]
         json: bool,
+        /// Print the record as STAC Processing extension v1.3 fields
+        /// (`processing:*` properties and `derived_from` links to the STAC
+        /// items read), to merge into a STAC Item describing the file
+        #[arg(long, conflicts_with = "json")]
+        stac: bool,
     },
     /// Verify a SurtGIS output against its embedded provenance: recompute
     /// the digest of the pixel array and re-hash the recorded inputs.
@@ -67,6 +72,19 @@ pub enum Commands {
         /// Only check the output digest, not the inputs
         #[arg(long)]
         skip_inputs: bool,
+        /// File of affected STAC item ids, one per line (`#` comments and
+        /// item URLs accepted), e.g. a provider's list of corrupted
+        /// items. Fails when the output read any of them
+        #[arg(long, value_name = "FILE")]
+        against: Option<PathBuf>,
+        /// With --against: only items accessed at or after this time
+        /// (RFC 3339 or YYYY-MM-DD, UTC)
+        #[arg(long, value_name = "TIME", requires = "against")]
+        affected_from: Option<String>,
+        /// With --against: only items accessed at or before this time
+        /// (a bare date counts until the end of that day)
+        #[arg(long, value_name = "TIME", requires = "against")]
+        affected_to: Option<String>,
     },
     /// Terrain analysis algorithms
     Terrain {

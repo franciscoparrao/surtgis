@@ -163,6 +163,11 @@ mod inner {
             Ok(Self { rt, inner })
         }
 
+        /// The catalog this client is configured for.
+        pub fn catalog(&self) -> &StacCatalog {
+            self.inner.catalog()
+        }
+
         /// Execute a single search request (blocking).
         pub fn search(&self, params: &StacSearchParams) -> Result<StacItemCollection> {
             self.rt.block_on(self.inner.search(params))
