@@ -1091,3 +1091,71 @@ fn flow_accumulation_weights_and_include_self() {
         .failure()
         .stderr(predicate::str::contains("resample it first"));
 }
+
+/// `verify --against`: an output whose record lists STAC items is checked
+/// against a provider's list of affected items, with an optional window on
+/// the access time; `provenance --stac` maps the record to STAC Processing.
+#[test]
+fn verify_against_affected_stac_items_and_stac_export() {
+    use surtgis_core::provenance::{Provenance, StacItemRecord};
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("composite.tif");
+    let mut r: Raster<f32> = Raster::new(4, 4);
+    r.set_transform(GeoTransform::new(0.0, 4.0, 1.0, -1.0));
+    let mut p = Provenance::new().with_operation("stac composite");
+    let mut item = StacItemRecord::new(
+        "https://planetarycomputer.microsoft.com/api/stac/v1",
+        "sentinel-2-l2a",
+        "S2A_MSIL2A_20261027T145931_R039_T19KCA_20261027T211703",
+    );
+    item.accessed = "2026-10-28T10:00:00Z".into();
+    p.push_stac_item(item);
+    surtgis_core::io::write_geotiff_with_provenance(&r, &out, None, &p).unwrap();
+
+    let list = dir.path().join("affected.txt");
+    std::fs::write(
+        &list,
+        "# Planetary Computer issue 516\nS2A_MSIL2A_20261027T145931_R039_T19KCA_20261027T211703\n",
+    )
+    .unwrap();
+
+    // On the list, inside the incident window: fails.
+    surtgis_cmd()
+        .arg("verify")
+        .arg(&out)
+        .arg("--against")
+        .arg(&list)
+        .args([
+            "--affected-from",
+            "2026-10-26T12:07:00Z",
+            "--affected-to",
+            "2026-10-30",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("AFFECTED"));
+    // Read after the backfill: on the list, but outside the window.
+    surtgis_cmd()
+        .arg("verify")
+        .arg(&out)
+        .arg("--against")
+        .arg(&list)
+        .args(["--affected-to", "2026-10-27"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("outside the affected window"));
+
+    let stac = surtgis_cmd()
+        .args(["provenance", "--stac"])
+        .arg(&out)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let v: serde_json::Value = serde_json::from_slice(&stac).unwrap();
+    assert_eq!(v["links"][0]["rel"], "derived_from");
+    assert!(v["links"][0]["href"].as_str().unwrap().ends_with(
+        "/collections/sentinel-2-l2a/items/S2A_MSIL2A_20261027T145931_R039_T19KCA_20261027T211703"
+    ));
+}

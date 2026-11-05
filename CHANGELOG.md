@@ -8,6 +8,39 @@ breaking changes only ship in a major version and are called out under a
 
 ## [Unreleased]
 
+### Added
+
+- **STAC items in the provenance record.** `stac composite`,
+  `time-series`, `fetch` and `fetch-mosaic` record every STAC item they
+  read (catalog, collection, id, item datetime, assets, access time) in
+  the new `stac_items` field. `surtgis provenance` lists them.
+  Library: `provenance::StacItemRecord`, `Provenance::push_stac_item`,
+  `set_stac_item_observer` / `observe_stac_item`.
+- **`surtgis verify --against <list>`** checks an output against a list
+  of affected STAC item ids, with `--affected-from` / `--affected-to` on
+  the access time, and exits non-zero on a hit. Tested against the
+  26,116-item list Planetary Computer published for its October 2026
+  Sentinel-2 L2A incident (issue #516).
+- **`surtgis provenance --stac`** prints the record as STAC Processing
+  extension v1.3 fields (`processing:software`, `processing:datetime`,
+  `processing:lineage`) and `derived_from` links to the items read;
+  library `Provenance::to_stac_processing`.
+
+### Security
+
+- **Signed URLs no longer reach the provenance record.** Since 1.5.0 the
+  record stored the URLs of remote inputs verbatim; for Planetary
+  Computer that included the SAS token (read access to the whole
+  container for about a day). Planetary Computer hands those tokens to
+  anyone, but the same path would have embedded real credentials from a
+  private catalog or an S3 presigned URL into files that get shared.
+  Every URL now loses its query string before it is recorded
+  (`provenance::redact_source`, applied in `observe_input` and
+  `push_input`), and `surtgis provenance` / `verify` redact records
+  written by 1.5.0–1.6.0 when printing them. The tokens already inside
+  older files remain there: rewrite or strip the `SURTGIS_PROVENANCE`
+  metadata item before sharing a 1.5–1.6 composite outside your team.
+
 ## [1.6.0] - 2026-10-25
 
 Weighted flow accumulation and the fixes reported from the Tal_Tal risk

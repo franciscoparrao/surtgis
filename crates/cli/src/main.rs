@@ -97,10 +97,24 @@ fn run(cli: Cli) -> Result<()> {
             );
         }
         Commands::Info { input } => handlers::info::handle(input)?,
-        Commands::Provenance { input, json } => handlers::provenance::show(input, json)?,
-        Commands::Verify { input, skip_inputs } => {
-            handlers::provenance::verify(input, skip_inputs)?
+        Commands::Provenance { input, json, stac } => {
+            handlers::provenance::show(input, json, stac)?
         }
+        Commands::Verify {
+            input,
+            skip_inputs,
+            against,
+            affected_from,
+            affected_to,
+        } => handlers::provenance::verify(
+            input,
+            skip_inputs,
+            against.map(|f| handlers::provenance::AffectedList {
+                file: f,
+                from: affected_from,
+                to: affected_to,
+            }),
+        )?,
         Commands::Terrain { algorithm } => {
             handlers::terrain::handle(algorithm, compress, streaming, mem_limit_bytes)?
         }

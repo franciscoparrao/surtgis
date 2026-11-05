@@ -13,12 +13,14 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use surtgis_core::provenance::{self, InputRecord, Provenance, hash_file};
+use surtgis_core::provenance::{self, InputRecord, Provenance, StacItemRecord, hash_file};
 
 struct Context {
     argv: Vec<String>,
     cwd: Option<String>,
     inputs: Mutex<BTreeMap<String, InputRecord>>,
+    /// Keyed by `catalog collection id`; the first access is kept.
+    stac_items: Mutex<BTreeMap<String, StacItemRecord>>,
 }
 
 static CONTEXT: OnceLock<Arc<Context>> = OnceLock::new();
@@ -33,12 +35,17 @@ pub fn install(argv: Vec<String>) {
                     .ok()
                     .map(|p| p.display().to_string()),
                 inputs: Mutex::new(BTreeMap::new()),
+                stac_items: Mutex::new(BTreeMap::new()),
             })
         })
         .clone();
     let observer = ctx.clone();
     provenance::set_input_observer(Some(Arc::new(move |source: &str| {
         observer.note_input(source)
+    })));
+    let items = ctx.clone();
+    provenance::set_stac_item_observer(Some(Arc::new(move |item: StacItemRecord| {
+        items.note_stac_item(item)
     })));
     let provider = ctx;
     provenance::set_output_provider(Some(Arc::new(move || Some(provider.record()))));
@@ -53,6 +60,12 @@ pub fn disabled_by_env() -> bool {
 }
 
 impl Context {
+    fn note_stac_item(&self, item: StacItemRecord) {
+        let key = format!("{} {} {}", item.catalog, item.collection, item.id);
+        let mut items = self.stac_items.lock().unwrap_or_else(|e| e.into_inner());
+        items.entry(key).or_insert(item);
+    }
+
     fn note_input(&self, source: &str) {
         let mut inputs = self.inputs.lock().unwrap_or_else(|e| e.into_inner());
         if inputs.contains_key(source) {
@@ -96,6 +109,10 @@ impl Context {
         let inputs = self.inputs.lock().unwrap_or_else(|e| e.into_inner());
         for rec in inputs.values() {
             p.push_input(rec.clone());
+        }
+        let items = self.stac_items.lock().unwrap_or_else(|e| e.into_inner());
+        for item in items.values() {
+            p.push_stac_item(item.clone());
         }
         p
     }
