@@ -56,6 +56,10 @@ jobs:
             libgdal-dev libhdf5-dev libnetcdf-dev libeccodes-dev pkg-config
       - name: Check
         run: cargo check --workspace --exclude surtgis-python --all-features
+      # The README's no-C-libraries install path; it broke unnoticed in
+      # 1.5.0 because no job built this feature set.
+      - name: Check CLI without C dependencies (cloud,projections)
+        run: cargo check -p surtgis --no-default-features --features cloud,projections
       # Clippy enforces correctness lints as errors (real bugs only) and
       # leaves style lints as warnings. Style cleanup (`collapsible_if`,
       # `map_or` simplification, etc.) is tracked separately and applied

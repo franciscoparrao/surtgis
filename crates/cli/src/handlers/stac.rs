@@ -2891,6 +2891,7 @@ pub(crate) fn item_time_extent(
     }
 }
 
+#[cfg(feature = "zarr")]
 fn parse_aggregate(s: &str) -> Result<(IntervalType, Option<surtgis_cloud::AggMethod>)> {
     use surtgis_cloud::AggMethod;
     match s.to_lowercase().replace('_', "-").as_str() {
