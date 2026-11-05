@@ -90,13 +90,43 @@ pub fn decompress_tile(
             let mut decoder =
                 weezl::decode::Decoder::with_tiff_size_switch(weezl::BitOrder::Msb, 8);
             let mut out = vec![0u8; cap];
-            let result = decoder.decode_bytes(data, &mut out);
-            result
-                .status
-                .map_err(|e| CloudError::Decompress(format!("LZW: {}", e)))?;
-            if result.consumed_in < data.len() {
+            // `decode_bytes` decodes a prefix per call: loop until the buffer
+            // is full, the end code is seen, or no progress is made.
+            let (mut consumed_in, mut consumed_out) = (0usize, 0usize);
+            let status = loop {
+                let r = decoder.decode_bytes(&data[consumed_in..], &mut out[consumed_out..]);
+                consumed_in += r.consumed_in;
+                consumed_out += r.consumed_out;
+                let st = r
+                    .status
+                    .map_err(|e| CloudError::Decompress(format!("LZW: {}", e)))?;
+                let stalled = r.consumed_in == 0 && r.consumed_out == 0;
+                if matches!(st, weezl::LzwStatus::Done)
+                    || consumed_out >= cap
+                    || consumed_in >= data.len()
+                    || stalled
+                {
+                    break st;
+                }
+            };
+            let result = weezl::BufferResult {
+                consumed_in,
+                consumed_out,
+                status: Ok(status),
+            };
+            // A complete tile is all we need: like libtiff, keep the first
+            // `expected_raw_size` bytes and ignore what the stream encodes
+            // past them (some writers, e.g. the ALOS AW3D30 COGs on
+            // Planetary Computer, emit extra codes before EOI). The cap
+            // still bounds the allocation.
+            if result.consumed_out >= expected_raw_size {
+                out.truncate(expected_raw_size);
+                return Ok(out);
+            }
+            if result.consumed_in < data.len() && !matches!(status, weezl::LzwStatus::Done) {
                 return Err(CloudError::Decompress(format!(
-                    "LZW: decompressed tile exceeds {cap} bytes (expected {expected_raw_size}); malformed input"
+                    "LZW: stream stopped after {} of {expected_raw_size} bytes with input left; malformed input",
+                    result.consumed_out
                 )));
             }
             out.truncate(result.consumed_out);
@@ -569,6 +599,47 @@ mod tests {
         let compressed = encoder.finish().unwrap();
         let out = decompress_tile(&compressed, compression::DEFLATE, original.len()).unwrap();
         assert_eq!(out, original);
+    }
+
+    #[cfg(feature = "lzw")]
+    fn lzw_encode(raw: &[u8]) -> Vec<u8> {
+        weezl::encode::Encoder::with_tiff_size_switch(weezl::BitOrder::Msb, 8)
+            .encode(raw)
+            .unwrap()
+    }
+
+    #[cfg(feature = "lzw")]
+    #[test]
+    fn lzw_stream_longer_than_the_tile_keeps_the_tile() {
+        // The writer encoded 10 % more than the tile holds (as the ALOS
+        // AW3D30 COGs on Planetary Computer do): keep the tile, like libtiff.
+        let raw: Vec<u8> = (0..1100u32).map(|i| (i * 7 % 251) as u8).collect();
+        let out = decompress_tile(&lzw_encode(&raw), compression::LZW, 1000).unwrap();
+        assert_eq!(out, raw[..1000]);
+    }
+
+    #[cfg(feature = "lzw")]
+    #[test]
+    fn lzw_exact_and_short_streams() {
+        let raw: Vec<u8> = (0..4096u32).map(|i| (i % 13) as u8).collect();
+        assert_eq!(
+            decompress_tile(&lzw_encode(&raw), compression::LZW, 4096).unwrap(),
+            raw
+        );
+        // A complete stream shorter than the tile is returned as is; the
+        // caller decides whether a short tile is acceptable.
+        let short = decompress_tile(&lzw_encode(&raw[..100]), compression::LZW, 4096).unwrap();
+        assert_eq!(short, raw[..100]);
+    }
+
+    #[cfg(feature = "lzw")]
+    #[test]
+    fn lzw_bomb_is_bounded_by_the_tile_size() {
+        // 16 MiB of zeros compresses to a few KiB; only the tile is kept.
+        let bomb = lzw_encode(&vec![0u8; 16 << 20]);
+        assert!(bomb.len() < 1 << 20);
+        let out = decompress_tile(&bomb, compression::LZW, 4096).unwrap();
+        assert_eq!(out.len(), 4096);
     }
 
     #[test]
