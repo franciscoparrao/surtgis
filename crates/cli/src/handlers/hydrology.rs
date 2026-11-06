@@ -48,6 +48,40 @@ pub fn handle(
             done("Flow direction", &output, elapsed);
         }
 
+        #[cfg(all(feature = "cloud", feature = "projections"))]
+        HydrologyCommands::LakeCatchment {
+            lakes,
+            output,
+            dems,
+            id_field,
+            water_mask,
+            water_value,
+            window_km,
+            max_window_km,
+            pixel_size,
+            jobs,
+            retries,
+            masks_dir,
+            sink_depth,
+        } => {
+            let _ = (compress, mem_limit_bytes);
+            crate::handlers::lake_catchment::run(crate::handlers::lake_catchment::Args {
+                lakes,
+                id_field,
+                dems,
+                water_mask,
+                water_value,
+                window_km,
+                max_window_km,
+                pixel_size,
+                jobs,
+                retries,
+                output,
+                masks_dir,
+                sink_depth,
+            })?;
+        }
+
         HydrologyCommands::FlowAccumulation {
             input,
             output,
