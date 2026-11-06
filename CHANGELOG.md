@@ -8,6 +8,18 @@ breaking changes only ship in a major version and are called out under a
 
 ## [Unreleased]
 
+### Fixed
+
+- STAC search on Earth Search fetched the first page over and over: the
+  `next` cursor in the POST body of its `next` link was dropped when the
+  body was parsed into `StacSearchParams`, so `search_all` collected up to
+  `max_items` copies of the same items (1000 for a query with 6). Earth
+  Search sends a `next` link even on the last page, so every `--catalog
+  es` search was affected: slow, and many repeated tile requests. The link
+  body is now sent as-is, and pagination stops on a page with no new item.
+- The nightly STAC composite RAM job had never run: the CLI build lacked
+  the HDF5, NetCDF and ecCodes system libraries.
+
 ## [1.8.0] - 2026-11-06
 
 Lake catchments for permafrost lake districts, built for an Arctic lake

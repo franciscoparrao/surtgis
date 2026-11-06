@@ -71,8 +71,10 @@ while kill -0 "$PID" 2>/dev/null; do
     sleep 0.25
 done
 
-wait "$PID"
-STATUS=$?
+# Under `set -e` a bare failing `wait` would end the script here, before
+# the log tail below is printed.
+STATUS=0
+wait "$PID" || STATUS=$?
 
 if [ "$STATUS" -ne 0 ]; then
     echo "FAIL: surtgis exited with status $STATUS"
