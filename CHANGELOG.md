@@ -18,7 +18,9 @@ breaking changes only ship in a major version and are called out under a
   es` search was affected: slow, and many repeated tile requests. The link
   body is now sent as-is, and pagination stops on a page with no new item.
 - The nightly STAC composite RAM job had never run: the CLI build lacked
-  the HDF5, NetCDF and ecCodes system libraries.
+  the HDF5, NetCDF and ecCodes system libraries. Its leak check compared
+  two single RSS samples on a per-strip sawtooth and failed on noise; it
+  now compares window peaks and ignores growth under `LEAK_MIN_MB` (64).
 
 ## [1.8.0] - 2026-11-06
 
