@@ -8,6 +8,21 @@ breaking changes only ship in a major version and are called out under a
 
 ## [Unreleased]
 
+### Added
+
+- **`surtgis hydrology lake-catchment`**: catchments of many lakes at
+  once, with each lake as the outlet. Lakes come as polygons (or points
+  plus a water mask such as ESA WorldCover), DEMs as STAC collections or
+  local tiles (e.g. FABDEM); per lake a UTM window grows until the
+  catchment fits. One CSV row per lake and DEM; with several DEMs
+  `dem_spread` flags flat terrain where the catchment is uncertain.
+  `catchment_area_km2` is the connected (fill-and-spill) catchment;
+  `--sink-depth <m>` adds `local_catchment_area_km2`, where depressions
+  at least that deep keep their own drainage.
+  Library: `hydrology::lake_catchment` (the lake drains the depression
+  filling like the sea, so a lake in a closed basin keeps its basin) and
+  `hydrology::water_body_at`. Guide: *Delineate lake catchments*.
+
 ### Fixed
 
 - **The COG reader could not read any tile of `alos-dem` (ALOS AW3D30)

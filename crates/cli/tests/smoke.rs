@@ -1159,3 +1159,92 @@ fn verify_against_affected_stac_items_and_stac_export() {
         "/collections/sentinel-2-l2a/items/S2A_MSIL2A_20261027T145931_R039_T19KCA_20261027T211703"
     ));
 }
+
+/// `hydrology lake-catchment` on a local DEM: a crater whose rim (600 m
+/// radius) bounds the catchment of the lake at its centre.
+#[test]
+fn lake_catchment_crater_from_local_dem() {
+    if !(cfg!(feature = "cloud") && cfg!(feature = "projections")) {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (x0, y0, cell, n) = (500_000.0, 7_001_200.0, 30.0, 80usize);
+    let (cx, cy) = (x0 + 40.0 * cell, y0 - 40.0 * cell);
+    let dem = dir.path().join("dem.tif");
+    write_raster(
+        &dem,
+        n,
+        n,
+        GeoTransform::new(x0, y0, cell, -cell),
+        32619,
+        |r, c| {
+            let (x, y) = (x0 + (c as f64 + 0.5) * cell, y0 - (r as f64 + 0.5) * cell);
+            let d = ((x - cx).powi(2) + (y - cy).powi(2)).sqrt();
+            // rim at 600 m: inside falls to the centre, outside falls away
+            100.0 - (d - 600.0).abs() * 0.05 + ((r * 7 + c * 3) % 5) as f64 * 0.001
+        },
+    );
+    // Lake: a 150 m square at the centre, in the DEM's CRS (legacy crs member).
+    let lakes = dir.path().join("lakes.geojson");
+    std::fs::write(
+        &lakes,
+        format!(
+            r#"{{"type":"FeatureCollection","crs":{{"type":"name","properties":{{"name":"EPSG:32619"}}}},
+            "features":[{{"type":"Feature","properties":{{"name":"crater"}},"geometry":{{"type":"Polygon",
+            "coordinates":[[[{a},{b}],[{c},{b}],[{c},{d}],[{a},{d}],[{a},{b}]]]}}}}]}}"#,
+            a = cx - 75.0,
+            b = cy - 75.0,
+            c = cx + 75.0,
+            d = cy + 75.0
+        ),
+    )
+    .unwrap();
+    let out = dir.path().join("lakes.csv");
+    surtgis_cmd()
+        .args(["hydrology", "lake-catchment"])
+        .arg(&lakes)
+        .arg(&out)
+        .arg("--dem")
+        .arg(&dem)
+        .args([
+            "--id-field",
+            "name",
+            "--window-km",
+            "2.1",
+            "--max-window-km",
+            "2.1",
+            "--jobs",
+            "1",
+            "--sink-depth",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1/1 lake x DEM runs ok"));
+    let text = std::fs::read_to_string(&out).unwrap();
+    let mut rdr = csv::Reader::from_reader(text.as_bytes());
+    let hdr = rdr.headers().unwrap().clone();
+    let rec = rdr.records().next().unwrap().unwrap();
+    let get = |k: &str| {
+        rec.get(hdr.iter().position(|h| h == k).unwrap())
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(get("lake_id"), "crater");
+    assert_eq!(get("utm_epsg"), "32619");
+    assert_eq!(get("status"), "ok", "{text}");
+    let area: f64 = get("catchment_area_km2").parse().unwrap();
+    let want = std::f64::consts::PI * 0.6 * 0.6;
+    assert!(
+        (area - want).abs() / want < 0.10,
+        "catchment {area} km2 vs disc {want}"
+    );
+    // No side depression in the crater: local == connected.
+    let local: f64 = get("local_catchment_area_km2").parse().unwrap();
+    assert!(
+        (local - area).abs() < 1e-9,
+        "local {local} vs connected {area}"
+    );
+    let lake: f64 = get("lake_area_km2").parse().unwrap();
+    assert!((lake - 0.0225).abs() < 0.006, "lake {lake}");
+}

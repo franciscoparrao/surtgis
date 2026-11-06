@@ -31,6 +31,7 @@ mod hand;
 mod hypsometric;
 #[cfg(feature = "unstable")]
 mod laharz;
+mod lake_catchment;
 mod melton;
 mod nested_depressions;
 mod priority_flood;
@@ -60,6 +61,10 @@ pub use hand::{HandParams, hand};
 pub use hypsometric::hypsometric_integral;
 #[cfg(feature = "unstable")]
 pub use laharz::{LaharzFlowType, LaharzParams, laharz};
+pub use lake_catchment::{
+    LakeCatchment, LakeCatchmentParams, WaterBody, WaterBodyParams, lake_catchment,
+    mask_code as lake_mask_code, water_body_at,
+};
 pub use melton::{MeltonRuggedness, melton_ruggedness};
 pub use nested_depressions::{
     Depression, NestedDepressionParams, NestedDepressionResult, nested_depressions,

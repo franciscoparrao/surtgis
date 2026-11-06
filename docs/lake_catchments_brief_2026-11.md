@@ -10,17 +10,16 @@
 
 ## 1. Conclusión
 
-SurtGIS puede reemplazar a HydroLAKES para esta muestra, con una condición: los lagos deben entrar como polígonos, no solo como coordenadas. El criterio del brief ("área de cuenca dentro de un 20 % de HydroLAKES en la mayoría") **no se cumple** (6 de 20), pero ese criterio no sirve para decidir. Al norte de 60°N, HydroLAKES calcula las cuencas con la red de HydroSHEDS v1, que ahí sale del DEM HYDRO1k de 1 km (verificado en las dos documentaciones técnicas).
+SurtGIS ya reemplaza a HydroLAKES para esta muestra: el módulo `surtgis hydrology lake-catchment` está construido (guía en el libro: *Delineate lake catchments*). Recibe polígonos de lagos, uno o varios DEM (STAC o teselas locales como FABDEM) y escribe una tabla por lago y DEM. La condición sigue siendo que los lagos entren como polígonos; con solo coordenadas hace falta una máscara de agua, y esa detección es frágil.
 
-Hay tres argumentos para preferir SurtGIS:
+El criterio del brief ("área de cuenca dentro de un 20 % de HydroLAKES en la mayoría") **no se cumple** (3 de 20 con GLO-30), pero no sirve para decidir: al norte de 60°N, HydroLAKES calcula las cuencas con HydroSHEDS v1 sobre el DEM HYDRO1k de 1 km (verificado en las dos documentaciones técnicas).
 
-1. **Cobertura.** Solo el 20 % de las 1.539 ubicaciones de la muestra cae dentro de un lago de HydroLAKES (verificado). HydroLAKES deja sin atributos a la mayoría de los sitios.
-2. **Robustez.** Con el mismo polígono de lago, SurtGIS sobre dos DEM independientes (Copernicus GLO-30 y ALOS AW3D30) da cuencas que coinciden dentro del 20 % en 10 de 20 lagos, con mediana de razón 1,00 (verificado). En 7 de esos 10, HydroLAKES discrepa de ambos.
-3. **Inspección visual.** En los lagos donde HydroLAKES y SurtGIS más difieren, las cuencas de SurtGIS siguen las divisorias del relieve; las de HydroLAKES no son compatibles con el relieve a 30 m (inferido, muy probable; figura en la sección 3).
+1. **Cobertura**: solo el 20 % de las 1.539 ubicaciones cae dentro de un lago de HydroLAKES (verificado).
+2. **Robustez**: con el mismo lago, la cuenca conectada coincide dentro del 20 % entre GLO-30 y FABDEM en 18 de 20 lagos, y entre GLO-30 y AW3D30 en 11 de 20 (verificado).
+3. **Dos cuencas**: en terreno de permafrost hay que distinguir la cuenca **conectada** (toda cubeta que rebalsa al lago) de la **local** (las depresiones reales retienen su agua). Difieren hasta en dos órdenes de magnitud; el módulo reporta ambas.
+4. **DEM**: FABDEM en la franja boreal, GLO-30 por encima de 80°N, AW3D30 como segunda opinión (sección 4).
 
-Falta construir el módulo: hoy es un prototipo de unas 250 líneas sobre funciones existentes. El diseño mínimo y el esfuerzo están en la sección 5: alrededor de 3 a 4 semanas.
-
----
+Pendiente: volumen del lago y tiempo de residencia (sección 5), y una validación contra una referencia independiente de alta resolución.
 
 ## 2. Los puntos 1 a 5 del brief
 
@@ -63,51 +62,60 @@ Con la apertura morfológica final, la razón SurtGIS/HydroLAKES tiene mediana 1
 
 La detección automática es la parte frágil. WorldCover une lagos con ríos anchos: el lago 2 salió con 268 km² de cuenca antes de la apertura. La apertura corta esos ríos, pero parte lagos de forma estrecha: el lago 18 bajó de 15,4 a 1,0 km² de espejo. **Inferido (muy probable)**: el módulo debe recibir polígonos de lagos (HydroLAKES donde existan; una máscara propia u otro inventario donde no) y dejar la detección automática como respaldo con advertencia.
 
-### Área de cuenca (variante B, mismo lago)
+### Área de cuenca (variante B, mismo lago; módulo `lake-catchment`)
 
-| Comparación | Dentro del 20 % | Dentro del 50 % | Mediana de la razón |
-|---|---|---|---|
-| GLO-30 contra HydroLAKES | 6/20 | 6/20 | 1,11 |
-| AW3D30 contra HydroLAKES | 6/20 | 8/20 | — |
-| AW3D30 contra GLO-30 | **10/20** | **15/20** | **1,00** |
+> **Corrección.** La primera versión de este documento reportaba cuencas calculadas con un relleno que trataba al lago como una depresión más: un lago en una cubeta cerrada quedaba rellenado hasta la cota de rebalse, y su cubeta drenaba hacia el rebalse en vez de hacia el lago. El módulo final trata al lago como salida del relleno (como el mar) y reporta dos cuencas. Las cifras de esta sección son las corregidas; las anteriores quedan obsoletas.
 
-Por lago (km²):
+Dos cuencas por lago, en km²:
 
-| Lago | HydroLAKES | GLO-30 | AW3D30 | Lectura |
-|---|---|---|---|---|
-| 1 | 1,2 | 2,7 | 140,9 | DEM discrepan (fuga en AW3D30) |
-| 2 | 0,5 | 0,9 | 0,6 | cuenca diminuta |
-| 3 | 48,3 | 4,1 | 0,3 | terreno termokárstico plano; DEM discrepan |
-| 4 | 138,0 | 0,4 | 0,4 | DEM coinciden; HydroLAKES no |
-| 5 | 1,5 | 6,8 | 6,9 | DEM coinciden; HydroLAKES no |
-| 6 | 3,2 | 15,3 | 14,7 | DEM coinciden; HydroLAKES no |
-| 7 | 1,0 | 1,9 | 1,7 | DEM coinciden; HydroLAKES no |
-| 8 | 59,5 | 62,0 | 59,5 | **los tres coinciden** |
-| 9 | 3,4 | 3,0 | 3,7 | razonable |
-| 10 | 12,7 | 6,3 | 5,3 | DEM coinciden; HydroLAKES no |
-| 11 | 10,6 | 5,0 | 26,2 | DEM discrepan |
-| 12 | 123,5 | 9,6 | 11,8 | DEM casi coinciden; HydroLAKES no |
-| 13 | 12,6 | 39,6 | 39,7 | DEM coinciden; incluye un lago aguas arriba |
-| 14 | 33,7 | 29,5 | 40,2 | razonable |
-| 15 | 11,7 | 22,1 | 7,2 | DEM discrepan |
-| 16 | 56,6 | 62,8 | 70,4 | **coinciden** |
-| 17 | 1.197,5 | 1.924,6 | 1.140,1 | cuenca grande, DEM discrepan |
-| 18 | 152,8 | 150,5 | 152,2 | **los tres coinciden** |
-| 19 | 35,1 | 30,6 | 54,0 | DEM discrepan |
-| 20 | 57,6 | 109,5 | 111,9 | DEM coinciden; HydroLAKES no |
+- **Conectada** (`catchment_area_km2`): toda depresión se llena y rebalsa; una cubeta cuyo rebalse llega al lago le pertenece. Es la convención de HydroSHEDS y HydroLAKES.
+- **Local** (`local_catchment_area_km2`, `--sink-depth 1`): las depresiones de 1 m o más conservan su propio drenaje; las menores (ruido) se rellenan.
+
+| Lago | HydroLAKES | GLO-30 conectada | GLO-30 local | FABDEM conectada | FABDEM local | AW3D30 conectada | AW3D30 local | `dem_spread` |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 1,20 | 145,4 | 2,08 | 182,9 | 18,63 | 151,1 | 9,55 | 1,258 |
+| 2 | 0,50 | 1,03 | 1,03 | 0,92 | 0,92 | 150,9 | 3,35 | 164,810 |
+| 3 | 48,30 | 72,50 | 2,65 | 75,69 | 5,50 | 79,64 | 0,70 | 1,099 |
+| 4 | 138,0 | 0,43 | 0,43 | 0,43 | 0,43 | 0,40 | 0,39 | 1,081 |
+| 5 | 1,50 | 9,52 | 3,89 | 9,46 | 4,28 | 6,63 | 3,15 | 1,436 |
+| 6 | 3,20 | 15,31 | 12,51 | 14,70 | 14,70 | 14,41 | 2,13 | 1,062 |
+| 7 | 1,00 | 2,13 | 2,13 | 2,47 | 2,47 | 2,34 | 1,09 | 1,159 |
+| 8 | 59,50 | 61,52 | 28,63 | 63,73 | 63,73 | 77,24 | 6,85 | 1,256 |
+| 9 | 3,40 | 2,99 | 2,99 | 3,05 | 3,05 | 3,94 | 2,76 | 1,320 |
+| 10 | 12,70 | 6,22 | 5,03 | 6,15 | 4,98 | 6,16 | 2,66 | 1,012 |
+| 11 | 10,60 | 7,27 | 4,38 | 271,4 | 5,43 | 88,12 | 1,60 | 37,316 |
+| 12 | 123,5 | 11,06 | 9,67 | 12,16 | 12,16 | 12,20 | 2,49 | 1,104 |
+| 13 | 12,60 | 59,29 | 18,46 | 64,05 | 23,68 | 94,36 | 13,49 | 1,592 |
+| 14 | 33,70 | 50,88 | 31,87 | 59,40 | 44,62 | 184,7 | 6,96 | 3,630 |
+| 15 | 11,70 | 25,03 | 11,64 | 24,54 | 17,92 | 22,44 | 8,25 | 1,115 |
+| 16 | 56,60 | 134,6 | 44,86 | 159,5 | 94,57 | 132,6 | 49,67 | 1,203 |
+| 17 | 1.197,5 | 1.559,9 | 133,6 | 1.650,7 | 276,3 | 2.809,9 | 56,12 | 1,801 |
+| 18 | 152,8 | 150,9 | 87,56 | 147,2 | 88,25 | 153,8 | 27,94 | 1,044 |
+| 19 | 35,10 | 89,76 | 24,64 | 94,28 | 71,56 | 159,2 | 18,51 | 1,774 |
+| 20 | 57,60 | 263,2 | 111,6 | 247,5 | 136,4 | 291,5 | 63,83 | 1,177 |
+
+Acuerdo entre pares (dentro del 20 % / dentro del 50 % / mediana de la razón):
+
+| Par | Conectada | Local |
+|---|---|---|
+| GLO-30 contra FABDEM | **18/20** / 19/20 / 0,97 | 10/20 / 14/20 / 0,81 |
+| GLO-30 contra AW3D30 | 11/20 / 14/20 / 1,10 | 4/20 / 10/20 / 0,57 |
+| FABDEM contra AW3D30 | 11/20 / 15/20 / 1,04 | 2/20 / 7/20 / 0,46 |
+| GLO-30 contra HydroLAKES | 3/20 / 5/20 | 3/20 / 7/20 |
+
+Tiempo: los 20 lagos con los tres DEM (60 corridas) toman 9 minutos con 6 lagos en paralelo y 1,2 GB de RAM máxima (verificado).
 
 ![Seis lagos del benchmark](figures/lake_catchments_benchmark.png)
 
-*Cuenca GLO-30 en naranja, contorno de la cuenca AW3D30 en morado, lago de HydroLAKES en azul con borde rojo, punto de salida de HydroLAKES con una cruz.*
+*Figura de la primera pasada (relleno anterior): ilustra las cuencas de GLO-30 y AW3D30 frente a HydroLAKES en seis lagos; las áreas de sus títulos son las anteriores a la corrección.*
 
 ### Interpretación
 
-- **Verificado**: al norte de 60°N, HydroSHEDS v1 usó el DEM HYDRO1k de 1 km remuestreado a 15 segundos de arco (HydroSHEDS TechDoc, sec. 2.7 y 3.7), y `Wshd_area` de HydroLAKES sale de esa red (HydroLAKES TechDoc). Los polígonos de lagos de Rusia al norte de 60°N vienen de MODIS a 250 m.
-- **Inferido (muy probable)**: con celdas de 1 km, HydroLAKES no puede resolver cuencas de pocos km², y amarra algunos puntos de salida a drenes mayores. Los casos 4 y 12 de la figura lo muestran: dos DEM a 30 m dibujan la misma cuenca local, y HydroLAKES reporta 10 a 300 veces más.
-- **Inferido (probable)**: los desacuerdos entre GLO-30 y AW3D30 se concentran en terreno plano de termokarst (lagos 1, 3, 11, 15, 19), donde la red de drenaje depende de decímetros. Ahí la cuenca es incierta con cualquier DEM. El módulo debería reportarlo: correr dos DEM y marcar el lago cuando difieran más de un umbral.
-- **Supuesto**: que una referencia independiente de alta resolución confirmaría la lectura anterior. No se probó. El siguiente paso de validación sería comparar con MERIT-Hydro (90 m, global; requiere registro) o con NHDPlus HR en Alaska.
-
----
+- **Verificado**: al norte de 60°N, HydroSHEDS v1 usó el DEM HYDRO1k de 1 km remuestreado a 15 segundos de arco (HydroSHEDS TechDoc, sec. 2.7 y 3.7), y `Wshd_area` de HydroLAKES sale de esa red (HydroLAKES TechDoc). Los polígonos de lagos de Rusia al norte de 60°N vienen de MODIS a 250 m. HydroLAKES no es una referencia válida para cuencas de pocos km² en esta muestra.
+- **Verificado**: la cuenca **conectada** es robusta entre GLO-30 y FABDEM (18 de 20 dentro del 20 %) y razonablemente robusta con AW3D30 (11 de 20). La cuenca **local** depende mucho del DEM.
+- **Inferido (probable)**: FABDEM da cuencas locales mayores que GLO-30 justo en los lagos boreales (1, 8, 12, 16 y 19, en Siberia y Yukón), y casi iguales en los de tundra (2, 4, 6, 7, 9 y 10). Es lo esperado si el dosel crea pozos falsos en GLO-30. AW3D30, un modelo de superficie, da las cuencas locales más pequeñas por la misma razón.
+- **Inferido (muy probable)**: en el termokarst plano (lagos 1, 3, 11, 13, 17 y 19) la conectada y la local difieren en uno o dos órdenes de magnitud. Para el paper conviene reportar ambas, o justificar cuál es la relevante para la química del lago.
+- **Supuesto**: que una referencia independiente de alta resolución confirmaría la lectura anterior. No se probó; candidatos: MERIT-Hydro (90 m, requiere registro) o NHDPlus HR en Alaska.
 
 ## 4. Qué DEM usar
 
@@ -122,7 +130,7 @@ La intuición del brief se sostiene: GLO-30 para cuencas y ArcticDEM solo si hac
 
 ---
 
-## 5. Diseño mínimo: `surtgis hydrology lake-catchment`
+## 5. `surtgis hydrology lake-catchment`: diseño y estado
 
 **Entrada**
 - `--lakes`: polígonos (GPKG, GeoParquet o Shapefile) **o** puntos con `--water-mask worldcover` como respaldo.
@@ -150,7 +158,7 @@ Los polígonos de cuenca van opcionalmente en un GPKG. Cada salida lleva la prov
 | Volumen y residencia: profundidad desde la pendiente de ribera (Hollister y Milstead 2010) y volumen cónico; validar contra `Vol_total` de HydroLAKES en lagos grandes | no existe | 1 semana |
 | Docs, ejemplo y CLI | — | 2–3 días |
 
-**Total: unas 3 a 4 semanas** (inferido). Sin la parte de volumen y residencia, unas 2 semanas.
+**Estado (2026-11-05)**: construidos la función de librería, la extracción de lagos desde una máscara de agua, el orquestador (STAC y teselas locales, ventana adaptativa, varios DEM, paralelismo, reintentos, CSV y máscaras) y la cuenca local (`--sink-depth`). Faltan el caudal desde escorrentía y el volumen/residencia (unas 1,5 semanas) y la salida GeoParquet.
 
 **Riesgos**
 - La detección automática del lago (une o parte lagos) es el punto débil si no hay polígonos.

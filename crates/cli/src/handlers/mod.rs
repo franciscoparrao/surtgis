@@ -42,6 +42,8 @@ pub mod cog;
 #[cfg(feature = "cloud")]
 pub mod stac;
 
+#[cfg(all(feature = "cloud", feature = "projections"))]
+pub mod lake_catchment;
 #[cfg(feature = "projections")]
 pub mod reproject;
 

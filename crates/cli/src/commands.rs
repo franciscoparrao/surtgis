@@ -1291,6 +1291,61 @@ pub enum TerrainCommands {
 
 #[derive(Subcommand)]
 pub enum HydrologyCommands {
+    /// Catchments of many lakes, with each lake as the outlet
+    ///
+    /// For every lake: a UTM window around it, each --dem warped onto it,
+    /// the lake rasterized (polygons) or extracted from --water-mask
+    /// (points), depressions filled everywhere except the lake, D8, and the
+    /// union of everything that drains into any lake cell. The window
+    /// doubles while the catchment or the lake reaches its edge. Writes one
+    /// CSV row per lake and DEM; with two or more DEMs `dem_spread` = max/min
+    /// catchment area across them (large values flag flat, uncertain
+    /// terrain).
+    #[cfg(all(feature = "cloud", feature = "projections"))]
+    LakeCatchment {
+        /// Lakes: polygons (preferred) or points; GeoJSON, GeoPackage,
+        /// Shapefile or GeoParquet, any CRS with an EPSG code
+        lakes: PathBuf,
+        /// Output CSV
+        output: PathBuf,
+        /// DEM source, repeatable: `stac:<catalog>:<collection>[:asset]`
+        /// (e.g. stac:pc:cop-dem-glo-30, stac:pc:alos-dem) or a local
+        /// GeoTIFF/COG file or directory of tiles (e.g. FABDEM)
+        #[arg(long = "dem", required = true)]
+        dems: Vec<String>,
+        /// Attribute holding the lake id (default: feature id or index)
+        #[arg(long)]
+        id_field: Option<String>,
+        /// Water raster for point lakes, e.g. stac:pc:esa-worldcover:map
+        #[arg(long)]
+        water_mask: Option<String>,
+        /// Value of water in --water-mask (WorldCover: 80)
+        #[arg(long, default_value = "80")]
+        water_value: f64,
+        /// Initial window side, km (grown to 3x the lake's extent if larger)
+        #[arg(long, default_value = "16")]
+        window_km: f64,
+        /// Largest window side, km
+        #[arg(long, default_value = "256")]
+        max_window_km: f64,
+        /// Cell size of the working UTM grid, metres
+        #[arg(long, default_value = "30")]
+        pixel_size: f64,
+        /// Lakes processed in parallel
+        #[arg(long, default_value = "4")]
+        jobs: usize,
+        /// Attempts per remote tile
+        #[arg(long, default_value = "3")]
+        retries: u32,
+        /// Also write each catchment mask (0 out, 1 catchment, 2 lake) here
+        #[arg(long)]
+        masks_dir: Option<PathBuf>,
+        /// Also report the local catchment: depressions at least this deep
+        /// (m) keep their own drainage instead of spilling into the lake
+        /// (`catchment_area_km2` is the connected, fill-and-spill one)
+        #[arg(long)]
+        sink_depth: Option<f64>,
+    },
     /// Fill sinks / depressions in DEM (Planchon-Darboux 2001)
     FillSinks {
         /// Input DEM file

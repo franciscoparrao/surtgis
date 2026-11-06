@@ -17,6 +17,7 @@
 - [Tune the RAM budget](how-to/ram-budget.md)
 - [Verify where a raster came from](how-to/provenance.md)
 - [Work with foundation-model embeddings](how-to/embeddings.md)
+- [Delineate lake catchments](how-to/lake-catchments.md)
 - [Debug a stac composite using too much RAM](how-to/debug-stac-ram.md)
 - [Extract patches: points vs polygons](how-to/extract-patches.md)
 - [Prepare training data for a Geospatial Foundation Model](how-to/gfm-prithvi-prep.md)
