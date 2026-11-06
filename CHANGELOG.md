@@ -8,6 +8,12 @@ breaking changes only ship in a major version and are called out under a
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-11-06
+
+Lake catchments for permafrost lake districts, built for an Arctic lake
+chemistry study, and the COG reader can read ALOS AW3D30 on Planetary
+Computer again.
+
 ### Added
 
 - **`surtgis hydrology lake-catchment`**: catchments of many lakes at
