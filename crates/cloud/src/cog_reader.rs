@@ -632,6 +632,11 @@ impl CogReader {
         let auth = self.options.auth.as_ref();
         let batch_size = self.options.max_concurrent_fetches;
 
+        // Tiles decoded for this window are held here until it is
+        // assembled: the LRU cache alone would evict the first ones when a
+        // window spans more tiles than its capacity.
+        let mut fresh: std::collections::HashMap<usize, Vec<u8>> =
+            std::collections::HashMap::with_capacity(to_fetch.len());
         let mut fetch_count = 0usize;
         for chunk in to_fetch.chunks(batch_size) {
             let ranges: Vec<(u64, u64)> = chunk.iter().map(|&(_, o, l)| (o, l)).collect();
@@ -687,11 +692,7 @@ impl CogReader {
                     }
                 }
                 fetch_count += 1;
-                let key = TileKey {
-                    ifd_idx,
-                    tile_idx: file_tile_idx,
-                };
-                self.cache.insert(key, raw);
+                fresh.insert(file_tile_idx, raw);
             }
         }
 
@@ -721,7 +722,7 @@ impl CogReader {
                     ifd_idx,
                     tile_idx: ft,
                 };
-                let raw = match self.cache.get(&key) {
+                let raw = match fresh.get(&ft).or_else(|| self.cache.get(&key)) {
                     Some(data) => {
                         tiles_written += 1;
                         data.clone()
@@ -811,6 +812,10 @@ impl CogReader {
                     }
                 }
             }
+        }
+
+        for (tile_idx, raw) in fresh {
+            self.cache.insert(TileKey { ifd_idx, tile_idx }, raw);
         }
 
         // Bottom-up file: the window was assembled in file order (south at

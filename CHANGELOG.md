@@ -8,6 +8,31 @@ breaking changes only ship in a major version and are called out under a
 
 ## [Unreleased]
 
+### Added
+
+- **`lake-catchment` water masks**: `--water-mask` is repeatable and
+  tried in order, and a spec may carry its rule
+  (`stac:pc:jrc-gsw:occurrence>=50`, `stac:pc:esa-worldcover:map=80`), so
+  JRC GSW can be used to 78°N with WorldCover above it. New statuses
+  `review` (an elongated or trimmed water body: possibly a river or merged
+  lakes; `--min-compactness`) and `point_only` (no water near the point;
+  `--min-lake-cells`), new columns `lake_source` and `lake_compactness`;
+  `dem_spread` now also counts `review` and `point_only` rows.
+
+### Changed
+
+- `lake-catchment` reads each water mask and DEM from the coarsest COG
+  overview still at least as fine as the working grid: WorldCover (10 m)
+  is read at 20 m for the 30 m grid. Peak RAM on a 22-lake Arctic test
+  went from 4.6 GB to 1.2 GB.
+
+### Fixed
+
+- The COG reader failed with "tile … was requested but never fetched or
+  decoded" on any window spanning more tiles than its tile cache holds
+  (256 by default): the first decoded tiles were evicted before the
+  window was assembled. They are now held until assembly.
+
 ## [1.8.0] - 2026-11-06
 
 Lake catchments for permafrost lake districts, built for an Arctic lake
