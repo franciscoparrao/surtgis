@@ -297,8 +297,9 @@ cargo test --test cross_validation
 Each release is archived on Zenodo. Cite the software with the concept DOI
 [10.5281/zenodo.22970701](https://doi.org/10.5281/zenodo.22970701) (always the
 latest release) or a version DOI such as
-[10.5281/zenodo.23994320](https://doi.org/10.5281/zenodo.23994320) for v1.8.0
-(v1.7.0: [10.5281/zenodo.23986693](https://doi.org/10.5281/zenodo.23986693),
+[10.5281/zenodo.24025590](https://doi.org/10.5281/zenodo.24025590) for v1.8.1
+(v1.8.0: [10.5281/zenodo.23994320](https://doi.org/10.5281/zenodo.23994320),
+v1.7.0: [10.5281/zenodo.23986693](https://doi.org/10.5281/zenodo.23986693),
 v1.6.0: [10.5281/zenodo.23645303](https://doi.org/10.5281/zenodo.23645303),
 v1.5.2: [10.5281/zenodo.23050794](https://doi.org/10.5281/zenodo.23050794),
 v1.5.1: [10.5281/zenodo.23047088](https://doi.org/10.5281/zenodo.23047088),
