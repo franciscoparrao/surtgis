@@ -15,7 +15,7 @@ pub use any_raster::{AnyRaster, DataType};
 // and `surtgis_core::raster::dispatch_any!` work.
 pub use crate::dispatch_any;
 #[cfg(feature = "complex")]
-pub use complex::{complex_from_parts, complex_to_parts, magnitude, phase};
+pub use complex::{complex_from_amp_phase, complex_from_parts, complex_to_parts, magnitude, phase};
 pub use element::{RasterCell, RasterElement};
 pub use geotransform::GeoTransform;
 pub use grid::Raster;
