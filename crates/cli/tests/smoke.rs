@@ -1248,3 +1248,98 @@ fn lake_catchment_crater_from_local_dem() {
     let lake: f64 = get("lake_area_km2").parse().unwrap();
     assert!((lake - 0.0225).abs() < 0.006, "lake {lake}");
 }
+
+/// `hydrology lake-catchment` with point lakes and repeated `--water-mask`
+/// rules: a mask without water near the point falls through to the next
+/// one, and with no water at all the lake is the cell under the point.
+#[test]
+fn lake_catchment_point_lake_water_mask_fallback() {
+    if !(cfg!(feature = "cloud") && cfg!(feature = "projections")) {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (x0, y0, cell, n) = (500_000.0, 7_001_200.0, 30.0, 80usize);
+    let (cx, cy) = (x0 + 40.0 * cell, y0 - 40.0 * cell);
+    let gt = GeoTransform::new(x0, y0, cell, -cell);
+    let dem = dir.path().join("dem.tif");
+    write_raster(&dem, n, n, gt, 32619, |r, c| {
+        let (x, y) = (x0 + (c as f64 + 0.5) * cell, y0 - (r as f64 + 0.5) * cell);
+        let d = ((x - cx).powi(2) + (y - cy).powi(2)).sqrt();
+        100.0 - (d - 600.0).abs() * 0.05 + ((r * 7 + c * 3) % 5) as f64 * 0.001
+    });
+    // Dry everywhere, and a 150 m (5x5 cells) lake of 90 % occurrence
+    // over a 30 % background.
+    let dry = dir.path().join("dry.tif");
+    write_raster(&dry, n, n, gt, 32619, |_, _| 0.0);
+    let occ = dir.path().join("occurrence.tif");
+    write_raster(&occ, n, n, gt, 32619, |r, c| {
+        if (38..43).contains(&r) && (38..43).contains(&c) {
+            90.0
+        } else {
+            30.0
+        }
+    });
+    let lakes = dir.path().join("lakes.geojson");
+    std::fs::write(
+        &lakes,
+        format!(
+            r#"{{"type":"FeatureCollection","crs":{{"type":"name","properties":{{"name":"EPSG:32619"}}}},
+            "features":[{{"type":"Feature","properties":{{"name":"crater"}},"geometry":{{"type":"Point",
+            "coordinates":[{cx},{cy}]}}}}]}}"#
+        ),
+    )
+    .unwrap();
+    let run = |masks: &[String], out: &Path| {
+        let mut cmd = surtgis_cmd();
+        cmd.args(["hydrology", "lake-catchment"])
+            .arg(&lakes)
+            .arg(out)
+            .arg("--dem")
+            .arg(&dem)
+            .args([
+                "--id-field",
+                "name",
+                "--window-km",
+                "2.1",
+                "--max-window-km",
+                "2.1",
+                "--jobs",
+                "1",
+            ]);
+        for m in masks {
+            cmd.arg("--water-mask").arg(m);
+        }
+        cmd.assert().success();
+        let text = std::fs::read_to_string(out).unwrap();
+        let mut rdr = csv::Reader::from_reader(text.as_bytes());
+        let hdr = rdr.headers().unwrap().clone();
+        let rec = rdr.records().next().unwrap().unwrap();
+        hdr.iter()
+            .zip(rec.iter())
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect::<std::collections::HashMap<_, _>>()
+    };
+    let dry_spec = format!("{}>=50", dry.display());
+    let occ_spec = format!("{}>=50", occ.display());
+
+    // The dry mask falls through; the occurrence rule finds the 5x5 lake.
+    let row = run(&[dry_spec.clone(), occ_spec], &dir.path().join("a.csv"));
+    assert_eq!(row["status"], "ok", "{row:?}");
+    assert_eq!(row["lake_source"], "occurrence", "{row:?}");
+    assert!(row["message"].contains("no water"), "{row:?}");
+    let lake: f64 = row["lake_area_km2"].parse().unwrap();
+    assert!((lake - 0.0225).abs() < 0.006, "lake {lake}");
+    let area: f64 = row["catchment_area_km2"].parse().unwrap();
+    let want = std::f64::consts::PI * 0.6 * 0.6;
+    assert!(
+        (area - want).abs() / want < 0.10,
+        "catchment {area} vs {want}"
+    );
+
+    // No water in any mask: the cell under the point is the lake.
+    let row = run(&[dry_spec], &dir.path().join("b.csv"));
+    assert_eq!(row["status"], "point_only", "{row:?}");
+    assert_eq!(row["lake_source"], "point");
+    let lake: f64 = row["lake_area_km2"].parse().unwrap();
+    assert!((lake - 0.0009).abs() < 1e-6, "lake {lake}");
+}

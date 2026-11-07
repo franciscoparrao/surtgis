@@ -95,3 +95,34 @@ fn check_planar(planar: &str) {
         }
     }
 }
+
+/// A window spanning more tiles than the LRU tile cache holds (72 file
+/// tiles, capacity 4): the first decoded tiles used to be evicted before
+/// assembly and the read failed with "requested but never fetched".
+#[test]
+fn window_larger_than_tile_cache_reads_the_same() {
+    let path = fixture("aef_planar_bottomup_zstd.tif");
+    let mut full = CogReaderBlocking::open(&path, CogReaderOptions::default()).unwrap();
+    let small = CogReaderOptions {
+        cache_capacity: 4,
+        ..CogReaderOptions::default()
+    };
+    let mut tiny = CogReaderBlocking::open(&path, small).unwrap();
+    let m = full.metadata();
+    let (min_x, min_y, max_x, max_y) = m.geo_transform.bounds(m.width as usize, m.height as usize);
+    let bb = BBox::new(min_x, min_y, max_x, max_y);
+    let want: Vec<Raster<f64>> = full.read_bbox_bands(&bb, None).unwrap();
+    // Twice: the second read comes partly from the cache.
+    for _ in 0..2 {
+        let got: Vec<Raster<f64>> = tiny.read_bbox_bands(&bb, None).unwrap();
+        assert_eq!(got.len(), want.len());
+        for (g, w) in got.iter().zip(&want) {
+            assert!(
+                g.data()
+                    .iter()
+                    .zip(w.data())
+                    .all(|(a, b)| a == b || (a.is_nan() && b.is_nan()))
+            );
+        }
+    }
+}

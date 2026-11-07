@@ -29,8 +29,10 @@ pub struct Args {
     pub lakes: PathBuf,
     pub id_field: Option<String>,
     pub dems: Vec<String>,
-    pub water_mask: Option<String>,
+    pub water_masks: Vec<String>,
     pub water_value: f64,
+    pub min_lake_cells: usize,
+    pub min_compactness: f64,
     pub window_km: f64,
     pub max_window_km: f64,
     pub pixel_size: f64,
@@ -68,6 +70,58 @@ struct NamedSource {
     source: Source,
 }
 
+/// Which cells of a water raster are water.
+#[derive(Clone, Copy, Debug)]
+enum WaterRule {
+    Eq(f64),
+    Ge(f64),
+    Gt(f64),
+}
+
+impl WaterRule {
+    fn is_water(self, v: f64) -> bool {
+        v.is_finite()
+            && match self {
+                Self::Eq(x) => (v - x).abs() < 0.5,
+                Self::Ge(x) => v >= x,
+                Self::Gt(x) => v > x,
+            }
+    }
+}
+
+/// A water raster and its rule, e.g. `stac:pc:jrc-gsw:occurrence>=90`.
+struct WaterSource {
+    src: NamedSource,
+    rule: WaterRule,
+}
+
+/// Split an optional trailing rule (`>=v`, `>v`, `=v`) off a water-mask
+/// spec; without one, water is `== default`.
+fn parse_water(spec: &str, default: f64) -> Result<WaterSource> {
+    let (base, rule) = if let Some(i) = spec.rfind(">=") {
+        (
+            &spec[..i],
+            WaterRule::Ge(spec[i + 2..].trim().parse().context("water rule value")?),
+        )
+    } else if let Some(i) = spec.rfind('>') {
+        (
+            &spec[..i],
+            WaterRule::Gt(spec[i + 1..].trim().parse().context("water rule value")?),
+        )
+    } else if let Some(i) = spec
+        .rfind('=')
+        .filter(|&i| spec[i + 1..].trim().parse::<f64>().is_ok())
+    {
+        (&spec[..i], WaterRule::Eq(spec[i + 1..].trim().parse()?))
+    } else {
+        (spec, WaterRule::Eq(default))
+    };
+    Ok(WaterSource {
+        src: parse_source(base)?,
+        rule,
+    })
+}
+
 /// One input lake: id, geometry in EPSG:4326 and a representative point.
 struct Lake {
     id: String,
@@ -92,6 +146,8 @@ struct Row {
     local_catchment_area_km2: f64,
     catchment_mean_elev_m: f64,
     water_trimmed: Option<f64>,
+    lake_source: String,
+    lake_compactness: f64,
     edge_reached: bool,
     status: String,
     message: String,
@@ -108,9 +164,13 @@ pub fn run(a: Args) -> Result<()> {
         .iter()
         .map(|s| parse_source(s))
         .collect::<Result<_>>()?;
-    let water = a.water_mask.as_deref().map(parse_source).transpose()?;
+    let water: Vec<WaterSource> = a
+        .water_masks
+        .iter()
+        .map(|s| parse_water(s, a.water_value))
+        .collect::<Result<_>>()?;
     let lakes = read_lakes(&a.lakes, a.id_field.as_deref())?;
-    if lakes.iter().any(|l| l.is_point) && water.is_none() {
+    if lakes.iter().any(|l| l.is_point) && water.is_empty() {
         bail!(
             "{} has point lakes: give --water-mask (e.g. stac:pc:esa-worldcover:map) to extract \
              each lake, or pass lake polygons",
@@ -138,10 +198,7 @@ pub fn run(a: Args) -> Result<()> {
         lakes
             .par_iter()
             .flat_map_iter(|lake| {
-                let out: Vec<Row> = dems
-                    .iter()
-                    .map(|d| one(lake, d, water.as_ref(), &a))
-                    .collect();
+                let out: Vec<Row> = dems.iter().map(|d| one(lake, d, &water, &a)).collect();
                 let mut n = done.lock().unwrap_or_else(|e| e.into_inner());
                 *n += 1;
                 let summary: Vec<String> = out
@@ -171,7 +228,12 @@ pub fn run(a: Args) -> Result<()> {
     for id in lakes.iter().map(|l| &l.id) {
         let v: Vec<f64> = rows
             .iter()
-            .filter(|r| &r.lake_id == id && r.status == "ok" && r.catchment_area_km2 > 0.0)
+            .filter(|r| {
+                &r.lake_id == id
+                    && r.status != "error"
+                    && r.status != "edge"
+                    && r.catchment_area_km2 > 0.0
+            })
             .map(|r| r.catchment_area_km2)
             .collect();
         if v.len() >= 2 {
@@ -183,17 +245,22 @@ pub fn run(a: Args) -> Result<()> {
     }
     rows.sort_by(|x, y| x.lake_id.cmp(&y.lake_id).then(x.dem.cmp(&y.dem)));
     write_csv(&a.output, &rows, &spread)?;
-    let ok = rows.iter().filter(|r| r.status == "ok").count();
+    let count = |s: &str| rows.iter().filter(|r| r.status == s).count();
     println!(
-        "Lake catchments: {ok}/{} lake x DEM runs ok -> {}",
+        "Lake catchments: {}/{} lake x DEM runs ok ({} review, {} point_only, {} edge, {} error) -> {}",
+        count("ok"),
         rows.len(),
+        count("review"),
+        count("point_only"),
+        count("edge"),
+        count("error"),
         a.output.display()
     );
     Ok(())
 }
 
 /// Delineate one lake with one DEM, enlarging the window as needed.
-fn one(lake: &Lake, dem: &NamedSource, water: Option<&NamedSource>, a: &Args) -> Row {
+fn one(lake: &Lake, dem: &NamedSource, water: &[WaterSource], a: &Args) -> Row {
     let zone = (((lake.lon + 180.0) / 6.0).floor() as i64).clamp(0, 59) as u32 + 1;
     let epsg = if lake.lat >= 0.0 {
         32600 + zone
@@ -214,6 +281,12 @@ fn one(lake: &Lake, dem: &NamedSource, water: Option<&NamedSource>, a: &Args) ->
         local_catchment_area_km2: f64::NAN,
         catchment_mean_elev_m: f64::NAN,
         water_trimmed: None,
+        lake_source: if lake.is_point {
+            String::new()
+        } else {
+            "polygon".into()
+        },
+        lake_compactness: f64::NAN,
         edge_reached: false,
         status: "error".into(),
         message: String::new(),
@@ -247,23 +320,69 @@ fn one(lake: &Lake, dem: &NamedSource, water: Option<&NamedSource>, a: &Args) ->
             };
             let z = build_on_grid(&dem.source, &grid, Resampling::Nearest, a.retries)
                 .with_context(|| format!("DEM {}", dem.label))?;
+            let mut notes: Vec<String> = Vec::new();
             let lake_mask = match &lake_utm {
                 Some(g) => rasterize_lake(g, &grid, cx, cy)?,
                 None => {
-                    let w = water.expect("checked in run()");
-                    let wm = build_on_grid(&w.source, &grid, Resampling::Nearest, a.retries)
-                        .with_context(|| format!("water mask {}", w.label))?;
-                    let mut bin = Raster::<u8>::new(n, n);
-                    bin.set_transform(grid.transform);
-                    for (o, v) in bin.data_mut().iter_mut().zip(wm.data().iter()) {
-                        *o = u8::from((*v - a.water_value).abs() < 0.5);
-                    }
+                    // Water masks in order; the first that has data here and a
+                    // water body of at least --min-lake-cells near the point wins.
                     let (c, r) = grid_cell(&grid, cx, cy);
-                    let wb = water_body_at(&bin, r, c, WaterBodyParams::default())
-                        .context("no water within 10 cells of the point")?;
-                    row.water_trimmed =
-                        Some(wb.raw_component_cells as f64 / wb.cells.max(1) as f64);
-                    wb.mask
+                    let mut found = None;
+                    let mut any_mask = false;
+                    for w in water {
+                        let wm = match build_on_grid(
+                            &w.src.source,
+                            &grid,
+                            Resampling::Nearest,
+                            a.retries,
+                        ) {
+                            Ok(m) => m,
+                            Err(e) => {
+                                notes.push(format!("{}: {e:#}", w.src.label));
+                                continue;
+                            }
+                        };
+                        any_mask = true;
+                        let mut bin = Raster::<u8>::new(n, n);
+                        bin.set_transform(grid.transform);
+                        for (o, v) in bin.data_mut().iter_mut().zip(wm.data().iter()) {
+                            *o = u8::from(w.rule.is_water(*v));
+                        }
+                        match water_body_at(&bin, r, c, WaterBodyParams::default()) {
+                            Some(wb) if wb.cells >= a.min_lake_cells => {
+                                found = Some((wb, w.src.label.clone()));
+                                break;
+                            }
+                            Some(wb) => notes.push(format!(
+                                "{}: water body of {} cells (< --min-lake-cells {})",
+                                w.src.label, wb.cells, a.min_lake_cells
+                            )),
+                            None => {
+                                notes.push(format!("{}: no water within 10 cells", w.src.label))
+                            }
+                        }
+                    }
+                    if found.is_none() && !any_mask {
+                        // Every mask failed to load: an error, not a lake
+                        // without a polygon.
+                        bail!("no water mask could be read: {}", notes.join("; "));
+                    }
+                    match found {
+                        Some((wb, label)) => {
+                            row.water_trimmed =
+                                Some(wb.raw_component_cells as f64 / wb.cells.max(1) as f64);
+                            row.lake_source = label;
+                            wb.mask
+                        }
+                        None => {
+                            // No usable polygon: the cell under the point is the lake.
+                            row.lake_source = "point".into();
+                            let mut m = Raster::<u8>::new(n, n);
+                            m.set_transform(grid.transform);
+                            m.data_mut()[(r, c)] = 1;
+                            m
+                        }
+                    }
                 }
             };
             let lc = lake_catchment(&z, &lake_mask, LakeCatchmentParams::default())?;
@@ -281,14 +400,43 @@ fn one(lake: &Lake, dem: &NamedSource, water: Option<&NamedSource>, a: &Args) ->
                     row.local_catchment_area_km2 = local.catchment_area / 1e6;
                 }
                 row.edge_reached = edge;
-                row.status = if edge { "edge".into() } else { "ok".into() };
+                row.lake_compactness = if lc.lake_perimeter > 0.0 {
+                    4.0 * std::f64::consts::PI * lc.lake_area / lc.lake_perimeter.powi(2)
+                } else {
+                    f64::NAN
+                };
+                let from_mask = lake.is_point && row.lake_source != "point";
+                let riverish = from_mask
+                    && (row.lake_compactness < a.min_compactness
+                        || row.water_trimmed.is_some_and(|t| t > 2.0));
+                row.status = if edge {
+                    "edge".into()
+                } else if row.lake_source == "point" {
+                    "point_only".into()
+                } else if riverish {
+                    "review".into()
+                } else {
+                    "ok".into()
+                };
                 if edge {
-                    row.message = format!(
+                    notes.push(format!(
                         "catchment still reaches the edge of a {win_km} km window \
                          (--max-window-km {}); areas are lower bounds",
                         a.max_window_km
-                    );
+                    ));
                 }
+                if row.lake_source == "point" {
+                    notes.push("no water polygon: the lake is the cell under the point".into());
+                }
+                if riverish {
+                    notes.push(format!(
+                        "elongated or trimmed water body (compactness {:.3}, trimmed {:.1}); \
+                         check it is not a river or a merged lake",
+                        row.lake_compactness,
+                        row.water_trimmed.unwrap_or(1.0)
+                    ));
+                }
+                row.message = notes.join("; ");
                 if let Some(dir) = &a.masks_dir {
                     let name = format!("{}_{}.tif", sanitize(&lake.id), sanitize(&dem.label));
                     let mut m = lc.mask.clone();
@@ -452,7 +600,16 @@ fn build_on_grid(
                             max_x: b.max_x,
                             max_y: b.max_y,
                         };
-                        match reader.read_bbox::<f64>(&bb, None) {
+                        // Coarsest overview still at least as fine as the
+                        // working grid: a 10 m water mask is read at 20 m for
+                        // a 30 m grid, and a big window does not pull in
+                        // billions of native cells.
+                        let ov = coarsest_fine_enough(
+                            &reader,
+                            src_epsg,
+                            grid.transform.pixel_width.abs(),
+                        );
+                        match reader.read_bbox::<f64>(&bb, ov) {
                             Ok(piece) => merge(&piece, src_epsg),
                             // the item's footprint does not reach the window
                             Err(e) if e.to_string().contains("does not intersect") => Ok(()),
@@ -490,6 +647,30 @@ fn build_on_grid(
         bail!("no data in the window");
     }
     Ok(out)
+}
+
+/// Index of the coarsest overview whose pixel is no larger than `target_m`
+/// metres (`None` = full resolution). Geographic sources are judged by the
+/// north-south size of a degree, the stricter axis.
+fn coarsest_fine_enough(reader: &CogReaderBlocking, src_epsg: u32, target_m: f64) -> Option<usize> {
+    let meta = reader.metadata();
+    let full_px = meta.geo_transform.pixel_width.abs();
+    let to_m = if src_epsg == 4326 || (4000..5000).contains(&src_epsg) {
+        111_320.0
+    } else {
+        1.0
+    };
+    let mut best = None;
+    for ov in reader.overviews() {
+        if ov.width == 0 {
+            continue;
+        }
+        let px_m = full_px * (meta.width as f64 / ov.width as f64) * to_m;
+        if px_m <= target_m * 1.001 {
+            best = Some(ov.index);
+        }
+    }
+    best
 }
 
 /// `stac:<catalog>:<collection>[:asset]`, or a local file or directory.
@@ -683,6 +864,8 @@ fn write_csv(
         "local_catchment_area_km2",
         "catchment_mean_elev_m",
         "dem_spread",
+        "lake_source",
+        "lake_compactness",
         "water_trimmed",
         "edge_reached",
         "status",
@@ -712,6 +895,8 @@ fn write_csv(
             f(r.local_catchment_area_km2, 4),
             f(r.catchment_mean_elev_m, 2),
             spread.get(&r.lake_id).map(|v| f(*v, 3)).unwrap_or_default(),
+            r.lake_source.clone(),
+            f(r.lake_compactness, 3),
             r.water_trimmed.map(|v| f(v, 2)).unwrap_or_default(),
             r.edge_reached.to_string(),
             r.status.clone(),
@@ -720,4 +905,26 @@ fn write_csv(
     }
     w.flush()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn water_rules_parse_and_classify() {
+        let w = parse_water("stac:pc:jrc-gsw:occurrence>=50", 80.0).unwrap();
+        assert_eq!(w.src.label, "jrc-gsw");
+        assert!(w.rule.is_water(50.0) && !w.rule.is_water(49.9));
+        let w = parse_water("stac:pc:jrc-gsw:occurrence>50", 80.0).unwrap();
+        assert!(!w.rule.is_water(50.0) && w.rule.is_water(51.0));
+        let w = parse_water("stac:pc:esa-worldcover:map=80", 0.0).unwrap();
+        assert_eq!(w.src.label, "esa-worldcover");
+        assert!(w.rule.is_water(80.0) && !w.rule.is_water(90.0));
+        // No rule: water is == --water-value.
+        let w = parse_water("stac:pc:esa-worldcover:map", 80.0).unwrap();
+        assert!(w.rule.is_water(80.0) && !w.rule.is_water(70.0));
+        assert!(!w.rule.is_water(f64::NAN));
+        assert!(parse_water("stac:pc:jrc-gsw:occurrence>=x", 80.0).is_err());
+    }
 }

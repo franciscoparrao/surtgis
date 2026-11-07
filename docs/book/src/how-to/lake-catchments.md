@@ -61,7 +61,15 @@ surtgis hydrology lake-catchment lakes.gpkg catchments.csv \
 - A `--dem` is either `stac:<catalog>:<collection>[:asset]` or a local
   GeoTIFF/COG file or directory of tiles. FABDEM, for example, is
   distributed as 1-degree tiles.
-- Point lakes need `--water-mask stac:pc:esa-worldcover:map` (water = 80).
+- Point lakes need a `--water-mask`. It is repeatable: masks are tried in
+  order, and the first one with data and a water body of at least
+  `--min-lake-cells` near the point is used. A rule may follow the spec,
+  for example
+  `--water-mask 'stac:pc:jrc-gsw:occurrence>=50' --water-mask 'stac:pc:esa-worldcover:map=80'`.
+  JRC Global Surface Water ends at 78°N and ESA WorldCover at 82.75°N, so
+  the second mask covers the high Arctic. Without a rule, water is
+  `--water-value` (80, WorldCover's class). A mask that cannot be read
+  for a lake is skipped and named in `message`.
 - `--masks-dir` writes each catchment as a raster: 0 outside,
   1 catchment, 2 lake.
 
@@ -69,9 +77,15 @@ The CSV has one row per lake and DEM, with these columns:
 
 - `lake_area_km2`, `lake_perimeter_km`, `lake_elev_m`;
 - `catchment_area_km2`, `catchment_lake_ratio`, `catchment_mean_elev_m`;
-- `window_km` and `status`, which is `ok`, `edge` (the catchment still
-  reached the edge of the largest window, so the area is a lower bound) or
-  `error`;
+- `window_km` and `status`, which is `ok`; `review` (a point lake whose
+  water body has a compactness 4πA/P² below `--min-compactness`, or was
+  cut by the opening to under half its component: possibly a river or
+  merged lakes, check it); `point_only` (no mask had water near the point,
+  so the lake is the single cell under it and the catchment is that
+  cell's); `edge` (the catchment still reached the edge of the largest
+  window, so the area is a lower bound); or `error`;
+- `lake_source`: `polygon`, the label of the water mask that gave the
+  lake (e.g. `jrc-gsw`), or `point`; and `lake_compactness`;
 - `dem_spread`, present with two or more DEMs: the largest catchment area
   divided by the smallest. Values well above 1 flag flat terrain where the
   catchment is uncertain with any DEM;
