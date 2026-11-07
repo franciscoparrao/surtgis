@@ -1316,12 +1316,24 @@ pub enum HydrologyCommands {
         /// Attribute holding the lake id (default: feature id or index)
         #[arg(long)]
         id_field: Option<String>,
-        /// Water raster for point lakes, e.g. stac:pc:esa-worldcover:map
-        #[arg(long)]
-        water_mask: Option<String>,
-        /// Value of water in --water-mask (WorldCover: 80)
+        /// Water raster for point lakes, repeatable, tried in order (the
+        /// first with data and a water body near the point wins). A rule
+        /// may follow the spec: `stac:pc:jrc-gsw:occurrence>=90` (JRC GSW,
+        /// to 78°N), `stac:pc:esa-worldcover:map=80` (to 82.75°N)
+        #[arg(long = "water-mask")]
+        water_masks: Vec<String>,
+        /// Water value for --water-mask specs without a rule (WorldCover: 80)
         #[arg(long, default_value = "80")]
         water_value: f64,
+        /// Water bodies smaller than this (cells) are not used as the
+        /// lake; the cell under the point is (status point_only)
+        #[arg(long, default_value = "4")]
+        min_lake_cells: usize,
+        /// Water-mask lakes below this compactness 4πA/P² (or cut by the
+        /// opening to under half their component) get status review:
+        /// possibly a river or merged lakes
+        #[arg(long, default_value = "0.06")]
+        min_compactness: f64,
         /// Initial window side, km (grown to 3x the lake's extent if larger)
         #[arg(long, default_value = "16")]
         window_km: f64,
