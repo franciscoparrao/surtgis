@@ -8,6 +8,12 @@ breaking changes only ship in a major version and are called out under a
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-11-06
+
+Every Earth Search query fetched its first page up to 1000 times, the COG
+reader failed on windows larger than its tile cache, and lake catchments
+take point lakes from several water masks in order.
+
 ### Added
 
 - **`lake-catchment` water masks**: `--water-mask` is repeatable and
