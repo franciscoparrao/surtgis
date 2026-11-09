@@ -24,6 +24,12 @@
 pub mod channel_steepness;
 pub mod chi;
 pub mod concavity;
+/// Divide migration (Gilbert metrics). **Experimental** (feature
+/// `unstable`): the current implementation samples χ/relief at ridge
+/// pixels rather than at channel heads (Forte & Whipple 2018), so its
+/// output is not yet scientifically meaningful on real topography
+/// (audit CR-2). Gated out of the 1.0 stability guarantee until fixed.
+#[cfg(feature = "unstable")]
 pub mod divide_migration;
 pub mod export;
 pub mod knickpoint;
@@ -34,6 +40,7 @@ pub mod swath_profile;
 pub use channel_steepness::{KsnError, KsnParams, KsnResult, KsnSegment, channel_steepness};
 pub use chi::{ChiError, ChiParams, chi_transform};
 pub use concavity::{ConcavityError, ConcavityParams, ConcavityResult, concavity_index};
+#[cfg(feature = "unstable")]
 pub use divide_migration::{
     DivideMigrationError, DivideMigrationParams, DivideSegment, divide_migration,
 };
@@ -49,3 +56,19 @@ pub use long_profile::{
 };
 pub use stream_traversal::{StreamGraph, StreamGraphError, build_stream_graph};
 pub use swath_profile::{SwathError, SwathParams, SwathProfile, SwathStats, swath_profile};
+
+/// Stable 64-bit mix (SplitMix64 finaliser over the concatenated parts).
+/// Used as the resampling PRNG of the bootstrap confidence intervals:
+/// unlike `std`'s `DefaultHasher`, whose algorithm is not specified to be
+/// stable across Rust releases, this is a fixed function of `(seed,
+/// group, boot, k)` and reproduces the same CI on any toolchain.
+pub(crate) fn stable_mix(parts: &[u64]) -> u64 {
+    let mut z: u64 = 0x9E37_79B9_7F4A_7C15;
+    for &p in parts {
+        z = z.wrapping_add(p).wrapping_add(0x9E37_79B9_7F4A_7C15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+    }
+    z
+}

@@ -1,5 +1,7 @@
 # SurtGIS
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22970701.svg)](https://doi.org/10.5281/zenodo.22970701)
+
 **High-performance geospatial analysis library and CLI in Rust.**
 
 127 algorithms (56 of them also in the browser via WebAssembly), 90 CLI subcommands, streaming I/O for arbitrarily large DEMs, native CRS reprojection, and an end-to-end satellite composite pipeline — all from a single binary with no external dependencies.
@@ -12,18 +14,26 @@
 
 ## Quick start
 
-Install from crates.io:
+Install from crates.io (`--features server` adds `surtgis serve`):
 
 ```bash
 cargo install surtgis
 ```
 
-Or build the latest from git — name the `surtgis` package explicitly (the repo
-ships two binaries, `surtgis` and `surtgis-gui`):
+Or download a precompiled binary from the
+[GitHub Releases](https://github.com/franciscoparrao/surtgis/releases) (Linux,
+macOS, Windows), or install the Python package (`pip install surtgis`), or
+build from git — name the `surtgis` package explicitly (the repo ships two
+binaries, `surtgis` and `surtgis-gui`):
 
 ```bash
 cargo install --git https://github.com/franciscoparrao/surtgis surtgis
 ```
+
+> The crates.io release of the CLI has no `ecw` feature: the native ECW
+> decoder crate is not published while its licensing review is open. The
+> GitHub Release binaries include it, and so does a `--git` build with
+> `--features ecw`.
 
 The default feature set reads NetCDF/HDF5, so the system libraries must be
 present (the `netcdf-sys` / `hdf5-metno-sys` build scripts need them):
@@ -37,6 +47,16 @@ brew install hdf5 netcdf
 
 To skip those (and the C dependencies entirely), build without default
 features: `cargo install surtgis --no-default-features --features cloud,projections`.
+
+Some subcommands are opt-in features, **not** included by default —
+installing without them yields `error: unrecognized subcommand`:
+
+```bash
+# `surtgis flow run` — debris-flow solver (EXPERIMENTAL API)
+cargo install surtgis --features flow
+# `surtgis relief-3d` — 3D rayshader-style renders (pulls a wgpu stack)
+cargo install surtgis --features relief-3d
+```
 
 End-to-end: download a cloud-free Sentinel-2 composite over a small
 Chilean bbox (5×5 km, one month) and compute NDVI. The example below
@@ -98,6 +118,8 @@ See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 - **Cloud native** — COG reader with HTTP range requests, STAC client for Planetary Computer / Earth Search
 - **Cross-platform** — compiles to native (Rayon), WebAssembly (browser), Python (PyO3)
 - **No external dependencies** — native GeoTIFF I/O with DEFLATE compression, no GDAL required
+- **Verifiable outputs** — every file embeds its provenance (command, hashed inputs, output digest); `surtgis verify` checks it, and a CI contract keeps results bit-identical across thread counts and runs
+- **Embeddings as rasters** — AlphaEarth/TESSERA-style stacks: similarity maps, PCA false colour and per-band features in the CLI, and `similarity`/`pca` tiles in `surtgis serve`; reads the AlphaEarth COGs as published (ZSTD, band-interleaved, bottom-up)
 
 ## Architecture
 
@@ -269,6 +291,30 @@ cargo test --workspace
 # Cross-validation against GDAL/GRASS
 cargo test --test cross_validation
 ```
+
+## Reproducibility
+
+Each release is archived on Zenodo. Cite the software with the concept DOI
+[10.5281/zenodo.22970701](https://doi.org/10.5281/zenodo.22970701) (always the
+latest release) or a version DOI such as
+[10.5281/zenodo.24025590](https://doi.org/10.5281/zenodo.24025590) for v1.8.1
+(v1.8.0: [10.5281/zenodo.23994320](https://doi.org/10.5281/zenodo.23994320),
+v1.7.0: [10.5281/zenodo.23986693](https://doi.org/10.5281/zenodo.23986693),
+v1.6.0: [10.5281/zenodo.23645303](https://doi.org/10.5281/zenodo.23645303),
+v1.5.2: [10.5281/zenodo.23050794](https://doi.org/10.5281/zenodo.23050794),
+v1.5.1: [10.5281/zenodo.23047088](https://doi.org/10.5281/zenodo.23047088),
+v1.5.0: [10.5281/zenodo.23042861](https://doi.org/10.5281/zenodo.23042861),
+v1.4.0: [10.5281/zenodo.22970702](https://doi.org/10.5281/zenodo.22970702)); the
+paper citation is in `CITATION.cff`.
+
+```bash
+cargo build --release
+cargo test
+```
+
+Algorithms are deterministic; the same input and parameters produce identical output
+across runs and platforms. Pin the toolchain via `Cargo.lock` for bit-level
+reproducibility, and see the CHANGELOG for the version-to-result mapping.
 
 ## License
 

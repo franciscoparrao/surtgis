@@ -39,6 +39,7 @@ const DEDUP_TOLERANCE: f64 = 1e-6;
 
 /// Parameters for Ordinary Kriging interpolation
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct OrdinaryKrigingParams {
     /// Output raster rows
     pub rows: usize,
@@ -70,6 +71,7 @@ impl Default for OrdinaryKrigingParams {
 }
 
 /// Result of Ordinary Kriging interpolation
+#[non_exhaustive]
 pub struct KrigingResult {
     /// Interpolated values
     pub estimate: Raster<f64>,

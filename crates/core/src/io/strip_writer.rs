@@ -17,9 +17,13 @@ use tiff::encoder::compression::DeflateLevel;
 use tiff::encoder::{TiffEncoder, TiffKindStandard};
 use tiff::tags::{CompressionMethod, PhotometricInterpretation, Tag};
 
-use super::native::{deflate_compress_bytes, flatten_native_bytes, write_geo_metadata_tags};
+use super::native::{
+    deflate_compress_bytes, flatten_native_bytes, provenance_items_with_output,
+    write_gdal_metadata_tag, write_geo_metadata_tags,
+};
 use crate::crs::CRS;
 use crate::error::{Error, Result};
+use crate::provenance::DataDigest;
 use crate::raster::GeoTransform;
 
 /// Configuration for streaming GeoTIFF writing.
@@ -125,6 +129,7 @@ where
 
     let rps = config.rows_per_strip as usize;
     let num_strips = (config.rows + rps - 1) / rps;
+    let mut digest = DataDigest::new(config.rows, config.cols, 1, "f32");
     for strip_idx in 0..num_strips {
         let strip_rows = if strip_idx == num_strips - 1 {
             config.rows - strip_idx * rps
@@ -133,10 +138,15 @@ where
         };
         let data = produce_strip(strip_idx, strip_rows)?;
         let strip_f32: Vec<f32> = data.iter().map(|&v| v as f32).collect();
+        digest.update(&flatten_native_bytes(&strip_f32));
         image
             .write_strip(&strip_f32)
             .map_err(|e| Error::Other(format!("Cannot write strip {}: {}", strip_idx, e)))?;
     }
+    // Tags may be written until `finish()`: the provenance record needs the
+    // digest of the strips just written.
+    let items = provenance_items_with_output(digest.finish(), None);
+    write_gdal_metadata_tag(image.encoder(), &items)?;
     image
         .finish()
         .map_err(|e| Error::Other(format!("Cannot finish TIFF image: {}", e)))?;
@@ -210,6 +220,7 @@ where
     // per-strip) — never one stream spanning the whole image.
     let mut strip_offsets: Vec<u32> = Vec::with_capacity(num_strips);
     let mut strip_byte_counts: Vec<u32> = Vec::with_capacity(num_strips);
+    let mut digest = DataDigest::new(config.rows, config.cols, 1, "f32");
     for strip_idx in 0..num_strips {
         let strip_rows = if strip_idx == num_strips - 1 {
             config.rows - strip_idx * rps
@@ -219,6 +230,7 @@ where
         let data = produce_strip(strip_idx, strip_rows)?;
         let strip_f32: Vec<f32> = data.iter().map(|&v| v as f32).collect();
         let raw_bytes = flatten_native_bytes(&strip_f32);
+        digest.update(&raw_bytes);
         let compressed = deflate_compress_bytes(&raw_bytes, DeflateLevel::Balanced)?;
 
         let offset = dir
@@ -245,6 +257,8 @@ where
         config.crs.as_ref(),
         config.nodata,
     )?;
+    let items = provenance_items_with_output(digest.finish(), None);
+    write_gdal_metadata_tag(&mut dir, &items)?;
 
     dir.finish()
         .map_err(|e| Error::Other(format!("Cannot finish TIFF directory: {}", e)))?;
@@ -302,13 +316,10 @@ mod tests {
         // TempDir cleans up on drop.
     }
 
-    /// Regression for the `compress: true` branch: it still buffers the
-    /// full image (a real `tiff`-crate API limitation, documented at the
-    /// call site) rather than streaming strip-by-strip, but it must
-    /// remain byte-for-byte correct after being split out of the
-    /// uncompressed streaming path. Single strip (whole image), so it
-    /// doesn't trip the multi-strip corruption documented in
-    /// `known_bug_multi_strip_deflate_corrupts_rows_after_first_strip`.
+    /// Regression for the `compress: true` branch: it now streams
+    /// strip-by-strip (hand-driven `DirectoryEncoder`, one compressed
+    /// strip in memory at a time) and must remain byte-for-byte correct
+    /// after being split out of the uncompressed streaming path.
     #[test]
     fn test_write_and_read_back_compressed() {
         let dir = tempfile::tempdir().unwrap();

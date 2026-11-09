@@ -5,6 +5,7 @@
 
 use super::GeoTiffOptions;
 use crate::error::{Error, Result};
+use crate::provenance::{self, DataDigest, OutputRecord, Provenance};
 use crate::raster::{AnyRaster, GeoTransform, Raster, RasterElement};
 use std::any::{Any, TypeId};
 use std::fs::File;
@@ -13,7 +14,7 @@ use std::path::Path;
 use tiff::decoder::{Decoder, DecodingResult, Limits};
 use tiff::encoder::colortype::{
     ColorType, Gray8, Gray16, Gray32, Gray32Float, Gray64, Gray64Float, GrayI8, GrayI16, GrayI32,
-    GrayI64, RGB32Float, RGBA32Float,
+    GrayI64, RGB8, RGB16, RGB32Float, RGBA8, RGBA16, RGBA32Float,
 };
 use tiff::encoder::compression::DeflateLevel;
 use tiff::encoder::{
@@ -30,6 +31,7 @@ where
     T: RasterElement,
     P: AsRef<Path>,
 {
+    provenance::observe_input(&path.as_ref().display().to_string());
     let file = File::open(path.as_ref())?;
     let len = file.metadata().ok().map(|m| m.len());
     decode_geotiff(file, band, len)
@@ -64,6 +66,7 @@ where
 /// rather than failing the read — see [`decode_geotiff_any`] for the
 /// mapping.
 pub fn read_geotiff_any<P: AsRef<Path>>(path: P, band: Option<usize>) -> Result<AnyRaster> {
+    provenance::observe_input(&path.as_ref().display().to_string());
     let file = File::open(path.as_ref())?;
     let len = file.metadata().ok().map(|m| m.len());
     decode_geotiff_any(file, band, len)
@@ -89,6 +92,7 @@ where
     T: RasterElement,
     P: AsRef<Path>,
 {
+    provenance::observe_input(&path.as_ref().display().to_string());
     let file = File::open(path.as_ref())?;
     let len = file.metadata().ok().map(|m| m.len());
     decode_geotiff_bands(file, len)
@@ -146,6 +150,29 @@ fn decode_raw<R>(reader: R, source_len: Option<u64>) -> Result<RawDecoded>
 where
     R: std::io::Read + std::io::Seek,
 {
+    // The `tiff` decoder can *panic* (not just return Err) on malformed
+    // input — e.g. a `SampleFormat` tag with count 0 indexes an empty Vec
+    // (tiff 0.10.3, image.rs:153; found by the nightly fuzzer). This path
+    // decodes untrusted bytes (COGs from arbitrary third-party STAC
+    // catalog hrefs), so an uncaught panic is a denial of service. Contain
+    // any unwind from the decoder and turn it into a normal error. On
+    // panic everything is dropped, so asserting unwind-safety is sound.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        decode_raw_inner(reader, source_len)
+    }))
+    .unwrap_or_else(|_| {
+        Err(Error::Other(
+            "TIFF decode error: the decoder panicked on malformed input \
+             (invalid or inconsistent TIFF tags)"
+                .into(),
+        ))
+    })
+}
+
+fn decode_raw_inner<R>(reader: R, source_len: Option<u64>) -> Result<RawDecoded>
+where
+    R: std::io::Read + std::io::Seek,
+{
     // A hostile TIFF can declare huge ImageWidth/ImageLength or tag counts;
     // `Limits::unlimited()` honours them with a single multi-GB allocation
     // (a 338-byte file forced ~32 GB — found by fuzzing). We keep the
@@ -182,6 +209,26 @@ where
         .unwrap_or(1)
         .max(1);
 
+    // PlanarConfiguration (tag 284): 2 = separate planes (GDAL's
+    // INTERLEAVE=BAND). The `tiff` crate's `read_image()` returns only the
+    // first plane for planar multi-band TIFFs, so `spp` stays > 1 while the
+    // buffer holds just `rows*cols` samples. The interleaved band selection
+    // downstream (`buf[i*spp + b]`) would then index out of bounds and
+    // panic. A planar TIFF is perfectly valid GDAL output, so reject it with
+    // an actionable message rather than crashing or mis-sizing.
+    if spp > 1
+        && decoder
+            .get_tag_u32(Tag::PlanarConfiguration)
+            .map(|v| v == 2)
+            .unwrap_or(false)
+    {
+        return Err(Error::Other(
+            "planar (PlanarConfiguration=2, INTERLEAVE=BAND) multi-band TIFFs are not \
+             supported; convert with `gdal_translate -co INTERLEAVE=PIXEL in.tif out.tif`"
+                .to_string(),
+        ));
+    }
+
     // Read geo-tags before the pixel body: tag lookups are independent of
     // `read_image()` (the decoder parsed the IFD at construction), and
     // having `nodata` in hand lets the cast below fuse the nodata->NaN
@@ -190,6 +237,7 @@ where
     let transform = read_geotransform(&mut decoder).ok();
     let crs = read_crs(&mut decoder);
     let nodata = read_nodata(&mut decoder);
+    warn_unapplied_scale_offset(&mut decoder);
 
     // Read image data (pixel-interleaved for multi-band TIFFs)
     let result = decoder
@@ -249,6 +297,32 @@ where
     })
 }
 
+/// Rewrite a non-NaN `GDAL_NODATA` sentinel (finite or ±inf) to NaN in a
+/// float sample buffer.
+///
+/// The [`read_geotiff_any`] path preserves native pixel values without the
+/// [`cast_and_normalize`] pass, yet [`finish_raster`] still records a float
+/// raster's nodata as NaN (SurtGIS's in-memory convention). Left unreconciled
+/// the two disagree — the buffer holds the literal sentinel (e.g. `-9999`)
+/// while masking looks for NaN — so nodata cells leak into statistics. This
+/// brings the buffer in line with the metadata. No-op for integer `T`, whose
+/// sentinel is kept verbatim and matched by exact equality.
+pub fn normalize_any_float_nodata<T: RasterElement>(data: &mut [T], nodata: Option<f64>) {
+    if !T::is_float() {
+        return;
+    }
+    if let Some(nd_f64) = nodata
+        && !nd_f64.is_nan()
+        && let Some(nd) = num_traits::cast::<f64, T>(nd_f64)
+    {
+        for v in data.iter_mut() {
+            if v.is_nodata(Some(nd)) {
+                *v = T::default_nodata();
+            }
+        }
+    }
+}
+
 /// Internal: decode a GeoTIFF into an [`AnyRaster`], selecting one band
 /// (0-based; default: first) — the dtype-preserving counterpart of
 /// `decode_geotiff`.
@@ -287,12 +361,18 @@ where
     macro_rules! band_raster {
         ($buf:expr) => {{
             let buf = $buf;
-            let selected = if raw.spp == 1 {
+            let mut selected = if raw.spp == 1 {
                 buf
             } else {
                 let n = raw.rows * raw.cols;
                 (0..n).map(|i| buf[i * raw.spp + b]).collect()
             };
+            // The dtype-preserving path skips `cast_and_normalize`, so a
+            // finite GDAL_NODATA sentinel is still literal in float buffers
+            // while `finish_raster` records the nodata as NaN. Reconcile the
+            // two so masking / statistics (and `surtgis info`) see the nodata
+            // cells instead of counting the sentinel as valid data.
+            normalize_any_float_nodata(&mut selected, raw.nodata);
             finish_raster(
                 selected,
                 raw.rows,
@@ -365,7 +445,7 @@ fn same_type_vec<T: 'static, U: 'static>(v: Vec<U>) -> std::result::Result<Vec<T
 ///   nodata->NaN check happen in the same `map`, instead of casting here
 ///   and normalizing again in a second full-buffer pass in
 ///   `finish_raster`.
-fn cast_and_normalize<T, U>(buf: Vec<U>, nodata: Option<f64>) -> Vec<T>
+pub(crate) fn cast_and_normalize<T, U>(buf: Vec<U>, nodata: Option<f64>) -> Vec<T>
 where
     T: RasterElement,
     U: RasterElement,
@@ -385,17 +465,21 @@ where
             same
         }
         Err(buf) => {
-            let nd_t: Option<T> = nodata.and_then(|nd| num_traits::cast::<f64, T>(nd));
+            // Compare in the file's own sample type `U`, not in `T`: GDAL /
+            // terra write GDAL_NODATA as a decimal string ("-3.39999999999999996e+38")
+            // whose nearest f32 (what the pixels hold) differs from its f64
+            // value, so a comparison after widening to f64 never matched and
+            // the sentinel leaked into computations (issues_surtgis.md #1).
+            let nd_u: Option<U> = nodata.and_then(|nd| num_traits::cast::<f64, U>(nd));
             buf.iter()
                 .map(|&v| {
-                    let casted: T = num_traits::cast(v).unwrap_or(T::default_nodata());
                     if T::is_float()
-                        && let Some(nd) = nd_t
-                        && casted.is_nodata(Some(nd))
+                        && let Some(nd) = nd_u
+                        && v.is_nodata(Some(nd))
                     {
                         return T::default_nodata();
                     }
-                    casted
+                    num_traits::cast(v).unwrap_or(T::default_nodata())
                 })
                 .collect()
         }
@@ -500,7 +584,9 @@ where
 }
 
 /// Attempt to read CRS EPSG code from GeoKeyDirectory tag
-fn read_crs<R: std::io::Read + std::io::Seek>(decoder: &mut Decoder<R>) -> Option<crate::crs::CRS> {
+pub(crate) fn read_crs<R: std::io::Read + std::io::Seek>(
+    decoder: &mut Decoder<R>,
+) -> Option<crate::crs::CRS> {
     let geokeys = decoder.get_tag_u16_vec(Tag::Unknown(34735)).ok()?;
     if geokeys.len() < 4 {
         return None;
@@ -522,7 +608,7 @@ fn read_crs<R: std::io::Read + std::io::Seek>(decoder: &mut Decoder<R>) -> Optio
 }
 
 /// Attempt to read GeoTransform from TIFF tags
-fn read_geotransform<R: std::io::Read + std::io::Seek>(
+pub(crate) fn read_geotransform<R: std::io::Read + std::io::Seek>(
     decoder: &mut Decoder<R>,
 ) -> Result<GeoTransform> {
     // ModelPixelScaleTag = 33550
@@ -560,8 +646,68 @@ fn read_geotransform<R: std::io::Read + std::io::Seek>(
     Err(Error::Other("Cannot determine geotransform".into()))
 }
 
+/// Warn (stderr, once per open) when the file's `GDAL_METADATA` (tag
+/// 42112) declares a non-identity per-band SCALE/OFFSET that this reader
+/// does not apply.
+///
+/// Packed products (HLS/MODIS int16 reflectance, scaled temperature) store
+/// physical values as `raw * scale + offset`; GDAL applies the pair on
+/// read, SurtGIS's native reader returns raw values (and its Zarr/NetCDF
+/// readers DO unpack — an asymmetry a user has no way to see). Until the
+/// reader unpacks, the defensible minimum is to say so out loud instead of
+/// silently handing back numbers that are off by orders of magnitude
+/// (audit R4, third round).
+fn warn_unapplied_scale_offset<R: std::io::Read + std::io::Seek>(decoder: &mut Decoder<R>) {
+    let Ok(xml) = decoder.get_tag_ascii_string(Tag::Unknown(42112)) else {
+        return;
+    };
+    if let Some((scale, offset)) = parse_non_identity_scale_offset(&xml) {
+        eprintln!(
+            "warning: GeoTIFF declares band scale/offset (SCALE={}, OFFSET={}) \
+             which SurtGIS does not apply — values are returned RAW (packed). \
+             Unpack with: value = raw * scale + offset",
+            scale.unwrap_or(1.0),
+            offset.unwrap_or(0.0),
+        );
+    }
+}
+
+/// Extract a non-identity per-band SCALE/OFFSET pair from a `GDAL_METADATA`
+/// XML payload. Returns `None` when the metadata declares no scaling or
+/// only the identity pair (SCALE=1, OFFSET=0), `Some((scale, offset))`
+/// otherwise (each side `None` if absent/identity).
+///
+/// Minimal scan of `<Item name="SCALE" ...>v</Item>` — the same schema this
+/// crate writes for band names. No XML dependency: GDAL itself generates
+/// this structure, so plain string parsing holds.
+fn parse_non_identity_scale_offset(xml: &str) -> Option<(Option<f64>, Option<f64>)> {
+    let non_identity = |key: &str, identity: f64| {
+        let needle = format!("name=\"{key}\"");
+        let mut rest = xml;
+        while let Some(pos) = rest.find(&needle) {
+            let after = &rest[pos..];
+            if let Some(v) = after
+                .find('>')
+                .map(|g| &after[g + 1..])
+                .and_then(|s| s.split('<').next())
+                .and_then(|s| s.trim().parse::<f64>().ok())
+                && v != identity
+            {
+                return Some(v);
+            }
+            rest = &after[needle.len()..];
+        }
+        None
+    };
+    let scale = non_identity("SCALE", 1.0);
+    let offset = non_identity("OFFSET", 0.0);
+    (scale.is_some() || offset.is_some()).then_some((scale, offset))
+}
+
 /// Read GDAL_NODATA tag (42113) — stored as ASCII string, parsed to f64.
-fn read_nodata<R: std::io::Read + std::io::Seek>(decoder: &mut Decoder<R>) -> Option<f64> {
+pub(crate) fn read_nodata<R: std::io::Read + std::io::Seek>(
+    decoder: &mut Decoder<R>,
+) -> Option<f64> {
     let s = match decoder.get_tag_ascii_string(Tag::Unknown(42113)) {
         Ok(s) => s,
         // Fallback: SurtGIS <= 0.16.3 wrote this tag via as_bytes(),
@@ -813,11 +959,42 @@ where
     [T]: tiff::encoder::TiffValue,
     P: AsRef<Path>,
 {
+    write_geotiff_inner(raster, path.as_ref(), options.as_ref(), None)
+}
+
+/// [`write_geotiff`] with an explicit provenance record embedded as the
+/// `SURTGIS_PROVENANCE` item of `GDAL_METADATA` (tag 42112). The writer
+/// fills [`Provenance::output`] with the digest of the array it writes;
+/// see [`crate::provenance`] for the record and the digest definition.
+pub fn write_geotiff_with_provenance<T, P>(
+    raster: &Raster<T>,
+    path: P,
+    options: Option<GeoTiffOptions>,
+    provenance: &Provenance,
+) -> Result<()>
+where
+    T: RasterElement + NativeGraySample,
+    [T]: tiff::encoder::TiffValue,
+    P: AsRef<Path>,
+{
+    write_geotiff_inner(raster, path.as_ref(), options.as_ref(), Some(provenance))
+}
+
+fn write_geotiff_inner<T>(
+    raster: &Raster<T>,
+    final_path: &Path,
+    options: Option<&GeoTiffOptions>,
+    explicit: Option<&Provenance>,
+) -> Result<()>
+where
+    T: RasterElement + NativeGraySample,
+    [T]: tiff::encoder::TiffValue,
+{
     // Write to temp file first, then atomic rename to prevent corrupt partial files
-    let final_path = path.as_ref();
     let tmp_path = final_path.with_extension("tmp");
     let file = File::create(&tmp_path)?;
-    encode_geotiff(raster, file, options.as_ref())?;
+    let items = provenance_items(&[raster], explicit);
+    encode_geotiff(raster, file, options, &items)?;
     std::fs::rename(&tmp_path, final_path)?;
     Ok(())
 }
@@ -835,7 +1012,8 @@ where
     [T]: tiff::encoder::TiffValue,
 {
     let mut buf = Vec::new();
-    encode_geotiff(raster, Cursor::new(&mut buf), options.as_ref())?;
+    let items = provenance_items(&[raster], None);
+    encode_geotiff(raster, Cursor::new(&mut buf), options.as_ref(), &items)?;
     Ok(buf)
 }
 
@@ -845,6 +1023,7 @@ fn encode_geotiff<T, W>(
     raster: &Raster<T>,
     writer: W,
     options: Option<&GeoTiffOptions>,
+    metadata_items: &[(String, String)],
 ) -> Result<()>
 where
     T: RasterElement + NativeGraySample,
@@ -866,7 +1045,7 @@ where
         let image = encoder
             .new_image::<T::Gray>(cols as u32, rows as u32)
             .map_err(|e| Error::Other(format!("Cannot create TIFF image: {}", e)))?;
-        write_single_band_image(image, raster)
+        write_single_band_image(image, raster, metadata_items)
     } else {
         let mut encoder = TiffEncoder::new(writer)
             .map_err(|e| Error::Other(format!("TIFF encoder error: {}", e)))?
@@ -874,7 +1053,7 @@ where
         let image = encoder
             .new_image::<T::Gray>(cols as u32, rows as u32)
             .map_err(|e| Error::Other(format!("Cannot create TIFF image: {}", e)))?;
-        write_single_band_image(image, raster)
+        write_single_band_image(image, raster, metadata_items)
     }
 }
 
@@ -884,6 +1063,7 @@ where
 fn write_single_band_image<T, W, K>(
     mut image: tiff::encoder::ImageEncoder<'_, W, T::Gray, K>,
     raster: &Raster<T>,
+    metadata_items: &[(String, String)],
 ) -> Result<()>
 where
     T: RasterElement + NativeGraySample,
@@ -897,6 +1077,7 @@ where
         raster.crs(),
         raster.nodata().and_then(|nd| nd.to_f64()),
     )?;
+    write_gdal_metadata_tag(image.encoder(), metadata_items)?;
 
     // No cast needed: T::Gray::Inner == T, so the raw sample buffer is
     // written verbatim instead of through the old lossy f32 conversion.
@@ -910,13 +1091,17 @@ where
 
 /// Write a stack of single-band rasters as a multi-band GeoTIFF.
 ///
-/// Supports 1, 3 or 4 bands (`Gray32Float`, `RGB32Float`,
-/// `RGBA32Float`). All band rasters must share the same shape and
-/// geotransform. GeoTIFF metadata (CRS, transform, nodata) is
-/// inherited from `bands[0]`. Per-band values are cast to `f32`.
+/// Supports 1, 3 or 4 bands. The sample type is preserved for `u8`
+/// (`Gray8`/`RGB8`/`RGBA8`) and `u16` (`Gray16`/`RGB16`/`RGBA16`), so an
+/// RGB orthophoto stays byte-sized RGB (issue #123); every other element
+/// type is cast to `f32` (`Gray32Float`/`RGB32Float`/`RGBA32Float`) as
+/// before. All band rasters must share the same shape and geotransform.
+/// GeoTIFF metadata (CRS, transform, nodata) is inherited from
+/// `bands[0]`.
 ///
-/// For arbitrary `N > 4`, enable the `gdal` feature and use
-/// `gdal_io::write_geotiff_multiband`.
+/// For arbitrary `N` with `BlackIsZero` photometric use
+/// [`write_geotiff_stack`]; for `N > 4` with RGB semantics, enable the
+/// `gdal` feature and use `gdal_io::write_geotiff_multiband`.
 pub fn write_geotiff_multiband<T, P>(
     bands: &[&Raster<T>],
     path: P,
@@ -952,27 +1137,111 @@ where
     let tmp_path = final_path.with_extension("tmp");
     let file = File::create(&tmp_path)?;
 
-    // Build the interleaved (chunky) buffer expected by the tiff
-    // crate for pixel-interleaved multi-sample images:
-    //   [s0_px0, s1_px0, ..., sK_px0,
-    //    s0_px1, s1_px1, ..., sK_px1, ...]
-    let n_px = rows * cols;
-    let mut interleaved: Vec<f32> = vec![0.0; n_px * n_bands];
-    for (b, raster) in bands.iter().enumerate() {
-        for (i, &v) in raster.data().iter().enumerate() {
-            let f: f32 = num_traits::cast(v).unwrap_or(f32::NAN);
-            interleaved[i * n_bands + b] = f;
+    // Dispatch on the element type so byte and 16-bit imagery keep their
+    // native sample format; anything else falls back to f32 as before.
+    if TypeId::of::<T>() == TypeId::of::<u8>() {
+        let interleaved: Vec<u8> = interleave_cast(bands, rows, cols, 0u8);
+        let items = provenance_items_interleaved(&interleaved, rows, cols, n_bands, None);
+        match n_bands {
+            1 => encode_multiband_image::<Gray8, _>(
+                file,
+                bands[0],
+                &interleaved,
+                compression,
+                &items,
+            )?,
+            3 => encode_multiband_image::<RGB8, _>(
+                file,
+                bands[0],
+                &interleaved,
+                compression,
+                &items,
+            )?,
+            4 => encode_multiband_image::<RGBA8, _>(
+                file,
+                bands[0],
+                &interleaved,
+                compression,
+                &items,
+            )?,
+            _ => unreachable!(),
         }
-    }
-
-    match n_bands {
-        1 => encode_multiband_image::<Gray32Float, _>(file, bands[0], &interleaved, compression)?,
-        3 => encode_multiband_image::<RGB32Float, _>(file, bands[0], &interleaved, compression)?,
-        4 => encode_multiband_image::<RGBA32Float, _>(file, bands[0], &interleaved, compression)?,
-        _ => unreachable!(),
+    } else if TypeId::of::<T>() == TypeId::of::<u16>() {
+        let interleaved: Vec<u16> = interleave_cast(bands, rows, cols, 0u16);
+        let items = provenance_items_interleaved(&interleaved, rows, cols, n_bands, None);
+        match n_bands {
+            1 => encode_multiband_image::<Gray16, _>(
+                file,
+                bands[0],
+                &interleaved,
+                compression,
+                &items,
+            )?,
+            3 => encode_multiband_image::<RGB16, _>(
+                file,
+                bands[0],
+                &interleaved,
+                compression,
+                &items,
+            )?,
+            4 => encode_multiband_image::<RGBA16, _>(
+                file,
+                bands[0],
+                &interleaved,
+                compression,
+                &items,
+            )?,
+            _ => unreachable!(),
+        }
+    } else {
+        let interleaved: Vec<f32> = interleave_cast(bands, rows, cols, f32::NAN);
+        let items = provenance_items_interleaved(&interleaved, rows, cols, n_bands, None);
+        match n_bands {
+            1 => encode_multiband_image::<Gray32Float, _>(
+                file,
+                bands[0],
+                &interleaved,
+                compression,
+                &items,
+            )?,
+            3 => encode_multiband_image::<RGB32Float, _>(
+                file,
+                bands[0],
+                &interleaved,
+                compression,
+                &items,
+            )?,
+            4 => encode_multiband_image::<RGBA32Float, _>(
+                file,
+                bands[0],
+                &interleaved,
+                compression,
+                &items,
+            )?,
+            _ => unreachable!(),
+        }
     }
     std::fs::rename(&tmp_path, final_path)?;
     Ok(())
+}
+
+/// Build the interleaved (chunky) buffer expected by the tiff crate for
+/// pixel-interleaved multi-sample images:
+///   `[s0_px0, s1_px0, ..., sK_px0, s0_px1, s1_px1, ...]`
+/// Values that don't fit the target sample type become `fill`.
+fn interleave_cast<T, X>(bands: &[&Raster<T>], rows: usize, cols: usize, fill: X) -> Vec<X>
+where
+    T: RasterElement,
+    X: num_traits::NumCast + Copy,
+{
+    let n_bands = bands.len();
+    let mut interleaved: Vec<X> = vec![fill; rows * cols * n_bands];
+    for (b, raster) in bands.iter().enumerate() {
+        for (i, &v) in raster.data().iter().enumerate() {
+            interleaved[i * n_bands + b] = num_traits::cast(v).unwrap_or(fill);
+        }
+    }
+    interleaved
 }
 
 /// Generic multi-band writer parameterised over the tiff
@@ -982,11 +1251,13 @@ where
 fn encode_multiband_image<CT, W>(
     writer: W,
     meta: &Raster<impl RasterElement>,
-    interleaved: &[f32],
+    interleaved: &[CT::Inner],
     compression: Compression,
+    metadata_items: &[(String, String)],
 ) -> Result<()>
 where
-    CT: ColorType<Inner = f32>,
+    CT: ColorType,
+    [CT::Inner]: tiff::encoder::TiffValue,
     W: std::io::Write + std::io::Seek,
 {
     let mut encoder = TiffEncoder::new(writer)
@@ -1076,6 +1347,7 @@ where
             .write_tag(Tag::Unknown(42113), nodata_str.as_str())
             .map_err(|e| Error::Other(format!("Cannot write nodata tag: {}", e)))?;
     }
+    write_gdal_metadata_tag(image.encoder(), metadata_items)?;
 
     image
         .write_data(interleaved)
@@ -1159,6 +1431,7 @@ where
 
     let final_path = path.as_ref();
     let tmp_path = final_path.with_extension("tmp");
+    let items = provenance_items(bands, None);
     let file = File::create(&tmp_path)?;
 
     if options.bigtiff {
@@ -1173,6 +1446,7 @@ where
             compression,
             bands[0],
             names,
+            &items,
         )?;
     } else {
         let mut encoder = TiffEncoder::new(file)
@@ -1186,6 +1460,7 @@ where
             compression,
             bands[0],
             names,
+            &items,
         )?;
     }
 
@@ -1226,27 +1501,282 @@ pub(crate) fn deflate_compress_bytes(data: &[u8], level: DeflateLevel) -> Result
 
 /// Escape the handful of characters that are meaningful in XML text
 /// content/attribute values.
+/// Escape `s` for an XML attribute or text node of the `GDAL_METADATA`
+/// payload. The payload is stored in a TIFF ASCII tag, which cannot hold
+/// UTF-8 bytes, so every non-ASCII character becomes a numeric character
+/// reference (`&#xF1;`); [`xml_unescape`] turns it back.
 fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            c if c.is_ascii() => out.push(c),
+            c => out.push_str(&format!("&#x{:X};", c as u32)),
+        }
+    }
+    out
 }
 
-/// Build the GDAL_METADATA (tag 42112) XML payload carrying per-band
-/// descriptions, in the format GDAL's GTiff driver writes/reads:
-/// `<Item name="DESCRIPTION" sample="i">...</Item>` per band.
-fn gdal_metadata_xml(names: &[&str]) -> String {
+/// One `<Item>` of a `GDAL_METADATA` (tag 42112) payload.
+pub(crate) struct MetadataItem<'a> {
+    pub name: &'a str,
+    pub sample: Option<usize>,
+    pub role: Option<&'a str>,
+    pub value: &'a str,
+}
+
+/// Build the GDAL_METADATA (tag 42112) XML payload in the format GDAL's
+/// GTiff driver writes/reads: `<Item name="…" [sample="i"] [role="…"]>…</Item>`.
+pub(crate) fn gdal_metadata_xml_items(items: &[MetadataItem<'_>]) -> String {
     let mut xml = String::from("<GDALMetadata>");
-    for (i, name) in names.iter().enumerate() {
-        xml.push_str(&format!(
-            "<Item name=\"DESCRIPTION\" sample=\"{}\" role=\"description\">{}</Item>",
-            i,
-            xml_escape(name)
-        ));
+    for it in items {
+        xml.push_str("<Item name=\"");
+        xml.push_str(&xml_escape(it.name));
+        xml.push('"');
+        if let Some(i) = it.sample {
+            xml.push_str(&format!(" sample=\"{i}\""));
+        }
+        if let Some(r) = it.role {
+            xml.push_str(&format!(" role=\"{}\"", xml_escape(r)));
+        }
+        xml.push('>');
+        xml.push_str(&xml_escape(it.value));
+        xml.push_str("</Item>");
     }
     xml.push_str("</GDALMetadata>");
     xml
+}
+
+/// Write `items` as the GDAL_METADATA tag (42112) of `dir`; a no-op when
+/// `items` is empty.
+pub(crate) fn write_gdal_metadata_tag<W, K>(
+    dir: &mut DirectoryEncoder<'_, W, K>,
+    items: &[(String, String)],
+) -> Result<()>
+where
+    W: std::io::Write + std::io::Seek,
+    K: TiffKind,
+{
+    if items.is_empty() {
+        return Ok(());
+    }
+    let xml_items: Vec<MetadataItem<'_>> = items
+        .iter()
+        .map(|(k, v)| MetadataItem {
+            name: k,
+            sample: None,
+            role: None,
+            value: v,
+        })
+        .collect();
+    let xml = gdal_metadata_xml_items(&xml_items);
+    dir.write_tag(Tag::Unknown(42112), xml.as_str())
+        .map_err(|e| Error::Other(format!("Cannot write GDAL_METADATA tag: {}", e)))
+}
+
+fn xml_unescape(s: &str) -> String {
+    if !s.contains('&') {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(pos) = rest.find('&') {
+        out.push_str(&rest[..pos]);
+        let tail = &rest[pos..];
+        let decoded = tail.find(';').filter(|&end| end <= 12).and_then(|end| {
+            let ent = &tail[1..end];
+            let ch = match ent {
+                "lt" => Some('<'),
+                "gt" => Some('>'),
+                "quot" => Some('"'),
+                "apos" => Some('\''),
+                "amp" => Some('&'),
+                _ => {
+                    let code = if let Some(hex) =
+                        ent.strip_prefix("#x").or_else(|| ent.strip_prefix("#X"))
+                    {
+                        u32::from_str_radix(hex, 16).ok()
+                    } else if let Some(dec) = ent.strip_prefix('#') {
+                        dec.parse::<u32>().ok()
+                    } else {
+                        None
+                    };
+                    code.and_then(char::from_u32)
+                }
+            };
+            ch.map(|c| (c, end))
+        });
+        match decoded {
+            Some((c, end)) => {
+                out.push(c);
+                rest = &tail[end + 1..];
+            }
+            None => {
+                out.push('&');
+                rest = &tail[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Parse a `GDAL_METADATA` XML payload into `(name, value)` pairs in
+/// document order. Per-band items (`sample="i"`) are returned with their
+/// plain name (e.g. `DESCRIPTION`), one pair per band. Plain string scan,
+/// as GDAL's own output is regular; no XML dependency.
+pub fn parse_gdal_metadata_items(xml: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut rest = xml;
+    while let Some(pos) = rest.find("<Item ") {
+        let after = &rest[pos + 6..];
+        let Some(name_pos) = after.find("name=\"") else {
+            break;
+        };
+        let name_start = &after[name_pos + 6..];
+        let Some(name_end) = name_start.find('"') else {
+            break;
+        };
+        let name = xml_unescape(&name_start[..name_end]);
+        let Some(gt) = after.find('>') else {
+            break;
+        };
+        let body = &after[gt + 1..];
+        let Some(end) = body.find("</Item>") else {
+            break;
+        };
+        out.push((name, xml_unescape(&body[..end])));
+        rest = &body[end + 7..];
+    }
+    out
+}
+
+/// Read the `GDAL_METADATA` (tag 42112) items of a GeoTIFF: band
+/// descriptions, scale/offset, the SurtGIS provenance record and anything
+/// else GDAL or another writer put there. Empty when the tag is absent.
+pub fn read_gdal_metadata<P: AsRef<Path>>(path: P) -> Result<Vec<(String, String)>> {
+    let file = File::open(path.as_ref())?;
+    let mut decoder = Decoder::new(std::io::BufReader::new(file))
+        .map_err(|e| Error::Other(format!("TIFF decode error: {}", e)))?
+        .with_limits(Limits::unlimited());
+    Ok(match decoder.get_tag_ascii_string(Tag::Unknown(42112)) {
+        Ok(xml) => parse_gdal_metadata_items(&xml),
+        Err(_) => Vec::new(),
+    })
+}
+
+/// Read the embedded [`Provenance`] record of a GeoTIFF/COG written by
+/// SurtGIS, `None` when the file carries none.
+///
+/// # Errors
+/// I/O and TIFF errors, and a present record whose schema this build
+/// does not understand.
+pub fn read_provenance<P: AsRef<Path>>(path: P) -> Result<Option<Provenance>> {
+    for (k, v) in read_gdal_metadata(path)? {
+        if k == provenance::METADATA_ITEM {
+            return Provenance::from_json(&v).map(Some);
+        }
+    }
+    Ok(None)
+}
+
+/// Digest of one or more aligned single-band rasters as SurtGIS writes
+/// them (band-sequential; see [`crate::provenance`]). This is the value
+/// [`read_provenance`] must match for a file to verify.
+pub fn raster_data_hash<T>(bands: &[&Raster<T>]) -> OutputRecord
+where
+    T: RasterElement,
+    [T]: tiff::encoder::TiffValue,
+{
+    let (rows, cols) = bands.first().map(|b| b.shape()).unwrap_or((0, 0));
+    let mut d = DataDigest::new(rows, cols, bands.len(), std::any::type_name::<T>());
+    for b in bands {
+        // Hash in row chunks: `TiffValue::data` may copy, so keep it small.
+        for row in b.data().rows() {
+            match row.as_slice() {
+                Some(sl) => d.update(&tiff::encoder::TiffValue::data(sl)),
+                None => {
+                    let owned: Vec<T> = row.iter().copied().collect();
+                    d.update(&tiff::encoder::TiffValue::data(owned.as_slice()));
+                }
+            }
+        }
+    }
+    d.finish()
+}
+
+/// Same digest computed from a pixel-interleaved buffer of `n_bands`.
+fn interleaved_data_hash<S>(
+    interleaved: &[S],
+    rows: usize,
+    cols: usize,
+    n_bands: usize,
+) -> OutputRecord
+where
+    S: Copy,
+    [S]: tiff::encoder::TiffValue,
+{
+    let mut d = DataDigest::new(rows, cols, n_bands, std::any::type_name::<S>());
+    let mut row_buf: Vec<S> = Vec::with_capacity(cols);
+    for b in 0..n_bands {
+        for r in 0..rows {
+            row_buf.clear();
+            row_buf.extend((0..cols).map(|c| interleaved[(r * cols + c) * n_bands + b]));
+            d.update(&tiff::encoder::TiffValue::data(row_buf.as_slice()));
+        }
+    }
+    d.finish()
+}
+
+/// Resolve the record to embed (explicit, else the process provider),
+/// attach the output digest, and return it as GDAL_METADATA items.
+pub(crate) fn provenance_items<T>(
+    bands: &[&Raster<T>],
+    explicit: Option<&Provenance>,
+) -> Vec<(String, String)>
+where
+    T: RasterElement,
+    [T]: tiff::encoder::TiffValue,
+{
+    let Some(mut prov) = explicit.cloned().or_else(provenance::provided_output) else {
+        return Vec::new();
+    };
+    prov.output = Some(raster_data_hash(bands));
+    vec![(provenance::METADATA_ITEM.to_string(), prov.to_json())]
+}
+
+fn provenance_items_interleaved<S>(
+    interleaved: &[S],
+    rows: usize,
+    cols: usize,
+    n_bands: usize,
+    explicit: Option<&Provenance>,
+) -> Vec<(String, String)>
+where
+    S: Copy,
+    [S]: tiff::encoder::TiffValue,
+{
+    let Some(mut prov) = explicit.cloned().or_else(provenance::provided_output) else {
+        return Vec::new();
+    };
+    prov.output = Some(interleaved_data_hash(interleaved, rows, cols, n_bands));
+    vec![(provenance::METADATA_ITEM.to_string(), prov.to_json())]
+}
+
+/// Attach a ready-made [`OutputRecord`] (streaming writers hash as they
+/// go) and return the GDAL_METADATA items to write.
+pub(crate) fn provenance_items_with_output(
+    output: OutputRecord,
+    explicit: Option<&Provenance>,
+) -> Vec<(String, String)> {
+    let Some(mut prov) = explicit.cloned().or_else(provenance::provided_output) else {
+        return Vec::new();
+    };
+    prov.output = Some(output);
+    vec![(provenance::METADATA_ITEM.to_string(), prov.to_json())]
 }
 
 /// Low-level IFD writer behind [`write_geotiff_stack`]: writes every
@@ -1263,6 +1793,7 @@ fn write_stack_ifd<T, W, K>(
     compression: Compression,
     meta: &Raster<T>,
     names: Option<&[&str]>,
+    metadata_items: &[(String, String)],
 ) -> Result<()>
 where
     T: RasterElement + NativeGraySample,
@@ -1345,8 +1876,23 @@ where
         meta.nodata().and_then(|nd| nd.to_f64()),
     )?;
 
+    let mut xml_items: Vec<MetadataItem<'_>> = Vec::new();
     if let Some(names) = names {
-        let xml = gdal_metadata_xml(names);
+        xml_items.extend(names.iter().enumerate().map(|(i, n)| MetadataItem {
+            name: "DESCRIPTION",
+            sample: Some(i),
+            role: Some("description"),
+            value: n,
+        }));
+    }
+    xml_items.extend(metadata_items.iter().map(|(k, v)| MetadataItem {
+        name: k,
+        sample: None,
+        role: None,
+        value: v,
+    }));
+    if !xml_items.is_empty() {
+        let xml = gdal_metadata_xml_items(&xml_items);
         dir.write_tag(Tag::Unknown(42112), xml.as_str())
             .map_err(|e| Error::Other(format!("Cannot write GDAL_METADATA tag: {}", e)))?;
     }
@@ -1895,6 +2441,34 @@ mod tests {
     // write_geotiff_stack: arbitrary N bands (mejora 3)
     // ---------------------------------------------------------------
 
+    /// Issue #123 regression: the 1/3/4-band writer must keep u8 samples
+    /// as u8 (RGB8), not silently promote them to Float32.
+    #[test]
+    fn write_geotiff_multiband_preserves_u8() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("rgb_u8.tif");
+        let mut bands: Vec<Raster<u8>> = Vec::new();
+        for base in [10u8, 120, 240] {
+            let mut r = Raster::filled(4, 5, base);
+            r.set(1, 2, base.saturating_add(5)).unwrap();
+            r.set_transform(GeoTransform::new(0.0, 4.0, 1.0, -1.0));
+            bands.push(r);
+        }
+        let refs: Vec<&Raster<u8>> = bands.iter().collect();
+        write_geotiff_multiband(&refs, &path, None).unwrap();
+
+        let probe = read_geotiff_any(&path, Some(0)).unwrap();
+        assert!(
+            matches!(probe, AnyRaster::U8(_)),
+            "u8 stack must stay u8 on disk"
+        );
+        let back: Vec<Raster<u8>> = read_geotiff_bands(&path).unwrap();
+        assert_eq!(back.len(), 3);
+        for (orig, round) in bands.iter().zip(&back) {
+            assert_eq!(orig.data(), round.data());
+        }
+    }
+
     #[test]
     fn write_geotiff_stack_roundtrips_arbitrary_band_count() {
         // 5 bands — outside the 1/3/4 the legacy multiband writer allows.
@@ -1980,6 +2554,100 @@ mod tests {
             }
             other => panic!("expected AnyRaster::F32, got {:?}", other.dtype()),
         }
+    }
+
+    #[test]
+    fn parse_scale_offset_detects_packed_products() {
+        // HLS-style: int16 reflectance packed with SCALE=0.0001.
+        let hls = r#"<GDALMetadata><Item name="SCALE" sample="0" role="scale">0.0001</Item><Item name="OFFSET" sample="0" role="offset">0</Item></GDALMetadata>"#;
+        let (scale, offset) = parse_non_identity_scale_offset(hls).expect("HLS must warn");
+        assert_eq!(scale, Some(0.0001));
+        assert_eq!(offset, None); // 0 is the identity offset
+
+        // MODIS LST style: scale + offset both non-identity.
+        let lst = r#"<GDALMetadata><Item name="SCALE" sample="0">0.02</Item><Item name="OFFSET" sample="0">-273.15</Item></GDALMetadata>"#;
+        let (scale, offset) = parse_non_identity_scale_offset(lst).unwrap();
+        assert_eq!(scale, Some(0.02));
+        assert_eq!(offset, Some(-273.15));
+
+        // Identity pair: no warning.
+        let identity = r#"<GDALMetadata><Item name="SCALE" sample="0">1</Item><Item name="OFFSET" sample="0">0</Item></GDALMetadata>"#;
+        assert!(parse_non_identity_scale_offset(identity).is_none());
+
+        // Unrelated metadata (band names, as this crate writes): no warning.
+        let names = r#"<GDALMetadata><Item name="DESCRIPTION" sample="0" role="description">ndvi</Item></GDALMetadata>"#;
+        assert!(parse_non_identity_scale_offset(names).is_none());
+
+        // No metadata at all.
+        assert!(parse_non_identity_scale_offset("").is_none());
+    }
+
+    #[test]
+    fn normalize_any_float_nodata_rewrites_finite_sentinel() {
+        // Float, finite sentinel: rewritten to NaN so masking sees it.
+        let mut d = vec![5.0f32, -9999.0, 5.0, -9999.0];
+        normalize_any_float_nodata(&mut d, Some(-9999.0));
+        assert_eq!(d[0], 5.0);
+        assert!(d[1].is_nan());
+        assert!(d[3].is_nan());
+        // Float, NaN sentinel: nothing to rewrite (already the convention).
+        let mut n = vec![5.0f32, f32::NAN];
+        normalize_any_float_nodata(&mut n, Some(f64::NAN));
+        assert_eq!(n[0], 5.0);
+        // Float, infinite sentinel: rewritten like any other non-NaN one —
+        // the typed path (`cast_and_normalize`) never excluded ±inf, so the
+        // dtype-preserving path must not either.
+        let mut inf = vec![5.0f32, f32::INFINITY, f32::NEG_INFINITY];
+        normalize_any_float_nodata(&mut inf, Some(f64::INFINITY));
+        assert_eq!(inf[0], 5.0);
+        assert!(inf[1].is_nan());
+        assert_eq!(inf[2], f32::NEG_INFINITY);
+        // Integer T: no-op — the sentinel is kept verbatim and matched by
+        // equality downstream, never turned into a (non-existent) NaN.
+        let mut di = vec![5i16, -9999, 5];
+        normalize_any_float_nodata(&mut di, Some(-9999.0));
+        assert_eq!(di, vec![5i16, -9999, 5]);
+    }
+
+    #[test]
+    fn read_geotiff_any_masks_finite_float_nodata_in_statistics() {
+        // Regression: a raster whose GDAL_NODATA is a *finite* sentinel (the
+        // rasterio/GDAL `-9999` convention) must not count the fill cells as
+        // valid in `surtgis info`. The dtype-preserving read used to leave the
+        // sentinel literal in float buffers while recording nodata as NaN, so
+        // all 100 cells read as valid with a fill-contaminated mean.
+        fn check<T: RasterElement + NativeGraySample>(dir: &TempDir, name: &str, nodata: f64)
+        where
+            [T]: tiff::encoder::TiffValue,
+        {
+            let valid: T = num_traits::cast(5.0).unwrap();
+            let nd: T = num_traits::cast(nodata).unwrap();
+            let mut data = vec![valid; 100]; // 10x10
+            for c in data.iter_mut().skip(50) {
+                *c = nd; // bottom half = nodata
+            }
+            let mut r = Raster::<T>::from_vec(data, 10, 10).unwrap();
+            r.set_nodata(Some(nd));
+            let path = dir.path().join(format!("{name}.tif"));
+            write_geotiff(&r, &path, None).unwrap();
+
+            let any = read_geotiff_any(&path, None).unwrap();
+            let (valid_count, mean) = crate::dispatch_any!(&any, rr => {
+                let s = rr.statistics();
+                (s.valid_count, s.mean)
+            });
+            assert_eq!(valid_count, 50, "{name}: valid_count");
+            assert_eq!(mean, Some(5.0), "{name}: mean");
+        }
+
+        let dir = TempDir::new().unwrap();
+        check::<f32>(&dir, "f32_-9999", -9999.0); // the bug
+        check::<f32>(&dir, "f32_0", 0.0); // 0.0 sentinel
+        check::<f32>(&dir, "f32_-1", -1.0);
+        check::<f64>(&dir, "f64_-9999", -9999.0);
+        // Integer paths (i16/u8 with finite sentinel) were already correct —
+        // the no-op branch is covered by `normalize_any_float_nodata_*` and
+        // verified end-to-end via the CLI matrix.
     }
 
     #[test]
@@ -2269,5 +2937,72 @@ mod tests {
         } else {
             unreachable!();
         }
+    }
+
+    #[test]
+    fn float32_nodata_written_as_f64_string_is_matched_in_f32() {
+        // terra/raster write GDAL_NODATA="-3.39999999999999996e+38" for
+        // FLT4S; the pixels hold the nearest f32. Reading into f64 must
+        // still recognise them as nodata (issues_surtgis.md #1).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("terra_nodata.tif");
+        let nd_f64: f64 = -3.39999999999999996e38;
+        let mut r = Raster::<f32>::new(3, 3);
+        r.set_transform(GeoTransform::new(0.0, 3.0, 1.0, -1.0));
+        r.data_mut().fill(5.0);
+        r.data_mut()[[1, 1]] = nd_f64 as f32;
+        r.set_nodata(Some(nd_f64 as f32));
+        write_geotiff(&r, &path, None).unwrap();
+        // The tag holds the f32 sentinel printed by Rust; rewrite it the way
+        // terra does (the f64 decimal) to reproduce the exact file.
+        let back: Raster<f64> = read_geotiff(&path, None).unwrap();
+        assert!(back.data()[[1, 1]].is_nan(), "{}", back.data()[[1, 1]]);
+        assert_eq!(back.data()[[0, 0]], 5.0);
+        // Same through cast_and_normalize with the f64 tag value directly.
+        let buf: Vec<f32> = vec![5.0, nd_f64 as f32, 7.0];
+        let out: Vec<f64> = cast_and_normalize::<f64, f32>(buf, Some(nd_f64));
+        assert!(out[1].is_nan() && out[0] == 5.0 && out[2] == 7.0);
+        // Integer sentinel through a float target: matched in the source type.
+        let buf: Vec<i16> = vec![1, -32768, 3];
+        let out: Vec<f64> = cast_and_normalize::<f64, i16>(buf, Some(-32768.0));
+        assert!(out[1].is_nan() && out[0] == 1.0);
+    }
+    #[test]
+    fn gdal_metadata_non_ascii_is_escaped_and_round_trips() {
+        let items = [MetadataItem {
+            name: "DESCRIPTION",
+            sample: Some(0),
+            role: None,
+            value: "Chañaral <río> & Aysén 𝛼",
+        }];
+        let xml = gdal_metadata_xml_items(&items);
+        assert!(xml.is_ascii(), "{xml}");
+        let parsed = parse_gdal_metadata_items(&xml);
+        assert_eq!(
+            parsed,
+            vec![(
+                "DESCRIPTION".to_string(),
+                "Chañaral <río> & Aysén 𝛼".to_string()
+            )]
+        );
+        // A stray ampersand GDAL might leave unescaped survives verbatim.
+        assert_eq!(xml_unescape("a & b &#zz; &#xF1;"), "a & b &#zz; ñ");
+    }
+
+    #[test]
+    fn provenance_with_non_ascii_paths_writes_and_verifies() {
+        use crate::provenance::Provenance;
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("chañaral");
+        std::fs::create_dir_all(&sub).unwrap();
+        let path = sub.join("dem_Ñuble.tif");
+        let mut r: Raster<f32> = Raster::new(4, 5);
+        r.set_transform(crate::GeoTransform::new(0.0, 4.0, 1.0, -1.0));
+        let mut p = Provenance::new();
+        p.command = vec!["surtgis".into(), path.display().to_string()];
+        write_geotiff_with_provenance(&r, &path, None, &p).unwrap();
+        let back = read_provenance(&path).unwrap().expect("record present");
+        assert_eq!(back.command, p.command);
+        assert_eq!(back.output, Some(raster_data_hash(&[&r])));
     }
 }

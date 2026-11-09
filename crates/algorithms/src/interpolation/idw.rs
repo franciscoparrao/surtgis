@@ -62,6 +62,7 @@ pub struct Anisotropy {
 
 /// Parameters for IDW interpolation
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct IdwParams {
     /// Power parameter (default: 2.0).
     /// Higher values give more weight to nearby points.

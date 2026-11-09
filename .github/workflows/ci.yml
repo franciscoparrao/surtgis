@@ -22,7 +22,10 @@ env:
 jobs:
   check:
     name: Check & Clippy
-    runs-on: ubuntu-latest
+    # Pinned: --all-features builds the optional `gdal` feature, and the
+    # gdal 0.17 crate does not compile against GDAL 3.12 (ubuntu-latest is
+    # 26.04 since 2026-10). Unpin when the gdal crate is upgraded.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       # The PyPI wheel version (crates/python/pyproject.toml) is independent of
@@ -53,6 +56,10 @@ jobs:
             libgdal-dev libhdf5-dev libnetcdf-dev libeccodes-dev pkg-config
       - name: Check
         run: cargo check --workspace --exclude surtgis-python --all-features
+      # The README's no-C-libraries install path; it broke unnoticed in
+      # 1.5.0 because no job built this feature set.
+      - name: Check CLI without C dependencies (cloud,projections)
+        run: cargo check -p surtgis --no-default-features --features cloud,projections
       # Clippy enforces correctness lints as errors (real bugs only) and
       # leaves style lints as warnings. Style cleanup (`collapsible_if`,
       # `map_or` simplification, etc.) is tracked separately and applied
@@ -104,6 +111,25 @@ jobs:
             libgdal-dev libhdf5-dev libnetcdf-dev libeccodes-dev pkg-config
       - name: Run tests without parallel feature
         run: cargo test --workspace --exclude surtgis-python --no-default-features
+
+  # C ABI smoke (spec surtgis-flow v1.0 §9, M5 gate): build the surtgis-ffi
+  # cdylib, compile examples/smoke.c against include/surtgis_flow.h with the
+  # system C compiler and run it end-to-end. Catches header/implementation
+  # drift and linkage breakage that pure-Rust tests can't see.
+  ffi-smoke:
+    name: FFI smoke (C)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build cdylib
+        run: cargo build -p surtgis-ffi --release
+      - name: Compile and run smoke.c
+        run: |
+          cc -Wall -Werror -Icrates/ffi/include crates/ffi/examples/smoke.c \
+             -Ltarget/release -lsurtgis_ffi -lm -o sf_smoke
+          LD_LIBRARY_PATH=target/release ./sf_smoke
 
   wasm:
     name: WASM Build
@@ -171,6 +197,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install maturin
         run: pip install maturin numpy pytest
+      # gen_stubs.py parses the Rust source (no compiled module needed), so
+      # a drifted surtgis.pyi — a #[pyfunction] added without regenerating —
+      # is caught here rather than shipping stale type hints to users.
+      - name: Check type stubs are in sync
+        run: |
+          python3 crates/python/gen_stubs.py > /tmp/surtgis.pyi.gen
+          diff -u crates/python/surtgis.pyi /tmp/surtgis.pyi.gen \
+            || { echo "::error::surtgis.pyi is out of date; run 'python3 gen_stubs.py > surtgis.pyi' in crates/python/"; exit 1; }
       - name: Build Python package
         run: maturin build --manifest-path crates/python/Cargo.toml --release
       # The wheel is imported and exercised before it can ever reach PyPI —
@@ -278,11 +312,19 @@ jobs:
     # Runs on schedule + manual dispatch only; net-dependent (Earth Search),
     # would be flaky per-PR and redundant per-push on main.
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    timeout-minutes: 15
+    # A cold release build of the CLI takes most of this.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # The CLI's default features (netcdf, grib) link HDF5, NetCDF and
+      # ecCodes: without them the build fails before the benchmark runs.
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libhdf5-dev libnetcdf-dev libeccodes-dev pkg-config
       - name: Build surtgis release
         run: cargo build --release -p surtgis --bin surtgis
       - name: Run RAM benchmark

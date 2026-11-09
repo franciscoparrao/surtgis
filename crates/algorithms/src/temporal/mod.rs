@@ -20,5 +20,6 @@ pub use statistics::{
 };
 pub use streaming::{TemporalReducer, TheilSenTrend, reduce_temporal};
 pub use trend::{
-    LinearTrendResult, MannKendallResult, linear_trend, mann_kendall, sens_slope, sens_slope_series,
+    LinearTrendResult, MannKendallResult, linear_trend, mann_kendall, mann_kendall_with_times,
+    sens_slope, sens_slope_series, sens_slope_with_times,
 };

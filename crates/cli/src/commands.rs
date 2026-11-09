@@ -27,6 +27,17 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub max_memory: Option<String>,
 
+    /// Sample type of Float64 outputs: `f64` (default) or `f32` (half
+    /// the size; nodata stays NaN)
+    #[arg(long, global = true, default_value = "f64", value_parser = ["f32", "f64"])]
+    pub output_dtype: String,
+
+    /// Do not embed a provenance record (command, hashed inputs, output
+    /// digest) in the written GeoTIFFs, and skip hashing the inputs.
+    /// Also honoured as SURTGIS_NO_PROVENANCE=1.
+    #[arg(long, global = true)]
+    pub no_provenance: bool,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -37,6 +48,43 @@ pub enum Commands {
     Info {
         /// Input raster file
         input: PathBuf,
+    },
+    /// Show the provenance record embedded in a SurtGIS output (engine,
+    /// command, hashed inputs, output digest)
+    Provenance {
+        /// GeoTIFF/COG written by SurtGIS
+        input: PathBuf,
+        /// Print the raw JSON record (URL query strings removed)
+        #[arg(long)]
+        json: bool,
+        /// Print the record as STAC Processing extension v1.3 fields
+        /// (`processing:*` properties and `derived_from` links to the STAC
+        /// items read), to merge into a STAC Item describing the file
+        #[arg(long, conflicts_with = "json")]
+        stac: bool,
+    },
+    /// Verify a SurtGIS output against its embedded provenance: recompute
+    /// the digest of the pixel array and re-hash the recorded inputs.
+    /// Exits non-zero on any mismatch.
+    Verify {
+        /// GeoTIFF/COG written by SurtGIS
+        input: PathBuf,
+        /// Only check the output digest, not the inputs
+        #[arg(long)]
+        skip_inputs: bool,
+        /// File of affected STAC item ids, one per line (`#` comments and
+        /// item URLs accepted), e.g. a provider's list of corrupted
+        /// items. Fails when the output read any of them
+        #[arg(long, value_name = "FILE")]
+        against: Option<PathBuf>,
+        /// With --against: only items accessed at or after this time
+        /// (RFC 3339 or YYYY-MM-DD, UTC)
+        #[arg(long, value_name = "TIME", requires = "against")]
+        affected_from: Option<String>,
+        /// With --against: only items accessed at or before this time
+        /// (a bare date counts until the end of that day)
+        #[arg(long, value_name = "TIME", requires = "against")]
+        affected_to: Option<String>,
     },
     /// Terrain analysis algorithms
     Terrain {
@@ -231,6 +279,11 @@ pub enum Commands {
         lod: bool,
     },
     /// Clip a raster by polygon or bounding box
+    ///
+    /// With --polygon, cells outside the polygons become NaN and the output
+    /// is cropped to the polygons' extent (like `gdalwarp -crop_to_cutline`);
+    /// --keep-extent keeps the input grid and only masks. Polygons and bbox
+    /// must use the raster's CRS. A clip that leaves no valid cell fails.
     Clip {
         /// Input raster file
         input: PathBuf,
@@ -240,6 +293,9 @@ pub enum Commands {
         /// Bounding box: xmin,ymin,xmax,ymax (same CRS as input)
         #[arg(long)]
         bbox: Option<String>,
+        /// With --polygon: mask only, keeping the input's full extent
+        #[arg(long)]
+        keep_extent: bool,
         /// Output file
         output: PathBuf,
     },
@@ -341,6 +397,12 @@ pub enum Commands {
         #[command(subcommand)]
         algorithm: TextureCommands,
     },
+    /// Foundation-model embeddings (AlphaEarth, TESSERA, your own encoder)
+    /// as rasters: similarity maps, PCA false colour, norms
+    Embeddings {
+        #[command(subcommand)]
+        command: EmbeddingsCommands,
+    },
     /// Image segmentation: SLIC superpixels and Felzenszwalb-Huttenlocher
     Segmentation {
         #[command(subcommand)]
@@ -394,11 +456,253 @@ pub enum Commands {
         #[arg(long)]
         argmax: bool,
     },
+    /// Debris-flow simulation, shallow water + Voellmy (EXPERIMENTAL pre-1.0)
+    #[cfg(feature = "flow")]
+    Flow {
+        #[command(subcommand)]
+        command: FlowCommands,
+    },
+    /// Dynamic tile server: terrain operators and band formulas as XYZ tile parameters (EXPERIMENTAL)
+    #[cfg(feature = "server")]
+    Serve {
+        /// Address to listen on
+        #[arg(long, default_value = "127.0.0.1:8080")]
+        bind: String,
+        /// Directory local sources (`?url=<path>`) must live under
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// URL prefix remote COG sources may start with (repeatable); none = no remote sources
+        #[arg(long = "allow")]
+        allow: Vec<String>,
+        /// Cache-Control max-age for tiles, in seconds
+        #[arg(long, default_value_t = 3600)]
+        max_age: u32,
+        /// In-memory cache of rendered tiles, in MiB (0 disables)
+        #[arg(long, default_value_t = 256)]
+        cache_mb: usize,
+        /// Directory for the on-disk tile cache (`{layer}/{z}/{x}/{y}.png`); unset = none
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+        /// Per-tile deadline, in milliseconds
+        #[arg(long, default_value_t = 30_000)]
+        timeout_ms: u64,
+        /// Tiles rendered concurrently before requests get 503
+        #[arg(long, default_value_t = 64)]
+        max_inflight: usize,
+        /// Open COG readers kept per URL
+        #[arg(long, default_value_t = 4)]
+        pool_per_url: usize,
+        /// Folder for materialisation job outputs (default `<root>/_jobs`; must lie under --root)
+        #[arg(long)]
+        jobs_dir: Option<PathBuf>,
+    },
+    /// Read ER Mapper ECW v2 imagery with the native decoder (no GDAL)
+    #[cfg(feature = "ecw")]
+    Ecw {
+        #[command(subcommand)]
+        action: EcwCommands,
+    },
     /// Generate shell completion scripts (write to a file in your shell's
     /// completion directory, e.g. `surtgis completions bash > /etc/bash_completion.d/surtgis`)
     Completions {
         /// Target shell
         shell: clap_complete::Shell,
+    },
+}
+
+// ─── Embeddings subcommands ─────────────────────────────────────────────
+
+/// Subcommands of `surtgis embeddings`. The input is a multi-band raster
+/// whose bands are the dimensions of one vector per cell (e.g. the 64
+/// bands of an AlphaEarth tile). Nodata in any band makes the cell
+/// nodata.
+#[derive(Subcommand)]
+pub enum EmbeddingsCommands {
+    /// Describe a stack: dimensions, valid vectors, L2 norm statistics
+    /// (is it unit-normalised?), variance captured by the first PCs
+    Info {
+        /// Embedding stack (multi-band GeoTIFF/COG)
+        input: PathBuf,
+        /// Read only this window, `min_x,min_y,max_x,max_y` in the stack's
+        /// CRS (an AlphaEarth tile is 8192² × 64 bands: 34 GB as f64)
+        #[arg(long, value_name = "MINX,MINY,MAXX,MAXY", allow_hyphen_values = true)]
+        bbox: Option<String>,
+        /// Stored-value code: none | alphaearth | linear:SCALE[,OFFSET]
+        #[arg(long, default_value = "none")]
+        dequantize: String,
+    },
+    /// Similarity of every cell to a reference vector ("more like this")
+    Similarity {
+        /// Embedding stack (multi-band GeoTIFF/COG)
+        input: PathBuf,
+        /// Read only this window, `min_x,min_y,max_x,max_y` in the stack's
+        /// CRS (an AlphaEarth tile is 8192² × 64 bands: 34 GB as f64)
+        #[arg(long, value_name = "MINX,MINY,MAXX,MAXY", allow_hyphen_values = true)]
+        bbox: Option<String>,
+        /// Output similarity raster (Float64)
+        output: PathBuf,
+        /// Stored-value code: none | alphaearth | linear:SCALE[,OFFSET].
+        /// AlphaEarth int8 tiles need `alphaearth` (non-linear code).
+        #[arg(long, default_value = "none")]
+        dequantize: String,
+        /// Reference as a longitude,latitude (EPSG:4326) inside the stack
+        #[arg(long, value_name = "LON,LAT", allow_hyphen_values = true)]
+        ref_lonlat: Option<String>,
+        /// Reference as a row,col cell of the stack
+        #[arg(long, value_name = "ROW,COL")]
+        ref_cell: Option<String>,
+        /// Reference as an explicit vector, one value per band
+        #[arg(long, value_name = "V1,V2,...", allow_hyphen_values = true)]
+        ref_vec: Option<String>,
+        /// cosine (scale-free, [-1,1]) | dot | euclidean
+        #[arg(long, default_value = "cosine")]
+        metric: String,
+    },
+    /// Principal components of the field: fit on a sample, project every
+    /// cell, write one band per component (PC1..PCn; view the first three
+    /// as RGB)
+    Pca {
+        /// Embedding stack (multi-band GeoTIFF/COG)
+        input: PathBuf,
+        /// Read only this window, `min_x,min_y,max_x,max_y` in the stack's
+        /// CRS (an AlphaEarth tile is 8192² × 64 bands: 34 GB as f64)
+        #[arg(long, value_name = "MINX,MINY,MAXX,MAXY", allow_hyphen_values = true)]
+        bbox: Option<String>,
+        /// Output stack of component scores
+        output: PathBuf,
+        /// Stored-value code: none | alphaearth | linear:SCALE[,OFFSET]
+        #[arg(long, default_value = "none")]
+        dequantize: String,
+        /// Components to keep
+        #[arg(long, default_value = "3")]
+        components: usize,
+        /// Vectors used for the fit (regular subsample)
+        #[arg(long, default_value = "200000")]
+        samples: usize,
+        /// Reuse a model saved with --save-model instead of fitting (same
+        /// colours across tiles and years)
+        #[arg(long)]
+        model: Option<PathBuf>,
+        /// Save the fitted model as JSON
+        #[arg(long)]
+        save_model: Option<PathBuf>,
+    },
+    /// Find the AlphaEarth tile(s) covering a location in the product's
+    /// GeoParquet index (`aef_index.parquet`, next to the annual folders)
+    Locate {
+        /// `aef_index.parquet` (download once from
+        /// https://storage.googleapis.com/alphaearth_foundations/satellite_embedding/v1/annual/aef_index.parquet)
+        #[arg(long)]
+        index: PathBuf,
+        /// Longitude (EPSG:4326)
+        #[arg(long, allow_hyphen_values = true)]
+        lon: f64,
+        /// Latitude (EPSG:4326)
+        #[arg(long, allow_hyphen_values = true)]
+        lat: f64,
+        /// Year (default: every year in the index)
+        #[arg(long)]
+        year: Option<i64>,
+    },
+    /// L2 norm of the vector at every cell
+    Norm {
+        /// Embedding stack (multi-band GeoTIFF/COG)
+        input: PathBuf,
+        /// Read only this window, `min_x,min_y,max_x,max_y` in the stack's
+        /// CRS (an AlphaEarth tile is 8192² × 64 bands: 34 GB as f64)
+        #[arg(long, value_name = "MINX,MINY,MAXX,MAXY", allow_hyphen_values = true)]
+        bbox: Option<String>,
+        /// Output raster (Float64)
+        output: PathBuf,
+        /// Stored-value code: none | alphaearth | linear:SCALE[,OFFSET]
+        #[arg(long, default_value = "none")]
+        dequantize: String,
+    },
+}
+
+// ─── ECW subcommands ────────────────────────────────────────────────────
+
+/// Subcommands of `surtgis ecw` (native ECW v2 reader, docs/ecw_format.md).
+#[cfg(feature = "ecw")]
+#[derive(Subcommand)]
+pub enum EcwCommands {
+    /// Print header, georeferencing and pyramid information
+    Info {
+        /// Input .ecw file
+        input: PathBuf,
+    },
+    /// Decode to GeoTIFF (one file per band: <output>_b1.tif, ...)
+    ///
+    /// By default converts the whole image at full resolution; use
+    /// --reduction for overviews (1:2^N) and/or --window for a crop.
+    /// Windows are given in full-resolution cell coordinates even when
+    /// combined with --reduction.
+    Convert {
+        /// Input .ecw file
+        input: PathBuf,
+        /// Output prefix (writes <prefix>_b1.tif .. <prefix>_bN.tif)
+        output: PathBuf,
+        /// Decode at 1:2^N scale (0 = full resolution)
+        #[arg(long, default_value = "0")]
+        reduction: u32,
+        /// Crop window as: start_x start_y width height (full-res cells)
+        #[arg(long, num_args = 4, value_names = ["X", "Y", "W", "H"])]
+        window: Option<Vec<u32>>,
+    },
+}
+
+// ─── Flow (debris-flow solver) subcommands ──────────────────────────────
+
+/// Subcommands of `surtgis flow` (spec surtgis-flow v1.0 §8).
+#[cfg(feature = "flow")]
+#[derive(Subcommand)]
+pub enum FlowCommands {
+    /// Run a 2D debris-flow simulation (SWE + Voellmy) over a DEM
+    Run {
+        /// Input DEM GeoTIFF (square cells; NoData cells act as solid walls)
+        dem: PathBuf,
+        /// Release thickness raster [m] on the same grid as the DEM
+        release: PathBuf,
+        /// Output directory: h_t####.tif frames + manifest.json
+        outdir: PathBuf,
+        /// Voellmy Coulomb friction coefficient μ
+        #[arg(long, default_value = "0.15")]
+        mu: f32,
+        /// Voellmy turbulent friction ξ [m/s²]
+        #[arg(long, default_value = "200")]
+        xi: f32,
+        /// Physical time to simulate [s]
+        #[arg(long, default_value = "600")]
+        duration: f64,
+        /// Physical time between saved frames [s]
+        #[arg(long, default_value = "2")]
+        output_interval: f64,
+        /// Also write u_t####.tif / v_t####.tif velocity frames [m/s]
+        #[arg(long)]
+        dump_velocity: bool,
+        /// Write the arrival-time raster [s] to this file at the end
+        #[arg(long)]
+        arrival: Option<PathBuf>,
+        /// Maximum erodible depth raster [m] on the DEM grid — activates
+        /// bed entrainment (spec v1.1)
+        #[arg(long)]
+        erodible: Option<PathBuf>,
+        /// Entrainment growth coefficient K [1/m] (with --erodible)
+        #[arg(long, default_value = "1e-3", requires = "erodible")]
+        entrainment_k: f32,
+        /// Also write e_t####.tif cumulative-erosion frames [m]
+        #[arg(long, requires = "erodible")]
+        dump_erosion: bool,
+        /// Stop as soon as this fraction of the volume moves slower than
+        /// --rest-velocity, instead of always running the full --duration.
+        /// A runout is only meaningful once the flow has settled; without
+        /// this, the reported extent is wherever the front was when the
+        /// clock ran out. --duration then acts as the upper bound.
+        #[arg(long, value_name = "FRACTION")]
+        until_rest: Option<f64>,
+        /// Speed below which a cell counts as at rest [m/s] (with --until-rest)
+        #[arg(long, default_value = "0.5")]
+        rest_velocity: f32,
     },
 }
 
@@ -612,7 +916,7 @@ pub enum TerrainCommands {
         #[arg(short, long, default_value = "3")]
         radius: usize,
     },
-    /// Multi-directional hillshade (6 azimuths combined)
+    /// Multi-directional hillshade (Mark 1992: 225/270/315/360 deg, GDAL-compatible)
     MultiHillshade { input: PathBuf, output: PathBuf },
     /// LS-Factor for RUSLE soil erosion model
     LsFactor {
@@ -690,6 +994,12 @@ pub enum TerrainCommands {
         base: f64,
     },
     /// Cost distance from source points
+    /// Accumulated cost distance from source cells (8-connected Dijkstra)
+    ///
+    /// By default each step costs the mean cost of the two cells times the
+    /// step length in cells (1 cardinal, √2 diagonal). --map-units uses the
+    /// pixel size instead (metres on a projected grid), so a uniform cost
+    /// of 1 gives distance in metres.
     CostDistance {
         /// Cost surface raster
         input: PathBuf,
@@ -698,6 +1008,9 @@ pub enum TerrainCommands {
         sources: PathBuf,
         /// Output accumulated cost raster
         output: PathBuf,
+        /// Scale steps by the pixel size (map units) instead of cell steps
+        #[arg(long)]
+        map_units: bool,
     },
     /// Shape index (concavity/convexity, -1 to +1)
     ShapeIndex { input: PathBuf, output: PathBuf },
@@ -774,7 +1087,8 @@ pub enum TerrainCommands {
         /// Flow accumulation raster
         #[arg(long)]
         flow_acc: PathBuf,
-        /// Slope raster (radians)
+        /// Slope raster in RADIANS (`terrain slope --units radians`); a
+        /// raster with values above π/2 is refused as degrees or percent
         #[arg(long)]
         slope: PathBuf,
         output: PathBuf,
@@ -977,6 +1291,73 @@ pub enum TerrainCommands {
 
 #[derive(Subcommand)]
 pub enum HydrologyCommands {
+    /// Catchments of many lakes, with each lake as the outlet
+    ///
+    /// For every lake: a UTM window around it, each --dem warped onto it,
+    /// the lake rasterized (polygons) or extracted from --water-mask
+    /// (points), depressions filled everywhere except the lake, D8, and the
+    /// union of everything that drains into any lake cell. The window
+    /// doubles while the catchment or the lake reaches its edge. Writes one
+    /// CSV row per lake and DEM; with two or more DEMs `dem_spread` = max/min
+    /// catchment area across them (large values flag flat, uncertain
+    /// terrain).
+    #[cfg(all(feature = "cloud", feature = "projections"))]
+    LakeCatchment {
+        /// Lakes: polygons (preferred) or points; GeoJSON, GeoPackage,
+        /// Shapefile or GeoParquet, any CRS with an EPSG code
+        lakes: PathBuf,
+        /// Output CSV
+        output: PathBuf,
+        /// DEM source, repeatable: `stac:<catalog>:<collection>[:asset]`
+        /// (e.g. stac:pc:cop-dem-glo-30, stac:pc:alos-dem) or a local
+        /// GeoTIFF/COG file or directory of tiles (e.g. FABDEM)
+        #[arg(long = "dem", required = true)]
+        dems: Vec<String>,
+        /// Attribute holding the lake id (default: feature id or index)
+        #[arg(long)]
+        id_field: Option<String>,
+        /// Water raster for point lakes, repeatable, tried in order (the
+        /// first with data and a water body near the point wins). A rule
+        /// may follow the spec: `stac:pc:jrc-gsw:occurrence>=90` (JRC GSW,
+        /// to 78°N), `stac:pc:esa-worldcover:map=80` (to 82.75°N)
+        #[arg(long = "water-mask")]
+        water_masks: Vec<String>,
+        /// Water value for --water-mask specs without a rule (WorldCover: 80)
+        #[arg(long, default_value = "80")]
+        water_value: f64,
+        /// Water bodies smaller than this (cells) are not used as the
+        /// lake; the cell under the point is (status point_only)
+        #[arg(long, default_value = "4")]
+        min_lake_cells: usize,
+        /// Water-mask lakes below this compactness 4πA/P² (or cut by the
+        /// opening to under half their component) get status review:
+        /// possibly a river or merged lakes
+        #[arg(long, default_value = "0.06")]
+        min_compactness: f64,
+        /// Initial window side, km (grown to 3x the lake's extent if larger)
+        #[arg(long, default_value = "16")]
+        window_km: f64,
+        /// Largest window side, km
+        #[arg(long, default_value = "256")]
+        max_window_km: f64,
+        /// Cell size of the working UTM grid, metres
+        #[arg(long, default_value = "30")]
+        pixel_size: f64,
+        /// Lakes processed in parallel
+        #[arg(long, default_value = "4")]
+        jobs: usize,
+        /// Attempts per remote tile
+        #[arg(long, default_value = "3")]
+        retries: u32,
+        /// Also write each catchment mask (0 out, 1 catchment, 2 lake) here
+        #[arg(long)]
+        masks_dir: Option<PathBuf>,
+        /// Also report the local catchment: depressions at least this deep
+        /// (m) keep their own drainage instead of spilling into the lake
+        /// (`catchment_area_km2` is the connected, fill-and-spill one)
+        #[arg(long)]
+        sink_depth: Option<f64>,
+    },
     /// Fill sinks / depressions in DEM (Planchon-Darboux 2001)
     FillSinks {
         /// Input DEM file
@@ -998,8 +1379,20 @@ pub enum HydrologyCommands {
     FlowAccumulation {
         /// Input flow direction raster (D8 codes)
         input: PathBuf,
-        /// Output file (upstream cell count)
+        /// Output file (upstream cell count, or upstream weight sum with
+        /// --weights)
         output: PathBuf,
+        /// Weight raster on the same grid: each cell receives the sum of
+        /// the weights of every cell upstream of it (susceptible source
+        /// area, runoff, sediment or pollutant load). NaN/nodata weights
+        /// contribute nothing but still pass flow through. Read as f32.
+        #[arg(long, value_name = "RASTER")]
+        weights: Option<PathBuf>,
+        /// Add each cell's own weight (1 without --weights) to its result.
+        /// This is the convention of terra::flowAccumulation and
+        /// WhiteboxTools; without it a headwater cell is 0.
+        #[arg(long)]
+        include_self: bool,
     },
     /// Watershed delineation from flow direction
     Watershed {
@@ -1310,11 +1703,16 @@ pub enum ImageryCommands {
     },
     /// Compute custom spectral index from arithmetic expression
     ///
+    /// Supports + - * / ** (power), parentheses, unary minus and numeric
+    /// constants: the full grammar of the Awesome Spectral Indices
+    /// catalogue (Montero et al., 2023), so its parameter-free formulas
+    /// run verbatim with the ASI band names.
+    ///
     /// Common formulas:
     ///   NDVI:  "(NIR - Red) / (NIR + Red)"
     ///   EXG:   "2 * Green - Red - Blue"
     ///   VARI:  "(Green - Red) / (Green + Red - Blue)"
-    ///   Clay:  "SWIR1 / SWIR2"
+    ///   BAI:   "1.0 / ((0.1 - R) ** 2.0 + (0.06 - N) ** 2.0)"
     Calc {
         /// Arithmetic expression using band names
         #[arg(short, long)]
@@ -1401,12 +1799,16 @@ pub enum ImageryCommands {
     Reclassify {
         input: PathBuf,
         output: PathBuf,
-        /// Class definition as "min,max,value" (repeatable)
-        #[arg(long, value_name = "MIN,MAX,VALUE")]
+        /// Class definition as "min,max,value" (repeatable; negative bounds
+        /// are fine: `--class -0.5,0.5,1`)
+        #[arg(long, value_name = "MIN,MAX,VALUE", allow_hyphen_values = true)]
         class: Vec<String>,
-        /// Default value for unclassified cells
-        #[arg(long, default_value = "NaN")]
+        /// Default value for valid cells that match no class
+        #[arg(long, default_value = "NaN", allow_hyphen_values = true)]
         default: String,
+        /// Also give nodata (NaN) cells the default value, i.e. fill nodata
+        #[arg(long)]
+        fill_nodata: bool,
     },
     /// Per-pixel median composite across multiple rasters
     MedianComposite {
@@ -2011,6 +2413,17 @@ pub enum StacCommands {
         /// Maximum items to fetch and mosaic (caps RAM/time on wide queries)
         #[arg(long, default_value = "20", visible_alias = "max-scenes")]
         max_items: u32,
+        /// Attempts per tile before giving it up (transient HTTP errors are
+        /// retried with exponential backoff)
+        #[arg(long, default_value = "3")]
+        retries: u32,
+        /// Save the mosaic even if some tiles could not be fetched. Off by
+        /// default: an incomplete mosaic is an error, because tile-sized
+        /// NoData holes are indistinguishable from legitimate NoData in the
+        /// output. With this flag, missing tiles are listed loudly and in a
+        /// `<output>.partial.json` sidecar.
+        #[arg(long)]
+        allow_partial: bool,
         /// Output GeoTIFF file
         output: PathBuf,
     },
@@ -2062,6 +2475,12 @@ pub enum StacCommands {
         /// affected). Multi-band composites (--asset with commas) only.
         #[arg(long, default_value = "0")]
         max_tile_failures: usize,
+        /// Keep Sentinel-2 L2A digital numbers as served. By default tiles
+        /// with processing baseline >= 04.00 get ESA's BOA_ADD_OFFSET (-1000)
+        /// applied when the catalog has not (Planetary Computer), so every
+        /// scene is on the pre-2022 scale: reflectance = DN / 10000.
+        #[arg(long)]
+        no_harmonize: bool,
         /// Output GeoTIFF file
         output: PathBuf,
     },
@@ -2094,6 +2513,9 @@ pub enum StacCommands {
         /// Align output to this raster's grid (e.g., a DEM)
         #[arg(long)]
         align_to: Option<PathBuf>,
+        /// Keep Sentinel-2 L2A digital numbers as served (see `composite`)
+        #[arg(long)]
+        no_harmonize: bool,
         /// Output directory (one GeoTIFF per interval)
         output: PathBuf,
     },
@@ -2111,7 +2533,8 @@ pub enum StacCommands {
         /// Collection (e.g. "era5-pds")
         #[arg(long)]
         collection: String,
-        /// Variable name (e.g. "precipitation_amount_1hour_Accumulation")
+        /// Variable (STAC asset / Zarr array) to read; several separated by commas
+        /// (each variable then goes to its own `<output>/<variable>/` folder)
         #[arg(long)]
         variable: String,
         /// Datetime range (e.g. "2020-01-01/2020-12-31")
@@ -2120,6 +2543,12 @@ pub enum StacCommands {
         /// Temporal aggregation: none, daily-sum, daily-mean, monthly-mean, monthly-sum, yearly-mean, yearly-sum
         #[arg(long, default_value = "monthly-mean")]
         aggregate: String,
+
+        /// Stores (STAC items) read at the same time. Climate archives publish
+        /// one store per period, and each store costs a few latency-bound
+        /// requests, so reading several at once is the main speed-up.
+        #[arg(long, default_value_t = 4)]
+        concurrency: usize,
         /// Output directory (one GeoTIFF per interval)
         output: PathBuf,
     },
@@ -2810,17 +3239,30 @@ pub enum StatisticsCommands {
         #[arg(long)]
         circular: bool,
     },
-    /// Zonal statistics (JSON output by zone)
+    /// Zonal statistics per zone, written as JSON (or CSV)
+    ///
+    /// Zone 0 is background and is skipped unless --include-zero is given;
+    /// cells equal to the zone raster's nodata and NaN values are always
+    /// skipped.
     Zonal {
         /// Input values raster
         input: PathBuf,
         /// Zone raster (integer classes)
         #[arg(long)]
         zones: PathBuf,
-        /// Output JSON file
+        /// Output file: JSON, or CSV when the name ends in .csv
         output: PathBuf,
+        /// Output format; by default taken from the output extension
+        /// (.csv → csv, anything else → json)
+        #[arg(long, value_parser = ["json", "csv"])]
+        format: Option<String>,
+        /// Report zone 0 as a zone instead of treating it as background
+        #[arg(long)]
+        include_zero: bool,
     },
     /// Zonal statistics as raster (each cell = zone statistic)
+    ///
+    /// Zone 0 is background (NaN in the output) unless --include-zero.
     ZonalRaster {
         /// Input values raster
         input: PathBuf,
@@ -2832,6 +3274,9 @@ pub enum StatisticsCommands {
         /// Statistic: mean, std, min, max, range, sum, count, median
         #[arg(short, long, default_value = "mean")]
         stat: String,
+        /// Map zone 0 as a zone instead of treating it as background
+        #[arg(long)]
+        include_zero: bool,
     },
     /// Global Moran's I spatial autocorrelation (prints result)
     MoransI {
@@ -3052,4 +3497,118 @@ pub enum FluvialCommands {
         #[arg(long)]
         keep_crs: bool,
     },
+}
+
+/// Whether an option takes values that may legitimately start with `-`:
+/// every `--bbox` and every comma-separated list (`MINX,MINY,…`,
+/// `LON,LAT`, `MIN,MAX,VALUE`). West/south coordinates are negative, and
+/// clap would otherwise read `-70.5,-25.4` as an unknown flag `-7`.
+fn takes_hyphen_values(a: &clap::Arg) -> bool {
+    if a.is_positional() || !a.get_action().takes_values() {
+        return false;
+    }
+    a.get_id() == "bbox"
+        || a.get_value_names()
+            .is_some_and(|names| names.iter().any(|n| n.contains(',')))
+}
+
+fn relax_negative_values(cmd: clap::Command) -> clap::Command {
+    cmd.allow_negative_numbers(true)
+        .mut_args(|a| {
+            if takes_hyphen_values(&a) {
+                a.allow_hyphen_values(true)
+            } else {
+                a
+            }
+        })
+        .mut_subcommands(relax_negative_values)
+}
+
+/// The full command tree with negative values accepted everywhere:
+/// `allow_negative_numbers` on every subcommand (clap does not propagate
+/// it) so `--latitude -27.5` or `--offset -1000` parse, and
+/// `allow_hyphen_values` on every `--bbox` and comma-list option so
+/// `--bbox -70.53,-25.48,-70.38,-25.36` works without the `=` form.
+/// Applied as a rule rather than per argument, so a new subcommand cannot
+/// forget it.
+pub fn cli_command() -> clap::Command {
+    use clap::CommandFactory;
+    relax_negative_values(Cli::command())
+}
+
+#[cfg(test)]
+mod negative_values_tests {
+    use super::*;
+    use clap::FromArgMatches;
+
+    /// The command tree is deep enough to overflow the 2 MB default stack
+    /// of test threads; `main` runs on the 8 MB main thread.
+    fn with_stack<F: FnOnce() + Send + 'static>(f: F) {
+        std::thread::Builder::new()
+            .stack_size(64 << 20)
+            .spawn(f)
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
+        let mut m = cli_command().try_get_matches_from(args)?;
+        Cli::from_arg_matches_mut(&mut m)
+    }
+
+    #[test]
+    fn every_bbox_and_comma_list_accepts_leading_hyphen() {
+        with_stack(|| {
+            fn walk(cmd: &clap::Command, path: &str, bad: &mut Vec<String>) {
+                for a in cmd.get_arguments() {
+                    if takes_hyphen_values(a) && !a.is_allow_hyphen_values_set() {
+                        bad.push(format!("{path} --{}", a.get_id()));
+                    }
+                }
+                for s in cmd.get_subcommands() {
+                    walk(s, &format!("{path} {}", s.get_name()), bad);
+                }
+            }
+            let mut bad = Vec::new();
+            let cmd = cli_command();
+            walk(&cmd, "surtgis", &mut bad);
+            assert!(bad.is_empty(), "options rejecting negative values: {bad:?}");
+        });
+    }
+
+    #[test]
+    fn negative_bbox_without_equals_sign_parses() {
+        with_stack(|| {
+            #[allow(unused_mut)] // only pushed to with the `cloud` feature
+            let mut cases: Vec<&[&str]> = vec![&[
+                "surtgis",
+                "clip",
+                "in.tif",
+                "--bbox",
+                "-70.53,-25.48,-70.38,-25.36",
+                "out.tif",
+            ]];
+            #[cfg(feature = "cloud")]
+            cases.push(&[
+                "surtgis",
+                "stac",
+                "composite",
+                "--bbox",
+                "-70.62,-25.50,-70.58,-25.47",
+                "--collection",
+                "sentinel-2-l2a",
+                "--asset",
+                "red",
+                "--datetime",
+                "2024-01-01/2024-01-20",
+                "out.tif",
+            ]);
+            for args in cases {
+                if let Err(e) = parse(args) {
+                    panic!("{args:?}: {e}");
+                }
+            }
+        });
+    }
 }

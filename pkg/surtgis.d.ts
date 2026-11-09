@@ -72,6 +72,12 @@ export class SurtGIS {
   ndwi(green: Uint8Array, nir: Uint8Array): Uint8Array;
   savi(nir: Uint8Array, red: Uint8Array, opts?: SaviOptions): Uint8Array;
   normalizedDifference(a: Uint8Array, b: Uint8Array): Uint8Array;
+  /**
+   * Evaluate an arbitrary spectral-index formula (Awesome Spectral Indices
+   * grammar: + - * / ** parentheses) over named bands.
+   * `bandNames[i]` names `bandTiffs[i]`; all bands must share dimensions.
+   */
+  spectralIndex(formula: string, bandNames: string[], bandTiffs: Uint8Array[]): Uint8Array;
 
   // Morphology
   erode(dem: Uint8Array, opts?: RadiusOptions): Uint8Array;

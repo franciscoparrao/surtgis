@@ -380,7 +380,11 @@ fn enforce_connectivity_4(labels: &[i32], rows: usize, cols: usize, min_size: us
                 try_neighbour(row, col + 1);
             }
         }
-        if let Some((&winner, _)) = votes.iter().max_by_key(|&(_, &v)| v) {
+        // Ties go to the smallest label: independent of HashMap order.
+        if let Some((&winner, _)) = votes
+            .iter()
+            .max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0)))
+        {
             for &p in pixels {
                 out[p] = winner;
             }

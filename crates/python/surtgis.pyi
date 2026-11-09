@@ -107,7 +107,10 @@ Args:
 Returns:
     (bands, meta): `bands` is a dict of band key → 2D float64 numpy array
     (NaN = no data); `meta` is a dict with `transform` (GDAL 6-tuple),
-    `crs`, `width`, `height` shared by every band.
+    `crs`, `width`, `height` shared by every band, plus a quality report
+    (`scenes_used`, `total_tiles`, `failed_tiles`, `failed_dates`,
+    `last_error`) so degraded output from failed tiles is visible rather
+    than silently gap-filled.
     """
     ...
 
@@ -135,7 +138,12 @@ def convergence_index_compute(dem: npt.NDArray[np.float64], cell_size: float = 1
     ...
 
 def cost_distance_compute(cost_surface: npt.NDArray[np.float64], cell_size: float = 1.0, source_row: int = 0, source_col: int = 0) -> npt.NDArray[np.float64]:
-    """Compute cost distance from source cells.
+    """Compute accumulated cost distance from one source cell.
+
+Each step costs the mean cost of the two cells times the step length
+in map units: ``cell_size`` for cardinal steps, ``cell_size * sqrt(2)``
+on diagonals. With a uniform cost of 1 the result is the distance in
+the units of ``cell_size`` (300 at ten 30 m cells).
     """
     ...
 
@@ -211,13 +219,14 @@ Returns:
     """
     ...
 
-def extract_at_points(rasters: list[npt.NDArray[np.float64]], points_col: npt.NDArray[np.float64], points_row: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+def extract_at_points(rasters: list[npt.NDArray[np.float64]], points_col: npt.ArrayLike, points_row: npt.ArrayLike) -> npt.NDArray[np.float64]:
     """Extract pixel values from multiple rasters at point locations.
 
 Args:
     rasters: list of 2D numpy arrays (all same shape)
-    points_x: 1D array of X coordinates (in pixel space: column indices)
-    points_y: 1D array of Y coordinates (in pixel space: row indices)
+    points_col: 1D array-like of column indices (pixel space, any
+        numeric dtype; fractional values are floored to the cell)
+    points_row: 1D array-like of row indices, same length
 
 Returns:
     2D numpy array of shape (N_valid_points, N_rasters) with extracted values.
@@ -225,11 +234,13 @@ Returns:
 
 Example:
     import surtgis, rasterio, numpy as np
-    slope = rasterio.open("slope.tif").read(1).astype(np.float64)
+    with rasterio.open("slope.tif") as src:
+        slope = src.read(1).astype(np.float64)
+        rows, cols = rasterio.transform.rowcol(src.transform, xs, ys)
     aspect = rasterio.open("aspect.tif").read(1).astype(np.float64)
-    # Convert geo coords to pixel coords using rasterio transform
-    cols, rows = rasterio.transform.rowcol(transform, xs, ys)
     X = surtgis.extract_at_points([slope, aspect], cols, rows)
+
+``rasterio.transform.rowcol`` returns ``(rows, cols)``, in that order.
 
 GIL note: this function intentionally does NOT release the GIL — the
 gather loop reads the numpy buffers in place (no copy), so the borrows
@@ -362,9 +373,10 @@ def horizon_angle_map_compute(dem: npt.NDArray[np.float64], cell_size: float = 1
     """
     ...
 
-def idw_interpolation(points_xy: npt.NDArray[np.float64], values: npt.NDArray[np.float64], grid_rows: int = 100, grid_cols: int = 100, cellsize: float = 1.0, power: float = 2.0) -> npt.NDArray[np.float64]:
+def idw_interpolation(points_xy: npt.NDArray[np.float64], values: npt.ArrayLike, grid_rows: int = 100, grid_cols: int = 100, cellsize: float = 1.0, power: float = 2.0) -> npt.NDArray[np.float64]:
     """IDW interpolation from scattered points to a raster grid.
-Points given as (N,2) array of (x,y) coords, values as (N,) array.
+Points given as (N,2) array of (x,y) coords, values as an (N,) or (N, 1)
+array (any numeric dtype).
     """
     ...
 
@@ -450,10 +462,15 @@ def log_transform_compute(data: npt.NDArray[np.float64]) -> npt.NDArray[np.float
     """
     ...
 
-def mann_kendall_compute(stack: npt.NDArray[np.float64], cell_size: float = 1.0) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+def mann_kendall_compute(stack: npt.NDArray[np.float64], cell_size: float = 1.0, times: list[float] | None = None) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64]]:
     """Per-pixel Mann-Kendall trend test across a temporal stack `(time, rows,
 cols)`. Returns `(tau, p_value, trend, sens_slope)` — `trend` is
 1=increasing / -1=decreasing / 0=no significant trend at alpha=0.05.
+
+`times` (optional, one value per band) feeds Sen's slope so irregularly
+spaced acquisitions get the correct magnitude — the slope's units become
+"per unit of `times`". S/tau/p are rank statistics and ignore spacing.
+Without `times`, index spacing (0, 1, …, n−1) is used as before.
     """
     ...
 
@@ -527,7 +544,7 @@ def multidirectional_hillshade(dem: npt.NDArray[np.float64], cell_size: float = 
     """
     ...
 
-def natural_neighbor_interpolation(points_xy: npt.NDArray[np.float64], values: npt.NDArray[np.float64], grid_rows: int = 100, grid_cols: int = 100, cellsize: float = 1.0) -> npt.NDArray[np.float64]:
+def natural_neighbor_interpolation(points_xy: npt.NDArray[np.float64], values: npt.ArrayLike, grid_rows: int = 100, grid_cols: int = 100, cellsize: float = 1.0) -> npt.NDArray[np.float64]:
     """Natural neighbor (Sibson) interpolation from scattered points to a raster grid.
     """
     ...
@@ -567,7 +584,7 @@ def ndwi_compute(green: npt.NDArray[np.float64], nir: npt.NDArray[np.float64]) -
     """
     ...
 
-def nearest_neighbor_interpolation(points_xy: npt.NDArray[np.float64], values: npt.NDArray[np.float64], grid_rows: int = 100, grid_cols: int = 100, cellsize: float = 1.0) -> npt.NDArray[np.float64]:
+def nearest_neighbor_interpolation(points_xy: npt.NDArray[np.float64], values: npt.ArrayLike, grid_rows: int = 100, grid_cols: int = 100, cellsize: float = 1.0) -> npt.NDArray[np.float64]:
     """Nearest-neighbor interpolation from scattered points to a raster grid.
     """
     ...
@@ -597,7 +614,7 @@ def openness_positive(dem: npt.NDArray[np.float64], cell_size: float = 1.0, dire
     """
     ...
 
-def ordinary_kriging_interpolation(points_xy: npt.NDArray[np.float64], values: npt.NDArray[np.float64], grid_rows: int = 100, grid_cols: int = 100, cellsize: float = 1.0, max_points: int = 16) -> npt.NDArray[np.float64]:
+def ordinary_kriging_interpolation(points_xy: npt.NDArray[np.float64], values: npt.ArrayLike, grid_rows: int = 100, grid_cols: int = 100, cellsize: float = 1.0, max_points: int = 16) -> npt.NDArray[np.float64]:
     """Ordinary Kriging interpolation from scattered points to a raster grid.
 Points given as (N,2) array of (x,y) coords, values as (N,1) array —
 same input shape as `idw_interpolation`/`nearest_neighbor_interpolation`.
@@ -845,7 +862,9 @@ def tri_compute(dem: npt.NDArray[np.float64], cell_size: float = 1.0) -> npt.NDA
     ...
 
 def twi_compute(dem: npt.NDArray[np.float64], cell_size: float = 1.0) -> npt.NDArray[np.float64]:
-    """Compute TWI from a DEM (fill → flow_dir → flow_acc → slope → TWI).
+    """Compute TWI from a DEM: priority-flood fill → D8 → flow accumulation →
+slope in radians → ln(a / tan β). Same pipeline and result as the CLI's
+`hydrology twi`; the one-cell border, where the slope is undefined, is NaN.
     """
     ...
 
@@ -895,5 +914,4 @@ cells come back NaN) — the same convention as watershed/basin IDs
 elsewhere in this crate. Use positive zone ids only.
     """
     ...
-# Generated 125 function stubs
 

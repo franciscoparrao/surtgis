@@ -39,11 +39,13 @@ pub fn handle(
     let dem = read_geotiff::<f64, _>(input, None)
         .with_context(|| format!("read DEM: {}", input.display()))?;
 
-    let sphere_params = HillshadeParams {
-        azimuth: sun_azimuth,
-        altitude: sun_altitude,
-        z_factor,
-        normalized: true,
+    let sphere_params = {
+        let mut p = HillshadeParams::default();
+        p.azimuth = sun_azimuth;
+        p.altitude = sun_altitude;
+        p.z_factor = z_factor;
+        p.normalized = true;
+        p
     };
     let sphere = sphere_shade(&dem, sphere_params).context("sphere_shade failed")?;
 

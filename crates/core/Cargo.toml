@@ -18,6 +18,8 @@ shapefile = ["dep:shapefile"]
 geopackage = ["dep:rusqlite"]
 parquet = ["dep:parquet"]
 complex = ["dep:num-complex"]
+# Raster warping between CRSs via proj4rs (pure Rust; native, WASM, server)
+projections = ["dep:proj4rs"]
 
 [dependencies]
 thiserror.workspace = true
@@ -32,6 +34,7 @@ ordered-float.workspace = true
 gdal = { workspace = true, optional = true }
 parquet = { workspace = true, optional = true }
 num-complex = { workspace = true, optional = true }
+proj4rs = { workspace = true, optional = true }
 shapefile = { workspace = true, optional = true }
 rusqlite = { workspace = true, optional = true }
 tiff.workspace = true
@@ -42,6 +45,9 @@ tiff.workspace = true
 # `tiff`'s lower-level `DirectoryEncoder` directly instead and compress
 # strips ourselves with the same zlib wrapper `tiff` uses internally.
 flate2.workspace = true
+# Provenance hashes (see src/provenance.rs). Pure-Rust fallback on every
+# target; the SIMD/asm paths are picked up where the C toolchain exists.
+blake3.workspace = true
 
 [dev-dependencies]
 approx.workspace = true

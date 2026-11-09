@@ -238,12 +238,24 @@ impl StacClient {
         let mut all_items: Vec<StacItem> = Vec::new();
         let max = self.options.max_items;
 
+        let mut seen = std::collections::HashSet::new();
+
         // First page
         let mut page = self.search(params).await?;
 
         loop {
             let next = page.next_link().cloned();
-            all_items.append(&mut page.features);
+            // A page with no new item is a catalog (or cursor) that loops:
+            // stop rather than repeat it up to `max_items`.
+            let before = all_items.len();
+            all_items.extend(
+                page.features
+                    .drain(..)
+                    .filter(|i| seen.insert(i.id.clone())),
+            );
+            if all_items.len() == before {
+                break;
+            }
 
             if all_items.len() >= max {
                 break;
@@ -382,10 +394,10 @@ impl StacClient {
 
     // ── Private helpers ─────────────────────────────────────────────
 
-    async fn post_search(
+    async fn post_search<P: serde::Serialize + ?Sized>(
         &self,
         url: &str,
-        params: &StacSearchParams,
+        params: &P,
     ) -> Result<StacItemCollection> {
         let mut last_err = None;
 
@@ -472,10 +484,10 @@ impl StacClient {
                     .map_err(|e| CloudError::Network(format!("serializing params: {e}")))?
             };
 
-            // Parse the merged body back to StacSearchParams for retry logic
-            let merged: StacSearchParams = serde_json::from_value(body)
-                .map_err(|e| CloudError::Network(format!("parsing merged params: {e}")))?;
-            self.post_search(&link.href, &merged).await
+            // Sent as-is: a round trip through StacSearchParams would drop
+            // fields it does not model, such as Earth Search's `next`
+            // cursor, and fetch the first page again.
+            self.post_search(&link.href, &body).await
         } else {
             // GET-based pagination
             let resp = self

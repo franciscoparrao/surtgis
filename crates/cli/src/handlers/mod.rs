@@ -1,7 +1,12 @@
 pub mod classification;
 pub mod clip;
+#[cfg(feature = "ecw")]
+pub mod ecw;
+pub mod embeddings;
 pub mod extract;
 pub mod extract_patches;
+#[cfg(feature = "flow")]
+pub mod flow;
 pub mod fluvial;
 pub mod gfm_profiles;
 pub mod hydrology;
@@ -11,10 +16,13 @@ pub mod interpolation;
 pub mod landscape;
 pub mod morphology;
 pub mod mosaic;
+pub mod provenance;
 pub mod relief;
 #[cfg(feature = "relief-3d")]
 pub mod relief_3d;
 pub mod segmentation;
+#[cfg(feature = "server")]
+pub mod serve;
 // Pipeline workflows depend on STAC for input data acquisition; without
 // the cloud feature there's no useful pipeline operation available, and
 // compiling it triggers unresolved imports for super::stac. Gate the
@@ -34,6 +42,8 @@ pub mod cog;
 #[cfg(feature = "cloud")]
 pub mod stac;
 
+#[cfg(all(feature = "cloud", feature = "projections"))]
+pub mod lake_catchment;
 #[cfg(feature = "projections")]
 pub mod reproject;
 

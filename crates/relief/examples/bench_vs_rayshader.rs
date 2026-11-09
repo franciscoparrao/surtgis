@@ -51,11 +51,13 @@ fn main() {
     println!("config: 11 sun samples (rayshader anglebreaks seq(40, 50, 1)), az 315°");
 
     let ray_params = rayshader_equivalent_params();
-    let sphere_params = HillshadeParams {
-        azimuth: 315.0,
-        altitude: 45.0,
-        z_factor: 1.0,
-        normalized: true,
+    let sphere_params = {
+        let mut p = HillshadeParams::default();
+        p.azimuth = 315.0;
+        p.altitude = 45.0;
+        p.z_factor = 1.0;
+        p.normalized = true;
+        p
     };
 
     // Warmup

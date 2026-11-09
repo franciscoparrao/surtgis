@@ -2,7 +2,6 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -11,14 +10,8 @@ use surtgis_algorithms::imagery::{
     CloudMaskStrategy, HlsFmask, LandsatQaMask, NoCloudMask, S2SclMask,
 };
 use surtgis_cloud::blocking::{CogReaderBlocking, StacClientBlocking};
-use surtgis_cloud::composite::{
-    cog_cache_key, overview_for_target_resolution, reproject_bbox_between_crs,
-};
-use surtgis_cloud::{
-    BBox, CogReaderOptions, StacCatalog, StacClientOptions, StacItem, StacSearchParams,
-};
-
-use tracing::debug;
+use surtgis_cloud::composite::{cog_cache_key, overview_for_target_resolution};
+use surtgis_cloud::{BBox, CogReaderOptions, StacCatalog, StacClientOptions, StacSearchParams};
 
 use crate::commands::StacCommands;
 use crate::helpers::{done, parse_bbox, spinner, write_result};
@@ -167,16 +160,6 @@ pub fn get_known_catalogs() -> Vec<StacCatalogInfo> {
             description: "STAC Index: Registry of all public STAC catalogs worldwide",
         },
     ]
-}
-
-pub fn resolve_catalog_url(catalog: &str) -> String {
-    for known in get_known_catalogs() {
-        if catalog == known.shorthand {
-            return known.url.to_string();
-        }
-    }
-    // If not a shorthand, treat as full URL
-    catalog.to_string()
 }
 
 /// Collections available in each STAC catalog
@@ -626,6 +609,7 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             let href = client
                 .sign_asset_href(&stac_asset.href, item.collection.as_deref().unwrap_or(""))
                 .context("Failed to sign asset URL")?;
+            record_stac_item(&client, item, &asset_key);
 
             match format {
                 #[cfg(feature = "zarr")]
@@ -734,6 +718,8 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             asset,
             datetime,
             max_items,
+            retries,
+            allow_partial,
             output,
         } => {
             let cat = StacCatalog::from_str_or_url(&catalog);
@@ -792,6 +778,10 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
 
             let start = Instant::now();
             let mut rasters: Vec<surtgis_core::Raster<f64>> = Vec::new();
+            // Tiles that could not be fetched: (item id, last error). A
+            // missing tile leaves a hole of NoData indistinguishable from
+            // legitimate NoData in the output, so these decide success below.
+            let mut missing: Vec<(String, String)> = Vec::new();
 
             for (i, item) in items.iter().enumerate() {
                 // Plain progress line so pipelines / non-TTY logs see progress
@@ -808,10 +798,8 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                     Some(a) => a,
                     None => {
                         pb.finish_and_clear();
-                        eprintln!(
-                            "  Warning: item {} missing asset '{}', skipping",
-                            item.id, asset_key
-                        );
+                        eprintln!("  Warning: item {} missing asset '{}'", item.id, asset_key);
+                        missing.push((item.id.clone(), format!("missing asset '{asset_key}'")));
                         continue;
                     }
                 };
@@ -819,41 +807,40 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                 let href = client
                     .sign_asset_href(&stac_asset.href, item.collection.as_deref().unwrap_or(""))
                     .context("Failed to sign asset URL")?;
+                record_stac_item(&client, item, &asset_key);
 
-                let opts = CogReaderOptions::default();
-                let mut reader = match CogReaderBlocking::open(&href, opts) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        pb.finish_and_clear();
-                        eprintln!(
-                            "  Warning: failed to open COG for {}: {}, skipping",
-                            item.id, e
-                        );
-                        continue;
-                    }
-                };
+                // Open + read under retry: the HTTP client only retries at
+                // the request level (connect/429/503), but a tile fetch can
+                // also die while decoding the response body — the transient
+                // failure that motivated this (a second attempt succeeds).
+                let fetched = retry_with_backoff(retries, Duration::from_millis(500), || {
+                    let opts = CogReaderOptions::default();
+                    let mut reader = CogReaderBlocking::open(&href, opts)?;
 
-                // Auto-reproject bbox if COG is in a projected CRS
-                let read_bb = {
-                    use surtgis_cloud::reproject;
-                    let epsg = item
-                        .epsg()
-                        .or_else(|| reader.metadata().crs.as_ref().and_then(|c| c.epsg()));
-                    if let Some(epsg) = epsg {
-                        if !reproject::is_wgs84(epsg) {
-                            reproject::reproject_bbox_to_cog(&bb, epsg)
+                    // Auto-reproject bbox if COG is in a projected CRS
+                    let read_bb = {
+                        use surtgis_cloud::reproject;
+                        let epsg = item
+                            .epsg()
+                            .or_else(|| reader.metadata().crs.as_ref().and_then(|c| c.epsg()));
+                        if let Some(epsg) = epsg {
+                            if !reproject::is_wgs84(epsg) {
+                                reproject::reproject_bbox_to_cog(&bb, epsg)
+                            } else {
+                                bb
+                            }
                         } else {
                             bb
                         }
-                    } else {
-                        bb
-                    }
-                };
+                    };
 
-                // Same as `stac fetch`: `fetch-mosaic` mosaics scenes at their
-                // own native resolution (no separate output grid), so there's
-                // no ratio to compute here — always full res.
-                match reader.read_bbox::<f64>(&read_bb, None) {
+                    // Same as `stac fetch`: `fetch-mosaic` mosaics scenes at
+                    // their own native resolution (no separate output grid),
+                    // so there's no ratio to compute here — always full res.
+                    reader.read_bbox::<f64>(&read_bb, None)
+                });
+
+                match fetched {
                     Ok(raster) => {
                         pb.finish_and_clear();
                         let (rows, cols) = raster.shape();
@@ -870,15 +857,55 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                     Err(e) => {
                         pb.finish_and_clear();
                         eprintln!(
-                            "  Warning: failed to read tile {}: {}, skipping",
-                            item.id, e
+                            "  Warning: failed to fetch tile {} after {} attempts: {}",
+                            item.id,
+                            retries.max(1),
+                            e
                         );
+                        missing.push((item.id.clone(), e.to_string()));
                     }
                 }
             }
 
             if rasters.is_empty() {
                 anyhow::bail!("No tiles were successfully fetched");
+            }
+
+            if !missing.is_empty() {
+                let ids: Vec<&str> = missing.iter().map(|(id, _)| id.as_str()).collect();
+                if !allow_partial {
+                    anyhow::bail!(
+                        "fetch-mosaic: {} of {} tiles could not be fetched: {}. \
+                         Nothing was written — an incomplete mosaic has tile-sized \
+                         NoData holes indistinguishable from real NoData. Re-run \
+                         (transient errors are retried {} times), or pass \
+                         --allow-partial to save it anyway with a sidecar listing \
+                         the missing tiles.",
+                        missing.len(),
+                        items.len(),
+                        ids.join(", "),
+                        retries.max(1)
+                    );
+                }
+                let sidecar = output.with_extension("partial.json");
+                std::fs::write(
+                    &sidecar,
+                    serde_json::to_string_pretty(&partial_sidecar_json(
+                        items.len(),
+                        rasters.len(),
+                        &missing,
+                    ))
+                    .expect("sidecar json"),
+                )
+                .with_context(|| format!("Failed to write sidecar {}", sidecar.display()))?;
+                eprintln!(
+                    "WARNING: INCOMPLETE mosaic — {} of {} tiles missing ({}). \
+                     Missing-tile list written to {}",
+                    missing.len(),
+                    items.len(),
+                    ids.join(", "),
+                    sidecar.display()
+                );
             }
 
             let pb = spinner("Mosaicking tiles...");
@@ -889,8 +916,9 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             let elapsed = start.elapsed();
             let (rows, cols) = result.shape();
             println!(
-                "Mosaic: {} tiles -> {} x {} ({} cells)",
+                "Mosaic: {} of {} tiles -> {} x {} ({} cells)",
                 rasters.len(),
+                items.len(),
                 cols,
                 rows,
                 result.len()
@@ -914,1037 +942,33 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             strip_rows: cli_strip_rows,
             band_chunk_size,
             max_tile_failures,
+            no_harmonize,
             output,
         } => {
-            // Multi-band support: --asset "red,nir,swir16,blue"
-            // Single pass: shared STAC search + shared mask download.
+            // Both single- and multi-band composites run through the same
+            // CompositeEngine (R8/R9): shared STAC search + mask, byte-budgeted
+            // decode, and streaming output. `--asset "red,nir,..."` splits into
+            // bands; a single `--asset red` is just `n_bands == 1`. This
+            // retired the separate single-band path, which had no memory budget
+            // (fixed strip height, one unbounded thread per tile).
             let assets: Vec<&str> = asset.split(',').map(|s| s.trim()).collect();
-            if assets.len() > 1 {
-                return handle_multiband_composite(
-                    &catalog,
-                    &bbox,
-                    &collection,
-                    &assets,
-                    &datetime,
-                    max_scenes,
-                    align_to.as_ref(),
-                    &output,
-                    &naming,
-                    cache,
-                    cli_strip_rows,
-                    band_chunk_size,
-                    compress,
-                    max_tile_failures,
-                );
-            }
-
-            // Get collection profile (determines cloud masking strategy)
-            let profile = CollectionProfile::from_collection_name(&collection)?;
-            let mask_asset_name = profile.mask_asset_name();
-
-            eprintln!("📷 Collection: {}", profile.description());
-
-            let cat = StacCatalog::from_str_or_url(&catalog);
-            let bb = parse_bbox(&bbox)?;
-
-            // Estimate spatial tile count based on bbox size.
-            // S2 MGRS tiles: ~110 km, Landsat WRS: ~185 km.
-            // Use 60 km effective spacing (tiles overlap significantly).
-            // At equator, 1° ≈ 111 km. At 30° lat, 1° lon ≈ 96 km.
-            let bbox_width_deg = (bb.max_x - bb.min_x).abs();
-            let bbox_height_deg = (bb.max_y - bb.min_y).abs();
-            let bbox_width_km = bbox_width_deg * 111.0;
-            let bbox_height_km = bbox_height_deg * 111.0;
-            // Tile count: ~60 km effective spacing (S2 MGRS overlap ~50%)
-            let tiles_x = ((bbox_width_km / 60.0).ceil() as usize).max(1);
-            let tiles_y = ((bbox_height_km / 60.0).ceil() as usize).max(1);
-            let estimated_spatial_tiles = tiles_x * tiles_y;
-            // S2 has ~73 dates/year, Landsat ~25. Use 5x safety margin.
-            // Need: spatial_tiles × max_scenes × 5 items minimum (floor 1000).
-            let search_limit = ((estimated_spatial_tiles * max_scenes * 5).max(1000)) as u32;
-            let search_limit = search_limit.min(10000); // Cap at 10k
-
-            eprintln!(
-                "  bbox: {:.1}×{:.1} km, ~{} spatial tiles, search_limit={}",
-                bbox_width_km, bbox_height_km, estimated_spatial_tiles, search_limit
-            );
-
-            // Page size ≤ 1000 (PC API rejects higher); total via pagination.
-            // Page size capped per catalog (PC=1000, ES=250, custom=250)
-            let params = StacSearchParams::new()
-                .bbox(bb.min_x, bb.min_y, bb.max_x, bb.max_y)
-                .collections(&[collection.as_str()])
-                .datetime(&datetime)
-                .limit(search_limit.min(cat.max_page_size()));
-
-            let pb = spinner("Searching STAC catalog...");
-            let client_opts = StacClientOptions {
-                max_items: search_limit as usize,
-                ..StacClientOptions::default()
-            };
-            let client = StacClientBlocking::new(cat, client_opts)
-                .context("Failed to create STAC client")?;
-            let items = client.search_all(&params).context("STAC search failed")?;
-            pb.finish_and_clear();
-
-            if items.is_empty() {
-                anyhow::bail!("No items found matching the search criteria");
-            }
-
-            // Group items by acquisition date (YYYY-MM-DD)
-            let mut by_date: BTreeMap<String, Vec<&StacItem>> = BTreeMap::new();
-            for item in &items {
-                let date = item
-                    .properties
-                    .datetime
-                    .as_deref()
-                    .unwrap_or("")
-                    .get(..10)
-                    .unwrap_or("unknown")
-                    .to_string();
-                by_date.entry(date).or_default().push(item);
-            }
-
-            // Select dates by spatial coverage: prefer dates with more tiles.
-            // This ensures both S2 orbit columns (C+D) are represented even when
-            // they capture on different dates.
-            let mut date_coverage: Vec<(String, usize)> = by_date
-                .iter()
-                .map(|(d, items)| (d.clone(), items.len()))
-                .collect();
-            date_coverage.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-            let dates: Vec<String> = date_coverage
-                .into_iter()
-                .take(max_scenes)
-                .map(|(d, _)| d)
-                .collect();
-
-            // Log tiles per date to verify all tiles are included
-            let tiles_per_date: Vec<usize> = dates
-                .iter()
-                .map(|d| by_date.get(d).map(|g| g.len()).unwrap_or(0))
-                .collect();
-            let min_tiles = tiles_per_date.iter().min().copied().unwrap_or(0);
-            let max_tiles = tiles_per_date.iter().max().copied().unwrap_or(0);
-
-            // Check spatial coverage: do we have items covering the full bbox?
-            let mut item_south = f64::INFINITY;
-            let mut item_north = f64::NEG_INFINITY;
-            for item in &items {
-                if let Some(bbox_arr) = &item.bbox {
-                    if bbox_arr.len() >= 4 {
-                        item_south = item_south.min(bbox_arr[1]);
-                        item_north = item_north.max(bbox_arr[3]);
-                    }
-                }
-            }
-            let coverage_south = item_south <= bb.min_y + 0.1; // within 0.1° of bbox south
-            let coverage_north = item_north >= bb.max_y - 0.1;
-
-            println!(
-                "Found {} items across {} dates (using {} dates, {}-{} tiles/date)",
-                items.len(),
-                by_date.len(),
-                dates.len(),
-                min_tiles,
-                max_tiles,
-            );
-
-            if !coverage_south || !coverage_north {
-                eprintln!(
-                    "  ⚠ SPATIAL COVERAGE WARNING: items cover lat [{:.2}, {:.2}] but bbox needs [{:.2}, {:.2}]",
-                    item_south, item_north, bb.min_y, bb.max_y
-                );
-                if items.len() >= search_limit as usize {
-                    eprintln!(
-                        "  ⚠ Search hit limit ({}) — may need more items for full coverage. Consider reducing date range.",
-                        search_limit
-                    );
-                }
-            }
-
-            let start = Instant::now();
-
-            // -- Phase 1: Resolve asset URLs for all items (no data download) --
-            // For each date, collect (data_href, scl_href, epsg) tuples
-            #[allow(dead_code)]
-            /// Per-tile info including its native EPSG for bbox reprojection.
-            ///
-            /// Stores both signed and original (unsigned) asset hrefs so that
-            /// SAS tokens can be re-signed during long-running strip processing
-            /// (PC tokens expire after ~1 hour).
-            struct TileRef {
-                data_href: String,
-                scl_href: String,
-                /// Original unsigned data href (for re-signing expired tokens)
-                original_data_href: String,
-                /// Original unsigned mask href (for re-signing expired tokens)
-                original_scl_href: String,
-                epsg: Option<u32>,
-                /// When the SAS token was last signed
-                signed_at: Instant,
-            }
-
-            struct SceneInfo {
-                date: String,
-                tiles: Vec<TileRef>,
-                epsg: Option<u32>, // EPSG of the first tile (for output grid)
-            }
-
-            let mut scenes: Vec<SceneInfo> = Vec::new();
-
-            for date in &dates {
-                let group = &by_date[date];
-                let mut tiles = Vec::new();
-                let mut scene_epsg = None;
-
-                let mut sign_failures = 0usize;
-                let mut asset_missing = 0usize;
-
-                let mut mask_missing = 0usize;
-                let is_verbose = tracing::enabled!(tracing::Level::DEBUG);
-
-                for item in group {
-                    let tile_epsg = item.epsg();
-                    let item_id = item.id.as_str();
-
-                    // Resolve data asset: keep both original href (for re-signing) and signed href
-                    let data_result = match resolve_asset_key(item, &asset) {
-                        Some((resolved_key, a)) => {
-                            debug!("item={} asset='{}' → '{}' ✓", item_id, asset, resolved_key);
-                            let original = a.href.clone();
-                            match client
-                                .sign_asset_href(&a.href, item.collection.as_deref().unwrap_or(""))
-                            {
-                                Ok(h) => Some((h, original)),
-                                Err(e) => {
-                                    sign_failures += 1;
-                                    debug!("item={} asset='{}' sign FAILED: {}", item_id, asset, e);
-                                    None
-                                }
-                            }
-                        }
-                        None => {
-                            asset_missing += 1;
-                            if is_verbose || (scenes.is_empty() && tiles.is_empty()) {
-                                let available: Vec<&str> =
-                                    item.assets.keys().map(|k| k.as_str()).collect();
-                                eprintln!(
-                                    "    [resolve] item={} data asset '{}' NOT FOUND. Available: {}",
-                                    item_id,
-                                    asset,
-                                    available.join(", ")
-                                );
-                            }
-                            None
-                        }
-                    };
-
-                    // Resolve mask asset: keep both original and signed hrefs
-                    let scl_result = mask_asset_name.and_then(|mask_name| match resolve_asset_key(
-                        item, mask_name,
-                    ) {
-                        Some((resolved_key, a)) => {
-                            debug!(
-                                "item={} mask='{}' → '{}' ✓",
-                                item_id, mask_name, resolved_key
-                            );
-                            let original = a.href.clone();
-                            match client
-                                .sign_asset_href(&a.href, item.collection.as_deref().unwrap_or(""))
-                            {
-                                Ok(h) => Some((h, original)),
-                                Err(_) => {
-                                    sign_failures += 1;
-                                    None
-                                }
-                            }
-                        }
-                        None => {
-                            mask_missing += 1;
-                            if is_verbose && mask_missing <= 2 {
-                                eprintln!(
-                                    "    [resolve] item={} mask '{}' not found → no cloud masking",
-                                    item_id, mask_name
-                                );
-                            }
-                            None
-                        }
-                    });
-
-                    // Data asset is required; mask asset is optional.
-                    if let Some((dh, orig_dh)) = data_result {
-                        if scene_epsg.is_none() {
-                            scene_epsg = tile_epsg;
-                        }
-                        let (sh, orig_sh) = scl_result.unwrap_or_default();
-                        tiles.push(TileRef {
-                            data_href: dh,
-                            scl_href: sh,
-                            original_data_href: orig_dh,
-                            original_scl_href: orig_sh,
-                            epsg: tile_epsg,
-                            signed_at: Instant::now(),
-                        });
-                    }
-                }
-
-                if tiles.is_empty() {
-                    eprintln!(
-                        "  ⚠ {}: 0 tiles resolved (items={}, sign_fail={}, data_missing={}, mask_missing={})",
-                        date,
-                        group.len(),
-                        sign_failures,
-                        asset_missing,
-                        mask_missing
-                    );
-                } else if mask_missing > 0 && scenes.is_empty() {
-                    eprintln!(
-                        "  ℹ {}: {} tiles (mask unavailable for {} items → no cloud masking)",
-                        date,
-                        tiles.len(),
-                        mask_missing
-                    );
-                }
-
-                if !tiles.is_empty() {
-                    scenes.push(SceneInfo {
-                        date: date.clone(),
-                        tiles,
-                        epsg: scene_epsg,
-                    });
-                }
-            }
-
-            if scenes.is_empty() {
-                anyhow::bail!("No valid scenes found");
-            }
-
-            // -- Phase 2: Determine output grid from first scene's metadata --
-            let first_href = &scenes[0].tiles[0].data_href;
-            let opts = CogReaderOptions::default();
-            let probe_reader =
-                CogReaderBlocking::open(first_href, opts).context("Failed to probe first COG")?;
-            let probe_meta = probe_reader.metadata();
-
-            // Determine output grid:
-            // If --align-to is present, use the DEM reference grid directly
-            // (avoids the unreliable post-composite resample step).
-            // Otherwise, use the COG native grid.
-            let (out_cols, out_rows, out_transform, out_crs, cog_bb);
-
-            eprintln!(
-                "  align_to = {:?}",
-                align_to.as_ref().map(|p| p.display().to_string())
-            );
-            if let Some(ref align_path) = align_to {
-                // Use reference DEM grid
-                let reference: surtgis_core::Raster<f64> =
-                    surtgis_core::io::read_geotiff(align_path, None)
-                        .context("Failed to read alignment reference raster")?;
-                let rgt = reference.transform();
-                let (rr, rc) = reference.shape();
-
-                out_rows = rr;
-                out_cols = rc;
-                out_transform = *rgt;
-                out_crs = reference.crs().cloned();
-
-                // Compute bbox from reference grid (in its CRS)
-                let min_x = rgt.origin_x;
-                let max_y = rgt.origin_y;
-                let max_x = min_x + rc as f64 * rgt.pixel_width;
-                let min_y = max_y + rr as f64 * rgt.pixel_height; // pixel_height is negative
-                cog_bb = BBox::new(min_x, min_y, max_x, max_y);
-
-                eprintln!(
-                    "  Using reference grid from --align-to: {}x{} px=({:.1},{:.1})",
-                    rc, rr, rgt.pixel_width, rgt.pixel_height
-                );
-            } else {
-                // Use COG native grid
-                let cog_bb_computed = {
-                    use surtgis_cloud::reproject;
-                    if let Some(epsg) = scenes[0].epsg {
-                        if !reproject::is_wgs84(epsg) {
-                            reproject::reproject_bbox_to_cog(&bb, epsg)
-                        } else {
-                            bb
-                        }
-                    } else {
-                        bb
-                    }
-                };
-                cog_bb = cog_bb_computed;
-
-                let pixel_width = probe_meta.geo_transform.pixel_width.abs();
-                let pixel_height = probe_meta.geo_transform.pixel_height.abs();
-                out_cols = ((cog_bb.max_x - cog_bb.min_x) / pixel_width).round() as usize;
-                out_rows = ((cog_bb.max_y - cog_bb.min_y) / pixel_height).round() as usize;
-
-                out_transform = surtgis_core::GeoTransform::new(
-                    cog_bb.min_x,
-                    cog_bb.max_y,
-                    pixel_width,
-                    -pixel_height,
-                );
-                out_crs = scenes[0].epsg.map(surtgis_core::CRS::from_epsg);
-            }
-
-            println!(
-                "Output grid: {} x {} ({:.1}M cells), {} dates",
-                out_cols,
-                out_rows,
-                (out_cols * out_rows) as f64 / 1e6,
-                scenes.len()
-            );
-            eprintln!(
-                "  Grid config: cols={} rows={} px=({:.1},{:.1})",
-                out_cols, out_rows, out_transform.pixel_width, out_transform.pixel_height
-            );
-            eprintln!(
-                "  Grid bbox: x=[{:.1}, {:.1}] y=[{:.1}, {:.1}]",
-                cog_bb.min_x, cog_bb.max_x, cog_bb.min_y, cog_bb.max_y
-            );
-
-            // -- Phase 3: Strip-by-strip processing --
-            let strip_rows = 512usize; // rows per output strip
-            let num_strips = (out_rows + strip_rows - 1) / strip_rows;
-            let n_scenes = scenes.len();
-
-            let out_epsg_for_tiles = out_crs.as_ref().and_then(|c| c.epsg());
-            let config = surtgis_core::io::StripWriterConfig {
-                rows: out_rows,
-                cols: out_cols,
-                transform: out_transform,
-                crs: out_crs,
-                nodata: Some(f64::NAN),
-                compress,
-                rows_per_strip: strip_rows as u32,
-            };
-
-            // Re-signing threshold: refresh SAS tokens if older than 30 minutes.
-            // PC tokens are valid ~1 hour; we refresh at 30 min to stay safe.
-            const TOKEN_REFRESH_THRESHOLD: Duration = Duration::from_secs(30 * 60);
-
-            let scenes_ref = &mut scenes;
-            let client_ref = &client;
-            // Get cloud masking strategy from collection profile
-            let cloud_mask_strategy = match &profile {
-                CollectionProfile::Sentinel2L2A {
-                    cloud_mask_strategy,
-                } => cloud_mask_strategy.clone(),
-                CollectionProfile::LandsatC2L2 {
-                    cloud_mask_strategy,
-                } => cloud_mask_strategy.clone(),
-                CollectionProfile::Sentinel1RTC => Arc::new(NoCloudMask),
-            };
-            let mask_ref = &cloud_mask_strategy;
-            let mut strip_idx_counter = 0usize;
-
-            surtgis_core::io::write_geotiff_streaming(
+            return handle_multiband_composite(
+                &catalog,
+                &bbox,
+                &collection,
+                &assets,
+                &datetime,
+                max_scenes,
+                align_to.as_ref(),
                 &output,
-                &config,
-                |_strip_idx, strip_out_rows| {
-                    let current_strip = strip_idx_counter;
-                    strip_idx_counter += 1;
-
-                    let row_start = current_strip * strip_rows;
-                    let row_end = (row_start + strip_out_rows).min(out_rows);
-                    let actual_rows = row_end - row_start;
-
-                    // Geographic bbox for this strip
-                    let ph = out_transform.pixel_height.abs();
-                    let strip_min_y = cog_bb.max_y - (row_end as f64 * ph);
-                    let strip_max_y = cog_bb.max_y - (row_start as f64 * ph);
-                    let strip_bb = BBox::new(
-                        cog_bb.min_x, strip_min_y, cog_bb.max_x, strip_max_y,
-                    );
-
-                    eprintln!("  Strip {}/{}: bbox y=[{:.0}, {:.0}]",
-                        current_strip + 1, num_strips, strip_min_y, strip_max_y);
-                    print!(
-                        "\r  Strip {}/{} (rows {}-{})...",
-                        current_strip + 1, num_strips, row_start, row_end
-                    );
-
-                    // Collect masked strips from each scene.
-                    // Strategy: read COG tiles at NATIVE resolution, mosaic+mask at native,
-                    // then resample the clean result to the output grid resolution.
-                    // This avoids tile alignment artifacts when COG res != output res.
-                    let mut scene_strips: Vec<ndarray::Array2<f64>> = Vec::with_capacity(n_scenes);
-
-                    // Reference raster for resampling scene results to output grid
-                    let strip_ref = {
-                        let mut r = surtgis_core::Raster::<f64>::new(actual_rows, out_cols);
-                        r.set_transform(surtgis_core::GeoTransform::new(
-                            strip_bb.min_x, strip_bb.max_y,
-                            out_transform.pixel_width, out_transform.pixel_height,
-                        ));
-                        r
-                    };
-
-                    for scene in scenes_ref.iter_mut() {
-                        let is_first_strip = current_strip == 0;
-
-                        // Re-sign SAS tokens if they are near expiry.
-                        // PC tokens are valid ~1h; we refresh at 30min to avoid
-                        // silent HTTP 403 failures during long composites.
-                        let token_age = scene.tiles.first()
-                            .map(|t| t.signed_at.elapsed());
-                        if token_age.map(|age| age > TOKEN_REFRESH_THRESHOLD).unwrap_or(false) {
-                            let age_secs = token_age.unwrap().as_secs();
-                            let mut refreshed = 0usize;
-                            for tile in &mut scene.tiles {
-                                if let Ok(h) = client_ref.sign_asset_href(&tile.original_data_href, "") {
-                                    tile.data_href = h;
-                                }
-                                if !tile.original_scl_href.is_empty() {
-                                    if let Ok(h) = client_ref.sign_asset_href(&tile.original_scl_href, "") {
-                                        tile.scl_href = h;
-                                    }
-                                }
-                                tile.signed_at = Instant::now();
-                                refreshed += 1;
-                            }
-                            eprintln!("    [token] Re-signed {} tiles for {} (tokens were {}s old)",
-                                refreshed, scene.date, age_secs);
-                        }
-
-                        // Expand strip_bb slightly to ensure it covers COG tiles
-                        // that may be offset from the DEM grid by a few pixels.
-                        let pad = 100.0; // 100m padding (covers 10 pixels at 10m)
-                        let tile_bb = BBox::new(
-                            strip_bb.min_x - pad,
-                            strip_bb.min_y - pad,
-                            strip_bb.max_x + pad,
-                            strip_bb.max_y + pad,
-                        );
-
-                        // Download all tiles in parallel using std threads.
-                        // Each tile involves 1-2 HTTP range requests (data + mask).
-                        let tile_results: Vec<(
-                            Option<surtgis_core::Raster<f64>>,
-                            Option<surtgis_core::Raster<f64>>,
-                        )> = {
-                            let mut handles = Vec::with_capacity(scene.tiles.len());
-                            let out_epsg = out_epsg_for_tiles;
-                            for (tile_idx, tile) in scene.tiles.iter().enumerate() {
-                                let data_href = tile.data_href.clone();
-                                let scl_href = tile.scl_href.clone();
-                                // Reproject strip bbox to tile's CRS if different from output CRS.
-                                // Without this, tiles in a different UTM zone silently return empty
-                                // (BBoxOutside) because the strip bbox doesn't intersect their extent.
-                                let bb = if let (Some(tile_epsg), Some(out_e)) = (tile.epsg, out_epsg) {
-                                    if tile_epsg != out_e {
-                                        reproject_bbox_between_crs(&tile_bb, out_e, tile_epsg)
-                                    } else {
-                                        tile_bb
-                                    }
-                                } else {
-                                    tile_bb
-                                };
-                                let first = is_first_strip && tile_idx == 0;
-                                let out_px = out_transform.pixel_width.abs();
-                                handles.push(std::thread::spawn(move || {
-                                    let data = read_cog_tile(&data_href, &bb, first, Some(out_px));
-                                    let mask = if scl_href.is_empty() {
-                                        None
-                                    } else {
-                                        read_cog_tile_raw(&scl_href, &bb, Some(out_px))
-                                    };
-                                    (data, mask)
-                                }));
-                            }
-                            handles.into_iter().map(|h| h.join().unwrap_or((None, None))).collect()
-                        };
-
-                        let mut data_tiles: Vec<surtgis_core::Raster<f64>> = Vec::new();
-                        let mut scl_tiles: Vec<surtgis_core::Raster<f64>> = Vec::new();
-                        let mut data_ok = 0usize;
-                        let mut data_fail = 0usize;
-                        let mut scl_ok = 0usize;
-
-                        for (data_opt, mask_opt) in tile_results {
-                            if let Some(r) = data_opt {
-                                data_tiles.push(r);
-                                data_ok += 1;
-                            } else {
-                                data_fail += 1;
-                            }
-                            if let Some(r) = mask_opt {
-                                scl_tiles.push(r);
-                                scl_ok += 1;
-                            }
-                        }
-
-                        if is_first_strip {
-                            eprintln!("  ℹ {}: {} tiles (parallel), data={}/{} mask={}",
-                                scene.date, scene.tiles.len(),
-                                data_ok, data_ok + data_fail, scl_ok);
-                        }
-
-                        if data_tiles.is_empty() {
-                            if is_first_strip {
-                                eprintln!("  ⚠ {}: SKIPPED (no data tiles)", scene.date);
-                            }
-                            continue;
-                        }
-
-                        // Unify CRS: reproject tiles to the CRS of the first tile
-                        // This handles multi-UTM-zone regions (e.g., EPSG:32719 + EPSG:32720)
-                        fn unify_crs(tiles: &mut Vec<surtgis_core::Raster<f64>>) {
-                            if tiles.len() <= 1 { return; }
-                            let target_epsg = tiles[0].crs().and_then(|c| c.epsg());
-                            if let Some(target) = target_epsg {
-                                for i in 1..tiles.len() {
-                                    if let Some(src_epsg) = tiles[i].crs().and_then(|c| c.epsg()) {
-                                        if src_epsg != target {
-                                            if let Some(reprojected) = surtgis_cloud::reproject::reproject_raster_utm(&tiles[i], src_epsg, target) {
-                                                tiles[i] = reprojected;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        unify_crs(&mut data_tiles);
-                        if !scl_tiles.is_empty() {
-                            unify_crs(&mut scl_tiles);
-                        }
-
-                        // Mosaic spatial tiles for this date's strip
-                        if is_first_strip {
-                            eprintln!("  ℹ {}: mosaic input: data={} mask={} tiles",
-                                scene.date, data_tiles.len(), scl_tiles.len());
-                        }
-                        let data_m = if data_tiles.len() == 1 {
-                            data_tiles.into_iter().next().unwrap()
-                        } else {
-                            let refs: Vec<&surtgis_core::Raster<f64>> = data_tiles.iter().collect();
-                            match surtgis_core::mosaic(&refs, None) {
-                                Ok(m) => m,
-                                Err(e) => {
-                                    eprintln!("  ⚠ Mosaic failed for date (data): {}", e);
-                                    continue;
-                                }
-                            }
-                        };
-
-                        // Mosaic mask tiles (optional — may be empty for collections without cloud mask)
-                        let scl_m = if scl_tiles.is_empty() {
-                            None
-                        } else if scl_tiles.len() == 1 {
-                            Some(scl_tiles.into_iter().next().unwrap())
-                        } else {
-                            let refs: Vec<&surtgis_core::Raster<f64>> = scl_tiles.iter().collect();
-                            match surtgis_core::mosaic(&refs, None) {
-                                Ok(m) => Some(m),
-                                Err(e) => {
-                                    eprintln!("  ⚠ Mosaic failed for date (mask): {}", e);
-                                    None
-                                }
-                            }
-                        };
-
-                        // Diagnose between each step
-                        if is_first_strip {
-                            let dgt = data_m.transform();
-                            let data_valid = data_m.data().iter().filter(|v| v.is_finite() && **v > 0.0).count();
-                            let data_total = data_m.data().len();
-                            eprintln!("    [mosaic] data_m: {}x{} px=({:.1},{:.1}) valid={}/{} ({:.0}%)",
-                                data_m.shape().1, data_m.shape().0,
-                                dgt.pixel_width, dgt.pixel_height,
-                                data_valid, data_total,
-                                if data_total > 0 { data_valid as f64 / data_total as f64 * 100.0 } else { 0.0 });
-
-                            if let Some(ref scl) = scl_m {
-                                let scl_valid = scl.data().iter().filter(|v| v.is_finite()).count();
-                                let scl_total = scl.data().len();
-                                eprintln!("    [mosaic] mask: {}x{} px=({:.1},{:.1}) valid={}/{} ({:.0}%)",
-                                    scl.shape().1, scl.shape().0,
-                                    scl.transform().pixel_width, scl.transform().pixel_height,
-                                    scl_valid, scl_total,
-                                    if scl_total > 0 { scl_valid as f64 / scl_total as f64 * 100.0 } else { 0.0 });
-                            } else {
-                                eprintln!("    [mosaic] no mask — proceeding without cloud masking");
-                            }
-                        }
-
-                        // Debug: check mask value distribution before cloud mask
-                        if is_first_strip {
-                            if let Some(ref scl) = scl_m {
-                                let mut scl_hist = [0usize; 16];
-                                for v in scl.data().iter() {
-                                    let vi = *v as usize;
-                                    if vi < 16 { scl_hist[vi] += 1; }
-                                }
-                                let scl_nonzero: Vec<String> = scl_hist.iter().enumerate()
-                                    .filter(|(_, c)| **c > 0)
-                                    .map(|(i, c)| format!("{}:{}", i, c))
-                                    .collect();
-                                eprintln!("    [mask] histogram: {}", scl_nonzero.join(" "));
-                            }
-                        }
-
-                        // Cloud mask using collection-specific strategy (if mask available)
-                        let clean_result = if let Some(ref scl) = scl_m {
-                            mask_ref.mask(&data_m, scl).ok()
-                        } else {
-                            Some(data_m) // No mask → use data as-is
-                        };
-
-                        match clean_result {
-                            Some(clean) => {
-                                // Resample from native resolution to output grid
-                                let (clean_r, clean_c) = clean.shape();
-
-                                if current_strip == 0 {
-                                    let clean_valid = clean.data().iter().filter(|v| v.is_finite() && **v > 0.0).count();
-                                    let clean_total = clean.data().len();
-                                    let cgt = clean.transform();
-                                    let rgt = strip_ref.transform();
-                                    eprintln!("    [cloud] clean: {}x{} px=({:.1},{:.1}) valid={}/{} ({:.0}%)",
-                                        clean_c, clean_r, cgt.pixel_width, cgt.pixel_height,
-                                        clean_valid, clean_total,
-                                        if clean_total > 0 { clean_valid as f64 / clean_total as f64 * 100.0 } else { 0.0 });
-                                    eprintln!("    Resample: src origin=({:.1},{:.1}) px=({:.1},{:.1}) {}x{}",
-                                        cgt.origin_x, cgt.origin_y, cgt.pixel_width, cgt.pixel_height, clean_c, clean_r);
-                                    eprintln!("    Resample: dst origin=({:.1},{:.1}) px=({:.1},{:.1}) {}x{}",
-                                        rgt.origin_x, rgt.origin_y, rgt.pixel_width, rgt.pixel_height,
-                                        strip_ref.shape().1, strip_ref.shape().0);
-                                }
-
-                                let resampled = surtgis_core::resample_to_grid(
-                                    &clean, &strip_ref,
-                                    surtgis_core::ResampleMethod::Bilinear,
-                                ).unwrap_or(clean);
-
-                                let valid = resampled.data().iter().filter(|v| v.is_finite()).count();
-                                let total = resampled.data().len();
-                                if current_strip == 0 {
-                                    let pct = if total > 0 { valid as f64 / total as f64 * 100.0 } else { 0.0 };
-                                    eprintln!(", mosaic OK, resample {}x{}→{}x{}, {:.0}% clear ✓",
-                                        clean_c, clean_r,
-                                        resampled.shape().1, resampled.shape().0, pct);
-                                }
-                                if valid > 0 {
-                                    scene_strips.push(resampled.data().to_owned());
-                                } else if current_strip == 0 {
-                                    eprintln!("  ⚠ {}: 100% cloudy, skipped", scene.date);
-                                }
-                            }
-                            None => {
-                                if current_strip == 0 {
-                                    eprintln!("  ⚠ {}: cloud mask failed, skipping", scene.date);
-                                }
-                            }
-                        }
-                    }
-
-                    // Compute per-pixel median across scenes for this strip,
-                    // then fill remaining NaN with temporal nearest (most recent valid value).
-                    let mut output = ndarray::Array2::<f64>::from_elem(
-                        (actual_rows, out_cols), f64::NAN,
-                    );
-
-                    if !scene_strips.is_empty() {
-                        let n = scene_strips.len();
-
-                        // Diagnostic: check value ranges of individual scene strips
-                        if current_strip == 0 {
-                            for (si, strip) in scene_strips.iter().enumerate() {
-                                let vals: Vec<f64> = strip.iter().filter(|v| v.is_finite()).copied().collect();
-                                if !vals.is_empty() {
-                                    let min = vals.iter().cloned().fold(f64::INFINITY, f64::min);
-                                    let max = vals.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-                                    let over = vals.iter().filter(|&&v| v > 10000.0).count();
-                                    if si < 3 || over > 0 {
-                                        eprintln!("    scene_strip[{}]: n={} range=[{:.0},{:.0}] >10k={}",
-                                            si, vals.len(), min, max, over);
-                                    }
-                                }
-                            }
-                        }
-
-                        // Sort scene_strips by coverage (most pixels first) for greedy coverage
-                        let mut coverage: Vec<(usize, usize)> = scene_strips.iter().enumerate()
-                            .map(|(i, s)| {
-                                let valid = s.iter().filter(|v| v.is_finite()).count();
-                                (i, valid)
-                            })
-                            .collect();
-                        coverage.sort_by(|a, b| b.1.cmp(&a.1));
-
-                        // Phase 1: Median composite (all scenes)
-                        for r in 0..actual_rows {
-                            for c in 0..out_cols {
-                                let mut values: Vec<f64> = Vec::with_capacity(n);
-                                for strip in &scene_strips {
-                                    if r < strip.nrows() && c < strip.ncols() {
-                                        let v = strip[[r, c]];
-                                        if v.is_finite() {
-                                            values.push(v);
-                                        }
-                                    }
-                                }
-                                if !values.is_empty() {
-                                    values.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
-                                    let mid = values.len() / 2;
-                                    output[[r, c]] = if values.len() % 2 == 0 {
-                                        (values[mid - 1] + values[mid]) / 2.0
-                                    } else {
-                                        values[mid]
-                                    };
-                                }
-                            }
-                        }
-
-                        // Phase 2: Fill remaining NaN with temporal nearest
-                        // (use the scene with highest coverage first, greedy)
-                        let nan_before = output.iter().filter(|v| !v.is_finite()).count();
-                        if nan_before > 0 {
-                            for &(scene_idx, _) in &coverage {
-                                let strip = &scene_strips[scene_idx];
-                                let mut filled = 0usize;
-                                for r in 0..actual_rows {
-                                    for c in 0..out_cols {
-                                        if !output[[r, c]].is_finite()
-                                            && r < strip.nrows() && c < strip.ncols()
-                                        {
-                                            let v = strip[[r, c]];
-                                            if v.is_finite() {
-                                                output[[r, c]] = v;
-                                                filled += 1;
-                                            }
-                                        }
-                                    }
-                                }
-                                if filled == 0 { continue; }
-                                // Check if all filled
-                                let nan_remaining = output.iter().filter(|v| !v.is_finite()).count();
-                                if nan_remaining == 0 { break; }
-                            }
-                        }
-
-                        // Phase 3: Spatial fill for any remaining NaN
-                        // (simple 3x3 mean of valid neighbors, iterate until stable)
-                        let mut nan_remaining = output.iter().filter(|v| !v.is_finite()).count();
-                        if nan_remaining > 0 && nan_remaining < output.len() {
-                            let max_passes = 20;
-                            for _pass in 0..max_passes {
-                                let prev = output.clone();
-                                let mut filled_this_pass = 0usize;
-                                for r in 0..actual_rows {
-                                    for c in 0..out_cols {
-                                        if prev[[r, c]].is_finite() { continue; }
-                                        // Collect valid neighbors in 3x3 window
-                                        let mut sum = 0.0;
-                                        let mut cnt = 0u32;
-                                        for dr in -1i32..=1 {
-                                            for dc in -1i32..=1 {
-                                                let nr = r as i32 + dr;
-                                                let nc = c as i32 + dc;
-                                                if nr >= 0 && nr < actual_rows as i32
-                                                    && nc >= 0 && nc < out_cols as i32
-                                                {
-                                                    let v = prev[[nr as usize, nc as usize]];
-                                                    if v.is_finite() {
-                                                        sum += v;
-                                                        cnt += 1;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        if cnt >= 2 {
-                                            output[[r, c]] = sum / cnt as f64;
-                                            filled_this_pass += 1;
-                                        }
-                                    }
-                                }
-                                if filled_this_pass == 0 { break; }
-                                nan_remaining = output.iter().filter(|v| !v.is_finite()).count();
-                                if nan_remaining == 0 { break; }
-                            }
-                        }
-                    }
-
-                    let valid_count = output.iter().filter(|v| v.is_finite()).count();
-                    let total = output.len();
-                    let pct = if total > 0 { valid_count as f64 / total as f64 * 100.0 } else { 0.0 };
-                    if current_strip == 0 || current_strip == num_strips - 1 || scene_strips.is_empty() {
-                        // Value range diagnostic
-                        let valid_vals: Vec<f64> = output.iter().filter(|v| v.is_finite()).copied().collect();
-                        let (vmin, vmax, vmean) = if !valid_vals.is_empty() {
-                            let min = valid_vals.iter().cloned().fold(f64::INFINITY, f64::min);
-                            let max = valid_vals.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-                            let mean = valid_vals.iter().sum::<f64>() / valid_vals.len() as f64;
-                            (min, max, mean)
-                        } else { (0.0, 0.0, 0.0) };
-                        let over_10k = valid_vals.iter().filter(|&&v| v > 10000.0).count();
-                        eprintln!("  Strip {}/{}: scenes={}, {:.0}% valid, range=[{:.0},{:.0}] mean={:.0} >10k={}",
-                            current_strip + 1, num_strips,
-                            scene_strips.len(), pct, vmin, vmax, vmean, over_10k);
-                    }
-                    Ok(output)
-                },
-            ).context("Failed to write streaming composite")?;
-
-            // Verify written file
-            let file_size = std::fs::metadata(&output).map(|m| m.len()).unwrap_or(0);
-            let expected_size = (out_rows * out_cols * 4) as u64; // f32
-            eprintln!(
-                "  File written: {} bytes ({:.1} MB), expected ~{:.1} MB",
-                file_size,
-                file_size as f64 / 1e6,
-                expected_size as f64 / 1e6
+                &naming,
+                cache,
+                cli_strip_rows,
+                band_chunk_size,
+                compress,
+                max_tile_failures,
+                !no_harmonize,
             );
-
-            println!(); // newline after \r progress
-
-            // If --align-to is specified AND we didn't already use the reference grid,
-            // resample the output to match. (When align_to is present, we now write
-            // directly to the reference grid, so this step is skipped.)
-            // The `if false` keeps the legacy resample block intact for reference
-            // without making it reachable; clippy's correctness lint requires the
-            // condition stay free of an `&& <side-effect-free expr>` short-circuit.
-            #[allow(clippy::overly_complex_bool_expr)]
-            if false {
-                let align_path = align_to.as_ref().unwrap();
-                let composite: surtgis_core::Raster<f64> =
-                    surtgis_core::io::read_geotiff(&output, None)
-                        .context("Failed to re-read composite for alignment")?;
-                let reference: surtgis_core::Raster<f64> =
-                    surtgis_core::io::read_geotiff(align_path, None)
-                        .context("Failed to read alignment reference raster")?;
-
-                // Debug: log extents to diagnose alignment
-                let cgt = composite.transform();
-                let (cr, cc) = composite.shape();
-                let rgt = reference.transform();
-                let (rr, rc) = reference.shape();
-                eprintln!(
-                    "  Composite transform: origin=({:.1},{:.1}) px=({:.1},{:.1}) shape={}x{}",
-                    cgt.origin_x, cgt.origin_y, cgt.pixel_width, cgt.pixel_height, cr, cc
-                );
-                eprintln!(
-                    "  Reference transform: origin=({:.1},{:.1}) px=({:.1},{:.1}) shape={}x{}",
-                    rgt.origin_x, rgt.origin_y, rgt.pixel_width, rgt.pixel_height, rr, rc
-                );
-                // Check sample pixel mapping
-                let sample_x = rgt.origin_x + 0.5 * rgt.pixel_width;
-                let sample_y = rgt.origin_y + 0.5 * rgt.pixel_height;
-                let src_col_f = (sample_x - cgt.origin_x) / cgt.pixel_width - 0.5;
-                let src_row_f = (sample_y - cgt.origin_y) / cgt.pixel_height - 0.5;
-                eprintln!(
-                    "  Pixel(0,0) ref→comp: geo=({:.1},{:.1}) → src_pix=({:.1},{:.1}) bounds=(0..{},0..{})",
-                    sample_x, sample_y, src_col_f, src_row_f, cc, cr
-                );
-
-                let pb = spinner("Aligning to reference grid...");
-                let aligned = surtgis_core::resample_to_grid(
-                    &composite,
-                    &reference,
-                    surtgis_core::ResampleMethod::Bilinear,
-                )
-                .context("Failed to resample to reference grid")?;
-                pb.finish_and_clear();
-
-                let (ar, ac) = aligned.shape();
-                let valid_aligned = aligned.data().iter().filter(|v| v.is_finite()).count();
-                let total_aligned = ar * ac;
-                let pct_aligned = if total_aligned > 0 {
-                    valid_aligned as f64 / total_aligned as f64 * 100.0
-                } else {
-                    0.0
-                };
-                eprintln!(
-                    "  Aligned result: {}x{}, {}/{} valid ({:.1}%)",
-                    ac, ar, valid_aligned, total_aligned, pct_aligned
-                );
-                if valid_aligned == 0 {
-                    eprintln!("  ⚠ WARNING: Aligned raster has 0% valid pixels!");
-                    eprintln!("    Composite CRS may differ from reference DEM CRS.");
-                    eprintln!(
-                        "    Composite origin: ({:.1}, {:.1}), Reference origin: ({:.1}, {:.1})",
-                        cgt.origin_x, cgt.origin_y, rgt.origin_x, rgt.origin_y
-                    );
-                }
-
-                // Post-align spatial gap-fill (3x3 iterative mean)
-                // The resample may introduce NaN at edges where bilinear hits NaN neighbors
-                let nan_post = aligned.data().iter().filter(|v| !v.is_finite()).count();
-                let mut aligned = aligned;
-                if nan_post > 0 && nan_post < total_aligned {
-                    let (ar, ac) = aligned.shape();
-                    let max_passes = 30;
-                    for _pass in 0..max_passes {
-                        let prev = aligned.data().clone();
-                        let mut filled = 0usize;
-                        for r in 0..ar {
-                            for c in 0..ac {
-                                if prev[[r, c]].is_finite() {
-                                    continue;
-                                }
-                                let mut sum = 0.0;
-                                let mut cnt = 0u32;
-                                for dr in -1i32..=1 {
-                                    for dc in -1i32..=1 {
-                                        let nr = r as i32 + dr;
-                                        let nc = c as i32 + dc;
-                                        if nr >= 0 && nr < ar as i32 && nc >= 0 && nc < ac as i32 {
-                                            let v = prev[[nr as usize, nc as usize]];
-                                            if v.is_finite() {
-                                                sum += v;
-                                                cnt += 1;
-                                            }
-                                        }
-                                    }
-                                }
-                                if cnt >= 2 {
-                                    aligned.set(r, c, sum / cnt as f64);
-                                    filled += 1;
-                                }
-                            }
-                        }
-                        if filled == 0 {
-                            break;
-                        }
-                        let remaining = aligned.data().iter().filter(|v| !v.is_finite()).count();
-                        if remaining == 0 {
-                            break;
-                        }
-                    }
-                    let final_valid = aligned.data().iter().filter(|v| v.is_finite()).count();
-                    eprintln!(
-                        "  Post-align gap-fill: {:.1}% → {:.1}%",
-                        pct_aligned,
-                        final_valid as f64 / total_aligned as f64 * 100.0
-                    );
-                }
-
-                write_result(&aligned, &output, compress)?;
-                println!(
-                    "Aligned to reference: {} x {} -> {} x {}",
-                    out_cols, out_rows, ac, ar
-                );
-            }
-
-            let elapsed = start.elapsed();
-            let total_items: usize = scenes.iter().map(|s| s.tiles.len()).sum();
-            println!(
-                "Composite: {} dates ({} tiles) -> {} x {} ({:.1}M cells)",
-                scenes.len(),
-                total_items,
-                out_cols,
-                out_rows,
-                (out_cols * out_rows) as f64 / 1e6,
-            );
-            eprintln!(
-                "  ℹ If fewer dates than expected were used, check ⚠ warnings above.\n    Common causes: CRS mismatch across UTM zones, cloud mask failures."
-            );
-            done("STAC composite", &output, elapsed);
         }
 
         StacCommands::ListCatalogs { search } => {
@@ -2084,6 +1108,7 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             scl_asset,
             max_scenes,
             align_to,
+            no_harmonize,
             output,
         } => {
             // Multi-band support: --asset "red,nir,swir16,blue"
@@ -2112,6 +1137,7 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                         align_to.as_ref(),
                         &band_outdir,
                         compress,
+                        !no_harmonize,
                     )?;
                 }
                 println!(
@@ -2132,6 +1158,7 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
                     align_to.as_ref(),
                     &output,
                     compress,
+                    !no_harmonize,
                 )?;
             }
         }
@@ -2144,11 +1171,13 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             variable,
             datetime,
             aggregate,
+            concurrency,
             output,
         } => {
-            use surtgis_cloud::blocking::ZarrReaderBlocking;
-            use surtgis_cloud::zarr_auth::abfs_to_https_with_account;
-            use surtgis_cloud::{AggMethod, TimeReduction, ZarrReaderOptions};
+            use std::collections::HashMap;
+            use surtgis_cloud::{
+                AggMethod, TimeAggPartial, TimeReduction, TimeSelector, ZarrReaderOptions,
+            };
 
             let cat = StacCatalog::from_str_or_url(&catalog);
             let bb = parse_bbox(&bbox)?;
@@ -2159,130 +1188,267 @@ pub fn handle(action: StacCommands, compress: bool) -> Result<()> {
             // Parse datetime range
             let (dt_start, dt_end) = parse_datetime_range(&datetime)?;
 
-            // Search STAC for the collection item
+            // Collect EVERY item that covers the range. Climate archives
+            // publish one item (= one Zarr store) per period — ERA5-pds on
+            // Planetary Computer is monthly — so an annual aggregate spans
+            // several items. Taking only the first hit made `yearly-sum` the
+            // sum of a single month (the newest one, PC sorts descending),
+            // and `yearly-mean` the mean of that same month.
             let pb = spinner("Searching STAC catalog...");
-            let client = StacClientBlocking::new(cat, StacClientOptions::default())
+            let client_opts = StacClientOptions {
+                max_items: 10_000,
+                ..StacClientOptions::default()
+            };
+            let client = StacClientBlocking::new(cat, client_opts)
                 .context("Failed to create STAC client")?;
 
             let params = StacSearchParams::new()
                 .bbox(bb.min_x, bb.min_y, bb.max_x, bb.max_y)
                 .collections(&[collection.as_str()])
                 .datetime(&datetime)
-                .limit(1);
+                .limit(100);
 
-            let results = client.search(&params).context("STAC search failed")?;
-            let item = results.features.first().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "No items found for collection '{}' in range '{}'",
+            let items = client.search_all(&params).context("STAC search failed")?;
+            if items.is_empty() {
+                // A collection can declare an open-ended extent while its
+                // items stop earlier (era5-pds on Planetary Computer declares
+                // 1979–present but ends in 2020-12), so say what the
+                // catalogue actually returns without a date filter.
+                let probe = StacSearchParams::new()
+                    .bbox(bb.min_x, bb.min_y, bb.max_x, bb.max_y)
+                    .collections(&[collection.as_str()])
+                    .limit(1);
+                let hint = client
+                    .search(&probe)
+                    .ok()
+                    .and_then(|r| r.features.into_iter().next())
+                    .and_then(|it| item_time_extent(&it).map(|(_, end)| (it.id, end)))
+                    .map(|(id, end)| {
+                        format!(
+                            " First item the catalogue returns without a date filter: {} (ends {}).",
+                            id,
+                            end.format("%Y-%m-%d")
+                        )
+                    })
+                    .unwrap_or_default();
+                anyhow::bail!(
+                    "No items found for collection '{}' in range '{}'.{}",
                     collection,
-                    datetime
-                )
-            })?;
+                    datetime,
+                    hint
+                );
+            }
+
+            let variables: Vec<String> = variable
+                .split(',')
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+                .collect();
+            if variables.is_empty() {
+                anyhow::bail!("--variable is empty");
+            }
+            let multi = variables.len() > 1;
             pb.finish_and_clear();
 
-            println!(
-                "Item: {} [{}]",
-                item.id,
-                item.collection.as_deref().unwrap_or("-")
-            );
-
-            // Find the asset matching the variable name
-            let stac_asset = item.asset(&variable).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Asset '{}' not found. Available: {}",
-                    variable,
-                    item.assets.keys().cloned().collect::<Vec<_>>().join(", ")
-                )
-            })?;
-
-            // Get collection-level auth for Zarr
+            // Get collection-level auth for Zarr (once for every variable)
             let auth = client
                 .get_collection_zarr_auth(&collection)
                 .context("Failed to get collection auth")?;
-
-            let (sas_token, store_url) = if let Some((token, account, _container)) = auth {
-                let url = abfs_to_https_with_account(&stac_asset.href, Some(&account));
-                (Some(token), url)
-            } else {
-                (None, stac_asset.href.clone())
+            let (sas_token, account) = match auth {
+                Some((token, account, _container)) => (Some(token), Some(account)),
+                None => (None, None),
             };
-
             let opts = ZarrReaderOptions { sas_token };
-
-            // Open the Zarr store
-            let pb = spinner("Opening Zarr store...");
-            let reader = ZarrReaderBlocking::open(&store_url, &variable, opts)
-                .context("Failed to open Zarr store")?;
-
-            let meta = reader.metadata();
-            println!(
-                "Variable: {} — shape {:?}, dims {:?}",
-                meta.variable, meta.shape, meta.dimension_names
-            );
-            if let Some((t0, t1)) = &meta.time_range {
-                println!(
-                    "Time range: {} to {}",
-                    t0.format("%Y-%m-%d"),
-                    t1.format("%Y-%m-%d")
-                );
-            }
-            pb.finish_and_clear();
 
             // Generate time intervals
             let intervals = generate_intervals(dt_start, dt_end, interval_type);
             println!(
-                "Downloading {} intervals ({}) for {}...",
+                "{} intervals ({}) × {} variable{}",
                 intervals.len(),
                 aggregate,
-                variable
+                variables.len(),
+                if multi { "s" } else { "" }
             );
 
-            // Create output directory
-            std::fs::create_dir_all(&output).context("Failed to create output directory")?;
-
             let total_start = Instant::now();
-            for (i, (int_start, int_end, label)) in intervals.iter().enumerate() {
-                let time = if agg_method.is_some() {
-                    TimeReduction::Aggregate {
-                        start: *int_start,
-                        end: *int_end,
-                        method: agg_method.unwrap(),
+            for var in &variables {
+                let mut stores: Vec<ClimateStore> = items
+                    .iter()
+                    .filter_map(|item| {
+                        let asset = item.asset(var)?;
+                        let (start, end) = item_time_extent(item)?;
+                        Some(ClimateStore {
+                            id: item.id.clone(),
+                            href: asset.href.clone(),
+                            start,
+                            end,
+                        })
+                    })
+                    .collect();
+                stores.sort_by_key(|s| s.start);
+
+                if stores.is_empty() {
+                    let available: std::collections::BTreeSet<&str> = items
+                        .iter()
+                        .flat_map(|it| it.assets.keys().map(String::as_str))
+                        .collect();
+                    let msg = format!(
+                        "Asset '{}' not found in any of the {} items. Available: {}",
+                        var,
+                        items.len(),
+                        available.into_iter().collect::<Vec<_>>().join(", ")
+                    );
+                    if multi {
+                        eprintln!("Warning: {msg}");
+                        continue;
                     }
+                    anyhow::bail!(msg);
+                }
+
+                println!(
+                    "{}: {} stores ({} to {})",
+                    var,
+                    stores.len(),
+                    stores.first().unwrap().start.format("%Y-%m-%d"),
+                    stores.last().unwrap().end.format("%Y-%m-%d")
+                );
+
+                let out_dir = if multi {
+                    output.join(var)
                 } else {
-                    TimeReduction::Single(surtgis_cloud::TimeSelector::Nearest(*int_start))
+                    output.clone()
+                };
+                std::fs::create_dir_all(&out_dir).context("Failed to create output directory")?;
+
+                let suffix = agg_method
+                    .map(|m| match m {
+                        AggMethod::Mean => "mean",
+                        AggMethod::Sum => "sum",
+                        AggMethod::Min => "min",
+                        AggMethod::Max => "max",
+                    })
+                    .unwrap_or("value");
+
+                let Some(method) = agg_method else {
+                    // Single time step per interval: nearest to the interval
+                    // start, from the first store that covers it.
+                    let mut readers = HashMap::new();
+                    for (i, (int_start, _int_end, label)) in intervals.iter().enumerate() {
+                        let pb = spinner(&format!("[{}/{}] {}", i + 1, intervals.len(), label));
+                        let Some(store) = stores
+                            .iter()
+                            .find(|s| s.start <= *int_start && s.end >= *int_start)
+                        else {
+                            pb.finish_and_clear();
+                            eprintln!("  Warning: {} — no store covers this instant", label);
+                            continue;
+                        };
+                        let result =
+                            climate_reader(&mut readers, store, var, account.as_deref(), &opts)
+                                .and_then(|reader| {
+                                    let time =
+                                        TimeReduction::Single(TimeSelector::Nearest(*int_start));
+                                    Ok(reader.read_bbox(&bb, &time)?)
+                                });
+                        pb.finish_and_clear();
+                        match result {
+                            Ok(raster) => {
+                                let filename = format!("{}_{}.tif", label, suffix);
+                                write_result(&raster, &out_dir.join(&filename), compress)?;
+                                let (rows, cols) = raster.shape();
+                                println!("  {} — {}x{}", filename, cols, rows);
+                            }
+                            Err(e) => eprintln!("  Warning: {} — {}", label, e),
+                        }
+                    }
+                    continue;
                 };
 
-                let pb = spinner(&format!("[{}/{}] {}", i + 1, intervals.len(), label));
-                match reader.read_bbox(&bb, &time) {
-                    Ok(raster) => {
-                        let suffix = agg_method
-                            .map(|m| match m {
-                                AggMethod::Mean => "mean",
-                                AggMethod::Sum => "sum",
-                                AggMethod::Min => "min",
-                                AggMethod::Max => "max",
-                            })
-                            .unwrap_or("value");
-                        let filename = format!("{}_{}.tif", label, suffix);
-                        let out_path = output.join(&filename);
-                        write_result(&raster, &out_path, compress)?;
-                        let (rows, cols) = raster.shape();
-                        pb.finish_and_clear();
-                        println!("  {} — {}x{}", filename, cols, rows);
+                // One job per store: the intervals it overlaps. Each store is
+                // fetched ONCE for the union of its windows and bucketed in
+                // memory, and stores are read `concurrency` at a time — the
+                // per-store cost is a handful of latency-bound requests.
+                let jobs: Vec<(usize, Vec<usize>)> = stores
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(si, s)| {
+                        let idx: Vec<usize> = intervals
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, (a, b, _))| s.start <= *b && s.end >= *a)
+                            .map(|(i, _)| i)
+                            .collect();
+                        (!idx.is_empty()).then_some((si, idx))
+                    })
+                    .collect();
+
+                let pb = spinner(&format!(
+                    "{}: reading {} stores, {} at a time...",
+                    var,
+                    jobs.len(),
+                    concurrency.max(1)
+                ));
+                let results = read_stores_parallel(
+                    &stores,
+                    &jobs,
+                    &intervals,
+                    &bb,
+                    var,
+                    account.as_deref(),
+                    &opts,
+                    concurrency,
+                );
+                pb.finish_and_clear();
+
+                // Merge the per-store partials into one accumulator per interval
+                let mut acc: Vec<Option<TimeAggPartial>> =
+                    (0..intervals.len()).map(|_| None).collect();
+                let mut used = vec![0usize; intervals.len()];
+                for (j, res) in results {
+                    let (si, idx) = &jobs[j];
+                    match res {
+                        Ok(parts) => {
+                            for (k, part) in parts.into_iter().enumerate() {
+                                let Some(part) = part else { continue };
+                                let i = idx[k];
+                                used[i] += 1;
+                                match acc[i].as_mut() {
+                                    Some(a) => a.merge(&part)?,
+                                    None => acc[i] = Some(part),
+                                }
+                            }
+                        }
+                        Err(e) => eprintln!("  Warning: store {} — {:#}", stores[*si].id, e),
                     }
-                    Err(e) => {
-                        pb.finish_and_clear();
-                        eprintln!("  Warning: {} — {}", label, e);
-                    }
+                }
+
+                for (i, (_, _, label)) in intervals.iter().enumerate() {
+                    let Some(part) = acc[i].as_ref() else {
+                        eprintln!("  Warning: {} — no time steps in any store", label);
+                        continue;
+                    };
+                    let raster = part.finish(method);
+                    let filename = format!("{}_{}.tif", label, suffix);
+                    write_result(&raster, &out_dir.join(&filename), compress)?;
+                    let (rows, cols) = raster.shape();
+                    println!(
+                        "  {} — {}x{} ({} time steps from {} store{})",
+                        filename,
+                        cols,
+                        rows,
+                        part.time_steps,
+                        used[i],
+                        if used[i] == 1 { "" } else { "s" }
+                    );
                 }
             }
 
-            let elapsed = total_start.elapsed();
             println!(
-                "\nDone: {} intervals written to {} in {:.1?}",
+                "\nDone: {} intervals × {} variable{} in {:.1?}",
                 intervals.len(),
-                output.display(),
-                elapsed
+                variables.len(),
+                if multi { "s" } else { "" },
+                total_start.elapsed()
             );
         }
 
@@ -2677,54 +1843,65 @@ impl Drop for RssPeakTracker {
     }
 }
 
-/// Handle multi-band `stac composite` in a single pass.
+/// Resolves band/mask keys via the CLI's band-alias table.
 ///
-/// Shares the STAC search and SCL mask download across all bands, avoiding
-/// redundant HTTP requests. For N bands, this is ~N× faster than running
-/// N independent single-band composites.
-fn handle_multiband_composite(
+/// Shared by every engine-routed composite (`handle_multiband_composite` and
+/// `handle_time_series`), so it lives at module scope.
+struct CliResolver;
+impl surtgis_cloud::composite::AssetResolver for CliResolver {
+    fn resolve(&self, item: &surtgis_cloud::stac_models::StacItem, key: &str) -> Option<String> {
+        resolve_asset_key(item, key).map(|(_, a)| a.href.clone())
+    }
+}
+
+/// Applies the collection's cloud-mask strategy.
+struct CliMask(Arc<dyn CloudMaskStrategy>);
+impl surtgis_cloud::composite::MaskApplier for CliMask {
+    fn apply(
+        &self,
+        data: &surtgis_core::Raster<f64>,
+        mask: &surtgis_core::Raster<f64>,
+    ) -> surtgis_core::Raster<f64> {
+        self.0.mask(data, mask).unwrap_or_else(|_| data.clone())
+    }
+}
+
+/// Run one composite through the RAM-budgeted [`CompositeEngine`], streaming
+/// each requested band straight to its `band_paths[i]` GeoTIFF.
+///
+/// This is the shared core behind both `stac composite` (multi-band, single
+/// pass) and `stac time-series` (one call per temporal interval). The engine
+/// enforces the RAM budget (`SURTGIS_RAM_BUDGET_GB`, default 16 GB) and, when
+/// `align_to` is given, produces its output *directly* on that reference grid —
+/// so callers must NOT resample post-hoc.
+///
+/// Masking is driven by [`CollectionProfile`]: Sentinel-2 (SCL), Landsat
+/// (QA_PIXEL) and Sentinel-1 (none). Collections outside those three get no
+/// mask (fallback).
+#[allow(clippy::too_many_arguments)]
+fn run_engine_composite(
     catalog: &str,
-    bbox_str: &str,
     collection: &str,
+    bbox: &str,
     band_names: &[&str],
     datetime: &str,
     max_scenes: usize,
     align_to: Option<&std::path::PathBuf>,
-    output: &std::path::Path,
-    naming: &str,
-    use_cache: bool,
-    strip_rows_cfg: usize,
+    band_paths: &[std::path::PathBuf],
     band_chunk_size: usize,
+    strip_rows_cfg: usize,
+    use_cache: bool,
     compress: bool,
     max_tile_failures: usize,
-) -> Result<()> {
-    use surtgis_cloud::composite::{
-        AssetResolver, CompositeEngine, CompositeProgress, CompositeSpec, MaskApplier, OutputGrid,
-        StripPlan, StripSink,
-    };
-
-    let n_bands = band_names.len();
-    println!(
-        "Multi-band composite: {} bands [{}]",
-        n_bands,
-        band_names.join(", ")
-    );
+    harmonize: bool,
+    progress: &mut dyn surtgis_cloud::composite::CompositeProgress,
+) -> Result<surtgis_cloud::composite::CompositeReport> {
+    use surtgis_cloud::composite::{CompositeEngine, CompositeSpec, OutputGrid};
 
     let profile = CollectionProfile::from_collection_name(collection)?;
-    eprintln!(
-        "📷 Collection: {} (mask: {:?})",
-        profile.description(),
-        profile.mask_asset_name()
-    );
-    if use_cache {
-        let sample = cog_cache_path("sample", &BBox::new(0.0, 0.0, 1.0, 1.0));
-        if let Some(root) = sample.ancestors().nth(3) {
-            eprintln!("📦 COG cache enabled: {}", root.display());
-        }
-    }
 
     // --- Build the spec ---
-    let bb = parse_bbox(bbox_str)?;
+    let bb = parse_bbox(bbox)?;
     let align_grid = match align_to {
         Some(path) => {
             let reference: surtgis_core::Raster<f64> =
@@ -2761,30 +1938,6 @@ fn handle_multiband_composite(
     };
 
     // --- Injected collaborators (dependency inversion) ---
-
-    /// Resolves band/mask keys via the CLI's band-alias table.
-    struct CliResolver;
-    impl AssetResolver for CliResolver {
-        fn resolve(
-            &self,
-            item: &surtgis_cloud::stac_models::StacItem,
-            key: &str,
-        ) -> Option<String> {
-            resolve_asset_key(item, key).map(|(_, a)| a.href.clone())
-        }
-    }
-
-    /// Applies the collection's cloud-mask strategy.
-    struct CliMask(Arc<dyn CloudMaskStrategy>);
-    impl MaskApplier for CliMask {
-        fn apply(
-            &self,
-            data: &surtgis_core::Raster<f64>,
-            mask: &surtgis_core::Raster<f64>,
-        ) -> surtgis_core::Raster<f64> {
-            self.0.mask(data, mask).unwrap_or_else(|_| data.clone())
-        }
-    }
     let cloud_mask_strategy: Arc<dyn CloudMaskStrategy> = match &profile {
         CollectionProfile::Sentinel2L2A {
             cloud_mask_strategy,
@@ -2796,22 +1949,87 @@ fn handle_multiband_composite(
     };
     let mask_applier = CliMask(cloud_mask_strategy);
 
-    // Resolve the per-band output paths up front, then stream each band strip
-    // straight to disk (no persistent `n_bands × rows × cols × 8` RAM buffers).
+    // Stream each band strip straight to disk (no persistent
+    // `n_bands × rows × cols × 8` RAM buffers).
+    let mut sink = crate::composite_sink::StreamingTiffSink::new(band_paths.to_vec(), compress);
+
+    // --- Run the engine, then assemble the streamed scratch into GeoTIFFs ---
+    let mut engine = CompositeEngine::new(spec).context("Failed to create composite engine")?;
+    engine.set_harmonize(harmonize);
+    let report = engine
+        .run(&CliResolver, &mask_applier, &mut sink, progress)
+        .context("Composite run failed")?;
+    sink.finish()
+        .context("Failed to assemble composite output files")?;
+
+    Ok(report)
+}
+
+/// Handle multi-band `stac composite` in a single pass.
+///
+/// Shares the STAC search and SCL mask download across all bands, avoiding
+/// redundant HTTP requests. For N bands, this is ~N× faster than running
+/// N independent single-band composites.
+fn handle_multiband_composite(
+    catalog: &str,
+    bbox_str: &str,
+    collection: &str,
+    band_names: &[&str],
+    datetime: &str,
+    max_scenes: usize,
+    align_to: Option<&std::path::PathBuf>,
+    output: &std::path::Path,
+    naming: &str,
+    use_cache: bool,
+    strip_rows_cfg: usize,
+    band_chunk_size: usize,
+    compress: bool,
+    max_tile_failures: usize,
+    harmonize: bool,
+) -> Result<()> {
+    use surtgis_cloud::composite::{CompositeProgress, OutputGrid, StripPlan};
+
+    let n_bands = band_names.len();
+    println!(
+        "Multi-band composite: {} bands [{}]",
+        n_bands,
+        band_names.join(", ")
+    );
+
+    let profile = CollectionProfile::from_collection_name(collection)?;
+    eprintln!(
+        "📷 Collection: {} (mask: {:?})",
+        profile.description(),
+        profile.mask_asset_name()
+    );
+    if use_cache {
+        let sample = cog_cache_path("sample", &BBox::new(0.0, 0.0, 1.0, 1.0));
+        if let Some(root) = sample.ancestors().nth(3) {
+            eprintln!("📦 COG cache enabled: {}", root.display());
+        }
+    }
+
+    // Resolve the per-band output paths up front (the engine streams each band
+    // straight to disk via `run_engine_composite`).
     let stem = output.file_stem().unwrap_or_default().to_string_lossy();
     let use_asset_naming = naming.eq_ignore_ascii_case("asset");
-    let band_paths: Vec<std::path::PathBuf> = band_names
-        .iter()
-        .map(|band_name| {
-            if use_asset_naming {
-                output.with_file_name(format!("{}.tif", band_name))
-            } else {
-                output.with_file_name(format!("{}_{}.tif", stem, band_name))
-            }
-        })
-        .collect();
-    let mut sink = crate::composite_sink::StreamingTiffSink::new(band_paths.clone(), compress);
-
+    let band_paths: Vec<std::path::PathBuf> = if n_bands == 1 {
+        // Single band: write exactly the requested `output` path, matching the
+        // historical `stac composite --asset red -o out.tif` behaviour (the
+        // per-band naming below is only meaningful for multi-band runs).
+        vec![output.to_path_buf()]
+    } else {
+        band_names
+            .iter()
+            .map(|band_name| {
+                if use_asset_naming {
+                    output.with_file_name(format!("{}.tif", band_name))
+                } else {
+                    output.with_file_name(format!("{}_{}.tif", stem, band_name))
+                }
+            })
+            .collect()
+    };
     /// Bridges engine progress hooks to the CLI's existing stdout/stderr
     /// reporting and RAM diagnostics (RSS logging, intra-strip peak tracking,
     /// and mimalloc page reclamation at strip boundaries — allocator control
@@ -2823,6 +2041,21 @@ fn handle_multiband_composite(
         rss_peak: RssPeakTracker,
     }
     impl CompositeProgress for CliProgress {
+        fn harmonize_summary(
+            &mut self,
+            offset_tiles: usize,
+            total_tiles: usize,
+            offset_dn: f64,
+            enabled: bool,
+        ) {
+            if !enabled {
+                eprintln!("  Radiometric harmonisation OFF (--no-harmonize): DN as served");
+            } else if offset_tiles > 0 {
+                eprintln!(
+                    "  Radiometric harmonisation: BOA offset {offset_dn:+} DN applied to {offset_tiles}/{total_tiles} tiles (Sentinel-2 L2A, processing baseline >= 04.00; reflectance = DN / 10000)"
+                );
+            }
+        }
         fn search_done(&mut self, items: usize, dates_total: usize, dates_used: usize) {
             println!(
                 "Found {} items across {} dates (using {} dates)",
@@ -2924,13 +2157,28 @@ fn handle_multiband_composite(
         rss_peak: RssPeakTracker::start(Duration::from_secs(2)),
     };
 
-    // --- Run the engine ---
+    // --- Run the engine (spec build + resolver/mask + streamed sink live in
+    // the shared `run_engine_composite` helper, which also assembles the
+    // per-band GeoTIFFs before returning) ---
     let start = Instant::now();
     eprintln!("[ram] baseline before composite: RSS={} MB", read_rss_mb());
-    let mut engine = CompositeEngine::new(spec).context("Failed to create composite engine")?;
-    let report = engine
-        .run(&CliResolver, &mask_applier, &mut sink, &mut progress)
-        .context("Composite run failed")?;
+    let report = run_engine_composite(
+        catalog,
+        collection,
+        bbox_str,
+        band_names,
+        datetime,
+        max_scenes,
+        align_to,
+        &band_paths,
+        band_chunk_size,
+        strip_rows_cfg,
+        use_cache,
+        compress,
+        max_tile_failures,
+        harmonize,
+        &mut progress,
+    )?;
     println!(); // newline after the \r strip progress
 
     if report.failed_tiles > 0 {
@@ -2943,17 +2191,17 @@ fn handle_multiband_composite(
         );
     }
 
-    // --- Assemble the N output GeoTIFFs from the streamed scratch files ---
+    // The helper already assembled the N output GeoTIFFs; report their sizes.
     let grid = &report.grid;
-    let sizes = sink
-        .finish()
-        .context("Failed to assemble composite output files")?;
     for (bi, band_name) in band_names.iter().enumerate() {
+        let size = std::fs::metadata(&band_paths[bi])
+            .map(|m| m.len())
+            .unwrap_or(0);
         println!(
             "  ✓ {} → {} ({:.1} MB)",
             band_name,
             band_paths[bi].display(),
-            sizes.get(bi).copied().unwrap_or(0) as f64 / 1e6
+            size as f64 / 1e6
         );
     }
 
@@ -2971,104 +2219,6 @@ fn handle_multiband_composite(
     Ok(())
 }
 
-/// Read a COG tile (data band) at native resolution into a raster.
-/// Applies nodata filtering (DN=0 → NaN). Used by parallel tile download.
-/// `out_pixel_size`: target output-grid resolution, if known — lets the read
-/// use a COG overview instead of full resolution when the output grid is
-/// much coarser than this tile's native resolution (ratio > 1.5). See
-/// `overview_for_target_resolution`.
-fn read_cog_tile(
-    href: &str,
-    bb: &BBox,
-    log_meta: bool,
-    out_pixel_size: Option<f64>,
-) -> Option<surtgis_core::Raster<f64>> {
-    let mut dr = match CogReaderBlocking::open(href, CogReaderOptions::default()) {
-        Ok(r) => r,
-        Err(e) => {
-            let short_href = &href[..80.min(href.len())];
-            eprintln!("    [cog] open FAILED: {} (href={}...)", e, short_href);
-            return None;
-        }
-    };
-    let tile_meta = dr.metadata();
-    if log_meta {
-        eprintln!(
-            "    COG meta: {}x{} bps={} sf={} compression={} px={:.0}m",
-            tile_meta.width,
-            tile_meta.height,
-            tile_meta.bits_per_sample,
-            tile_meta.sample_format,
-            tile_meta.compression,
-            tile_meta.geo_transform.pixel_width.abs()
-        );
-    }
-    let overview = out_pixel_size.and_then(|out_px| {
-        overview_for_target_resolution(
-            tile_meta.width,
-            tile_meta.height,
-            tile_meta.geo_transform.pixel_width.abs(),
-            &dr.overviews(),
-            out_px,
-        )
-    });
-    let mut r: surtgis_core::Raster<f64> = match dr.read_bbox(bb, overview) {
-        Ok(r) => r,
-        Err(e) => {
-            // BBoxOutside is expected (tile doesn't cover this strip) — don't log
-            let msg = e.to_string();
-            if !msg.contains("bbox does not intersect") {
-                eprintln!("    [cog] read_bbox FAILED: {}", msg);
-            }
-            return None;
-        }
-    };
-    let nodata_val = tile_meta.nodata.unwrap_or(0.0);
-    for val in r.data_mut().iter_mut() {
-        if *val == nodata_val || *val == 0.0 {
-            *val = f64::NAN;
-        }
-    }
-    Some(r)
-}
-
-/// Read a COG tile (mask/SCL band) at native resolution without nodata filtering.
-/// See `read_cog_tile` for the `out_pixel_size` overview-selection behaviour.
-fn read_cog_tile_raw(
-    href: &str,
-    bb: &BBox,
-    out_pixel_size: Option<f64>,
-) -> Option<surtgis_core::Raster<f64>> {
-    let mut sr = match CogReaderBlocking::open(href, CogReaderOptions::default()) {
-        Ok(r) => r,
-        Err(e) => {
-            let short_href = &href[..80.min(href.len())];
-            eprintln!("    [cog] mask open FAILED: {} (href={}...)", e, short_href);
-            return None;
-        }
-    };
-    let meta = sr.metadata();
-    let overview = out_pixel_size.and_then(|out_px| {
-        overview_for_target_resolution(
-            meta.width,
-            meta.height,
-            meta.geo_transform.pixel_width.abs(),
-            &sr.overviews(),
-            out_px,
-        )
-    });
-    match sr.read_bbox(bb, overview) {
-        Ok(r) => Some(r),
-        Err(e) => {
-            let msg = e.to_string();
-            if !msg.contains("bbox does not intersect") {
-                eprintln!("    [cog] mask read_bbox FAILED: {}", msg);
-            }
-            None
-        }
-    }
-}
-
 /// Handle `surtgis stac time-series`: download one composite per temporal interval.
 fn handle_time_series(
     catalog: &str,
@@ -3082,6 +2232,7 @@ fn handle_time_series(
     align_to: Option<&std::path::PathBuf>,
     outdir: &std::path::PathBuf,
     compress: bool,
+    harmonize: bool,
 ) -> Result<()> {
     // Parse datetime range "YYYY-MM-DD/YYYY-MM-DD"
     let parts: Vec<&str> = datetime.split('/').collect();
@@ -3101,127 +2252,110 @@ fn handle_time_series(
         parts[1]
     );
 
-    // Optionally load align-to reference
-    let reference = match align_to {
-        Some(path) => {
-            let r: surtgis_core::Raster<f64> = surtgis_core::io::read_geotiff(path, None)
-                .context("Failed to read align-to reference")?;
-            Some(r)
-        }
-        None => None,
-    };
-
     std::fs::create_dir_all(outdir)?;
     let start = Instant::now();
 
-    // Prepare interval tasks
-    let tasks: Vec<(usize, SimpleDate, SimpleDate, String, String)> = intervals
-        .iter()
-        .enumerate()
-        .map(|(i, (win_start, win_end))| {
-            let win_dt = format!("{}/{}", format_date(win_start), format_date(win_end));
-            let label = format_date(win_start);
-            (i, *win_start, *win_end, win_dt, label)
-        })
-        .collect();
-
-    // Process intervals in parallel batches (3 concurrent to avoid API overload)
-    let max_concurrent = 3usize.min(tasks.len());
+    // Masking-semantics note (engine routing, R-timeseries): each interval now
+    // runs through the RAM-budgeted `CompositeEngine` (the same core as
+    // `stac composite`), instead of the legacy unbounded `fetch_stac_band`.
+    // The engine masks via `CollectionProfile` — Sentinel-2 (SCL), Landsat
+    // (QA_PIXEL) and Sentinel-1 (none) — which covers the realistic
+    // time-series case (e.g. NDVI over Sentinel-2). For masked collections
+    // *outside* those three the engine falls back to NO masking, whereas the
+    // old `fetch_stac_band` auto-introspected the STAC schema. Intervals run
+    // SEQUENTIALLY (one engine at a time): concurrent engines would each hold
+    // their own RAM budget, defeating the point of routing through the engine.
+    let total = intervals.len();
     let mut success = 0usize;
-    let mut metadata: Vec<serde_json::Value> = vec![serde_json::Value::Null; tasks.len()];
+    let mut metadata: Vec<serde_json::Value> = Vec::with_capacity(total);
 
-    for chunk_start in (0..tasks.len()).step_by(max_concurrent) {
-        let chunk_end = (chunk_start + max_concurrent).min(tasks.len());
-        let chunk = &tasks[chunk_start..chunk_end];
+    for (i, (win_start, win_end)) in intervals.iter().enumerate() {
+        let win_dt = format!("{}/{}", format_date(win_start), format_date(win_end));
+        let label = format_date(win_start);
+        println!(
+            "[{}/{}] {} → {}",
+            i + 1,
+            total,
+            format_date(win_start),
+            format_date(win_end)
+        );
 
-        // Download this batch in parallel
-        let results: Vec<(
-            usize,
-            std::result::Result<surtgis_core::Raster<f64>, String>,
-        )> = {
-            let mut handles = Vec::with_capacity(chunk.len());
-            for &(i, win_start, win_end, ref win_dt, ref _label) in chunk {
-                let cat = catalog.to_string();
-                let bb = bbox.to_string();
-                let col = collection.to_string();
-                let ast = asset.to_string();
-                let dt = win_dt.clone();
-                let ms = max_scenes;
+        let filename = format!("{}_{}.tif", asset, label);
+        let path = outdir.join(&filename);
+        let band_paths = vec![path.clone()];
+
+        // Headless progress: per-interval strip logging would spam. The
+        // interval summary line below is the user-facing progress here.
+        let mut progress = surtgis_cloud::composite::NoProgress;
+        let run = run_engine_composite(
+            catalog,
+            collection,
+            bbox,
+            &[asset],
+            &win_dt,
+            max_scenes,
+            align_to,
+            &band_paths,
+            1,   // band_chunk_size: single band per interval → minimum RAM
+            512, // strip_rows: engine default (memory model may cap it)
+            false,
+            compress,
+            0, // max_tile_failures: never abort, just gap-fill (as before)
+            harmonize,
+            &mut progress,
+        );
+
+        match run {
+            Ok(_report) => {
+                // The engine doesn't report valid% directly, so read the written
+                // GeoTIFF back to compute it (and grab the final grid dims). This
+                // also preserves the historical metadata/console format exactly.
+                let raster: surtgis_core::Raster<f64> =
+                    match surtgis_core::io::read_geotiff(&path, None) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            eprintln!(
+                                "  ⚠️ [{}/{}] Wrote {} but could not read it back: {}",
+                                i + 1,
+                                total,
+                                filename,
+                                e
+                            );
+                            continue;
+                        }
+                    };
+                let (rows, cols) = raster.shape();
+                let valid = raster.data().iter().filter(|v| v.is_finite()).count();
+                let cells = rows * cols;
+                let pct = if cells > 0 {
+                    valid as f64 / cells as f64 * 100.0
+                } else {
+                    0.0
+                };
+
                 println!(
-                    "[{}/{}] {} → {}",
+                    "  [{}/{}] → {} ({}x{}, {:.1}% valid)",
                     i + 1,
-                    tasks.len(),
-                    format_date(&win_start),
-                    format_date(&win_end)
+                    total,
+                    filename,
+                    cols,
+                    rows,
+                    pct
                 );
-                handles.push(std::thread::spawn(move || {
-                    let r = fetch_stac_band(&cat, &bb, &col, &ast, &dt, ms, None);
-                    (i, r.map_err(|e| e.to_string()))
+
+                metadata.push(serde_json::json!({
+                    "index": i,
+                    "date_start": format_date(win_start),
+                    "date_end": format_date(win_end),
+                    "file": filename,
+                    "rows": rows,
+                    "cols": cols,
+                    "valid_pct": (pct * 10.0).round() / 10.0,
                 }));
+                success += 1;
             }
-            handles.into_iter().filter_map(|h| h.join().ok()).collect()
-        };
-
-        // Write results and optionally align
-        for (i, result) in results {
-            let (_, win_start, win_end, _, ref label) = tasks[i];
-            match result {
-                Ok(raster) => {
-                    // Align to reference if provided
-                    let final_raster = if let Some(ref refr) = reference {
-                        surtgis_core::resample_to_grid(
-                            &raster,
-                            refr,
-                            surtgis_core::ResampleMethod::Bilinear,
-                        )
-                        .unwrap_or(raster)
-                    } else {
-                        raster
-                    };
-
-                    let (rows, cols) = final_raster.shape();
-                    let valid = final_raster.data().iter().filter(|v| v.is_finite()).count();
-                    let total = rows * cols;
-                    let pct = if total > 0 {
-                        valid as f64 / total as f64 * 100.0
-                    } else {
-                        0.0
-                    };
-
-                    let filename = format!("{}_{}.tif", asset, label);
-                    let path = outdir.join(&filename);
-                    write_result(&final_raster, &path, compress)?;
-
-                    println!(
-                        "  [{}/{}] → {} ({}x{}, {:.1}% valid)",
-                        i + 1,
-                        tasks.len(),
-                        filename,
-                        cols,
-                        rows,
-                        pct
-                    );
-
-                    metadata[i] = serde_json::json!({
-                        "index": i,
-                        "date_start": format_date(&win_start),
-                        "date_end": format_date(&win_end),
-                        "file": filename,
-                        "rows": rows,
-                        "cols": cols,
-                        "valid_pct": (pct * 10.0).round() / 10.0,
-                    });
-                    success += 1;
-                }
-                Err(e) => {
-                    eprintln!(
-                        "  ⚠️ [{}/{}] No data for {}: {}",
-                        i + 1,
-                        tasks.len(),
-                        label,
-                        e
-                    );
-                }
+            Err(e) => {
+                eprintln!("  ⚠️ [{}/{}] No data for {}: {}", i + 1, total, label, e);
             }
         }
     }
@@ -3237,7 +2371,7 @@ fn handle_time_series(
         "interval": interval,
         "total_intervals": intervals.len(),
         "successful": success,
-        "rasters": metadata.into_iter().filter(|v| !v.is_null()).collect::<Vec<_>>(),
+        "rasters": metadata,
     });
     std::fs::write(&meta_path, serde_json::to_string_pretty(&meta_json)?)?;
     println!("\nMetadata → {}", meta_path.display());
@@ -3376,30 +2510,178 @@ pub(crate) fn split_date_range(
     Ok(windows)
 }
 
-/// DEPRECATED: Use fetch_stac_band() instead
-/// Backward-compatible wrapper for Sentinel-2 specific fetching
-#[deprecated(since = "0.3.0", note = "use fetch_stac_band() instead")]
-pub fn fetch_s2_band_from_stac(
-    catalog: &str,
-    bbox: &str,
-    collection: &str,
-    asset: &str,
-    datetime: &str,
-    max_scenes: usize,
-    _scl_asset: &str,
-    _scl_keep: &str,
-    align_to: Option<&surtgis_core::Raster<f64>>,
-) -> Result<surtgis_core::Raster<f64>> {
-    // Delegate to new multi-collection function
-    // (scl_asset and scl_keep are ignored, profile determines masking strategy)
-    fetch_stac_band(
-        catalog, bbox, collection, asset, datetime, max_scenes, align_to,
-    )
+/// Run `op` up to `attempts` times (min 1), sleeping `base × 2^n` between
+/// tries. Returns the first success or the last error. Used per tile in
+/// `fetch-mosaic`: transient HTTP failures (e.g. a response body that dies
+/// mid-decode) typically succeed on the next attempt.
+fn retry_with_backoff<T, E: std::fmt::Display>(
+    attempts: u32,
+    base: Duration,
+    mut op: impl FnMut() -> std::result::Result<T, E>,
+) -> std::result::Result<T, E> {
+    let attempts = attempts.max(1);
+    let mut last = None;
+    for i in 0..attempts {
+        match op() {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                if i + 1 < attempts {
+                    // Same "attempt X of N" vocabulary as the give-up error
+                    // below (N = total attempts = 1 initial + retries).
+                    eprintln!("  retrying: attempt {} of {} after: {}", i + 2, attempts, e);
+                    std::thread::sleep(base * 2u32.pow(i));
+                }
+                last = Some(e);
+            }
+        }
+    }
+    Err(last.expect("attempts >= 1"))
+}
+
+/// The `<output>.partial.json` sidecar for `--allow-partial`: which tiles a
+/// saved mosaic is missing, so an incomplete result stays machine-detectable.
+fn partial_sidecar_json(
+    expected: usize,
+    fetched: usize,
+    missing: &[(String, String)],
+) -> serde_json::Value {
+    serde_json::json!({
+        "warning": "INCOMPLETE MOSAIC: the tiles listed here are absent from the GeoTIFF; their footprints are NoData",
+        "tiles_expected": expected,
+        "tiles_fetched": fetched,
+        "tiles_missing": missing
+            .iter()
+            .map(|(id, error)| serde_json::json!({ "id": id, "error": error }))
+            .collect::<Vec<_>>(),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retry_with_backoff_succeeds_after_transient_failures() {
+        let mut calls = 0;
+        let out = retry_with_backoff(3, Duration::ZERO, || {
+            calls += 1;
+            if calls < 3 {
+                Err("HTTP error: error decoding response body")
+            } else {
+                Ok(42)
+            }
+        });
+        assert_eq!(out, Ok(42));
+        assert_eq!(calls, 3);
+    }
+
+    #[test]
+    fn retry_with_backoff_returns_last_error_when_exhausted() {
+        let mut calls = 0;
+        let out: Result<(), _> = retry_with_backoff(3, Duration::ZERO, || {
+            calls += 1;
+            Err(format!("boom {calls}"))
+        });
+        assert_eq!(out, Err("boom 3".to_string()));
+        assert_eq!(calls, 3);
+        // attempts=0 is clamped to a single try, never a panic.
+        let out: Result<(), _> = retry_with_backoff(0, Duration::ZERO, || Err("once"));
+        assert_eq!(out, Err("once"));
+    }
+
+    #[test]
+    fn partial_sidecar_lists_missing_tiles() {
+        let missing = vec![
+            ("S45_W072".to_string(), "decode error".to_string()),
+            ("S44_W073".to_string(), "decode error".to_string()),
+        ];
+        let j = partial_sidecar_json(20, 18, &missing);
+        assert_eq!(j["tiles_expected"], 20);
+        assert_eq!(j["tiles_fetched"], 18);
+        assert_eq!(j["tiles_missing"].as_array().unwrap().len(), 2);
+        assert_eq!(j["tiles_missing"][0]["id"], "S45_W072");
+    }
+
+    /// ERA5-pds items span a month with `datetime: null`; the extent comes
+    /// from `start_datetime`/`end_datetime`.
+    #[cfg(feature = "zarr")]
+    #[test]
+    fn item_time_extent_uses_start_end_datetime() {
+        let item: surtgis_cloud::StacItem = serde_json::from_value(serde_json::json!({
+            "type": "Feature",
+            "id": "era5-pds-2020-01-fc",
+            "properties": {
+                "datetime": null,
+                "start_datetime": "2020-01-01T00:00:00Z",
+                "end_datetime": "2020-01-31T23:00:00Z"
+            },
+            "assets": {}
+        }))
+        .unwrap();
+        let (start, end) = item_time_extent(&item).unwrap();
+        assert_eq!(start.to_rfc3339(), "2020-01-01T00:00:00+00:00");
+        assert_eq!(end.to_rfc3339(), "2020-01-31T23:00:00+00:00");
+    }
+
+    #[cfg(feature = "zarr")]
+    #[test]
+    fn item_time_extent_falls_back_to_datetime() {
+        let item: surtgis_cloud::StacItem = serde_json::from_value(serde_json::json!({
+            "type": "Feature",
+            "id": "x",
+            "properties": { "datetime": "2020-06-15T12:00:00Z" },
+            "assets": {}
+        }))
+        .unwrap();
+        let (start, end) = item_time_extent(&item).unwrap();
+        assert_eq!(start, end);
+        assert_eq!(start.to_rfc3339(), "2020-06-15T12:00:00+00:00");
+    }
+
+    #[cfg(feature = "zarr")]
+    #[test]
+    fn item_time_extent_none_without_dates() {
+        let item: surtgis_cloud::StacItem = serde_json::from_value(serde_json::json!({
+            "type": "Feature",
+            "id": "x",
+            "properties": {},
+            "assets": {}
+        }))
+        .unwrap();
+        assert!(item_time_extent(&item).is_none());
+    }
+
+    /// A monthly store overlaps exactly the monthly and yearly windows
+    /// that contain it, and no neighbour's.
+    #[cfg(feature = "zarr")]
+    #[test]
+    fn monthly_stores_cover_their_own_intervals_only() {
+        use chrono::{TimeZone, Utc};
+        let store = |m: u32, last: u32| {
+            (
+                Utc.with_ymd_and_hms(2020, m, 1, 0, 0, 0).unwrap(),
+                Utc.with_ymd_and_hms(2020, m, last, 23, 0, 0).unwrap(),
+            )
+        };
+        let jan = store(1, 31);
+        let feb = store(2, 29);
+        let covers =
+            |s: &(chrono::DateTime<Utc>, chrono::DateTime<Utc>),
+             w: &(chrono::DateTime<Utc>, chrono::DateTime<Utc>, String)| {
+                s.0 <= w.1 && s.1 >= w.0
+            };
+        let (y0, y1) = parse_datetime_range("2020-01-01/2020-12-31").unwrap();
+        let months = generate_intervals(y0, y1, IntervalType::Monthly);
+        assert_eq!(months.len(), 12);
+        assert!(covers(&jan, &months[0]));
+        assert!(!covers(&jan, &months[1]));
+        assert!(!covers(&feb, &months[0]));
+        assert!(covers(&feb, &months[1]));
+        let years = generate_intervals(y0, y1, IntervalType::Yearly);
+        assert_eq!(years.len(), 1);
+        assert!(covers(&jan, &years[0]));
+        assert!(covers(&feb, &years[0]));
+    }
 
     #[test]
     fn test_collection_profile_sentinel2() {
@@ -3476,6 +2758,137 @@ enum IntervalType {
     Monthly,
     Yearly,
     None,
+}
+
+#[cfg(feature = "zarr")]
+/// One STAC item of a climate collection: a Zarr store covering `[start, end]`.
+#[cfg(feature = "zarr")]
+struct ClimateStore {
+    id: String,
+    href: String,
+    start: chrono::DateTime<chrono::Utc>,
+    end: chrono::DateTime<chrono::Utc>,
+}
+
+/// Reader for `store`, opened on first use and cached for the rest of the
+/// run (daily intervals hit the same monthly store many times).
+#[cfg(feature = "zarr")]
+fn climate_reader<'a>(
+    readers: &'a mut std::collections::HashMap<String, surtgis_cloud::blocking::ZarrReaderBlocking>,
+    store: &ClimateStore,
+    variable: &str,
+    account: Option<&str>,
+    opts: &surtgis_cloud::ZarrReaderOptions,
+) -> Result<&'a surtgis_cloud::blocking::ZarrReaderBlocking> {
+    use surtgis_cloud::blocking::ZarrReaderBlocking;
+    use surtgis_cloud::zarr_auth::abfs_to_https_with_account;
+    if !readers.contains_key(&store.id) {
+        let url = match account {
+            Some(acc) => abfs_to_https_with_account(&store.href, Some(acc)),
+            None => store.href.clone(),
+        };
+        let reader = ZarrReaderBlocking::open(&url, variable, opts.clone())
+            .with_context(|| format!("Failed to open Zarr store {}", store.id))?;
+        readers.insert(store.id.clone(), reader);
+    }
+    Ok(&readers[&store.id])
+}
+
+/// Read every job's store once (the union of its windows) and bucket the
+/// partials per window, `concurrency` stores at a time.
+///
+/// Returns `(job index, result)` pairs in completion order. Each worker
+/// opens its own reader, so failures are per store and never take the
+/// other stores down.
+#[cfg(feature = "zarr")]
+#[allow(clippy::too_many_arguments)]
+fn read_stores_parallel(
+    stores: &[ClimateStore],
+    jobs: &[(usize, Vec<usize>)],
+    intervals: &[(
+        chrono::DateTime<chrono::Utc>,
+        chrono::DateTime<chrono::Utc>,
+        String,
+    )],
+    bb: &BBox,
+    variable: &str,
+    account: Option<&str>,
+    opts: &surtgis_cloud::ZarrReaderOptions,
+    concurrency: usize,
+) -> Vec<(usize, Result<Vec<Option<surtgis_cloud::TimeAggPartial>>>)> {
+    use std::sync::{Mutex, mpsc};
+    use surtgis_cloud::blocking::ZarrReaderBlocking;
+    use surtgis_cloud::zarr_auth::abfs_to_https_with_account;
+
+    let next = Mutex::new(0usize);
+    let (tx, rx) = mpsc::channel();
+    let workers = concurrency.max(1).min(jobs.len().max(1));
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            let tx = tx.clone();
+            let next = &next;
+            scope.spawn(move || {
+                loop {
+                    let j = {
+                        let mut cursor = next.lock().unwrap();
+                        let j = *cursor;
+                        *cursor += 1;
+                        j
+                    };
+                    if j >= jobs.len() {
+                        break;
+                    }
+                    let (si, idx) = &jobs[j];
+                    let store = &stores[*si];
+                    let windows: Vec<_> = idx
+                        .iter()
+                        .map(|&i| (intervals[i].0, intervals[i].1))
+                        .collect();
+                    let res = (|| -> Result<Vec<Option<surtgis_cloud::TimeAggPartial>>> {
+                        let url = match account {
+                            Some(acc) => abfs_to_https_with_account(&store.href, Some(acc)),
+                            None => store.href.clone(),
+                        };
+                        let reader = ZarrReaderBlocking::open(&url, variable, opts.clone())
+                            .with_context(|| format!("Failed to open Zarr store {}", store.id))?;
+                        Ok(reader.read_bbox_partials(bb, &windows)?)
+                    })();
+                    if tx.send((j, res)).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        drop(tx);
+    });
+    rx.into_iter().collect()
+}
+
+/// Temporal extent of a STAC item: `start_datetime`/`end_datetime` when the
+/// item spans a period (ERA5-pds months have `datetime: null`), else the
+/// instantaneous `datetime` as a degenerate range.
+#[cfg(feature = "zarr")]
+pub(crate) fn item_time_extent(
+    item: &surtgis_cloud::StacItem,
+) -> Option<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)> {
+    use chrono::{DateTime, Utc};
+    let parse = |v: &serde_json::Value| -> Option<DateTime<Utc>> {
+        DateTime::parse_from_rfc3339(v.as_str()?)
+            .ok()
+            .map(|d| d.with_timezone(&Utc))
+    };
+    let extra = &item.properties.extra;
+    match (extra.get("start_datetime"), extra.get("end_datetime")) {
+        (Some(a), Some(b)) => {
+            let (start, end) = (parse(a)?, parse(b)?);
+            Some((start, end.max(start)))
+        }
+        _ => {
+            let dt = item.properties.datetime.as_deref()?;
+            let t = DateTime::parse_from_rfc3339(dt).ok()?.with_timezone(&Utc);
+            Some((t, t))
+        }
+    }
 }
 
 #[cfg(feature = "zarr")]
@@ -3607,4 +3020,25 @@ fn generate_intervals(
     }
 
     intervals
+}
+
+/// Report a STAC item read by `stac fetch` / `fetch-mosaic` to the
+/// provenance record (the composite engine reports its own items).
+fn record_stac_item(
+    client: &surtgis_cloud::blocking::StacClientBlocking,
+    item: &surtgis_cloud::StacItem,
+    asset: &str,
+) {
+    let search_url = client.catalog().search_url();
+    let root = search_url.strip_suffix("/search").unwrap_or(&search_url);
+    let mut rec = surtgis_core::provenance::StacItemRecord::new(
+        root,
+        item.collection.as_deref().unwrap_or(""),
+        item.id.as_str(),
+    )
+    .with_assets([asset.to_string()]);
+    if let Some(dt) = &item.properties.datetime {
+        rec = rec.with_datetime(dt.clone());
+    }
+    surtgis_core::provenance::observe_stac_item(rec);
 }

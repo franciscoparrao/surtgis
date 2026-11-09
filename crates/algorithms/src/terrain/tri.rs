@@ -42,6 +42,7 @@ use surtgis_core::raster::Raster;
 
 /// Parameters for TRI calculation
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct TriParams {
     /// Neighborhood radius in cells (default 1 → 3x3)
     pub radius: usize,
@@ -187,9 +188,7 @@ impl surtgis_core::WindowAlgorithm for TriStreaming {
                     }
 
                     let center = input[[ir, c]];
-                    if center.is_nan()
-                        || nodata.is_some_and(|nd| (center - nd).abs() < f64::EPSILON)
-                    {
+                    if center.is_nan() || nodata.is_some_and(|nd| center == nd) {
                         *out_v = f64::NAN;
                         continue;
                     }

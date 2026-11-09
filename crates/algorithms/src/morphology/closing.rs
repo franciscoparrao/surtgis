@@ -12,6 +12,7 @@ use super::erode::erode;
 
 /// Parameters for morphological closing
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct ClosingParams {
     /// Structuring element shape
     pub element: StructuringElement,

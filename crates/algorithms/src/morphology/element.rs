@@ -8,6 +8,7 @@ use surtgis_core::{Error, Result};
 
 /// Shape of a structuring element for morphological operations
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum StructuringElement {
     /// Square element of given radius (side = 2*radius + 1)
     Square(usize),

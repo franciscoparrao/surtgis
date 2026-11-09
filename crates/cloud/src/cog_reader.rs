@@ -109,6 +109,11 @@ pub struct CogReader {
     geo_meta: GeoTiffMeta,
     cache: TileCache,
     options: CogReaderOptions,
+    /// The file stores rows south-to-north (positive `pixel_height`, as
+    /// GDAL writes some products, e.g. the AlphaEarth embedding COGs).
+    /// `geo_meta` is normalised to north-up; tiles are read in file order
+    /// and every window is mirrored on assembly.
+    flip_rows: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -200,6 +205,7 @@ impl CogReader {
     /// backing a catalog item do not change mid-run; it is not safe to rely
     /// on for URLs whose content can mutate during a process's lifetime.
     pub async fn open(url: &str, options: CogReaderOptions) -> Result<Self> {
+        surtgis_core::provenance::observe_input(url);
         let client = Self::client_for(&options)?;
         let auth = options.auth.as_ref();
 
@@ -232,6 +238,7 @@ impl CogReader {
 
             // 3. Parse IFD chain.
             let mut ifds = Vec::new();
+            let bigtiff = tiff_header.bigtiff;
             let mut ifd_offset = tiff_header.first_ifd_offset as usize;
 
             while ifd_offset > 0 {
@@ -245,7 +252,7 @@ impl CogReader {
                 )
                 .await?;
 
-                let raw_ifd = ifd::parse_ifd(byte_order, &ifd_data)?;
+                let raw_ifd = ifd::parse_ifd_with(byte_order, bigtiff, &ifd_data)?;
 
                 // Resolve external tag values needed for this IFD.
                 let ifd_info = resolve_ifd(
@@ -295,6 +302,22 @@ impl CogReader {
 
         let cache = TileCache::new(options.cache_capacity);
 
+        // Bottom-up files: present them north-up (origin at the top-left,
+        // negative pixel height) so bbox → pixel mapping and every consumer
+        // see the usual orientation; `assemble_bands` mirrors the rows.
+        let mut geo_meta = geo_meta;
+        let flip_rows = geo_meta.geo_transform.pixel_height > 0.0;
+        if flip_rows {
+            let gt = geo_meta.geo_transform;
+            let height = ifds.first().map(|i| i.height).unwrap_or(0) as f64;
+            geo_meta.geo_transform = GeoTransform::new(
+                gt.origin_x,
+                gt.origin_y + height * gt.pixel_height,
+                gt.pixel_width,
+                -gt.pixel_height,
+            );
+        }
+
         Ok(Self {
             url: url.to_string(),
             client,
@@ -303,7 +326,13 @@ impl CogReader {
             geo_meta,
             cache,
             options,
+            flip_rows,
         })
+    }
+
+    /// Whether the file is stored bottom-up (rows mirrored on read).
+    pub fn is_bottom_up(&self) -> bool {
+        self.flip_rows
     }
 
     /// Pick the [`HttpClient`] to use for this open: the process-wide shared
@@ -348,8 +377,65 @@ impl CogReader {
         )
         .ok_or(CloudError::BBoxOutside)?;
 
-        self.assemble_raster::<T>(ifd_idx, &ifd, &gt, &mapping)
+        let mut bands = self
+            .assemble_bands::<T>(ifd_idx, &ifd, &gt, &mapping, &[0])
+            .await?;
+        Ok(bands.remove(0))
+    }
+
+    /// Read every band of a geographic bounding box — pixel-interleaved
+    /// COGs only (`PlanarConfiguration = 1`). One raster per band, in file
+    /// order, sharing one tile fetch and decode.
+    pub async fn read_bbox_bands<T: RasterElement>(
+        &mut self,
+        bbox: &BBox,
+        overview: Option<usize>,
+    ) -> Result<Vec<Raster<T>>> {
+        let ifd_idx = overview.unwrap_or(0);
+        let ifd = self.get_ifd(ifd_idx)?;
+        let gt = self.geo_transform_for(ifd_idx);
+        let mapping = tile_index::tiles_for_bbox(
+            bbox,
+            &gt,
+            ifd.width,
+            ifd.height,
+            ifd.tile_width,
+            ifd.tile_height,
+        )
+        .ok_or(CloudError::BBoxOutside)?;
+        let all: Vec<usize> = (0..ifd.samples_per_pixel.max(1) as usize).collect();
+        self.assemble_bands::<T>(ifd_idx, &ifd, &gt, &mapping, &all)
             .await
+    }
+
+    /// Read one band (0-based) of a geographic bounding box.
+    pub async fn read_bbox_band<T: RasterElement>(
+        &mut self,
+        bbox: &BBox,
+        overview: Option<usize>,
+        band: usize,
+    ) -> Result<Raster<T>> {
+        let ifd_idx = overview.unwrap_or(0);
+        let ifd = self.get_ifd(ifd_idx)?;
+        let gt = self.geo_transform_for(ifd_idx);
+        let mapping = tile_index::tiles_for_bbox(
+            bbox,
+            &gt,
+            ifd.width,
+            ifd.height,
+            ifd.tile_width,
+            ifd.tile_height,
+        )
+        .ok_or(CloudError::BBoxOutside)?;
+        let mut bands = self
+            .assemble_bands::<T>(ifd_idx, &ifd, &gt, &mapping, &[band])
+            .await?;
+        Ok(bands.remove(0))
+    }
+
+    /// Number of bands (samples per pixel) of the full-resolution IFD.
+    pub fn bands(&self) -> usize {
+        self.ifds[0].samples_per_pixel.max(1) as usize
     }
 
     /// Read the full raster extent.
@@ -374,8 +460,10 @@ impl CogReader {
         )
         .ok_or(CloudError::BBoxOutside)?;
 
-        self.assemble_raster::<T>(ifd_idx, &ifd, &gt, &mapping)
-            .await
+        let mut bands = self
+            .assemble_bands::<T>(ifd_idx, &ifd, &gt, &mapping, &[0])
+            .await?;
+        Ok(bands.remove(0))
     }
 
     /// Return metadata about the COG.
@@ -395,6 +483,32 @@ impl CogReader {
             nodata: self.geo_meta.nodata,
             num_overviews: self.ifds.len().saturating_sub(1),
         }
+    }
+
+    /// Output pixel dimensions `(rows, cols)` that [`read_bbox`] would
+    /// produce for `bbox` at `overview`, without fetching or decoding any
+    /// pixels. `None` if the bbox does not intersect the raster.
+    ///
+    /// Lets a caller reserve the exact decoded-raster size *before* the
+    /// allocation happens, instead of a nominal guess — the composite's
+    /// [`MemoryBudget`](crate::composite::MemoryBudget) uses this so its
+    /// reservation matches the strip×granule window actually read, not the
+    /// server's internal tile size (which undercounts it several-fold).
+    ///
+    /// [`read_bbox`]: Self::read_bbox
+    pub fn output_shape_for(&self, bbox: &BBox, overview: Option<usize>) -> Option<(usize, usize)> {
+        let ifd_idx = overview.unwrap_or(0);
+        let ifd = self.ifds.get(ifd_idx)?;
+        let gt = self.geo_transform_for(ifd_idx);
+        let mapping = tile_index::tiles_for_bbox(
+            bbox,
+            &gt,
+            ifd.width,
+            ifd.height,
+            ifd.tile_width,
+            ifd.tile_height,
+        )?;
+        Some(mapping.output_shape)
     }
 
     /// Return overview information.
@@ -441,36 +555,75 @@ impl CogReader {
     }
 
     /// Fetch tiles, decompress, and assemble into a `Raster<T>`.
-    async fn assemble_raster<T: RasterElement>(
+    /// Fetch, decode and assemble the requested bands (0-based indices)
+    /// of `mapping`'s window. Tiles are pixel-interleaved, so every band
+    /// comes from the same decoded tile bytes.
+    async fn assemble_bands<T: RasterElement>(
         &mut self,
         ifd_idx: usize,
         ifd: &IfdInfo,
         gt: &GeoTransform,
         mapping: &TileMapping,
-    ) -> Result<Raster<T>> {
+        bands: &[usize],
+    ) -> Result<Vec<Raster<T>>> {
         let tw = ifd.tile_width as usize;
         let th = ifd.tile_height as usize;
         let bps = ifd.bits_per_sample;
         let sf = ifd.sample_format;
         let compression = ifd.compression;
+        let spp = ifd.samples_per_pixel.max(1) as usize;
+        if let Some(&b) = bands.iter().find(|&&b| b >= spp) {
+            return Err(CloudError::InvalidTiff {
+                reason: format!("band {b} out of range: the COG has {spp} band(s)"),
+            });
+        }
+        // Planar files (PlanarConfiguration = 2, GDAL INTERLEAVE=BAND) store
+        // one tile per band plane: tile `t` of band `b` is file tile
+        // `b * tiles_per_plane + t`, each holding a single sample per pixel.
+        let planar = spp > 1 && ifd.planar_config == 2;
+        let plane_spp = if planar { 1 } else { spp };
+        let tiles_per_plane = mapping.tiles_across * mapping.tiles_down;
+        let file_tile = |band: usize, tile_idx: usize| {
+            if planar {
+                band * tiles_per_plane + tile_idx
+            } else {
+                tile_idx
+            }
+        };
         let bytes_per_pixel = (bps as usize).div_ceil(8);
-        let raw_tile_size = tw * th * bytes_per_pixel;
+        let raw_tile_size = tw * th * bytes_per_pixel * plane_spp;
 
+        // Bottom-up files: the mapping is in north-up rows; read the
+        // mirrored file rows and flip the assembled window at the end.
+        let mirrored;
+        let mapping = if self.flip_rows {
+            mirrored = mirror_mapping(mapping, ifd.height as usize, tw, th);
+            &mirrored
+        } else {
+            mapping
+        };
         let (px_min_col, px_min_row, px_max_col, px_max_row) = mapping.pixel_window;
         let (out_rows, out_cols) = mapping.output_shape;
 
-        // Identify which tiles we need to fetch (not in cache).
-        let mut to_fetch: Vec<(usize, u64, u64)> = Vec::new(); // (tile_list_idx, offset, length)
-        for (i, tr) in mapping.tiles.iter().enumerate() {
-            let key = TileKey {
-                ifd_idx,
-                tile_idx: tr.tile_idx,
-            };
-            if self.cache.get(&key).is_none() && tr.tile_idx < ifd.tile_offsets.len() {
-                let offset = ifd.tile_offsets[tr.tile_idx];
-                let length = ifd.tile_byte_counts[tr.tile_idx];
-                if length > 0 {
-                    to_fetch.push((i, offset, length));
+        // Identify which file tiles we need to fetch (not in cache): one per
+        // window tile (chunky) or one per window tile and band (planar).
+        let mut to_fetch: Vec<(usize, u64, u64)> = Vec::new(); // (file tile idx, offset, length)
+        let mut seen = std::collections::HashSet::new();
+        for tr in mapping.tiles.iter() {
+            let planes: Vec<usize> = if planar { bands.to_vec() } else { vec![0] };
+            for b in planes {
+                let ft = file_tile(b, tr.tile_idx);
+                let key = TileKey {
+                    ifd_idx,
+                    tile_idx: ft,
+                };
+                if seen.insert(ft) && self.cache.get(&key).is_none() && ft < ifd.tile_offsets.len()
+                {
+                    let offset = ifd.tile_offsets[ft];
+                    let length = ifd.tile_byte_counts[ft];
+                    if length > 0 {
+                        to_fetch.push((ft, offset, length));
+                    }
                 }
             }
         }
@@ -479,13 +632,17 @@ impl CogReader {
         let auth = self.options.auth.as_ref();
         let batch_size = self.options.max_concurrent_fetches;
 
+        // Tiles decoded for this window are held here until it is
+        // assembled: the LRU cache alone would evict the first ones when a
+        // window spans more tiles than its capacity.
+        let mut fresh: std::collections::HashMap<usize, Vec<u8>> =
+            std::collections::HashMap::with_capacity(to_fetch.len());
         let mut fetch_count = 0usize;
         for chunk in to_fetch.chunks(batch_size) {
             let ranges: Vec<(u64, u64)> = chunk.iter().map(|&(_, o, l)| (o, l)).collect();
             let fetched = self.client.fetch_ranges(&self.url, &ranges, auth).await?;
 
-            for (j, &(tile_list_idx, _, _)) in chunk.iter().enumerate() {
-                let tr = &mapping.tiles[tile_list_idx];
+            for (j, &(file_tile_idx, _, _)) in chunk.iter().enumerate() {
                 let mut raw = decompress::decompress_tile(&fetched[j], compression, raw_tile_size)?;
                 // Apply predictor undo (TIFF tag 317):
                 //   1 = no predictor
@@ -494,7 +651,12 @@ impl CogReader {
                 match ifd.predictor {
                     1 => {}
                     2 => {
-                        decompress::undo_horizontal_differencing(&mut raw, tw, bytes_per_pixel);
+                        decompress::undo_horizontal_differencing_multi(
+                            &mut raw,
+                            tw,
+                            bytes_per_pixel,
+                            plane_spp,
+                        );
                         if fetch_count == 0 && cog_debug() {
                             eprintln!(
                                 "    [pred] undo horiz-diff: bps={} tw={} len={}",
@@ -505,7 +667,12 @@ impl CogReader {
                         }
                     }
                     3 => {
-                        decompress::undo_floating_point_predictor(&mut raw, tw, bytes_per_pixel);
+                        decompress::undo_floating_point_predictor_multi(
+                            &mut raw,
+                            tw,
+                            bytes_per_pixel,
+                            plane_spp,
+                        );
                         if fetch_count == 0 && cog_debug() {
                             let sample0 = if raw.len() >= 4 {
                                 f32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]])
@@ -525,147 +692,162 @@ impl CogReader {
                     }
                 }
                 fetch_count += 1;
-                let key = TileKey {
-                    ifd_idx,
-                    tile_idx: tr.tile_idx,
-                };
-                self.cache.insert(key, raw);
+                fresh.insert(file_tile_idx, raw);
             }
         }
 
-        // Assemble output array from cached tiles.
-        let mut output = Array2::<T>::from_elem((out_rows, out_cols), T::default_nodata());
+        // Assemble one output array per requested band from cached tiles.
+        let mut outputs: Vec<Array2<T>> = bands
+            .iter()
+            .map(|_| Array2::<T>::from_elem((out_rows, out_cols), T::default_nodata()))
+            .collect();
         let mut tiles_written = 0usize;
         let mut tiles_skipped = 0usize;
         let tiles_fetched = mapping.tiles.len();
 
+        // Which (band k, file tile) pairs feed each window tile: chunky
+        // tiles carry every band; planar tiles carry one.
         for tr in &mapping.tiles {
-            let key = TileKey {
-                ifd_idx,
-                tile_idx: tr.tile_idx,
+            let planes: Vec<(Vec<usize>, usize)> = if planar {
+                bands
+                    .iter()
+                    .enumerate()
+                    .map(|(k, &b)| (vec![k], file_tile(b, tr.tile_idx)))
+                    .collect()
+            } else {
+                vec![((0..bands.len()).collect(), tr.tile_idx)]
             };
+            for (ks, ft) in planes {
+                let key = TileKey {
+                    ifd_idx,
+                    tile_idx: ft,
+                };
+                let raw = match fresh.get(&ft).or_else(|| self.cache.get(&key)) {
+                    Some(data) => {
+                        tiles_written += 1;
+                        data.clone()
+                    }
+                    None => {
+                        // Sparse COGs mark intentionally-missing tiles with
+                        // byte count 0: the window stays nodata, which is the
+                        // correct fill. Any other cache miss means requested
+                        // data was never fetched/decoded — that is data loss,
+                        // not a skippable condition.
+                        let sparse = ifd.tile_byte_counts.get(ft).is_some_and(|&c| c == 0);
+                        if sparse {
+                            tiles_skipped += 1;
+                            continue;
+                        }
+                        return Err(CloudError::InvalidTiff {
+                            reason: format!(
+                                "tile {} (col {}, row {}) was requested but never \
+                                 fetched or decoded; refusing to return a \
+                                 partially-empty raster",
+                                ft, tr.tile_col, tr.tile_row
+                            ),
+                        });
+                    }
+                };
 
-            let raw = match self.cache.get(&key) {
-                Some(data) => {
-                    tiles_written += 1;
-                    data.clone()
+                if tiles_written == 1 && raw.len() >= 10 && cog_debug() {
+                    let first_bytes: Vec<String> =
+                        raw[..10].iter().map(|b| format!("{:02x}", b)).collect();
+                    eprintln!(
+                        "    [cog] tile({},{}) file idx={} raw[0..10]: {} pred={} comp={} bps={} sf={} raw_len={} expected={}",
+                        tr.tile_col,
+                        tr.tile_row,
+                        ft,
+                        first_bytes.join(" "),
+                        ifd.predictor,
+                        compression,
+                        bps,
+                        sf,
+                        raw.len(),
+                        tw * th * bytes_per_pixel * plane_spp
+                    );
                 }
-                None => {
-                    // Sparse COGs mark intentionally-missing tiles with
-                    // byte count 0: the window stays nodata, which is the
-                    // correct fill. Any other cache miss means requested
-                    // data was never fetched/decoded — that is data loss,
-                    // not a skippable condition.
-                    let sparse = ifd
-                        .tile_byte_counts
-                        .get(tr.tile_idx)
-                        .is_some_and(|&c| c == 0);
-                    if sparse {
-                        tiles_skipped += 1;
+
+                let typed: Vec<T> = decompress::bytes_to_typed(&raw, bps, sf)?;
+
+                // A decoded tile of the wrong size is a hard error: copying a
+                // partial buffer produced the striping artefacts described in
+                // BUG_TILE_DECODE_BPS15_STRIPING.md.
+                let expected_pixels = tw * th * plane_spp;
+                if typed.len() != expected_pixels {
+                    return Err(crate::error::CloudError::Decompress(format!(
+                        "tile decode produced {} samples, expected {} (bps={} sf={} tw={} th={} raw_len={})",
+                        typed.len(),
+                        expected_pixels,
+                        bps,
+                        sf,
+                        tw,
+                        th,
+                        raw.len(),
+                    )));
+                }
+
+                // Pixel bounds of this tile in full-image (file) coordinates.
+                let tile_px_col = tr.tile_col * tw;
+                let tile_px_row = tr.tile_row * th;
+
+                for local_row in 0..th {
+                    let img_row = tile_px_row + local_row;
+                    if img_row < px_min_row || img_row >= px_max_row {
                         continue;
                     }
-                    return Err(CloudError::InvalidTiff {
-                        reason: format!(
-                            "tile {} (col {}, row {}) was requested but never \
-                             fetched or decoded; refusing to return a \
-                             partially-empty raster",
-                            tr.tile_idx, tr.tile_col, tr.tile_row
-                        ),
-                    });
-                }
-            };
-
-            // Debug: log first tile's raw bytes and interpreted values
-            if tiles_written == 1 && raw.len() >= 10 && cog_debug() {
-                let first_bytes: Vec<String> =
-                    raw[..10].iter().map(|b| format!("{:02x}", b)).collect();
-                let first_u16 = u16::from_le_bytes([raw[0], raw[1]]);
-                let second_u16 = u16::from_le_bytes([raw[2], raw[3]]);
-                eprintln!(
-                    "    [cog] tile({},{}) idx={} raw[0..10]: {} → u16 LE: [{}, {}, ...]",
-                    tr.tile_col,
-                    tr.tile_row,
-                    tr.tile_idx,
-                    first_bytes.join(" "),
-                    first_u16,
-                    second_u16
-                );
-                eprintln!(
-                    "    [cog] pred={} comp={} bps={} sf={} raw_len={} expected={}",
-                    ifd.predictor,
-                    compression,
-                    bps,
-                    sf,
-                    raw.len(),
-                    tw * th * bytes_per_pixel
-                );
-            }
-
-            let typed: Vec<T> = decompress::bytes_to_typed(&raw, bps, sf)?;
-
-            // Check if decompressed tile has expected size. Prior to v0.7.5
-            // this was a warning and the partial buffer was silently copied
-            // into the output, producing the striping artefacts described in
-            // BUG_TILE_DECODE_BPS15_STRIPING.md. We now treat the mismatch as
-            // a hard error so the run aborts loudly instead of producing
-            // scientifically unusable composites.
-            let expected_pixels = tw * th;
-            if typed.len() != expected_pixels {
-                eprintln!(
-                    "    [cog] FATAL tile({},{}) idx={} decoded {} px, expected {} (raw={} bytes, bps={} sf={} tw={} th={}).\
-                     \n          Aborting to prevent silent striping; see BUG_TILE_DECODE_BPS15_STRIPING.md.",
-                    tr.tile_col,
-                    tr.tile_row,
-                    tr.tile_idx,
-                    typed.len(),
-                    expected_pixels,
-                    raw.len(),
-                    bps,
-                    sf,
-                    tw,
-                    th,
-                );
-                return Err(crate::error::CloudError::Decompress(format!(
-                    "tile decode produced {} samples, expected {} (bps={} sf={} tw={} th={} raw_len={})",
-                    typed.len(),
-                    expected_pixels,
-                    bps,
-                    sf,
-                    tw,
-                    th,
-                    raw.len(),
-                )));
-            }
-
-            // Pixel bounds of this tile in full-image coordinates.
-            let tile_px_col = tr.tile_col * tw;
-            let tile_px_row = tr.tile_row * th;
-
-            // Copy the relevant portion into the output.
-            for local_row in 0..th {
-                let img_row = tile_px_row + local_row;
-                if img_row < px_min_row || img_row >= px_max_row {
-                    continue;
-                }
-                let out_row = img_row - px_min_row;
-
-                for local_col in 0..tw {
-                    let img_col = tile_px_col + local_col;
-                    if img_col < px_min_col || img_col >= px_max_col {
-                        continue;
-                    }
-                    let out_col = img_col - px_min_col;
-
-                    let tile_linear = local_row * tw + local_col;
-                    if tile_linear < typed.len() {
-                        output[(out_row, out_col)] = typed[tile_linear];
+                    let out_row = img_row - px_min_row;
+                    for local_col in 0..tw {
+                        let img_col = tile_px_col + local_col;
+                        if img_col < px_min_col || img_col >= px_max_col {
+                            continue;
+                        }
+                        let out_col = img_col - px_min_col;
+                        let tile_linear = (local_row * tw + local_col) * plane_spp;
+                        for &k in &ks {
+                            let sample = if planar { 0 } else { bands[k] };
+                            if tile_linear + sample < typed.len() {
+                                outputs[k][(out_row, out_col)] = typed[tile_linear + sample];
+                            }
+                        }
                     }
                 }
             }
         }
 
+        for (tile_idx, raw) in fresh {
+            self.cache.insert(TileKey { ifd_idx, tile_idx }, raw);
+        }
+
+        // Bottom-up file: the window was assembled in file order (south at
+        // row 0); mirror it so row 0 is north, matching the normalised
+        // geotransform.
+        if self.flip_rows {
+            for output in outputs.iter_mut() {
+                output.invert_axis(ndarray::Axis(0));
+            }
+        }
+
+        // Float outputs: rewrite a non-NaN nodata sentinel to NaN, the same
+        // convention as every other read path (`cast_and_normalize` in core).
+        // Without this, tiles with data keep the literal sentinel while
+        // sparse tiles were pre-filled with NaN — the same raster mixes both
+        // conventions and NaN-checking kernels see the sentinel as valid
+        // data (audit R4, H4). No-op for integer `T`.
+        // The GDAL_NODATA string is decimal; the pixels hold the nearest
+        // value of the file's sample type, so compare against that (a terra
+        // "-3.39999999999999996e+38" tag vs f32 pixels never matched in f64).
+        let nodata_in_samples = self.geo_meta.nodata.map(|nd| match (sf, bps) {
+            (3, 32) => (nd as f32) as f64,
+            _ => nd,
+        });
+        for output in outputs.iter_mut() {
+            if let Some(slice) = output.as_slice_mut() {
+                surtgis_core::io::normalize_any_float_nodata(slice, nodata_in_samples);
+            }
+        }
+
         // Tile assembly stats (verbose; gated behind SURTGIS_COG_DEBUG).
-        let valid_pixels = output.iter().filter(|v| !v.is_nodata(None)).count();
+        let valid_pixels = outputs[0].iter().filter(|v| !v.is_nodata(None)).count();
         if cog_debug() {
             eprintln!(
                 "    [cog] assembled: {} tiles ({}+{} skip), output={}x{}, tw={} th={}, valid={}/{} ({:.0}%)",
@@ -686,22 +868,34 @@ impl CogReader {
             );
         }
 
-        // Build Raster with correct geo metadata.
-        let mut raster = Raster::from_array(output);
-
-        // GeoTransform for the output window.
-        let (corner_x, corner_y) = gt.pixel_to_geo_corner(px_min_col, px_min_row);
+        // GeoTransform for the output window, shared by every band. `gt` is
+        // north-up; for a mirrored file the window's top row is the mirror
+        // of the file rows just read.
+        let top_row = if self.flip_rows {
+            ifd.height as usize - px_max_row
+        } else {
+            px_min_row
+        };
+        let (corner_x, corner_y) = gt.pixel_to_geo_corner(px_min_col, top_row);
         let out_gt = GeoTransform::new(corner_x, corner_y, gt.pixel_width, gt.pixel_height);
-        raster.set_transform(out_gt);
-        raster.set_crs(self.geo_meta.crs.clone());
-
-        if let Some(nd) = self.geo_meta.nodata
-            && let Some(nd_t) = num_traits::cast(nd)
-        {
-            raster.set_nodata(Some(nd_t));
-        }
-
-        Ok(raster)
+        Ok(outputs
+            .into_iter()
+            .map(|output| {
+                let mut raster = Raster::from_array(output);
+                raster.set_transform(out_gt);
+                raster.set_crs(self.geo_meta.crs.clone());
+                // Float pixels were just normalized to NaN, so the metadata
+                // must say NaN too; integers keep the sentinel verbatim.
+                if let Some(nd) = self.geo_meta.nodata {
+                    if T::is_float() {
+                        raster.set_nodata(Some(T::default_nodata()));
+                    } else if let Some(nd_t) = num_traits::cast(nd) {
+                        raster.set_nodata(Some(nd_t));
+                    }
+                }
+                raster
+            })
+            .collect())
     }
 }
 
@@ -731,8 +925,11 @@ async fn ensure_data(
         let have = header_bytes.len() - offset;
         let extra_offset = header_bytes.len() as u64;
         let extra_len = (need - have) as u64;
+        // A malformed IFD can put `extra_offset` past `file_size`; clamp with
+        // checked_sub so the range shrinks to 0 instead of underflowing u64
+        // into an absurd length (audit M9).
         let extra_len = if file_size > 0 {
-            extra_len.min(file_size - extra_offset)
+            extra_len.min(file_size.saturating_sub(extra_offset))
         } else {
             extra_len
         };
@@ -745,8 +942,9 @@ async fn ensure_data(
     } else {
         // Entirely outside initial fetch.
         let fetch_len = need as u64;
+        // Guard against a malformed offset beyond EOF (audit M9).
         let fetch_len = if file_size > 0 {
-            fetch_len.min(file_size - offset as u64)
+            fetch_len.min(file_size.saturating_sub(offset as u64))
         } else {
             fetch_len
         };
@@ -792,7 +990,7 @@ async fn resolve_ifd(
             continue;
         }
         let size = ifd::external_value_size(entry);
-        let offset = entry.value_or_offset as u64;
+        let offset = entry.value_or_offset;
         let data = fetch_or_slice(client, url, auth, header_bytes, offset, size, file_size).await?;
         resolved.push((entry.tag, data));
     }
@@ -866,7 +1064,7 @@ async fn resolve_geotiff_meta(
             continue;
         }
         let size = ifd::external_value_size(entry);
-        let offset = entry.value_or_offset as u64;
+        let offset = entry.value_or_offset;
         let data = fetch_or_slice(client, url, auth, header_bytes, offset, size, file_size).await?;
         resolved.push((entry.tag, data));
     }
@@ -892,8 +1090,9 @@ async fn fetch_or_slice(
     if end <= header_bytes.len() {
         Ok(header_bytes[start..end].to_vec())
     } else {
+        // Guard against a malformed offset beyond EOF (audit M9).
         let fetch_size = if file_size > 0 {
-            size.min(file_size - offset)
+            size.min(file_size.saturating_sub(offset))
         } else {
             size
         };
@@ -913,7 +1112,9 @@ fn get_tag_u16(
 ) -> Option<u16> {
     let entry = entries.iter().find(|e| e.tag == tag_id)?;
     if entry.inline {
-        Some(ifd::inline_u16(byte_order, entry))
+        ifd::inline_values_u64(byte_order, entry)
+            .first()
+            .map(|&v| v as u16)
     } else {
         let data = resolved.iter().find(|(t, _)| *t == tag_id)?.1.as_slice();
         let vals = ifd::read_offset_values_u64(byte_order, entry, data);
@@ -929,7 +1130,9 @@ fn get_tag_u32(
 ) -> Option<u32> {
     let entry = entries.iter().find(|e| e.tag == tag_id)?;
     if entry.inline {
-        Some(ifd::inline_u32(byte_order, entry))
+        ifd::inline_values_u64(byte_order, entry)
+            .first()
+            .map(|&v| v as u32)
     } else {
         let data = resolved.iter().find(|(t, _)| *t == tag_id)?.1.as_slice();
         let vals = ifd::read_offset_values_u64(byte_order, entry, data);
@@ -949,7 +1152,7 @@ fn get_tag_u64_array(
     };
 
     if entry.inline {
-        vec![entry.value_or_offset as u64]
+        ifd::inline_values_u64(byte_order, entry)
     } else {
         match resolved.iter().find(|(t, _)| *t == tag_id) {
             Some((_, data)) => ifd::read_offset_values_u64(byte_order, entry, data),
@@ -1035,6 +1238,7 @@ mod strip_rejection_tests {
             type_id: 4,
             count: 1,
             value_or_offset: 8,
+            value_bytes: [0u8; 8],
             inline: true,
         }
     }
@@ -1263,5 +1467,40 @@ mod ifd_cache_tests {
         let hit = cached_header(&key).expect("just-inserted key must be a hit");
         assert_eq!(hit.ifds[0].tile_offsets, vec![8]);
         assert_eq!(hit.geo_meta.nodata, Some(-9999.0));
+    }
+}
+
+/// The file-row view of a north-up tile mapping of a bottom-up image:
+/// pixel rows `[a, b)` from the top become `[h - b, h - a)` from the file's
+/// first row, and the tile list is rebuilt for those rows.
+fn mirror_mapping(
+    m: &tile_index::TileMapping,
+    image_height: usize,
+    tw: usize,
+    th: usize,
+) -> tile_index::TileMapping {
+    let (min_col, min_row, max_col, max_row) = m.pixel_window;
+    let f_min_row = image_height.saturating_sub(max_row);
+    let f_max_row = image_height.saturating_sub(min_row);
+    let tile_col_min = min_col / tw;
+    let tile_col_max = max_col.div_ceil(tw).min(m.tiles_across);
+    let tile_row_min = f_min_row / th;
+    let tile_row_max = f_max_row.div_ceil(th).min(m.tiles_down);
+    let mut tiles = Vec::new();
+    for tr in tile_row_min..tile_row_max {
+        for tc in tile_col_min..tile_col_max {
+            tiles.push(tile_index::TileRequest {
+                tile_idx: tr * m.tiles_across + tc,
+                tile_col: tc,
+                tile_row: tr,
+            });
+        }
+    }
+    tile_index::TileMapping {
+        tiles,
+        tiles_across: m.tiles_across,
+        tiles_down: m.tiles_down,
+        pixel_window: (min_col, f_min_row, max_col, f_max_row),
+        output_shape: m.output_shape,
     }
 }

@@ -13,6 +13,7 @@ use super::element::StructuringElement;
 
 /// Parameters for morphological erosion
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct ErodeParams {
     /// Structuring element shape
     pub element: StructuringElement,

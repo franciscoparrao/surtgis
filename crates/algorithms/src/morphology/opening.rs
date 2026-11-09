@@ -12,6 +12,7 @@ use super::erode::erode;
 
 /// Parameters for morphological opening
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct OpeningParams {
     /// Structuring element shape
     pub element: StructuringElement,

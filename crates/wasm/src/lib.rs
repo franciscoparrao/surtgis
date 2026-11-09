@@ -15,9 +15,9 @@ use surtgis_algorithms::hydrology::{
 };
 use surtgis_algorithms::imagery::{
     EviParams, SaviParams, bsi as compute_bsi, evi as compute_evi, evi2 as compute_evi2,
-    gndvi as compute_gndvi, mndwi as compute_mndwi, msavi as compute_msavi, nbr as compute_nbr,
-    ndbi as compute_ndbi, ndmi as compute_ndmi, ndre as compute_ndre, ndvi as compute_ndvi,
-    ndwi as compute_ndwi, normalized_difference, savi as compute_savi,
+    gndvi as compute_gndvi, index_builder, mndwi as compute_mndwi, msavi as compute_msavi,
+    nbr as compute_nbr, ndbi as compute_ndbi, ndmi as compute_ndmi, ndre as compute_ndre,
+    ndvi as compute_ndvi, ndwi as compute_ndwi, normalized_difference, savi as compute_savi,
 };
 use surtgis_algorithms::morphology::{
     StructuringElement, closing as compute_closing, dilate as compute_dilate,
@@ -59,13 +59,12 @@ pub fn slope(tiff_bytes: &[u8], units: &str) -> Result<Vec<u8>, JsValue> {
         "percent" | "pct" => SlopeUnits::Percent,
         _ => SlopeUnits::Degrees,
     };
-    dem_op!(tiff_bytes, |dem: &_| compute_slope(
-        dem,
-        SlopeParams {
-            units: slope_units,
-            z_factor: 1.0
-        }
-    ))
+    dem_op!(tiff_bytes, |dem: &_| compute_slope(dem, {
+        let mut p = SlopeParams::default();
+        p.units = slope_units;
+        p.z_factor = 1.0;
+        p
+    }))
 }
 
 /// Compute aspect in degrees (0-360, 0=North, clockwise).
@@ -81,18 +80,17 @@ pub fn hillshade_compute(
     azimuth: f64,
     altitude: f64,
 ) -> Result<Vec<u8>, JsValue> {
-    dem_op!(tiff_bytes, |dem: &_| hillshade(
-        dem,
-        HillshadeParams {
-            azimuth,
-            altitude,
-            z_factor: 1.0,
-            normalized: false
-        }
-    ))
+    dem_op!(tiff_bytes, |dem: &_| hillshade(dem, {
+        let mut p = HillshadeParams::default();
+        p.azimuth = azimuth;
+        p.altitude = altitude;
+        p.z_factor = 1.0;
+        p.normalized = false;
+        p
+    }))
 }
 
-/// Compute multidirectional hillshade (6 azimuths combined).
+/// Compute multidirectional hillshade (Mark 1992: 4 azimuths, GDAL-compatible).
 #[wasm_bindgen]
 pub fn multidirectional_hillshade(tiff_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
     dem_op!(tiff_bytes, |dem: &_| compute_multi_hillshade(
@@ -109,14 +107,12 @@ pub fn curvature_compute(tiff_bytes: &[u8], ctype: &str) -> Result<Vec<u8>, JsVa
         "plan" | "tangential" => CurvatureType::Plan,
         _ => CurvatureType::General,
     };
-    dem_op!(tiff_bytes, |dem: &_| curvature(
-        dem,
-        CurvatureParams {
-            curvature_type: ct,
-            method: DerivativeMethod::EvansYoung,
-            ..Default::default()
-        }
-    ))
+    dem_op!(tiff_bytes, |dem: &_| curvature(dem, {
+        let mut p = CurvatureParams::default();
+        p.curvature_type = ct;
+        p.method = DerivativeMethod::EvansYoung;
+        p
+    }))
 }
 
 /// Compute one of Florinsky's 14 curvatures from a DEM. `ctype` accepts:
@@ -158,7 +154,11 @@ pub fn advanced_curvature(tiff_bytes: &[u8], ctype: &str) -> Result<Vec<u8>, JsV
 /// Compute TPI (Topographic Position Index). `radius`: window radius in cells.
 #[wasm_bindgen]
 pub fn tpi_compute(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> {
-    dem_op!(tiff_bytes, |dem: &_| compute_tpi(dem, TpiParams { radius }))
+    dem_op!(tiff_bytes, |dem: &_| compute_tpi(dem, {
+        let mut p = TpiParams::default();
+        p.radius = radius;
+        p
+    }))
 }
 
 /// Compute TRI (Terrain Ruggedness Index).
@@ -173,17 +173,23 @@ pub fn tri_compute(tiff_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
 pub fn twi_compute(tiff_bytes: &[u8]) -> Result<Vec<u8>, JsValue> {
     let dem = read_geotiff_from_buffer::<f64>(tiff_bytes, None)
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let filled = fill_sinks(&dem, FillSinksParams::default())
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    // Same pipeline as the CLI's `hydrology twi`.
+    let filled = surtgis_algorithms::hydrology::priority_flood(&dem, {
+        let mut p = PriorityFloodParams::default();
+        p.epsilon = 0.0001;
+        p
+    })
+    .map_err(|e| JsValue::from_str(&e.to_string()))?;
     let fdir = flow_direction(&filled).map_err(|e| JsValue::from_str(&e.to_string()))?;
     let facc = flow_accumulation(&fdir).map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let slp = compute_slope(
-        &dem,
-        SlopeParams {
-            units: SlopeUnits::Degrees,
-            z_factor: 1.0,
-        },
-    )
+    // `twi` takes radians, on the filled DEM like the CLI's `hydrology twi`;
+    // degrees left ~45 % NaN.
+    let slp = compute_slope(&filled, {
+        let mut p = SlopeParams::default();
+        p.units = SlopeUnits::Radians;
+        p.z_factor = 1.0;
+        p
+    })
     .map_err(|e| JsValue::from_str(&e.to_string()))?;
     let result = compute_twi(&facc, &slp).map_err(|e| JsValue::from_str(&e.to_string()))?;
     write_geotiff_to_buffer(&result, None).map_err(|e| JsValue::from_str(&e.to_string()))
@@ -406,8 +412,12 @@ pub fn hand_compute(tiff_bytes: &[u8], stream_threshold: f64) -> Result<Vec<u8>,
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
     let fdir = flow_direction(&filled).map_err(|e| JsValue::from_str(&e.to_string()))?;
     let facc = flow_accumulation(&fdir).map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let result = compute_hand(&dem, &fdir, &facc, HandParams { stream_threshold })
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let result = compute_hand(&dem, &fdir, &facc, {
+        let mut p = HandParams::default();
+        p.stream_threshold = stream_threshold;
+        p
+    })
+    .map_err(|e| JsValue::from_str(&e.to_string()))?;
     write_geotiff_to_buffer(&result, None).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
@@ -535,6 +545,57 @@ pub fn evi(nir_bytes: &[u8], red_bytes: &[u8], blue_bytes: &[u8]) -> Result<Vec<
     write_geotiff_to_buffer(&result, None).map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
+/// Evaluate an arbitrary spectral-index formula over named bands.
+///
+/// Covers the full grammar of the Awesome Spectral Indices catalogue
+/// (Montero et al., 2023): `+`, `-`, `*`, `/`, `**` (right-associative
+/// power), parentheses, unary minus and numeric constants. Band names in
+/// the formula follow the caller's `band_names` — use the ASI convention
+/// (`N`, `R`, `G`, `B`, `RE1`..`RE3`, `N2`, `S1`, `S2`, `A`, `WV`) to run
+/// catalogue formulas verbatim, e.g. `"(N - R)/(N + R)"` for NDVI.
+///
+/// `band_names[i]` names the band decoded from `band_tiffs[i]`; the two
+/// arrays must have the same length and every GeoTIFF the same dimensions.
+/// Nodata (NaN or the declared nodata value) in any referenced band and
+/// division by zero both produce NaN in the output.
+#[wasm_bindgen]
+pub fn spectral_index(
+    formula: &str,
+    band_names: Vec<String>,
+    band_tiffs: Vec<js_sys::Uint8Array>,
+) -> Result<Vec<u8>, JsValue> {
+    if band_names.is_empty() {
+        return Err(JsValue::from_str("spectral_index: no bands provided"));
+    }
+    if band_names.len() != band_tiffs.len() {
+        return Err(JsValue::from_str(&format!(
+            "spectral_index: {} band names but {} band buffers",
+            band_names.len(),
+            band_tiffs.len()
+        )));
+    }
+
+    let mut rasters = Vec::with_capacity(band_tiffs.len());
+    for (name, tiff) in band_names.iter().zip(&band_tiffs) {
+        let raster = read_geotiff_from_buffer::<f64>(&tiff.to_vec(), None)
+            .map_err(|e| JsValue::from_str(&format!("spectral_index: band '{}': {}", name, e)))?;
+        rasters.push(raster);
+    }
+
+    let mut bands = std::collections::HashMap::new();
+    for (name, raster) in band_names.iter().zip(&rasters) {
+        if bands.insert(name.as_str(), raster).is_some() {
+            return Err(JsValue::from_str(&format!(
+                "spectral_index: duplicate band name '{}'",
+                name
+            )));
+        }
+    }
+
+    let result = index_builder(formula, &bands).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    write_geotiff_to_buffer(&result, None).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
 /// BSI (Bare Soil Index) from SWIR, Red, NIR, and Blue bands.
 #[wasm_bindgen]
 pub fn bsi(
@@ -595,105 +656,97 @@ pub fn morph_closing(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValu
 /// Focal mean statistic. `radius`: window radius in cells.
 #[wasm_bindgen]
 pub fn focal_mean(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> {
-    dem_op!(tiff_bytes, |dem: &_| focal_statistics(
-        dem,
-        FocalParams {
-            statistic: FocalStatistic::Mean,
-            radius,
-            circular: false
-        }
-    ))
+    dem_op!(tiff_bytes, |dem: &_| focal_statistics(dem, {
+        let mut p = FocalParams::default();
+        p.statistic = FocalStatistic::Mean;
+        p.radius = radius;
+        p.circular = false;
+        p
+    }))
 }
 
 /// Focal standard deviation. `radius`: window radius in cells.
 #[wasm_bindgen]
 pub fn focal_std(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> {
-    dem_op!(tiff_bytes, |dem: &_| focal_statistics(
-        dem,
-        FocalParams {
-            statistic: FocalStatistic::StdDev,
-            radius,
-            circular: false
-        }
-    ))
+    dem_op!(tiff_bytes, |dem: &_| focal_statistics(dem, {
+        let mut p = FocalParams::default();
+        p.statistic = FocalStatistic::StdDev;
+        p.radius = radius;
+        p.circular = false;
+        p
+    }))
 }
 
 /// Focal range (max - min). `radius`: window radius in cells.
 #[wasm_bindgen]
 pub fn focal_range(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> {
-    dem_op!(tiff_bytes, |dem: &_| focal_statistics(
-        dem,
-        FocalParams {
-            statistic: FocalStatistic::Range,
-            radius,
-            circular: false
-        }
-    ))
+    dem_op!(tiff_bytes, |dem: &_| focal_statistics(dem, {
+        let mut p = FocalParams::default();
+        p.statistic = FocalStatistic::Range;
+        p.radius = radius;
+        p.circular = false;
+        p
+    }))
 }
 
 /// Focal minimum.
 #[wasm_bindgen]
 pub fn focal_min(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> {
-    dem_op!(tiff_bytes, |dem: &_| focal_statistics(
-        dem,
-        FocalParams {
-            statistic: FocalStatistic::Min,
-            radius,
-            circular: false
-        }
-    ))
+    dem_op!(tiff_bytes, |dem: &_| focal_statistics(dem, {
+        let mut p = FocalParams::default();
+        p.statistic = FocalStatistic::Min;
+        p.radius = radius;
+        p.circular = false;
+        p
+    }))
 }
 
 /// Focal maximum.
 #[wasm_bindgen]
 pub fn focal_max(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> {
-    dem_op!(tiff_bytes, |dem: &_| focal_statistics(
-        dem,
-        FocalParams {
-            statistic: FocalStatistic::Max,
-            radius,
-            circular: false
-        }
-    ))
+    dem_op!(tiff_bytes, |dem: &_| focal_statistics(dem, {
+        let mut p = FocalParams::default();
+        p.statistic = FocalStatistic::Max;
+        p.radius = radius;
+        p.circular = false;
+        p
+    }))
 }
 
 /// Focal sum.
 #[wasm_bindgen]
 pub fn focal_sum(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> {
-    dem_op!(tiff_bytes, |dem: &_| focal_statistics(
-        dem,
-        FocalParams {
-            statistic: FocalStatistic::Sum,
-            radius,
-            circular: false
-        }
-    ))
+    dem_op!(tiff_bytes, |dem: &_| focal_statistics(dem, {
+        let mut p = FocalParams::default();
+        p.statistic = FocalStatistic::Sum;
+        p.radius = radius;
+        p.circular = false;
+        p
+    }))
 }
 
 /// Focal median.
 #[wasm_bindgen]
 pub fn focal_median(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> {
-    dem_op!(tiff_bytes, |dem: &_| focal_statistics(
-        dem,
-        FocalParams {
-            statistic: FocalStatistic::Median,
-            radius,
-            circular: false
-        }
-    ))
+    dem_op!(tiff_bytes, |dem: &_| focal_statistics(dem, {
+        let mut p = FocalParams::default();
+        p.statistic = FocalStatistic::Median;
+        p.radius = radius;
+        p.circular = false;
+        p
+    }))
 }
 
 /// Focal majority (mode). Useful for categorical rasters.
 #[wasm_bindgen]
 pub fn focal_majority(tiff_bytes: &[u8], radius: usize) -> Result<Vec<u8>, JsValue> {
-    dem_op!(tiff_bytes, |dem: &_| focal_statistics(
-        dem,
-        FocalParams {
-            statistic: FocalStatistic::Majority,
-            radius,
-            circular: false
-        }
-    ))
+    dem_op!(tiff_bytes, |dem: &_| focal_statistics(dem, {
+        let mut p = FocalParams::default();
+        p.statistic = FocalStatistic::Majority;
+        p.radius = radius;
+        p.circular = false;
+        p
+    }))
 }
 
 /// Focal percentile. `percentile` in [0, 100]; e.g. 50 = median, 25 = Q1.
@@ -703,14 +756,13 @@ pub fn focal_percentile(
     radius: usize,
     percentile: f64,
 ) -> Result<Vec<u8>, JsValue> {
-    dem_op!(tiff_bytes, |dem: &_| focal_statistics(
-        dem,
-        FocalParams {
-            statistic: FocalStatistic::Percentile(percentile),
-            radius,
-            circular: false
-        }
-    ))
+    dem_op!(tiff_bytes, |dem: &_| focal_statistics(dem, {
+        let mut p = FocalParams::default();
+        p.statistic = FocalStatistic::Percentile(percentile);
+        p.radius = radius;
+        p.circular = false;
+        p
+    }))
 }
 
 // ===========================================================================
@@ -756,15 +808,14 @@ pub fn relief_compute(
     let dem = read_geotiff_from_buffer::<f64>(tiff_bytes, None)
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
-    let sphere = sphere_shade(
-        &dem,
-        HillshadeParams {
-            azimuth: sun_azimuth,
-            altitude: sun_altitude,
-            z_factor: 1.0,
-            normalized: true,
-        },
-    )
+    let sphere = sphere_shade(&dem, {
+        let mut p = HillshadeParams::default();
+        p.azimuth = sun_azimuth;
+        p.altitude = sun_altitude;
+        p.z_factor = 1.0;
+        p.normalized = true;
+        p
+    })
     .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
     let mut builder = ReliefBuilder::new(&dem)

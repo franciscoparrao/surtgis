@@ -25,3 +25,4 @@ applicable) the reproduction that drove the fix.
 | `BUG_STRIP7_OOB_RESAMPLE.md` | Strip-7 out-of-bounds resample | 0.6.x | v0.6.x |
 | `DIAG_STRIP7_RESULTS.md` | Strip-7 diagnostics | 0.6.x | (diagnostic notes) |
 | `BUG_FLUVIAL_GEOJSON_CRS.md` | Fluvial GeoJSON CRS handling | 0.10.0 | v0.1x fluvial fixes |
+| `BUG_EXTRACT_ZERO_MATCH.md` | `surtgis extract` discarding valid points (`stream_network`/viewshed/lineament wrongly declared `nodata = 0`) | 0.17.0 | 0.18.x (this fix) |

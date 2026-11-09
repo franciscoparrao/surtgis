@@ -15,6 +15,10 @@ use surtgis_core::CRS;
 use surtgis_core::raster::{GeoTransform, Raster};
 
 use crate::error::{CloudError, Result};
+use crate::latlon_grid::{
+    build_geotransform, find_nearest, flip_rows, lat_range_ascending, lat_range_raw,
+    needs_north_up_flip,
+};
 use crate::tile_index::BBox;
 use crate::zarr_cf::CfMetadata;
 
@@ -97,6 +101,7 @@ pub struct NetCdfReader {
 impl NetCdfReader {
     /// Open a NetCDF file and select a variable for reading.
     pub fn open(path: &Path, variable: &str) -> Result<Self> {
+        surtgis_core::provenance::observe_input(&path.display().to_string());
         let file = netcdf::open(path)
             .map_err(|e| CloudError::NetCdf(format!("failed to open {}: {e}", path.display())))?;
 
@@ -215,6 +220,17 @@ impl NetCdfReader {
         let lat_size = lat_end - lat_start;
         let lon_size = lon_end - lon_start;
 
+        // (lat_start, lat_end) is in ascending `self.lat_coords` space; the
+        // file may store latitude descending (N→S), so map to raw index
+        // space only for the on-disk read. Using one pair for both spaces
+        // mirrored the output to the opposite hemisphere
+        // (BUG_ZARR_CLIMATE_LAT_MIRROR).
+        let (raw_lat_start, _) = lat_range_raw(
+            (lat_start, lat_end),
+            self.lat_coords.len(),
+            self.lat_descending,
+        );
+
         let lat_dim = self.cf.lat_dim.unwrap();
         let lon_dim = self.cf.lon_dim.unwrap();
         let ndim = self.metadata.shape.len();
@@ -233,7 +249,7 @@ impl NetCdfReader {
             var.get_values_into(
                 buf.as_mut_slice(),
                 (
-                    [time_start, lat_start, lon_start],
+                    [time_start, raw_lat_start, lon_start],
                     [time_count, lat_size, lon_size],
                 ),
             )
@@ -244,7 +260,7 @@ impl NetCdfReader {
             let mut buf = vec![0f32; lat_size * lon_size];
             var.get_values_into(
                 buf.as_mut_slice(),
-                ([lat_start, lon_start], [lat_size, lon_size]),
+                ([raw_lat_start, lon_start], [lat_size, lon_size]),
             )
             .map_err(|e| CloudError::NetCdf(format!("read failed: {e}")))?;
             buf.iter().map(|&v| v as f64).collect::<Vec<f64>>()
@@ -265,8 +281,10 @@ impl NetCdfReader {
             self.cf.fill_value,
         )?;
 
-        // Flip if lat was originally descending
-        let data_2d = if self.lat_descending {
+        // The GeoTransform below is always north-up (row 0 = northernmost).
+        // A descending source is already north-up in raw order; an ascending
+        // one arrives south-up and needs the flip.
+        let data_2d = if needs_north_up_flip(self.lat_descending) {
             flip_rows(data_2d)
         } else {
             data_2d
@@ -291,7 +309,11 @@ impl NetCdfReader {
         let mut raster = Raster::from_array(data_2d);
         raster.set_transform(geo_transform);
         raster.set_crs(Some(CRS::wgs84()));
-        raster.set_nodata(self.cf.fill_value);
+        // Fill pixels were replaced with NaN in `unpack_data`, so the
+        // declared nodata must be NaN too — declaring the original finite
+        // fill would make a subsequent write stamp GDAL_NODATA=<fill> over
+        // NaN pixels, and external tools would read the NaNs as valid data.
+        raster.set_nodata(self.cf.fill_value.map(|_| f64::NAN));
 
         Ok(raster)
     }
@@ -310,18 +332,10 @@ impl NetCdfReader {
 
     // ── Internals ────────────────────────────────────────────────────
 
+    /// Latitude index range in **ascending** `self.lat_coords` space.
+    /// Map through [`lat_range_raw`] before indexing the raw array.
     fn lat_range_for_bbox(&self, bbox: &BBox) -> Result<(usize, usize)> {
-        let start = find_nearest(&self.lat_coords, bbox.min_y);
-        let end = (find_nearest(&self.lat_coords, bbox.max_y) + 1).min(self.lat_coords.len());
-        if start >= end {
-            return Err(CloudError::BBoxOutside);
-        }
-        if self.lat_descending {
-            let n = self.lat_coords.len();
-            Ok((n - end, n - start))
-        } else {
-            Ok((start, end))
-        }
+        lat_range_ascending(&self.lat_coords, bbox.min_y, bbox.max_y).ok_or(CloudError::BBoxOutside)
     }
 
     fn lon_range_for_bbox(&self, bbox: &BBox) -> Result<(usize, usize)> {
@@ -484,39 +498,6 @@ fn normalise_longitude(lon: Vec<f64>) -> Vec<f64> {
     out
 }
 
-fn build_geotransform(lat: &[f64], lon: &[f64]) -> GeoTransform {
-    if lat.len() < 2 || lon.len() < 2 {
-        return GeoTransform::new(
-            lon.first().copied().unwrap_or(0.0),
-            lat.last().copied().unwrap_or(0.0),
-            1.0,
-            -1.0,
-        );
-    }
-    let pixel_width = (lon[lon.len() - 1] - lon[0]) / (lon.len() - 1) as f64;
-    let lat_step = (lat[lat.len() - 1] - lat[0]) / (lat.len() - 1) as f64;
-    let origin_x = lon[0] - pixel_width / 2.0;
-    let origin_y = lat[lat.len() - 1] + lat_step / 2.0;
-    GeoTransform::new(origin_x, origin_y, pixel_width, -lat_step)
-}
-
-fn find_nearest(coords: &[f64], value: f64) -> usize {
-    match coords.binary_search_by(|c| c.partial_cmp(&value).unwrap()) {
-        Ok(i) => i,
-        Err(i) => {
-            if i == 0 {
-                0
-            } else if i >= coords.len() {
-                coords.len() - 1
-            } else if (coords[i] - value).abs() < (coords[i - 1] - value).abs() {
-                i
-            } else {
-                i - 1
-            }
-        }
-    }
-}
-
 fn find_nearest_time(coords: &[DateTime<Utc>], target: &DateTime<Utc>) -> usize {
     coords
         .iter()
@@ -524,16 +505,6 @@ fn find_nearest_time(coords: &[DateTime<Utc>], target: &DateTime<Utc>) -> usize 
         .min_by_key(|(_, t)| (*target - **t).num_seconds().abs())
         .map(|(i, _)| i)
         .unwrap_or(0)
-}
-
-fn flip_rows(data: Array2<f64>) -> Array2<f64> {
-    let nrows = data.nrows();
-    let ncols = data.ncols();
-    let mut flipped = Array2::zeros((nrows, ncols));
-    for r in 0..nrows {
-        flipped.row_mut(r).assign(&data.row(nrows - 1 - r));
-    }
-    flipped
 }
 
 fn unpack_data(mut data: Array2<f64>, cf: &CfMetadata) -> Array2<f64> {

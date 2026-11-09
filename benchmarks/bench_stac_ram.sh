@@ -10,12 +10,13 @@
 #   1. Runs a small ES bbox composite (one MGRS tile, 3 bands, 3 dates)
 #   2. Samples RSS of the surtgis process every 0.25s
 #   3. Asserts peak RSS stays below THRESHOLD_MB (default 2000 MB)
-#   4. Asserts RSS is not monotonically growing (no leak pattern)
+#   4. Asserts the RSS peak does not grow late in the run (no leak pattern)
 #
 # Usage: bash benchmarks/bench_stac_ram.sh
 # Env:   THRESHOLD_MB=2000  (peak RSS fail threshold)
 #        BBOX="-71.5,-35.5,-71.4,-35.4"  (tiny, single MGRS tile)
 #        DATETIME="2024-01-01/2024-01-31"
+#        LEAK_MIN_MB=64  (late-run peak growth below this never fails)
 
 set -euo pipefail
 
@@ -71,8 +72,10 @@ while kill -0 "$PID" 2>/dev/null; do
     sleep 0.25
 done
 
-wait "$PID"
-STATUS=$?
+# Under `set -e` a bare failing `wait` would end the script here, before
+# the log tail below is printed.
+STATUS=0
+wait "$PID" || STATUS=$?
 
 if [ "$STATUS" -ne 0 ]; then
     echo "FAIL: surtgis exited with status $STATUS"
@@ -99,18 +102,28 @@ if [ "$PEAK_MB" -gt "$THRESHOLD_MB" ]; then
     exit 1
 fi
 
-# Check 2: no monotonic growth pattern over the final third of the run.
-# If RSS at t=end is significantly higher than at t=2/3*end, that's a leak
-# signature — memory should stabilise as processing settles.
+# Check 2: no growth over the final third of the run. RSS is a sawtooth
+# (each strip allocates and frees ~25 MB), so single samples depend on the
+# phase they land on: compare the peak of the final third with the peak of
+# the middle third. Growth must also exceed LEAK_MIN_MB, so allocator noise
+# on a ~100 MB run is not read as the GB-per-minute leaks this guards
+# against.
+LEAK_MIN_MB="${LEAK_MIN_MB:-64}"
 if [ "$N_SAMPLES" -ge 12 ]; then
-    TAIL_START=$((N_SAMPLES * 2 / 3 + 1))  # +1 for header
-    MID_RSS=$(awk -F, -v s="$TAIL_START" 'NR==s {print $2}' "$RSS_LOG")
-    END_RSS=$(awk -F, 'END {print $2}' "$RSS_LOG")
-    GROWTH_PCT=$(awk "BEGIN{if($MID_RSS>0) printf \"%.1f\", ($END_RSS - $MID_RSS)*100/$MID_RSS; else print 0}")
-    echo "  late-run growth: ${MID_RSS} MB → ${END_RSS} MB (${GROWTH_PCT}%)"
-    # Allow up to 20% late-run growth; more suggests a leak
-    if awk "BEGIN{exit !($GROWTH_PCT > 20)}"; then
-        echo "FAIL: monotonic growth detected — RSS grew ${GROWTH_PCT}% in final third (leak signature)"
+    read -r MID_PEAK END_PEAK < <(awk -F, -v n="$N_SAMPLES" '
+        NR > 1 { i = NR - 1
+                 if (i > n / 3 && i <= 2 * n / 3 && $2 + 0 > mid) mid = $2 + 0
+                 if (i > 2 * n / 3 && $2 + 0 > end) end = $2 + 0 }
+        END { print mid + 0, end + 0 }' "$RSS_LOG")
+    GROWTH_MB=$((END_PEAK - MID_PEAK))
+    GROWTH_PCT=$(awk "BEGIN{if($MID_PEAK>0) printf \"%.1f\", $GROWTH_MB*100/$MID_PEAK; else print 0}")
+    echo "  late-run peak: ${MID_PEAK} MB → ${END_PEAK} MB (${GROWTH_PCT}%, ${GROWTH_MB} MB)"
+    # Allow up to 20% (or LEAK_MIN_MB) late-run growth; more suggests a leak
+    if awk "BEGIN{exit !($GROWTH_PCT > 20)}" && [ "$GROWTH_MB" -gt "$LEAK_MIN_MB" ]; then
+        echo "FAIL: RSS peak grew ${GROWTH_PCT}% (${GROWTH_MB} MB) in the final third (leak signature)"
+        echo "--- RSS trajectory ---"
+        tr '\n' ' ' < "$RSS_LOG"
+        echo
         exit 1
     fi
 fi

@@ -45,11 +45,14 @@ pub mod cube;
 pub mod error;
 pub mod io;
 pub mod mosaic;
+pub mod provenance;
 pub mod raster;
 pub mod resample;
 pub mod streaming;
 pub mod tiling;
 pub mod vector;
+#[cfg(feature = "projections")]
+pub mod warp;
 
 /// Re-exported so downstream code can depend on the exact `geo` version
 /// used by algorithm-crate vector operations built on this crate.
@@ -68,15 +71,20 @@ pub use crs::CRS;
 pub use cube::{Cube, CubeChunk, CubeSource};
 pub use error::{Error, Result};
 pub use mosaic::{MosaicOptions, mosaic};
+pub use provenance::Provenance;
 pub use raster::{AnyRaster, DataType, GeoTransform, Raster, RasterCell, RasterElement};
 pub use resample::{ResampleMethod, resample_to_grid};
 pub use streaming::{GeoRowContext, StripProcessor, WindowAlgorithm};
 pub use tiling::{Tile, TileGrid};
 
-/// Prelude for convenient imports
+/// Prelude for convenient imports.
+///
+/// The `dispatch_any!` macro is intentionally **not** re-exported here:
+/// freezing a macro in the 1.0 prelude would freeze its internal match
+/// syntax. It remains reachable at its crate-root path
+/// `surtgis_core::dispatch_any!` (via `#[macro_export]`).
 pub mod prelude {
     pub use crate::crs::CRS;
-    pub use crate::dispatch_any;
     pub use crate::error::{Error, Result};
     pub use crate::raster::{
         AnyRaster, DataType, GeoTransform, Raster, RasterCell, RasterElement, check_aligned,

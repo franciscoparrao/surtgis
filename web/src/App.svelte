@@ -20,6 +20,24 @@
   let error = $state("");
   let wasmReady = $state(false);
 
+  /** Custom spectral-index formula (ASI grammar). Band uploaders derive from it. */
+  let formula = $state("(N - R)/(N + R)");
+
+  /** Unique identifiers in order of appearance — the band names the formula references. */
+  function parseFormulaBands(f) {
+    const seen = new Set();
+    const out = [];
+    for (const m of f.matchAll(/[A-Za-z_][A-Za-z0-9_]*/g)) {
+      if (!seen.has(m[0])) {
+        seen.add(m[0]);
+        out.push(m[0]);
+      }
+    }
+    return out;
+  }
+
+  let formulaBands = $derived(parseFormulaBands(formula));
+
   /**
    * Per-algorithm definition of the additional band slots after the primary
    * raster. Each entry is an array of label strings; UI renders one uploader
@@ -111,6 +129,7 @@
     evi2: "ndvi",
     evi: "ndvi",
     bsi: "divergent",
+    spectral_index: "divergent",
     // Morphology
     morph_erode: "terrain",
     morph_dilate: "terrain",
@@ -160,8 +179,16 @@
 
     try {
       const t0 = performance.now();
-      const slots = MULTI_BAND_LABELS[algo]?.length ?? 0;
-      const bands = extraBands.slice(0, slots).filter((b) => b !== null);
+      let bands;
+      if (algo === "spectral_index") {
+        // Positional name↔buffer mapping: keep nulls so the dispatcher can
+        // report exactly which bands are missing.
+        params.bandNames = formulaBands;
+        bands = extraBands.slice(0, Math.max(formulaBands.length - 1, 0));
+      } else {
+        const slots = MULTI_BAND_LABELS[algo]?.length ?? 0;
+        bands = extraBands.slice(0, slots).filter((b) => b != null);
+      }
       const out = await runAlgorithm(algo, demBytes, params, bands);
       elapsed = performance.now() - t0;
 
@@ -177,9 +204,17 @@
     }
   }
 
-  let extraBandLabels = $derived(MULTI_BAND_LABELS[selectedAlgo] ?? []);
+  let extraBandLabels = $derived(
+    selectedAlgo === "spectral_index"
+      ? formulaBands.slice(1).map((n) => `Band ${n}`)
+      : (MULTI_BAND_LABELS[selectedAlgo] ?? []),
+  );
   let primaryLabel = $derived(
-    PRIMARY_BAND_LABEL[selectedAlgo] ?? "DEM / Raster",
+    selectedAlgo === "spectral_index"
+      ? formulaBands.length > 0
+        ? `Band ${formulaBands[0]}`
+        : "DEM / Raster"
+      : (PRIMARY_BAND_LABEL[selectedAlgo] ?? "DEM / Raster"),
   );
 </script>
 
@@ -203,11 +238,12 @@
     {/each}
 
     <section>
-      <h2>Algorithms <span class="algo-count">56</span></h2>
+      <h2>Algorithms <span class="algo-count">57</span></h2>
       <AlgoPanel
         disabled={!demBytes || !wasmReady}
         {processing}
         bind:selectedAlgo
+        bind:formula
         onrun={onRun}
       />
     </section>

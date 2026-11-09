@@ -12,6 +12,10 @@ members = [
     "crates/gui",
     "crates/relief",
     "crates/relief-3d",
+    "crates/flow",
+    "crates/ffi",
+    "crates/ecw",
+    "crates/server",
 ]
 # The `fuzz/` crate is a cargo-fuzz harness; it must NOT be a workspace member
 # (it depends on the unstable `-Z sanitizer` build and its own nightly profile).
@@ -32,10 +36,14 @@ default-members = [
     "crates/cloud",
     "crates/colormap",
     "crates/relief",
+    "crates/flow",
+    "crates/ffi",
+    "crates/ecw",
+    "crates/server",
 ]
 
 [workspace.package]
-version = "0.18.0"
+version = "1.8.1"
 edition = "2024"
 # MSRV: edition 2024 + let-chains require 1.88, but the CLI's default
 # `zarr` feature transitively requires zarrs >=0.23, which requires 1.91
@@ -57,6 +65,10 @@ thiserror = "2"
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Embedded provenance (core::provenance): BLAKE3 of inputs and output arrays.
+blake3 = "1"
+# Pure-Rust ZSTD decoder for COG tiles (surtgis-cloud `zstd` feature).
+ruzstd = "0.9.1"
 
 # Geospatial
 geo = "0.29"
@@ -65,7 +77,7 @@ gdal = { version = "0.17", features = ["bindgen"] }
 geozero = "0.14"
 parquet = { version = "59", default-features = false, features = ["snap"] }
 rstar = "0.12"
-tiff = { version = "0.10", features = ["deflate"] }
+tiff = { version = "0.11", features = ["deflate"] }
 
 # Numerics
 ndarray = "0.16"
@@ -87,9 +99,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Cloud / HTTP
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "http2"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "sync"] }
+axum = "0.8"
+tower-http = { version = "0.7", features = ["cors", "trace"] }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 weezl = "0.1"
-lru = "0.16"
+lru = "0.18"
 byteorder = "1"
 futures = "0.3"
 
@@ -147,3 +161,10 @@ opt-level = 3
 [profile.bench]
 lto = "thin"
 codegen-units = 1
+
+# The surtgis-flow validation gates (T1-T7) integrate thousands of substeps
+# over full grids; at opt-level 0 they take minutes in CI. Optimizing just
+# this package keeps `cargo test --workspace` fast without touching the debug
+# profile of the rest of the workspace (debug assertions stay on).
+[profile.test.package.surtgis-flow]
+opt-level = 2

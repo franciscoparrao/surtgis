@@ -149,8 +149,9 @@ pub fn viewshed_pderl(dem: &Raster<f64>, params: PderlViewshedParams) -> Result<
         }
     }
 
+    // No nodata sentinel: every cell is a definite 0 (not visible) or 1
+    // (visible), and 0 is typically the majority value, not missing data.
     let mut output = dem.with_same_meta::<u8>(rows, cols);
-    output.set_nodata(Some(0));
     *output.data_mut() = visibility;
 
     Ok(output)

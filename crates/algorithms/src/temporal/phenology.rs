@@ -20,7 +20,9 @@ pub struct PhenologyParams {
     /// Threshold as fraction of amplitude (0-1) for SOS/EOS detection.
     /// Default: 0.5 (half-maximum method).
     pub threshold: f64,
-    /// Savitzky-Golay smoothing window size (must be odd). 0 = no smoothing.
+    /// Centered moving-average smoothing window size (must be odd).
+    /// 0 = no smoothing. (Not Savitzky-Golay: a plain unweighted mean,
+    /// which flattens peaks more than a polynomial fit would.)
     pub smooth_window: usize,
 }
 

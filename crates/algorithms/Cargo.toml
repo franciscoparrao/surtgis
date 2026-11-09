@@ -22,13 +22,13 @@ unstable = []
 # the single-binary property) backing `inference::onnx::OnnxModel`. Off by
 # default: it is a heavy dependency and, per SPEC_SURTGIS_ONNX_INFERENCE.md,
 # still a scaffold (`OnnxModel::load`/`infer` are stubs). The tiling/halo/
-# stitching orchestration in `inference::run_tiled` needs no feature and is
-# fully implemented and tested without it.
-onnx = ["dep:tract-onnx"]
+# stitching orchestration in `inference::run_tiled` needs no ONNX runtime
+# but lives under the `unstable` module, which `onnx` therefore enables.
+onnx = ["dep:tract-onnx", "unstable"]
 
 [dependencies]
-surtgis-core = { version = "0.18", path = "../core", default-features = false }
-surtgis-parallel = { version = "0.18", path = "../parallel", default-features = false }
+surtgis-core = { version = "1.0", path = "../core", default-features = false }
+surtgis-parallel = { version = "1.0", path = "../parallel", default-features = false }
 thiserror.workspace = true
 anyhow.workspace = true
 ndarray.workspace = true
@@ -46,6 +46,8 @@ tract-onnx = { version = "0.23", optional = true }
 approx.workspace = true
 tempfile.workspace = true
 criterion.workspace = true
+# tests/determinism.rs runs the suite under thread pools of different sizes.
+rayon.workspace = true
 
 [[bench]]
 name = "terrain"

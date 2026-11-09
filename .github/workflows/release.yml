@@ -80,7 +80,7 @@ jobs:
         # reprojection) without dragging in netcdf / grib, which need system
         # libraries (libnetcdf, HDF5) that vary across platforms. Users who
         # want those can still `cargo install surtgis --all-features`.
-        run: cargo build --release -p surtgis --bin surtgis --target ${{ matrix.target }} --no-default-features --features cloud,zarr,projections
+        run: cargo build --release -p surtgis --bin surtgis --target ${{ matrix.target }} --no-default-features --features cloud,zarr,projections,server,ecw
         env:
           RUSTFLAGS: ${{ matrix.rustflags || '' }}
 

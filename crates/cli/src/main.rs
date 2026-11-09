@@ -4,6 +4,7 @@ mod commands;
 mod handlers;
 mod helpers;
 mod memory;
+mod provenance;
 // streaming + stac_introspect import from surtgis_cloud unconditionally
 // and are consumed only by the cog/stac handlers (both cloud-gated).
 // Gate them too so --no-default-features builds cleanly.
@@ -27,7 +28,7 @@ mod streaming;
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use anyhow::Result;
-use clap::{CommandFactory, Parser};
+
 use std::process::ExitCode;
 
 use commands::{Cli, Commands};
@@ -53,7 +54,11 @@ fn exit_code_for(err: &anyhow::Error) -> u8 {
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let cli = {
+        use clap::FromArgMatches;
+        let mut matches = commands::cli_command().get_matches();
+        Cli::from_arg_matches_mut(&mut matches).unwrap_or_else(|e| e.exit())
+    };
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -76,17 +81,40 @@ fn run(cli: Cli) -> Result<()> {
         .transpose()?;
 
     helpers::setup_logging(verbose);
+    helpers::set_output_f32(cli.output_dtype == "f32");
+
+    if !cli.no_provenance && !provenance::disabled_by_env() {
+        provenance::install(std::env::args().collect());
+    }
 
     match cli.command {
         Commands::Completions { shell } => {
             clap_complete::generate(
                 shell,
-                &mut commands::Cli::command(),
+                &mut commands::cli_command(),
                 "surtgis",
                 &mut std::io::stdout(),
             );
         }
         Commands::Info { input } => handlers::info::handle(input)?,
+        Commands::Provenance { input, json, stac } => {
+            handlers::provenance::show(input, json, stac)?
+        }
+        Commands::Verify {
+            input,
+            skip_inputs,
+            against,
+            affected_from,
+            affected_to,
+        } => handlers::provenance::verify(
+            input,
+            skip_inputs,
+            against.map(|f| handlers::provenance::AffectedList {
+                file: f,
+                from: affected_from,
+                to: affected_to,
+            }),
+        )?,
         Commands::Terrain { algorithm } => {
             handlers::terrain::handle(algorithm, compress, streaming, mem_limit_bytes)?
         }
@@ -94,6 +122,34 @@ fn run(cli: Cli) -> Result<()> {
             handlers::hydrology::handle(algorithm, compress, mem_limit_bytes)?
         }
         Commands::Fluvial { algorithm } => handlers::fluvial::handle(algorithm, compress)?,
+        #[cfg(feature = "flow")]
+        Commands::Flow { command } => handlers::flow::handle(command, compress)?,
+        #[cfg(feature = "server")]
+        Commands::Serve {
+            bind,
+            root,
+            allow,
+            max_age,
+            cache_mb,
+            cache_dir,
+            timeout_ms,
+            max_inflight,
+            pool_per_url,
+            jobs_dir,
+        } => handlers::serve::handle(handlers::serve::Args {
+            bind,
+            root,
+            allow,
+            max_age,
+            cache_mb,
+            cache_dir,
+            timeout_ms,
+            max_inflight,
+            pool_per_url,
+            jobs_dir,
+        })?,
+        #[cfg(feature = "ecw")]
+        Commands::Ecw { action } => handlers::ecw::handle(action, compress)?,
         Commands::Imagery { algorithm } => handlers::imagery::handle(algorithm, compress)?,
         Commands::Morphology { algorithm } => handlers::morphology::handle(algorithm, compress)?,
         Commands::Landscape { algorithm } => handlers::landscape::handle(algorithm, compress)?,
@@ -199,8 +255,17 @@ fn run(cli: Cli) -> Result<()> {
             input,
             polygon,
             bbox,
+            keep_extent,
             output,
-        } => handlers::clip::handle_clip(input, polygon, bbox, output, compress, mem_limit_bytes)?,
+        } => handlers::clip::handle_clip(
+            input,
+            polygon,
+            bbox,
+            keep_extent,
+            output,
+            compress,
+            mem_limit_bytes,
+        )?,
         #[cfg(feature = "projections")]
         Commands::Reproject {
             input,
@@ -238,6 +303,7 @@ fn run(cli: Cli) -> Result<()> {
             handlers::classification::handle(algorithm, compress)?
         }
         Commands::Texture { algorithm } => handlers::texture::handle(algorithm, compress)?,
+        Commands::Embeddings { command } => handlers::embeddings::handle(command, compress)?,
         Commands::Segmentation { algorithm } => {
             handlers::segmentation::handle(algorithm, compress)?
         }

@@ -16,6 +16,10 @@ use surtgis_core::CRS;
 use surtgis_core::raster::{GeoTransform, Raster};
 
 use crate::error::{CloudError, Result};
+use crate::latlon_grid::{
+    build_geotransform, find_nearest, flip_rows, lat_range_ascending, lat_range_raw,
+    needs_north_up_flip,
+};
 use crate::tile_index::BBox;
 use crate::zarr_auth;
 use crate::zarr_cf::CfMetadata;
@@ -71,6 +75,89 @@ pub enum AggMethod {
     Max,
 }
 
+/// Per-pixel partial statistics of one time range, mergeable across stores.
+///
+/// Climate archives are often split into one store per period (ERA5 on
+/// Planetary Computer publishes one Zarr store per month), so a single
+/// aggregate such as an annual sum spans several stores. Each store yields
+/// one partial through [`ZarrReader::read_bbox_partial`]; [`merge`] combines
+/// them and [`finish`] derives the requested [`AggMethod`]. Sums and counts
+/// merge exactly, so `yearly-sum == Σ monthly-sum` holds by construction,
+/// and a mean is always the mean over every time step actually read, never
+/// a mean of per-store means.
+///
+/// Values are already unpacked (`scale_factor`/`add_offset` applied) and
+/// fill values excluded, so the accumulators are in physical units.
+///
+/// [`merge`]: TimeAggPartial::merge
+/// [`finish`]: TimeAggPartial::finish
+#[derive(Debug, Clone)]
+pub struct TimeAggPartial {
+    /// Sum of the valid values per pixel (`0.0` where none); carries the
+    /// georeferencing shared by every accumulator.
+    pub sum: Raster<f64>,
+    /// Number of valid time steps per pixel.
+    pub count: Array2<f64>,
+    /// Minimum valid value per pixel (`+inf` where none).
+    pub min: Array2<f64>,
+    /// Maximum valid value per pixel (`-inf` where none).
+    pub max: Array2<f64>,
+    /// Total number of time steps read (valid or not).
+    pub time_steps: usize,
+}
+
+impl TimeAggPartial {
+    /// Fold another partial (same grid, disjoint time steps) into this one.
+    ///
+    /// Only the grid shape is checked: the caller is responsible for reading
+    /// every partial with the same bounding box from stores on the same grid.
+    pub fn merge(&mut self, other: &TimeAggPartial) -> Result<()> {
+        if self.sum.shape() != other.sum.shape() {
+            return Err(CloudError::Zarr(format!(
+                "cannot merge time partials of different shapes: {:?} vs {:?}",
+                self.sum.shape(),
+                other.sum.shape()
+            )));
+        }
+        let (rows, cols) = self.sum.shape();
+        for r in 0..rows {
+            for c in 0..cols {
+                self.sum.data_mut()[[r, c]] += other.sum.data()[[r, c]];
+                self.count[[r, c]] += other.count[[r, c]];
+                self.min[[r, c]] = self.min[[r, c]].min(other.min[[r, c]]);
+                self.max[[r, c]] = self.max[[r, c]].max(other.max[[r, c]]);
+            }
+        }
+        self.time_steps += other.time_steps;
+        Ok(())
+    }
+
+    /// Derive the final raster for `method`; pixels with no valid step are NaN.
+    pub fn finish(&self, method: AggMethod) -> Raster<f64> {
+        let (rows, cols) = self.sum.shape();
+        let mut out = Array2::from_elem((rows, cols), f64::NAN);
+        for r in 0..rows {
+            for c in 0..cols {
+                let n = self.count[[r, c]];
+                if n == 0.0 {
+                    continue;
+                }
+                out[[r, c]] = match method {
+                    AggMethod::Mean => self.sum.data()[[r, c]] / n,
+                    AggMethod::Sum => self.sum.data()[[r, c]],
+                    AggMethod::Min => self.min[[r, c]],
+                    AggMethod::Max => self.max[[r, c]],
+                };
+            }
+        }
+        let mut raster = Raster::from_array(out);
+        raster.set_transform(*self.sum.transform());
+        raster.set_crs(self.sum.crs().cloned());
+        raster.set_nodata(self.sum.nodata());
+        raster
+    }
+}
+
 /// Metadata about a Zarr store and the selected variable.
 #[derive(Debug, Clone)]
 pub struct ZarrMetadata {
@@ -91,6 +178,9 @@ pub struct ZarrMetadata {
     /// First and last decoded time step (if time dimension exists).
     pub time_range: Option<(DateTime<Utc>, DateTime<Utc>)>,
     /// All variable names found in the store.
+    /// Variables listed in the store. Empty after a successful `open`
+    /// (listing costs one request per array); use
+    /// [`ZarrReader::list_variables`] to enumerate.
     pub available_variables: Vec<String>,
 }
 
@@ -115,37 +205,45 @@ pub struct ZarrReader {
 impl ZarrReader {
     /// Open a Zarr store and select a variable for reading.
     pub async fn open(store_url: &str, variable: &str, options: ZarrReaderOptions) -> Result<Self> {
+        surtgis_core::provenance::observe_input(&format!("{store_url}#{variable}"));
         let store = zarr_auth::build_zarr_store(store_url, options.sas_token.as_deref()).await?;
 
-        // Open root group (try default → V2 fallback)
-        let group = match Group::async_open(store.clone(), "/").await {
-            Ok(g) => g,
-            Err(_) => Group::async_open_opt(store.clone(), "/", &MetadataRetrieveVersion::V2)
-                .await
-                .map_err(|e| CloudError::Zarr(format!("failed to open Zarr group: {e}")))?,
-        };
+        // Open root group. Climate stores are overwhelmingly Zarr v2, and
+        // the default probe asks for `zarr.json` first (one 404 round trip
+        // per open), so try v2 first and fall back to the default probe.
+        let group =
+            match Group::async_open_opt(store.clone(), "/", &MetadataRetrieveVersion::V2).await {
+                Ok(g) => g,
+                Err(_) => Group::async_open(store.clone(), "/")
+                    .await
+                    .map_err(|e| CloudError::Zarr(format!("failed to open Zarr group: {e}")))?,
+            };
 
         let group_attrs = serde_json::Value::Object(group.attributes().clone());
 
-        // List available variables (may be empty if store doesn't support listing)
-        let available_variables = Self::list_arrays(&store).await.unwrap_or_default();
-
-        // Open data array (try default → V2 fallback)
+        // Open data array (v2 first, default probe as fallback). The store's
+        // variable listing costs one request per child array, so it is only
+        // fetched to explain a failure; `metadata().available_variables` is
+        // therefore empty on success (use `list_variables` to enumerate).
         let array_path = format!("/{variable}");
-        let array = match Array::async_open(store.clone(), &array_path).await {
-            Ok(a) => a,
-            Err(_) => {
-                // Retry with explicit V2 (common for climate Zarr stores)
-                Array::async_open_opt(store.clone(), &array_path, &MetadataRetrieveVersion::V2)
-                    .await
-                    .map_err(|e| {
-                        CloudError::Zarr(format!(
+        let array =
+            match Array::async_open_opt(store.clone(), &array_path, &MetadataRetrieveVersion::V2)
+                .await
+            {
+                Ok(a) => a,
+                Err(_) => match Array::async_open(store.clone(), &array_path).await {
+                    Ok(a) => a,
+                    Err(e) => {
+                        let available_variables =
+                            Self::list_arrays(&store).await.unwrap_or_default();
+                        return Err(CloudError::Zarr(format!(
                             "failed to open array '/{variable}': {e}. Available: [{}]",
                             available_variables.join(", ")
-                        ))
-                    })?
-            }
-        };
+                        )));
+                    }
+                },
+            };
+        let available_variables = Vec::new();
 
         // Dimension names
         // DimensionName = Option<String>, so we unwrap each name
@@ -254,6 +352,156 @@ impl ZarrReader {
 
     /// Read a geographic bounding box at a specific time.
     pub async fn read_bbox(&self, bbox: &BBox, time: &TimeReduction) -> Result<Raster<f64>> {
+        if let TimeReduction::Aggregate { start, end, method } = time {
+            return Ok(self
+                .read_bbox_partial(bbox, start, end)
+                .await?
+                .finish(*method));
+        }
+
+        let sub = self.fetch_subset(bbox, time).await?;
+        let data_2d = reduce_to_2d(
+            &sub.values,
+            &sub.shape,
+            sub.lat_dim,
+            sub.lon_dim,
+            sub.time_count,
+        )?;
+        let data_2d = self.orient_north_up(data_2d);
+        // Apply scale/offset and replace fill values
+        let data_2d = unpack_data(data_2d, &self.cf);
+        Ok(self.build_raster(data_2d, &sub))
+    }
+
+    /// Read a bounding box over `[start, end]` (inclusive) and return the
+    /// per-pixel partial statistics instead of a finished raster.
+    ///
+    /// Use this when one aggregate spans several stores: read one partial
+    /// per store, [`TimeAggPartial::merge`] them, then
+    /// [`TimeAggPartial::finish`]. Only the time steps whose coordinate
+    /// falls inside the range are read; fails with
+    /// [`CloudError::ZarrTimeOutOfRange`] when the store has none.
+    pub async fn read_bbox_partial(
+        &self,
+        bbox: &BBox,
+        start: &DateTime<Utc>,
+        end: &DateTime<Utc>,
+    ) -> Result<TimeAggPartial> {
+        let mut parts = self.read_bbox_partials(bbox, &[(*start, *end)]).await?;
+        parts
+            .pop()
+            .flatten()
+            .ok_or_else(|| self.time_out_of_range(start, end))
+    }
+
+    /// Partials for several time windows from **one** fetch of their union.
+    ///
+    /// The store is read once over `[min start, max end]` and every window
+    /// is bucketed from that buffer, so 31 daily windows against a monthly
+    /// store cost one download instead of 31 re-downloads of the same
+    /// chunks. Windows may overlap or be unsorted. The result is aligned
+    /// with `windows`; an entry is `None` when the store holds no time step
+    /// inside that window (including when it holds none for the union).
+    pub async fn read_bbox_partials(
+        &self,
+        bbox: &BBox,
+        windows: &[(DateTime<Utc>, DateTime<Utc>)],
+    ) -> Result<Vec<Option<TimeAggPartial>>> {
+        if windows.is_empty() {
+            return Ok(Vec::new());
+        }
+        let start = windows.iter().map(|w| w.0).min().unwrap();
+        let end = windows.iter().map(|w| w.1).max().unwrap();
+        let time = TimeReduction::Aggregate {
+            start,
+            end,
+            method: AggMethod::Sum,
+        };
+        let sub = match self.fetch_subset(bbox, &time).await {
+            Ok(sub) => sub,
+            Err(CloudError::ZarrTimeOutOfRange { .. }) => {
+                return Ok(vec![None; windows.len()]);
+            }
+            Err(e) => return Err(e),
+        };
+
+        let layout_ok = (sub.shape.len() == 3
+            && self.cf.time_dim == Some(0)
+            && sub.lat_dim == 1
+            && sub.lon_dim == 2)
+            || (sub.shape.len() == 2
+                && self.cf.time_dim.is_none()
+                && sub.lat_dim == 0
+                && sub.lon_dim == 1);
+        if !layout_ok {
+            return Err(CloudError::Zarr(
+                "unsupported dimension layout for time aggregation".into(),
+            ));
+        }
+
+        let lat_size = sub.shape[sub.lat_dim];
+        let lon_size = sub.shape[sub.lon_dim];
+        let spatial = lat_size * lon_size;
+
+        // Time coordinates of the fetched planes (empty when the store has
+        // no decodable time axis: then there is a single plane).
+        let coords: &[DateTime<Utc>] = if self.cf.time_dim.is_some() && !self.time_coords.is_empty()
+        {
+            let (first, _) = self.time_indices(&time)?;
+            &self.time_coords[first..first + sub.time_count]
+        } else {
+            &[]
+        };
+
+        let out = window_ranges(coords, sub.time_count, windows)
+            .into_iter()
+            .map(|range| {
+                range.map(|(first, count)| {
+                    let planes = &sub.values[first * spatial..(first + count) * spatial];
+                    let stats = accumulate_time_stats(planes, count, lat_size, lon_size, &self.cf);
+                    self.partial_from_stats(stats, &sub, count)
+                })
+            })
+            .collect();
+        Ok(out)
+    }
+
+    /// Georeference and orient raw accumulators into a [`TimeAggPartial`].
+    fn partial_from_stats(
+        &self,
+        stats: TimeStats,
+        sub: &Subset,
+        time_steps: usize,
+    ) -> TimeAggPartial {
+        TimeAggPartial {
+            sum: self.build_raster(self.orient_north_up(stats.sum), sub),
+            count: self.orient_north_up(stats.count),
+            min: self.orient_north_up(stats.min),
+            max: self.orient_north_up(stats.max),
+            time_steps,
+        }
+    }
+
+    fn time_out_of_range(&self, start: &DateTime<Utc>, end: &DateTime<Utc>) -> CloudError {
+        CloudError::ZarrTimeOutOfRange {
+            requested: format!("{start} to {end}"),
+            available: format!(
+                "{} to {}",
+                self.time_coords
+                    .first()
+                    .map(|t| t.to_string())
+                    .unwrap_or_default(),
+                self.time_coords
+                    .last()
+                    .map(|t| t.to_string())
+                    .unwrap_or_default(),
+            ),
+        }
+    }
+
+    /// Fetch the raw array subset for `bbox` and the time steps selected by
+    /// `time`. Values are still packed (no scale/offset, fills untouched).
+    async fn fetch_subset(&self, bbox: &BBox, time: &TimeReduction) -> Result<Subset> {
         let (lat_start, lat_end) = self.lat_range_for_bbox(bbox)?;
         let (lon_start, lon_end) = self.lon_range_for_bbox(bbox)?;
 
@@ -264,8 +512,18 @@ impl ZarrReader {
         let mut starts = vec![0u64; ndim];
         let mut sizes = vec![0u64; ndim];
 
-        starts[lat_dim] = lat_start as u64;
-        sizes[lat_dim] = (lat_end - lat_start) as u64;
+        // (lat_start, lat_end) is in ascending `self.lat_coords` space; the
+        // on-disk array may store latitude descending (N→S, e.g. ERA5), so
+        // map to raw index space only for the array read. Using one pair for
+        // both spaces mirrored the output to the opposite hemisphere
+        // (BUG_ZARR_CLIMATE_LAT_MIRROR).
+        let (raw_lat_start, raw_lat_end) = lat_range_raw(
+            (lat_start, lat_end),
+            self.lat_coords.len(),
+            self.lat_descending,
+        );
+        starts[lat_dim] = raw_lat_start as u64;
+        sizes[lat_dim] = (raw_lat_end - raw_lat_start) as u64;
         starts[lon_dim] = lon_start as u64;
         sizes[lon_dim] = (lon_end - lon_start) as u64;
 
@@ -279,9 +537,9 @@ impl ZarrReader {
         };
 
         // Fill remaining dims with full extent
-        for i in 0..ndim {
-            if sizes[i] == 0 {
-                sizes[i] = self.array.shape()[i];
+        for (size, &full) in sizes.iter_mut().zip(self.array.shape()) {
+            if *size == 0 {
+                *size = full;
             }
         }
 
@@ -305,37 +563,39 @@ impl ZarrReader {
             }
         };
 
-        // Build shape array for manual indexing
         let shape: Vec<usize> = sizes.iter().map(|&s| s as usize).collect();
 
-        // Reduce to 2D
-        let data_2d = reduce_to_2d(
-            &values,
-            &shape,
+        Ok(Subset {
+            values,
+            shape,
             lat_dim,
             lon_dim,
-            self.cf.time_dim,
-            time,
+            lat_start,
+            lat_end,
+            lon_start,
+            lon_end,
             time_count,
-            self.cf.fill_value,
-        )?;
+        })
+    }
 
-        // Flip if lat was originally descending
-        let data_2d = if self.lat_descending {
+    /// The GeoTransform is always north-up (row 0 = northernmost). A
+    /// descending source is already north-up in raw order; an ascending one
+    /// arrives south-up and needs the flip.
+    fn orient_north_up(&self, data_2d: Array2<f64>) -> Array2<f64> {
+        if needs_north_up_flip(self.lat_descending) {
             flip_rows(data_2d)
         } else {
             data_2d
-        };
+        }
+    }
 
-        // Apply scale/offset and replace fill values
-        let data_2d = unpack_data(data_2d, &self.cf);
-
-        // Build GeoTransform for subset
-        let sub_lat = &self.lat_coords[lat_start..lat_end];
+    /// Wrap an already north-up, unpacked plane as a georeferenced raster.
+    fn build_raster(&self, data_2d: Array2<f64>, sub: &Subset) -> Raster<f64> {
+        let sub_lat = &self.lat_coords[sub.lat_start..sub.lat_end];
         // Present western-hemisphere subsets of 0-360 grids in -180..180.
         // Safe only when the whole subset is > 180 (shifting keeps it
         // monotonic); subsets spanning 180 keep the 0-360 convention.
-        let sub_lon_raw = &self.lon_coords[lon_start..lon_end];
+        let sub_lon_raw = &self.lon_coords[sub.lon_start..sub.lon_end];
         let sub_lon: Vec<f64> = if sub_lon_raw.iter().all(|&v| v > 180.0) {
             sub_lon_raw.iter().map(|&v| v - 360.0).collect()
         } else {
@@ -346,9 +606,12 @@ impl ZarrReader {
         let mut raster = Raster::from_array(data_2d);
         raster.set_transform(geo_transform);
         raster.set_crs(Some(CRS::wgs84()));
-        raster.set_nodata(self.cf.fill_value);
-
-        Ok(raster)
+        // Fill pixels were replaced with NaN in `unpack_data`, so the
+        // declared nodata must be NaN too — declaring the original finite
+        // fill would make a subsequent write stamp GDAL_NODATA=<fill> over
+        // NaN pixels, and external tools would read the NaNs as valid data.
+        raster.set_nodata(self.cf.fill_value.map(|_| f64::NAN));
+        raster
     }
 
     /// Read the full spatial extent at a specific time.
@@ -401,18 +664,10 @@ impl ZarrReader {
         Ok(arrays)
     }
 
+    /// Latitude index range in **ascending** `self.lat_coords` space.
+    /// Map through [`lat_range_raw`] before indexing the raw array.
     fn lat_range_for_bbox(&self, bbox: &BBox) -> Result<(usize, usize)> {
-        let start = find_nearest(&self.lat_coords, bbox.min_y);
-        let end = (find_nearest(&self.lat_coords, bbox.max_y) + 1).min(self.lat_coords.len());
-        if start >= end {
-            return Err(CloudError::BBoxOutside);
-        }
-        if self.lat_descending {
-            let n = self.lat_coords.len();
-            Ok((n - end, n - start))
-        } else {
-            Ok((start, end))
-        }
+        lat_range_ascending(&self.lat_coords, bbox.min_y, bbox.max_y).ok_or(CloudError::BBoxOutside)
     }
 
     fn lon_range_for_bbox(&self, bbox: &BBox) -> Result<(usize, usize)> {
@@ -426,25 +681,8 @@ impl ZarrReader {
                 Ok((idx, 1))
             }
             TimeReduction::Aggregate { start, end, .. } => {
-                let si = find_nearest_time(&self.time_coords, start);
-                let ei = find_nearest_time(&self.time_coords, end);
-                if si > ei {
-                    return Err(CloudError::ZarrTimeOutOfRange {
-                        requested: format!("{start} to {end}"),
-                        available: format!(
-                            "{} to {}",
-                            self.time_coords
-                                .first()
-                                .map(|t| t.to_string())
-                                .unwrap_or_default(),
-                            self.time_coords
-                                .last()
-                                .map(|t| t.to_string())
-                                .unwrap_or_default(),
-                        ),
-                    });
-                }
-                Ok((si, ei - si + 1))
+                time_index_range(&self.time_coords, start, end)
+                    .ok_or_else(|| self.time_out_of_range(start, end))
             }
         }
     }
@@ -593,44 +831,6 @@ fn lon_range_physical(lon_coords: &[f64], min_x: f64, max_x: f64) -> Result<(usi
     Ok((start, end))
 }
 
-/// Build a GeoTransform from sorted lat/lon coordinate arrays.
-fn build_geotransform(lat: &[f64], lon: &[f64]) -> GeoTransform {
-    if lat.len() < 2 || lon.len() < 2 {
-        return GeoTransform::new(
-            lon.first().copied().unwrap_or(0.0),
-            lat.last().copied().unwrap_or(0.0),
-            1.0,
-            -1.0,
-        );
-    }
-
-    let pixel_width = (lon[lon.len() - 1] - lon[0]) / (lon.len() - 1) as f64;
-    let lat_step = (lat[lat.len() - 1] - lat[0]) / (lat.len() - 1) as f64;
-
-    // Origin: top-left corner (half pixel offset from first center)
-    let origin_x = lon[0] - pixel_width / 2.0;
-    let origin_y = lat[lat.len() - 1] + lat_step / 2.0;
-
-    GeoTransform::new(origin_x, origin_y, pixel_width, -lat_step)
-}
-
-fn find_nearest(coords: &[f64], value: f64) -> usize {
-    match coords.binary_search_by(|c| c.partial_cmp(&value).unwrap()) {
-        Ok(i) => i,
-        Err(i) => {
-            if i == 0 {
-                0
-            } else if i >= coords.len() {
-                coords.len() - 1
-            } else if (coords[i] - value).abs() < (coords[i - 1] - value).abs() {
-                i
-            } else {
-                i - 1
-            }
-        }
-    }
-}
-
 fn find_nearest_time(coords: &[DateTime<Utc>], target: &DateTime<Utc>) -> usize {
     coords
         .iter()
@@ -640,22 +840,58 @@ fn find_nearest_time(coords: &[DateTime<Utc>], target: &DateTime<Utc>) -> usize 
         .unwrap_or(0)
 }
 
+/// Contiguous index range `(first, count)` of the time steps whose
+/// coordinate falls inside `[start, end]` (both inclusive), or `None` when no
+/// step does. Assumes ascending coordinates, as CF climate stores provide.
+///
+/// Membership, not nearest-neighbour clamping: a range that starts before the
+/// store's first step or ends after its last one picks up only the steps the
+/// store actually holds, so several stores covering consecutive periods can
+/// be read with the same range and never double count a boundary step.
+fn time_index_range(
+    coords: &[DateTime<Utc>],
+    start: &DateTime<Utc>,
+    end: &DateTime<Utc>,
+) -> Option<(usize, usize)> {
+    if coords.is_empty() {
+        // No decodable time coordinate: read the single step that exists.
+        return Some((0, 1));
+    }
+    let first = coords.partition_point(|t| t < start);
+    let past = coords.partition_point(|t| t <= end);
+    if first >= past {
+        None
+    } else {
+        Some((first, past - first))
+    }
+}
+
+/// For each window, the `(first, count)` plane range inside a fetched
+/// buffer of `time_count` planes whose coordinates are `coords` (in order).
+/// With no coordinates the buffer is a single plane that every window gets.
+fn window_ranges(
+    coords: &[DateTime<Utc>],
+    time_count: usize,
+    windows: &[(DateTime<Utc>, DateTime<Utc>)],
+) -> Vec<Option<(usize, usize)>> {
+    windows
+        .iter()
+        .map(|(start, end)| {
+            if coords.is_empty() {
+                Some((0, time_count.min(1)))
+            } else {
+                time_index_range(coords, start, end)
+            }
+        })
+        .collect()
+}
+
 fn default_dimension_names(ndim: usize) -> Vec<String> {
     match ndim {
         3 => vec!["time".into(), "latitude".into(), "longitude".into()],
         2 => vec!["latitude".into(), "longitude".into()],
         _ => (0..ndim).map(|i| format!("dim_{i}")).collect(),
     }
-}
-
-fn flip_rows(data: Array2<f64>) -> Array2<f64> {
-    let nrows = data.nrows();
-    let ncols = data.ncols();
-    let mut flipped = Array2::zeros((nrows, ncols));
-    for r in 0..nrows {
-        flipped.row_mut(r).assign(&data.row(nrows - 1 - r));
-    }
-    flipped
 }
 
 /// Apply scale_factor/add_offset and replace fill values with NaN.
@@ -674,121 +910,125 @@ fn unpack_data(mut data: Array2<f64>, cf: &CfMetadata) -> Array2<f64> {
     data
 }
 
-/// Reduce a flat buffer with known shape to a 2D lat×lon Array2.
+/// Raw array subset for one bounding box plus the index ranges that
+/// georeference it (ascending-latitude space).
+struct Subset {
+    values: Vec<f64>,
+    shape: Vec<usize>,
+    lat_dim: usize,
+    lon_dim: usize,
+    lat_start: usize,
+    lat_end: usize,
+    lon_start: usize,
+    lon_end: usize,
+    time_count: usize,
+}
+
+/// Per-pixel accumulators over the time axis, still in raw array row order.
+struct TimeStats {
+    sum: Array2<f64>,
+    count: Array2<f64>,
+    min: Array2<f64>,
+    max: Array2<f64>,
+}
+
+/// Accumulate sum/count/min/max across `time_count` planes of a
+/// `[time, lat, lon]` buffer. Fill values are skipped and every value is
+/// unpacked (`scale_factor`/`add_offset`) *before* accumulating, so the sum
+/// of a packed variable is the sum of physical values, not
+/// `scale · Σraw + n · offset`.
+fn accumulate_time_stats(
+    values: &[f64],
+    time_count: usize,
+    lat_size: usize,
+    lon_size: usize,
+    cf: &CfMetadata,
+) -> TimeStats {
+    let spatial = lat_size * lon_size;
+    let mut sum = Array2::zeros((lat_size, lon_size));
+    let mut count = Array2::zeros((lat_size, lon_size));
+    let mut min = Array2::from_elem((lat_size, lon_size), f64::INFINITY);
+    let mut max = Array2::from_elem((lat_size, lon_size), f64::NEG_INFINITY);
+
+    for t in 0..time_count {
+        let plane = &values[t * spatial..(t + 1) * spatial];
+        for lat_i in 0..lat_size {
+            for lon_i in 0..lon_size {
+                let raw = plane[lat_i * lon_size + lon_i];
+                if cf.is_fill(raw) || raw.is_nan() {
+                    continue;
+                }
+                let v = cf.unpack_value(raw);
+                sum[[lat_i, lon_i]] += v;
+                count[[lat_i, lon_i]] += 1.0;
+                if v < min[[lat_i, lon_i]] {
+                    min[[lat_i, lon_i]] = v;
+                }
+                if v > max[[lat_i, lon_i]] {
+                    max[[lat_i, lon_i]] = v;
+                }
+            }
+        }
+    }
+    TimeStats {
+        sum,
+        count,
+        min,
+        max,
+    }
+}
+
+/// Extract the single lat×lon plane of a flat buffer with known shape.
 ///
-/// For a 3D array `[time, lat, lon]`, either picks a single time step or
-/// aggregates across time with the given method.
+/// Time aggregation never comes through here: [`ZarrReader::read_bbox`]
+/// routes every [`TimeReduction::Aggregate`] through
+/// [`ZarrReader::read_bbox_partial`].
 fn reduce_to_2d(
     values: &[f64],
     shape: &[usize],
     lat_dim: usize,
     lon_dim: usize,
-    time_dim: Option<usize>,
-    time: &TimeReduction,
     time_count: usize,
-    fill_value: Option<f64>,
 ) -> Result<Array2<f64>> {
     let lat_size = shape[lat_dim];
     let lon_size = shape[lon_dim];
 
-    // For 3D [time, lat, lon] (most common climate data layout)
-    if shape.len() == 3 && time_dim == Some(0) && lat_dim == 1 && lon_dim == 2 {
-        return reduce_3d_tlatlat(values, time_count, lat_size, lon_size, time, fill_value);
+    if time_count != 1 {
+        return Err(CloudError::Zarr(
+            "internal: single-step reduction called with several time steps".into(),
+        ));
     }
 
-    // Generic case: single time step — extract lat×lon plane
-    if time_count == 1 || time_dim.is_none() {
-        // Compute strides for row-major layout
-        let strides = compute_strides(shape);
-        let mut out = Array2::zeros((lat_size, lon_size));
+    // Fast path for the common [time, lat, lon] and [lat, lon] layouts.
+    if (shape.len() == 3 && lat_dim == 1 && lon_dim == 2)
+        || (shape.len() == 2 && lat_dim == 0 && lon_dim == 1)
+    {
+        let spatial = lat_size * lon_size;
+        return Array2::from_shape_vec((lat_size, lon_size), values[0..spatial].to_vec())
+            .map_err(|e| CloudError::Zarr(format!("reshape error: {e}")));
+    }
 
-        for lat_i in 0..lat_size {
-            for lon_i in 0..lon_size {
-                let mut idx = 0;
-                for d in 0..shape.len() {
-                    let coord = if d == lat_dim {
-                        lat_i
-                    } else if d == lon_dim {
-                        lon_i
-                    } else {
-                        0 // first index for other dims
-                    };
-                    idx += coord * strides[d];
-                }
-                out[[lat_i, lon_i]] = values[idx];
+    // Generic layout: index the lat×lon plane through the row-major strides,
+    // taking the first index on every other dimension.
+    let strides = compute_strides(shape);
+    let mut out = Array2::zeros((lat_size, lon_size));
+    for lat_i in 0..lat_size {
+        for lon_i in 0..lon_size {
+            let mut idx = 0;
+            for (d, stride) in strides.iter().enumerate() {
+                let coord = if d == lat_dim {
+                    lat_i
+                } else if d == lon_dim {
+                    lon_i
+                } else {
+                    0
+                };
+                idx += coord * stride;
             }
-        }
-        return Ok(out);
-    }
-
-    // Fallback: should not reach here for standard climate data
-    Err(CloudError::Zarr(
-        "unsupported dimension layout for time aggregation".into(),
-    ))
-}
-
-/// Fast path for [time, lat, lon] layout.
-fn reduce_3d_tlatlat(
-    values: &[f64],
-    time_count: usize,
-    lat_size: usize,
-    lon_size: usize,
-    time: &TimeReduction,
-    fill_value: Option<f64>,
-) -> Result<Array2<f64>> {
-    let spatial = lat_size * lon_size;
-
-    match time {
-        TimeReduction::Single(_) => {
-            // First (and only) time step
-            let slice = &values[0..spatial];
-            Array2::from_shape_vec((lat_size, lon_size), slice.to_vec())
-                .map_err(|e| CloudError::Zarr(format!("reshape error: {e}")))
-        }
-        TimeReduction::Aggregate { method, .. } => {
-            let mut out = Array2::zeros((lat_size, lon_size));
-
-            for lat_i in 0..lat_size {
-                for lon_i in 0..lon_size {
-                    let pix = lat_i * lon_size + lon_i;
-
-                    // Gather values across time for this pixel
-                    let mut valid_vals = Vec::with_capacity(time_count);
-                    for t in 0..time_count {
-                        let v = values[t * spatial + pix];
-                        if !is_fill(v, fill_value) {
-                            valid_vals.push(v);
-                        }
-                    }
-
-                    out[[lat_i, lon_i]] = if valid_vals.is_empty() {
-                        f64::NAN
-                    } else {
-                        match method {
-                            AggMethod::Mean => {
-                                valid_vals.iter().sum::<f64>() / valid_vals.len() as f64
-                            }
-                            AggMethod::Sum => valid_vals.iter().sum(),
-                            AggMethod::Min => {
-                                valid_vals.iter().copied().fold(f64::INFINITY, f64::min)
-                            }
-                            AggMethod::Max => {
-                                valid_vals.iter().copied().fold(f64::NEG_INFINITY, f64::max)
-                            }
-                        }
-                    };
-                }
-            }
-            Ok(out)
+            out[[lat_i, lon_i]] = values[idx];
         }
     }
-}
-
-fn is_fill(v: f64, fill_value: Option<f64>) -> bool {
-    match fill_value {
-        Some(fv) => v == fv || (fv.is_nan() && v.is_nan()),
-        None => false,
-    }
+    Ok(out)
 }
 
 fn compute_strides(shape: &[usize]) -> Vec<usize> {
@@ -850,5 +1090,194 @@ mod tests {
         let (start, end) = lon_range_physical(&lons, -76.0, -66.0).unwrap();
         assert_eq!(start, 104);
         assert_eq!(end, 115);
+    }
+
+    // ─── Time aggregation across stores ───────────────────────────────
+
+    fn hours(from: &str, n: usize) -> Vec<DateTime<Utc>> {
+        let t0: DateTime<Utc> = from.parse().unwrap();
+        (0..n)
+            .map(|h| t0 + chrono::TimeDelta::hours(h as i64))
+            .collect()
+    }
+
+    fn dt(s: &str) -> DateTime<Utc> {
+        s.parse().unwrap()
+    }
+
+    fn cf_plain() -> CfMetadata {
+        CfMetadata {
+            time_dim: Some(0),
+            lat_dim: Some(1),
+            lon_dim: Some(2),
+            time_units: None,
+            time_calendar: None,
+            fill_value: None,
+            scale_factor: None,
+            add_offset: None,
+            units: None,
+            long_name: None,
+        }
+    }
+
+    /// Partial over a 1×2 grid with the given per-step planes.
+    fn partial_from_planes(planes: &[[f64; 2]], cf: &CfMetadata) -> TimeAggPartial {
+        let values: Vec<f64> = planes.iter().flatten().copied().collect();
+        let stats = accumulate_time_stats(&values, planes.len(), 1, 2, cf);
+        TimeAggPartial {
+            sum: Raster::from_array(stats.sum),
+            count: stats.count,
+            min: stats.min,
+            max: stats.max,
+            time_steps: planes.len(),
+        }
+    }
+
+    /// Membership, not clamping: a January store asked for the whole year
+    /// contributes exactly its 744 hourly steps, and a request for a period
+    /// the store does not cover contributes nothing.
+    #[test]
+    fn test_time_index_range_is_inclusive_membership() {
+        let jan = hours("2020-01-01T00:00:00Z", 31 * 24);
+        let y0 = dt("2020-01-01T00:00:00Z");
+        let y1 = dt("2020-12-31T23:59:59Z");
+        assert_eq!(time_index_range(&jan, &y0, &y1), Some((0, 744)));
+
+        // Exact monthly window: both boundary steps included.
+        let m1 = dt("2020-01-31T23:59:59Z");
+        assert_eq!(time_index_range(&jan, &y0, &m1), Some((0, 744)));
+
+        // A single day in the middle of the store.
+        let d0 = dt("2020-01-10T00:00:00Z");
+        let d1 = dt("2020-01-10T23:59:59Z");
+        assert_eq!(time_index_range(&jan, &d0, &d1), Some((9 * 24, 24)));
+
+        // February asked of the January store: nothing, not "nearest".
+        let f0 = dt("2020-02-01T00:00:00Z");
+        let f1 = dt("2020-02-29T23:59:59Z");
+        assert_eq!(time_index_range(&jan, &f0, &f1), None);
+    }
+
+    /// Consecutive stores never share a step: the last hour of January and
+    /// the first of February land in different monthly windows.
+    #[test]
+    fn test_time_index_range_no_double_count_at_boundary() {
+        let jan = hours("2020-01-01T00:00:00Z", 31 * 24);
+        let feb = hours("2020-02-01T00:00:00Z", 29 * 24);
+        let jan_win = (dt("2020-01-01T00:00:00Z"), dt("2020-01-31T23:59:59Z"));
+        let feb_win = (dt("2020-02-01T00:00:00Z"), dt("2020-02-29T23:59:59Z"));
+        assert_eq!(
+            time_index_range(&jan, &jan_win.0, &jan_win.1),
+            Some((0, 744))
+        );
+        assert_eq!(time_index_range(&jan, &feb_win.0, &feb_win.1), None);
+        assert_eq!(time_index_range(&feb, &jan_win.0, &jan_win.1), None);
+        assert_eq!(
+            time_index_range(&feb, &feb_win.0, &feb_win.1),
+            Some((0, 696))
+        );
+    }
+
+    /// The identity behind `yearly-sum == Σ monthly-sum`: merging the
+    /// partials of two stores equals the partial of their concatenation,
+    /// for every method.
+    #[test]
+    fn test_partial_merge_equals_single_pass() {
+        let cf = cf_plain();
+        let a = [[1.0, 10.0], [2.0, 20.0], [3.0, 30.0]];
+        let b = [[4.0, 40.0], [5.0, 50.0]];
+        let all: Vec<[f64; 2]> = a.iter().chain(b.iter()).copied().collect();
+
+        let mut merged = partial_from_planes(&a, &cf);
+        merged.merge(&partial_from_planes(&b, &cf)).unwrap();
+        let single = partial_from_planes(&all, &cf);
+
+        assert_eq!(merged.time_steps, 5);
+        for m in [
+            AggMethod::Sum,
+            AggMethod::Mean,
+            AggMethod::Min,
+            AggMethod::Max,
+        ] {
+            let x = merged.finish(m);
+            let y = single.finish(m);
+            assert_eq!(x.data(), y.data(), "{m:?}");
+        }
+        let sum = merged.finish(AggMethod::Sum);
+        assert_eq!(sum.data()[[0, 0]], 15.0);
+        assert_eq!(sum.data()[[0, 1]], 150.0);
+        // Mean over every step read, not a mean of per-store means
+        // ((2+4.5)/2 = 3.25 would be wrong).
+        assert_eq!(merged.finish(AggMethod::Mean).data()[[0, 0]], 3.0);
+    }
+
+    /// Fill values are excluded from every accumulator; a pixel with no
+    /// valid step finishes as NaN.
+    #[test]
+    fn test_partial_skips_fill_values() {
+        let mut cf = cf_plain();
+        cf.fill_value = Some(-9999.0);
+        let planes = [[1.0, -9999.0], [-9999.0, -9999.0], [3.0, -9999.0]];
+        let p = partial_from_planes(&planes, &cf);
+        assert_eq!(p.count[[0, 0]], 2.0);
+        assert_eq!(p.count[[0, 1]], 0.0);
+        assert_eq!(p.finish(AggMethod::Sum).data()[[0, 0]], 4.0);
+        assert_eq!(p.finish(AggMethod::Mean).data()[[0, 0]], 2.0);
+        assert!(p.finish(AggMethod::Sum).data()[[0, 1]].is_nan());
+        assert!(p.finish(AggMethod::Min).data()[[0, 1]].is_nan());
+    }
+
+    /// Packed data is unpacked per value before summing: the offset must
+    /// be applied once per step, not once per sum.
+    #[test]
+    fn test_partial_unpacks_before_accumulating() {
+        let mut cf = cf_plain();
+        cf.scale_factor = Some(0.5);
+        cf.add_offset = Some(100.0);
+        let planes = [[2.0, 4.0], [6.0, 8.0]];
+        let p = partial_from_planes(&planes, &cf);
+        // (2·0.5+100) + (6·0.5+100) = 204
+        assert_eq!(p.finish(AggMethod::Sum).data()[[0, 0]], 204.0);
+        assert_eq!(p.finish(AggMethod::Mean).data()[[0, 0]], 102.0);
+        assert_eq!(p.finish(AggMethod::Min).data()[[0, 1]], 102.0);
+        assert_eq!(p.finish(AggMethod::Max).data()[[0, 1]], 104.0);
+    }
+
+    #[test]
+    fn test_partial_merge_rejects_shape_mismatch() {
+        let cf = cf_plain();
+        let mut a = partial_from_planes(&[[1.0, 2.0]], &cf);
+        let values = vec![1.0, 2.0, 3.0];
+        let stats = accumulate_time_stats(&values, 1, 1, 3, &cf);
+        let b = TimeAggPartial {
+            sum: Raster::from_array(stats.sum),
+            count: stats.count,
+            min: stats.min,
+            max: stats.max,
+            time_steps: 1,
+        };
+        assert!(a.merge(&b).is_err());
+    }
+
+    /// One fetch, many windows: daily windows against a monthly buffer map
+    /// to disjoint 24-step ranges, a window outside the buffer is `None`,
+    /// windows may be unsorted, and a time-less buffer is one plane for all.
+    #[test]
+    fn test_window_ranges_buckets_daily_windows() {
+        let jan = hours("2020-01-01T00:00:00Z", 31 * 24);
+        let day = |d: u32| {
+            (
+                dt(&format!("2020-01-{d:02}T00:00:00Z")),
+                dt(&format!("2020-01-{d:02}T23:59:59Z")),
+            )
+        };
+        let feb1 = (dt("2020-02-01T00:00:00Z"), dt("2020-02-01T23:59:59Z"));
+        let windows = [day(3), day(1), feb1, day(31)];
+        let got = window_ranges(&jan, jan.len(), &windows);
+        assert_eq!(
+            got,
+            vec![Some((48, 24)), Some((0, 24)), None, Some((720, 24))]
+        );
+        assert_eq!(window_ranges(&[], 1, &windows), vec![Some((0, 1)); 4]);
     }
 }

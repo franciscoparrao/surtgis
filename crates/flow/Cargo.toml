@@ -1,0 +1,27 @@
+[package]
+name = "surtgis-flow"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "2D debris-flow solver (shallow water + Voellmy rheology) for SurtGIS"
+keywords = ["gis", "debris-flow", "shallow-water", "simulation", "hazard"]
+categories = ["science::geo", "simulation"]
+# Published as EXPERIMENTAL: the solver API follows the surtgis-flow spec
+# (v1.1) and may change in minor releases; the `surtgis flow` CLI surface is
+# the stable entry point.
+
+[dependencies]
+surtgis-core = { version = "1.5", path = "../core" }
+rayon = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+approx = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "step_throughput"
+harness = false

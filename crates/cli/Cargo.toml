@@ -24,7 +24,7 @@ cloud = ["dep:surtgis-cloud"]
 zarr = ["surtgis-cloud/zarr", "dep:chrono"]
 netcdf = ["surtgis-cloud/netcdf"]
 grib = ["surtgis-cloud/grib"]
-projections = ["surtgis-cloud/projections", "dep:proj4rs"]
+projections = ["surtgis-core/projections", "surtgis-cloud/projections", "dep:proj4rs"]
 ml = ["dep:smelt-ml"]
 # Off by default — pulls wgpu + winit-style deps that aren't useful for
 # the 2D CLI workflows. Enable explicitly to get the `relief-3d`
@@ -35,14 +35,30 @@ relief-3d = ["dep:surtgis-relief-3d"]
 # SPEC_SURTGIS_ONNX_INFERENCE.md still a scaffold upstream
 # (`OnnxModel::load`/`infer` are stubs in surtgis-algorithms).
 onnx = ["surtgis-algorithms/onnx"]
+# `surtgis flow` — debris-flow solver (SWE + Voellmy), spec surtgis-flow v1.1.
+# Off by default: the default binary keeps its command set; GEODEO/dev builds
+# opt in with `--features flow`.
+flow = ["dep:surtgis-flow"]
+# `surtgis ecw` — native ECW v2 decoder (no GDAL, no Hexagon SDK). Opt-in,
+# and ABSENT from the crates.io release of this crate: surtgis-ecw is not
+# published (licensing review pending, docs/ecw_format.md), so
+# scripts/publish-crates.sh strips the lines marked `# @ecw-only` for the
+# publish. The GitHub Release binaries are built from this tree and keep it.
+ecw = ["dep:surtgis-ecw", "surtgis-server?/ecw"] # @ecw-only
+# `surtgis serve` — analysis-first dynamic tile server (docs/surtgis_server_design.md).
+server = ["dep:surtgis-server"]
 
 [dependencies]
-surtgis-core = { version = "0.18", path = "../core", features = ["shapefile", "geopackage"] }
-surtgis-algorithms = { version = "0.18", path = "../algorithms", features = ["unstable"] }
-surtgis-parallel = { version = "0.18", path = "../parallel" }
-surtgis-relief = { version = "0.18", path = "../relief" }
-surtgis-relief-3d = { version = "0.18", path = "../relief-3d", optional = true }
-surtgis-cloud = { version = "0.18", path = "../cloud", features = ["native", "unstable"], optional = true }
+surtgis-core = { version = "1.7", path = "../core", features = ["shapefile", "geopackage", "parquet"] }
+surtgis-algorithms = { version = "1.8", path = "../algorithms", features = ["unstable"] }
+surtgis-parallel = { version = "1.0", path = "../parallel" }
+surtgis-relief = { version = "1.0", path = "../relief" }
+surtgis-relief-3d = { version = "1.5", path = "../relief-3d", optional = true }
+surtgis-flow = { version = "1.5", path = "../flow", optional = true }
+# Path-only: surtgis-ecw is not on crates.io (see the `ecw` feature note).
+surtgis-ecw = { path = "../ecw", optional = true } # @ecw-only
+surtgis-server = { version = "1.5", path = "../server", optional = true }
+surtgis-cloud = { version = "1.8.1", path = "../cloud", features = ["native", "unstable"], optional = true }
 clap.workspace = true
 clap_complete.workspace = true
 anyhow.workspace = true

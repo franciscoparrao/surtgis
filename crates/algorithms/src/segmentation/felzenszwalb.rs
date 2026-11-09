@@ -128,7 +128,9 @@ pub fn felzenszwalb(bands: &[&Raster<f64>], params: FelzenszwalbParams) -> Resul
             }
         }
     }
-    edges.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    // Stable sort: equal weights keep raster order, so the merge sequence
+    // (and the labels) is a function of the data, not of the sort algorithm.
+    edges.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
     // Union-Find with size + int_diff per root.
     let mut parent: Vec<u32> = (0..n_px as u32).collect();

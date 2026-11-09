@@ -1,13 +1,971 @@
 # Changelog
 
 All notable changes to SurtGIS are documented in this file.
-
-Format follows [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/).
-Versioning follows [SemVer 2.0.0](https://semver.org/). The project is still in
-the `0.x` series, so minor versions may contain breaking changes; we try to
-call them out under a `Breaking` heading when they happen.
+Format follows [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/)
+and versioning follows [SemVer 2.0.0](https://semver.org/): since 1.0.0,
+breaking changes only ship in a major version and are called out under a
+`Breaking` heading.
 
 ## [Unreleased]
+
+## [1.8.1] - 2026-11-06
+
+Every Earth Search query fetched its first page up to 1000 times, the COG
+reader failed on windows larger than its tile cache, and lake catchments
+take point lakes from several water masks in order.
+
+### Added
+
+- **`lake-catchment` water masks**: `--water-mask` is repeatable and
+  tried in order, and a spec may carry its rule
+  (`stac:pc:jrc-gsw:occurrence>=50`, `stac:pc:esa-worldcover:map=80`), so
+  JRC GSW can be used to 78°N with WorldCover above it. New statuses
+  `review` (an elongated or trimmed water body: possibly a river or merged
+  lakes; `--min-compactness`) and `point_only` (no water near the point;
+  `--min-lake-cells`), new columns `lake_source` and `lake_compactness`;
+  `dem_spread` now also counts `review` and `point_only` rows.
+
+### Changed
+
+- `lake-catchment` reads each water mask and DEM from the coarsest COG
+  overview still at least as fine as the working grid: WorldCover (10 m)
+  is read at 20 m for the 30 m grid. Peak RAM on a 22-lake Arctic test
+  went from 4.6 GB to 1.2 GB.
+
+### Fixed
+
+- STAC search on Earth Search fetched the first page over and over: the
+  `next` cursor in the POST body of its `next` link was dropped when the
+  body was parsed into `StacSearchParams`, so `search_all` collected up to
+  `max_items` copies of the same items (1000 for a query with 6). Earth
+  Search sends a `next` link even on the last page, so every `--catalog
+  es` search was affected: slow, and many repeated tile requests. The link
+  body is now sent as-is, and pagination stops on a page with no new item.
+- The nightly STAC composite RAM job had never run: the CLI build lacked
+  the HDF5, NetCDF and ecCodes system libraries. Its leak check compared
+  two single RSS samples on a per-strip sawtooth and failed on noise; it
+  now compares window peaks and ignores growth under `LEAK_MIN_MB` (64).
+- The COG reader failed with "tile … was requested but never fetched or
+  decoded" on any window spanning more tiles than its tile cache holds
+  (256 by default): the first decoded tiles were evicted before the
+  window was assembled. They are now held until assembly.
+
+## [1.8.0] - 2026-11-06
+
+Lake catchments for permafrost lake districts, built for an Arctic lake
+chemistry study, and the COG reader can read ALOS AW3D30 on Planetary
+Computer again.
+
+### Added
+
+- **`surtgis hydrology lake-catchment`**: catchments of many lakes at
+  once, with each lake as the outlet. Lakes come as polygons (or points
+  plus a water mask such as ESA WorldCover), DEMs as STAC collections or
+  local tiles (e.g. FABDEM); per lake a UTM window grows until the
+  catchment fits. One CSV row per lake and DEM; with several DEMs
+  `dem_spread` flags flat terrain where the catchment is uncertain.
+  `catchment_area_km2` is the connected (fill-and-spill) catchment;
+  `--sink-depth <m>` adds `local_catchment_area_km2`, where depressions
+  at least that deep keep their own drainage.
+  Library: `hydrology::lake_catchment` (the lake drains the depression
+  filling like the sea, so a lake in a closed basin keeps its basin) and
+  `hydrology::water_body_at`. Guide: *Delineate lake catchments*.
+
+### Fixed
+
+- **The COG reader could not read any tile of `alos-dem` (ALOS AW3D30)
+  on Planetary Computer**: its LZW tiles encode slightly more than the
+  tile holds, and the decompression-bomb guard rejected them as
+  malformed. LZW now keeps the first tile-size bytes and ignores the
+  rest, as libtiff does (the cap still bounds the allocation), and
+  decodes in a loop: a single `decode_bytes` call can stop after a
+  prefix. Checked against GDAL on the same COG window: 78,554 of 78,554
+  cells identical.
+
+## [1.7.0] - 2026-11-05
+
+Provenance that can answer "did this output use the items my provider
+served wrong?", a fix for signed URLs leaking into every remote-input
+record since 1.5.0, and eleven RUSTSEC patches.
+
+### Added
+
+- **STAC items in the provenance record.** `stac composite`,
+  `time-series`, `fetch` and `fetch-mosaic` record every STAC item they
+  read (catalog, collection, id, item datetime, assets, access time) in
+  the new `stac_items` field. `surtgis provenance` lists them.
+  Library: `provenance::StacItemRecord`, `Provenance::push_stac_item`,
+  `set_stac_item_observer` / `observe_stac_item`.
+- **`surtgis verify --against <list>`** checks an output against a list
+  of affected STAC item ids, with `--affected-from` / `--affected-to` on
+  the access time, and exits non-zero on a hit. Tested against the
+  26,116-item list Planetary Computer published for its October 2026
+  Sentinel-2 L2A incident (issue #516).
+- **`surtgis provenance --stac`** prints the record as STAC Processing
+  extension v1.3 fields (`processing:software`, `processing:datetime`,
+  `processing:lineage`) and `derived_from` links to the items read;
+  library `Provenance::to_stac_processing`.
+
+### Security
+
+- **Signed URLs no longer reach the provenance record.** Since 1.5.0 the
+  record stored the URLs of remote inputs verbatim; for Planetary
+  Computer that included the SAS token (read access to the whole
+  container for about a day). Planetary Computer hands those tokens to
+  anyone, but the same path would have embedded real credentials from a
+  private catalog or an S3 presigned URL into files that get shared.
+  Every URL now loses its query string before it is recorded
+  (`provenance::redact_source`, applied in `observe_input` and
+  `push_input`), and `surtgis provenance` / `verify` redact records
+  written by 1.5.0–1.6.0 when printing them. The tokens already inside
+  older files remain there: rewrite or strip the `SURTGIS_PROVENANCE`
+  metadata item before sharing a 1.5–1.6 composite outside your team.
+- Patched six RUSTSEC advisories published after 1.6.0:
+  `zstd` 0.13.4 (RUSTSEC-2026-0391), `zstd-safe` 7.4.0
+  (RUSTSEC-2026-0398/0403), `zstd-sys` 2.1.2 (RUSTSEC-2026-0410),
+  `libz-sys` 1.1.31 (RUSTSEC-2026-0418), and `hyper` 1.12.0, which drops
+  the unmaintained `pin-utils` (RUSTSEC-2026-0441).
+
+### Fixed
+
+- `cargo install surtgis --no-default-features --features
+  cloud,projections`, the README's install path without C libraries,
+  did not compile since 1.5.0 (`parse_aggregate` used a type that only
+  exists with `zarr`). CI now builds that feature set.
+
+## [1.6.0] - 2026-10-25
+
+Weighted flow accumulation and the fixes reported from the Tal_Tal risk
+project (issues_surtgis.md #10–#12); six silent failures found while
+preparing course material on 1.5.2 (each finished, wrote a file and
+reported success), two half-cell georeferencing slips found while
+testing them; and patches for eight RUSTSEC advisories.
+
+### Added
+
+- **Weighted flow accumulation**: `surtgis hydrology flow-accumulation
+  --weights <raster>` gives each cell the sum of the weights of every
+  cell upstream of it — susceptible source area routed downstream
+  (source → propagation), runoff, sediment or pollutant loads.
+  `--include-self` adds the cell's own weight (1 without weights), the
+  convention of `terra::flowAccumulation` and WhiteboxTools. Weights must
+  share the flow-direction grid (checked); NaN/nodata weights contribute
+  nothing but still pass flow through — unlike terra, which turns every
+  cell downstream of an NA weight into NA. Validated against terra
+  1.8.60 on 1 M cells: the count is identical cell by cell, the weighted
+  sum agrees to 6e-8 relative (f32 weights). Library:
+  `hydrology::flow_accumulation_weighted`. (issues_surtgis.md #12)
+
+- `terrain::cost_distance_map_units` / `surtgis terrain cost-distance
+  --map-units`: steps scaled by the pixel size (`|pixel_width|`,
+  `|pixel_height|`, their hypotenuse on diagonals), so a uniform cost of
+  1 gives the distance in map units. `cost_distance` keeps cell steps.
+- `statistics::zonal_statistics_with` / `zonal_statistics_raster_with`
+  with an explicit background zone; `statistics zonal|zonal-raster
+  --include-zero` in the CLI.
+- `statistics zonal --format json|csv`.
+
+### Changed
+
+- D8 flow accumulation needs about half the memory (one byte of
+  in-degree per cell, 4-byte queue indices): 877 MB → 478 MB peak on
+  25 M cells, output identical cell by cell.
+
+### Fixed
+
+- **Any command writing a GeoTIFF failed when an input or output path
+  had a non-ASCII character** (`chañaral/dem.tif`: `Cannot write
+  GDAL_METADATA tag: format error: image contains invalid tag`). The
+  provenance record and the other `GDAL_METADATA` items live in a TIFF
+  ASCII tag; the record is now serialised as pure-ASCII JSON (`\u00f1`
+  escapes, which every JSON reader — GDAL, Python, R — decodes back to
+  `ñ`) and any other non-ASCII item text (band descriptions) as XML
+  numeric character references, decoded by `read_gdal_metadata`. The
+  payload is ASCII by construction, so this can no longer abort a
+  write. (issues_surtgis.md #10)
+- **`--bbox` with negative coordinates needed the `--bbox=` form** in
+  `clip`, `stac` and most other commands (`unexpected argument '-7'`).
+  Negative values are now accepted by rule over the whole command tree:
+  every `--bbox` and every comma-list option takes values starting with
+  `-`, and every subcommand accepts negative numbers (clap does not
+  propagate that setting). A test walks all options so a new command
+  cannot miss it. (issues_surtgis.md #11)
+
+- **`resample` wrote an all-NaN raster and exited 0 when input and
+  reference CRSs differed.** It sampled the source with coordinates of
+  the other CRS. Different EPSG codes are now reprojected on the fly
+  onto the reference grid (verified against `gdalwarp` on the same grid:
+  same coverage, 96 % of nearest-neighbour cells identical, the rest at
+  projection-library ties). A CRS pair that cannot be reprojected fails
+  and says to run `surtgis reproject`; an output with no valid cell is an
+  error and no file is left.
+- **`statistics zonal` wrote CSV although the help promised JSON.** The
+  output is JSON unless the file ends in `.csv` (or `--format csv`).
+  Zone 0 is still background by default, now documented in the help
+  and in the run line.
+- **`clip --polygon` masked but did not crop.** The output is cropped to
+  the polygons' extent, as `gdalwarp -crop_to_cutline` does;
+  `--keep-extent` keeps the old masking on the full grid. A clip that
+  leaves no valid cell (polygon in another CRS, or outside the raster)
+  fails instead of writing an empty raster.
+- **`clip --bbox` placed its output half a cell off**: the new origin
+  was the centre of the first cell instead of its corner (all versions
+  up to 1.5.2). Re-run clips made with `--bbox` if sub-pixel
+  georeferencing matters.
+- **`extract-patches` polygon mode tested cell corners, not centres,**
+  and wrote corner coordinates to `center_x`/`center_y` of the
+  manifest (half a cell south-east of the true centre).
+- **Python `twi_compute` returned ~45 % NaN** (and WASM `twi_compute`
+  too): the slope was passed in degrees to a formula that takes
+  radians. Both now use the CLI pipeline (priority-flood fill, slope in
+  radians on the filled DEM) and give the same result as `hydrology twi`
+  cell by cell; only the one-cell border is NaN. `terrain twi` refuses a
+  slope raster whose values exceed π/2.
+- **Python `cost_distance_compute` ignored `cell_size`**: distances are
+  now in the units of `cell_size` (300 at ten 30 m cells).
+- **Python `extract_at_points` rejected every NumPy array**: its
+  coordinate arguments were typed as 2-D arrays. They now take any 1-D
+  array-like of any numeric dtype (or a list); fractional indices are
+  floored, so -0.5 is outside. The docstring now names the real
+  arguments (`points_col`, `points_row`) and its rasterio example no
+  longer swaps rows and columns (`rowcol` returns `(rows, cols)`).
+- Python IDW, nearest-neighbour, natural-neighbour and kriging
+  interpolation accept `values` as `(N,)`, as documented, not only
+  `(N, 1)`.
+- Zonal statistics skip cells equal to the zone raster's nodata value;
+  before, a nodata value such as -9999 was reported as a zone.
+
+### Security
+
+- Patched eight RUSTSEC advisories published after 1.5.2.
+  RUSTSEC-2026-0344 is the one that matters most here: a decompression
+  bomb in `ruzstd`, which decodes ZSTD tiles in the COG reader for
+  remote files (0.8.3 → 0.9.1). Also `rustls` 0.23.46
+  (RUSTSEC-2026-0346/0347/0348/0349), `rustls-webpki` 0.103.16
+  (RUSTSEC-2026-0382), `webpki-roots` 1.0.11 (RUSTSEC-2026-0381) and
+  `tokio` 1.54.1 (RUSTSEC-2026-0386).
+
+### Notes
+
+- `fill_sinks` (Python `fill_depressions`, WASM `fill_depressions`) has
+  been unchanged since 0.18.0, so 1.2.5 builds already have the current
+  behaviour. Older builds (≤ 0.17) used `min_slope = 0.01`, which raised
+  filled depressions far more than SAGA or WhiteboxTools; rebuild
+  anything made with them.
+
+
+## [1.5.2] - 2026-09-30
+
+### Fixed
+
+- **`stac composite` returned raw Sentinel-2 L2A digital numbers from
+  2022 on.** Processing baseline 04.00 (2022-01-25) introduced
+  `BOA_ADD_OFFSET = -1000` (`reflectance = (DN + offset) / 10000`);
+  Planetary Computer serves those DN as produced, so every composite of
+  a post-2022 scene sat 1000 DN too high (ocean at ~1100 instead of
+  ~100) and every normalised index or reflectance-scaled constant was
+  biased. The engine now adds the offset per tile before compositing
+  when the item's `s2:processing_baseline` is ≥ 04.00 and the catalog
+  has not applied it (Earth Search marks
+  `earthsearch:boa_offset_applied: true`), so all scenes are on the
+  pre-2022 scale (`reflectance = DN / 10000`, as GEE's HARMONIZED
+  collection). `--no-harmonize` keeps DN as served;
+  `CompositeEngine::set_harmonize` in the library; the run log says how
+  many tiles were offset, and the flag is part of the embedded
+  provenance record. (issues_surtgis.md #9)
+- **`imagery calc` and `imagery reclassify` loaded every band whole**
+  (~55 B per cell for five bands; ~16 GB for 293 M cells, and
+  `--streaming` changed nothing). Both now run strip by strip over the
+  aligned inputs — one strip is ~64 MB of f64 across all bands — and stream the
+  result as Float32. Inputs must share one grid (checked; resample
+  first otherwise). `SURTGIS_STRIP_ROWS` overrides the strip height.
+  (issues_surtgis.md #8)
+
+## [1.5.1] - 2026-09-29
+
+### Added
+
+- **The CLI is back on crates.io.** `cargo install surtgis` resolves a
+  current version again. `surtgis-flow`, `surtgis-server` and
+  `surtgis-relief-3d` are published (marked experimental: their library
+  APIs may change in minor releases; the CLI subcommands are the stable
+  surface). The crates.io release of the CLI and of `surtgis-server` has
+  no `ecw` feature — `surtgis-ecw` stays unpublished while its licensing
+  review is open — so `scripts/publish-crates.sh` strips the lines marked
+  `# @ecw-only` from the two manifests for the publish; the GitHub
+  Release binaries keep ECW. Every 0.x version of the CLI on crates.io
+  was yanked (they predate 1.0 and `cargo install` fell back to them).
+
+### Fixed
+
+- **`resample` loaded the source and the reference whole** (~12 B per
+  cell; 3.4 GB to bring a 293 M-cell 10 m raster to a 121 m grid, and
+  `--streaming` changed nothing). It now reads only the two grids'
+  metadata, streams the output in Float32 strips and reads, per strip,
+  the source window under it plus a kernel margin — strips are sized so
+  that window is about 512 source rows. Same values as the in-memory
+  path. (issues_surtgis.md #7)
+
+## [1.5.0] - 2026-09-29
+
+### Added
+
+- **Foundation-model embeddings as first-class rasters.** New module
+  `surtgis_algorithms::embeddings`: a multi-band stack is a field of
+  vectors (bands = dimensions). `similarity` (cosine, dot, Euclidean) to
+  a reference vector, `vector_at` / `mean_vector` references, `norm`,
+  and `PcaModel` — fitted once on a regular sample, projected anywhere,
+  JSON-serialisable so colours match across tiles and years — plus
+  `Dequantize` for stored codes (`alphaearth`: `sign(v)·(v/127.5)²`
+  restoring unit-norm vectors; `linear:scale,offset`). CLI `surtgis
+  embeddings info | similarity | pca | norm | locate` with `--bbox`,
+  `--dequantize`, `--ref-lonlat/--ref-cell/--ref-vec`, `--save-model` /
+  `--model`; `locate` finds the AlphaEarth tile for a lon/lat in the
+  product's GeoParquet index. `surtgis extract` / `extract-patches`
+  expand a multi-band feature raster into one feature per band
+  (`name:b1`…). Server operators `alg=similarity` (`ref=lon,lat` resolved
+  once per source and cached, or `vec=…`; `params=metric:…,dequantize:…`)
+  and `alg=pca` (RGB from the first three components, fitted once per
+  source on a coarse sample with a per-component 2–98 % stretch);
+  `/statistics` works for similarity. Book: how-to/embeddings.md.
+- **COG reader: ZSTD, planar and bottom-up files, local backend.** The
+  layout the AlphaEarth tiles are published in — `Int8` × 64 bands,
+  `COMPRESS=ZSTD`, `INTERLEAVE=BAND`, positive pixel height — now reads
+  through `surtgis_cloud::CogReader`: ZSTD tiles decode in pure Rust
+  (`ruzstd`, feature `zstd`, default), planar files read one tile per
+  band plane, and bottom-up files are presented north-up (rows mirrored
+  on read, transform normalised; `CogReader::is_bottom_up`). A plain path
+  or `file://` URL is read from disk with the same tile machinery, so the
+  CLI (`embeddings`) and `surtgis serve` (local sources) fall back to it
+  when the `tiff`-crate readers decline a layout. **BigTIFF** (magic 43:
+  64-bit offsets and counts, 20-byte IFD entries) is parsed too — the
+  published tiles are 3.6 GB BigTIFFs. Validated on a real AlphaEarth
+  tile (2024, UTM 19S, Santiago): a 2 km window de-quantises to unit-norm
+  vectors (median 1.0001), and the classic/BigTIFF planar fixtures match
+  the same window rewritten north-up and pixel-interleaved by GDAL,
+  decoded by the independent `tiff`-crate reader.
+- `imagery calc` / `index_builder` grammar: comparisons (`<`, `<=`, `>`,
+  `>=`, `==`, `!=` → 1/0, NaN when a side is NaN) and the functions
+  `min`, `max`, `abs`, `sqrt`, `exp`, `ln`/`log`, `log10`, `isnan(x)`
+  and `if(cond, a, b)`; a formula that calls `isnan` sees nodata cells as
+  NaN instead of yielding NaN, so `if(isnan(A), 0, A)` fills nodata.
+  Band names that coincide with a function name still work when not
+  followed by `(`.
+- `imagery reclassify --fill-nodata` gives nodata cells the `--default`
+  value; `--class` and `--default` accept negative numbers without `=`.
+- Global `--output-dtype f32`: Float64 outputs written through the common
+  writer are stored as Float32 (half the size; nodata stays NaN).
+- **Embedded, verifiable provenance in every output.** Each GeoTIFF/COG
+  SurtGIS writes now carries a `SURTGIS_PROVENANCE` item in its
+  `GDAL_METADATA` tag (42112, so `gdalinfo`, rasterio and QGIS show it as
+  ordinary metadata): engine version, operation, command line, working
+  directory, thread count, every input with its BLAKE3 digest and size,
+  and a BLAKE3 digest of the pixel array as written. `surtgis provenance
+  <file>` prints it (`--json` for the raw record); `surtgis verify
+  <file>` recomputes the array digest and re-hashes the inputs, exiting
+  non-zero on any mismatch. `--no-provenance` / `SURTGIS_NO_PROVENANCE=1`
+  writes plain files. Library: `surtgis_core::provenance` (record,
+  digests, opt-in process hooks), `io::write_geotiff_with_provenance`,
+  `io::write_cog_with_provenance`, `io::read_provenance`,
+  `io::read_gdal_metadata`, `io::raster_data_hash`. Without hooks or an
+  explicit record the writers are unchanged. Server jobs embed the
+  request (url, pipeline, params) and the hashed source. Pixels are never
+  affected by the tag.
+- **Determinism contract.** `crates/algorithms/tests/determinism.rs`
+  runs 24 algorithms (terrain, hydrology, focal/zonal/Moran, diversity,
+  k-means, SLIC, Felzenszwalb, GLCM) under 1 and 4 worker threads and
+  twice in one process, and requires bit-identical outputs through the
+  same digest `surtgis verify` uses. Passes; see Fixed for what had to
+  change to get there.
+- **SurtGIS Server M1.5, materialisation jobs.** Global operators cannot be
+  tiled on the fly (a cell depends on the whole basin upstream), so they
+  run as jobs: `POST /jobs {"url", "pipeline", "output", "params"}` runs a
+  pipeline over the whole source — `fill_sinks`, `flow_direction`,
+  `flow_accumulation`, `stream_network`, `hand`, `twi`, each deriving the
+  stages it needs — and writes the last product as a tiled, deflate
+  compressed COG with overviews under `<root>/_jobs/` (or `--jobs-dir`,
+  which must lie under the root), where it is served by the ordinary tile
+  endpoints as `?url=_jobs/<output>.tif`. `GET /jobs/{id}` reports
+  queued/running/done/failed with per-step timings, `GET /jobs` lists
+  everything; one job runs at a time and the rest queue; `/metrics` gains
+  job gauges. Sources: local GeoTIFFs and allow-listed COGs (ECW is
+  imagery, rejected). The job's `fill_sinks` fills to exact flats
+  (`min_slope` 0, as TauDEM's `pitremove`) so that `flow_direction` routes
+  each filled depression with Garbrecht–Martz towards its spill; the
+  library/CLI ramp default (1e-5) made D8 drain filled depressions as
+  parallel lines leaving through several rim cells. Pass `min_slope` to
+  get the ramp back.
+
+### Changed
+
+- `info` prints the file's GDAL_NODATA next to the in-memory NaN
+  ("NoData: -9999 (file tag; NaN in memory)") instead of only "NaN".
+- Low-level `surtgis_cloud::ifd` types widened for BigTIFF:
+  `RawTagEntry::{count, value_or_offset}`, `TiffHeader::first_ifd_offset`
+  and `RawIfd::next_ifd_offset` are `u64`; `RawTagEntry` gains
+  `value_bytes` (the raw value field) and `TiffHeader` gains `bigtiff`;
+  `parse_ifd_with` takes the flag (`parse_ifd` keeps the classic
+  behaviour). Code that only reads these through `CogReader` is
+  unaffected.
+
+### Fixed
+
+- `read_geoparquet` skips nested columns (a GeoParquet 1.1 `*_bbox`
+  covering struct, lists, maps) instead of failing the whole file; the
+  scalar columns are still read.
+- **Float32 nodata written as an f64 decimal was never matched.** terra
+  / raster write `GDAL_NODATA="-3.39999999999999996e+38"` for FLT4S
+  files; the pixels hold the nearest f32, and SurtGIS compared after
+  widening to f64, so every nodata cell entered computations (a bilinear
+  `reproject` smeared −3.4e38 over borders). The native readers now
+  compare in the file's sample type before casting, and the COG reader
+  casts the tag through the sample type. (issues_surtgis.md #1)
+- **CRS compared by string.** An ESRI `.prj` (`WGS_1984_UTM_Zone_19S`)
+  was rejected against a raster in EPSG:32719. `CRS::epsg()` now infers
+  the code from WKT — trailing `AUTHORITY["EPSG",…]`, or the WGS 84 /
+  UTM / Web Mercator names in ESRI and OGC spelling — and
+  `is_equivalent` compares resolved codes. (#4)
+- **`rasterize` loaded the whole grid.** It read the reference raster's
+  pixels as f64 and held the full output plus the writer's copy: ~26 B
+  per cell, 7.6 GB for a 293 M-cell grid. It now takes only the
+  reference's grid (`geotiff_info`) and writes Float32 strips of 512
+  rows through the streaming writer, rasterizing each strip on its own
+  sub-grid; memory is one strip. (#3)
+- **Results that depended on `HashMap` iteration order** (randomised per
+  instance, so they differed run to run by the last ULPs or, for
+  categorical outputs, by whole classes): Shannon and Simpson diversity
+  rasters and the SHDI/SIDI of `landscape_metrics` now sum in class
+  order; zonal `majority`/`minority` break frequency ties towards the
+  smallest class value; SLIC's small-segment reassignment breaks vote
+  ties towards the smallest label; the `index_builder` fallback
+  georeference comes from the smallest band key; `first_cog_asset` /
+  `first_zarr_asset` scan STAC assets in key order and the composite
+  asset resolver's case-insensitive match picks the smallest key.
+- **Bootstrap confidence intervals of `concavity_index` and `ksn`** used
+  `std`'s `DefaultHasher` as the resampling PRNG, whose algorithm is not
+  guaranteed stable across Rust releases. They now use a fixed SplitMix64
+  mix of `(seed, group, boot, k)`; CI values change once, then stay
+  reproducible on any toolchain.
+- Felzenszwalb sorts edges with a stable sort so equal weights keep
+  raster order (labels no longer depend on the sort algorithm's
+  tie order). `KmeansParams::seed` is documented as currently unused
+  (initial centroids are data quantiles).
+
+## [1.4.0] - 2026-09-25
+
+### Added
+
+- **SurtGIS Server M0 — `surtgis serve`** (new crate `surtgis-server`,
+  `publish = false`, behind the opt-in `server` feature of the CLI): an
+  analysis-first dynamic tile server. A tile is computed at request time
+  from a remote COG or a local GeoTIFF; the operator is a URL parameter.
+  `GET /tiles/{z}/{x}/{y}.png?url=…&alg=hillshade|slope|value` or
+  `&formula=(N-R)/(N+R)&bands=N:4,R:3` (Awesome Spectral Indices grammar),
+  `&cmap=` (any `surtgis_colormap` scheme), `&rescale=min,max`,
+  `&params=azimuth:135,…`; plus `/tilejson` (TileJSON 3.0, drop-in for
+  MapLibre/Leaflet/QGIS-XYZ), `/info`, `/algorithms`, `/healthz` and a
+  MapLibre demo page at `/`. Pipeline per tile: WebMercatorQuad tile →
+  target grid plus the operator's gutter → `surtgis_core::warp` from the
+  source CRS at the overview closest to the tile resolution → operator →
+  crop → colormap → PNG. Sources are gated by an allowlist of URL prefixes
+  (`--allow`) and a root directory for local files (`--root`); anything
+  else is refused, since `?url=` is a request-forgery vector. Only local
+  and focal operators are served on the fly by design
+  (`docs/surtgis_server_design.md` §3); global ones are materialised
+  offline and served as sources. M0 limit: remote COGs are single-band
+  (formulas need a local multi-band file).
+
+- **SurtGIS Server M1, L2 disk cache.** `surtgis serve --cache-dir <dir>`
+  keeps rendered tiles on disk as `{layer}/{z}/{x}/{y}.png`, where `layer`
+  hashes everything in the request except the tile address, so each
+  folder is a plain XYZ pyramid any static host can serve (the seed the
+  design document wanted). Lookup order is L1 memory, L2 disk, render;
+  `X-Cache` reports `hit`, `disk` or `miss`; writes are atomic and off the
+  response path; `/metrics` gains disk hit/miss/write/error counters. No
+  size bound on disk — prune the folder externally. Verified: tiles
+  survive a server restart and are served from disk, bit-identical to a
+  fresh render; a different colormap lands in a different layer folder.
+
+- **Multi-band COGs in `surtgis_cloud::CogReader`.** Pixel-interleaved
+  COGs with several samples per pixel used to fail the tile-size check
+  (the decoder expected one sample per pixel); RGB imagery and multi-band
+  products now read correctly. New `read_bbox_bands` (every band from one
+  tile fetch and decode), `read_bbox_band(bbox, overview, band)` and
+  `bands()`, with blocking wrappers; `read_bbox` keeps returning band 0.
+  TIFF predictor 2 is undone with the pixel stride
+  (`undo_horizontal_differencing_multi`) and predictor 3 with its
+  multi-sample variant. Planar (`PlanarConfiguration = 2`) files are
+  rejected with a clear message. Integration tests read u8 RGB
+  (predictor 2) and f32 two-band (predictor 3, nodata, overview) fixtures
+  through a local range server and compare every cell with the values
+  written. The tile server reads every band of a remote COG, so
+  `?alg=rgb` and `?formula=` now work on remote imagery too.
+
+- **Windowed GeoTIFF reads: `surtgis_core::io::window`.** `geotiff_info`
+  describes a file once (size, bands, georeferencing, and the strip/tile
+  chunking of the full-resolution IFD and every overview), and
+  `read_geotiff_window` / `read_geotiff_window_bands` decode only the
+  chunks a pixel window touches, at any level, through the native `tiff`
+  decoder — no GDAL, memory bounded by the window. `level_for_scale` and
+  `window_for_bounds` do the overview and world-to-pixel arithmetic.
+  Verified against full reads on tiled COGs (windows crossing tile borders,
+  edge tiles) and stripped GeoTIFFs. The tile server's local sources now
+  use it: a 10 000 × 10 000 local COG with five overviews serves hillshade
+  tiles at every zoom in 13–26 ms with the process at 63 MB RSS, where M0
+  loaded the whole file (800 MB as f64); tiles of the benchmark DEM are
+  bit-identical to M0's.
+
+- **SurtGIS Server M1, ECW sources and true-colour tiles.** With the
+  CLI built with `--features server,ecw`, a `.ecw` file under `--root` is a
+  source like any other: the native decoder reads just the window a tile
+  needs at the pyramid level matching its resolution, so a 1.3-gigapixel
+  4-band orthomosaic (31 666 × 41 817, 4 cm) serves tiles from zoom 14 to
+  22 in 20–55 ms uncached, without the vendor SDK. New operator
+  `?alg=rgb` (`&bands=1,2,3` default, `&rescale=` optional) packs three
+  bands straight into an RGBA PNG — alpha 0 outside the footprint — for
+  orthomosaics and imagery; formulas and `value` work on ECW bands too.
+
+- **SurtGIS Server M1, operational core.** Remote readers are pooled per
+  URL (`--pool-per-url`, default 4, idle TTL 5 min) instead of re-opened
+  per request: neighbouring uncached tiles of a remote COG went from
+  0.4–2.4 s to 7–55 ms. Rendered tiles go to a byte-bounded L1 LRU
+  (`--cache-mb`, default 256; `X-Cache: hit|miss`), and a request whose
+  `If-None-Match` carries the tile's ETag gets 304. Limits: per-tile deadline
+  (`--timeout-ms`, default 30 s → 504) and a render concurrency cap
+  (`--max-inflight`, default 64 → 503 with `Retry-After`). New endpoints:
+  `/statistics?url=…&alg=…[&size=512]` evaluates the operator on a coarse
+  grid over the whole source and returns count/min/max/mean/std/p2/p50/p98
+  plus the `rescale` they suggest; `/metrics` exposes Prometheus text
+  (tiles by operator and outcome, render-time histogram per operator,
+  cache hits/misses, rejections, timeouts, cache/pool gauges). 5xx
+  responses are logged at WARN, not ERROR.
+
+- **`surtgis_core::warp`** (feature `projections`, pulls in proj4rs — pure
+  Rust, so it builds natively, in WASM and in a server): the inverse-mapping
+  warp kernel that `surtgis reproject` used to keep to itself. `Transformer`
+  (EPSG → EPSG with the degrees/radians convention handled), `GridSpec`,
+  `grid_for` (whole-raster target grid), `source_window` (which source
+  bounds to read for a target window plus a margin) and `warp` (nearest or
+  bilinear, parallel across rows). The CLI now calls it, and its output is
+  bit-identical to the previous release on the benchmark DEM (UTM 19S →
+  WGS84 nearest and bilinear, → Web Mercator bilinear). First building
+  block of the tile server (`docs/surtgis_server_design.md`).
+
+- `ZarrReader::read_bbox_partials(bbox, windows)` and the blocking wrapper:
+  partial statistics for several time windows from one fetch of their
+  union, aligned with the input windows (`None` where the store has no step
+  in a window).
+
+### Changed
+
+- **`stac download-climate` is 5–7× faster** (measured on ERA5-pds from
+  Chile, bbox of 5×5 cells): the 2020 annual precipitation sum went from
+  289 s to 51–61 s, the annual tmax mean from 420 s to 61–95 s, and twelve
+  daily sums across a month boundary from 124 s to 15 s. Outputs are
+  bit-identical to the previous release. Two changes drive it:
+  - **Stores are read concurrently** (`--concurrency N`, default 4; 8 was
+    faster still in our runs). Each store costs a handful of latency-bound
+    requests (~270 ms each from Chile to the Azure West Europe region), so
+    reading them one after another was the bottleneck.
+  - **Each store is fetched once for every interval that overlaps it** and
+    bucketed in memory (`ZarrReader::read_bbox_partials`). Daily intervals
+    against a monthly store used to re-download the same 3 MB time chunk
+    once per day.
+- **`stac download-climate --variable` accepts a comma-separated list.**
+  The STAC search and the collection auth run once; each variable is
+  written to its own `<output>/<variable>/` folder (a single variable keeps
+  the flat layout). Verified on precipitation, tmax and 10 m wind — the last
+  one lives in the `-an` items, which the asset filter now selects.
+- **`ZarrReader::open` probes Zarr v2 first** (the default probe asked for
+  `zarr.json` first, one 404 per open on climate stores) and no longer lists
+  every array in the store on open — that listing costs one request per
+  array and was only used to explain a failure, where it is still fetched.
+  `ZarrMetadata::available_variables` is therefore empty after a successful
+  open; use `ZarrReader::list_variables` to enumerate.
+
+## [1.3.0] - 2026-09-23
+
+### Fixed
+
+- **`stac download-climate` aggregates over every store in the range**
+  (`daily-sum`/`monthly-sum`/`yearly-sum` and the `*-mean` variants).
+  Climate collections publish one STAC item, hence one Zarr store, per
+  period — ERA5-pds on Planetary Computer is monthly — and the command took
+  only the first search hit, so `yearly-sum` returned the sum of a single
+  month (the newest, PC sorts descending) and `yearly-mean` the mean of
+  that same month. Every item whose extent overlaps an interval now
+  contributes the time steps it holds inside it, as mergeable partial
+  statistics; sums and counts merge exactly, so
+  `yearly-sum == Σ monthly-sum` and a mean is the mean over every step
+  read, never a mean of per-store means. Each written interval reports how
+  many time steps and stores it came from. Validated on ERA5-pds
+  precipitation over the Altiplano: the 2020 annual sum equals the sum of
+  the twelve monthly sums exactly, and the January sum is bit-identical to
+  an independent `zarr`/NumPy read of the same store.
+
+- **`stac download-climate` explains an empty date range.** When no item
+  matches, the error now names the first item the catalogue returns without
+  a date filter and when it ends, because a collection can declare an
+  open-ended extent while its items stop earlier (era5-pds on Planetary
+  Computer declares 1979–present but its last item is 2020-12).
+
+- **Zarr time aggregation selects steps by membership, not nearest
+  neighbour.** `TimeReduction::Aggregate { start, end }` used to clamp both
+  ends to the nearest coordinate, which could pull in a step outside the
+  window; it now reads exactly the steps with `start <= t <= end`, and
+  fails with `ZarrTimeOutOfRange` when the store has none.
+
+- **Zarr time aggregation unpacks before accumulating.** Packed variables
+  (`scale_factor`/`add_offset`) are unpacked per value before summing, so a
+  sum is a sum of physical values rather than `scale·Σraw + offset`.
+
+- **`surtgis reproject` is now multi-band aware** (issue #123). It used to
+  read only the first band of the input, so a regular RGB GeoTIFF came out
+  as a single grey band — the "wrong output" reported. Every band is now
+  reprojected onto one shared output grid (the per-pixel coordinate
+  transform runs once, not once per band) and written as a single
+  multi-band GeoTIFF; the input's sample type is preserved (u8 RGB in,
+  u8 RGB out; u16/i16/f32 likewise). Validated against `gdalwarp` on a
+  synthetic RGB: MAE 0.0/0.46/0.0 DN per band.
+
+- **`write_geotiff_multiband` preserves u8 and u16 sample types**
+  (`Gray8`/`RGB8`/`RGBA8`, `Gray16`/`RGB16`/`RGBA16`) instead of promoting
+  everything to Float32. Other element types keep the previous
+  Float32 behaviour, so existing f32/f64 callers are unchanged.
+
+### Added
+
+- `surtgis_cloud::TimeAggPartial` (per-pixel sum/count/min/max over a time
+  range, with `merge` and `finish`) plus `ZarrReader::read_bbox_partial` and
+  `ZarrReaderBlocking::read_bbox_partial`, for aggregates that span several
+  stores.
+
+- **New crate `surtgis-ecw`: native ECW v2 decoder** — reads ER Mapper
+  Enhanced Compressed Wavelet orthomosaics in pure safe Rust, with no GDAL
+  and no Hexagon/ERDAS SDK. Full-image, windowed and reduced-resolution
+  reads (the wavelet pyramid makes overviews first-class: opening a
+  gigapixel mosaic at 1:32 takes ~300 ms); all six sideband encodings
+  (RAW, Huffman, range, range-8, zeros, run-zero); greyscale, YUV→RGB and
+  multiband colour spaces; georeferencing with EPSG mapping for the common
+  ER Mapper datum/projection pairs. Line-streamed reconstruction: memory
+  scales with image width, not area. Validated against a real 1.3-gigapixel
+  4-band drone orthomosaic (31666×41817 @ 4 cm GSD). The format knowledge
+  was extracted from the libecwj2-3.3 sources used strictly as a specification
+  (no code ported; the three ER Mapper patents are verified expired) — the
+  full format write-up and licensing review live in `docs/ecw_format.md`.
+  The crate is `publish = false` until that review is signed off.
+
+- **CLI: `surtgis ecw info` / `surtgis ecw convert`** (behind the opt-in
+  `ecw` feature, same path-only pattern as `flow`): header/pyramid
+  inspection and decode-to-GeoTIFF with `--reduction` (1:2^N overviews)
+  and `--window` (crops in full-resolution cell coordinates).
+
+- **The formula evaluator now covers the full Awesome Spectral Indices
+  grammar** (Montero et al., 2023, *Scientific Data* 10, 197). The
+  `index_builder` expression engine — behind `surtgis imagery calc` and the
+  new WASM entry point — gained the `**` power operator (right-associative,
+  Python semantics: `-x ** 2` is `-(x ** 2)`, `x ** -2` is legal). With it,
+  every parameter-free formula in the catalogue (197 of the 245
+  Sentinel-2-compatible indices) evaluates verbatim; indices with tunable
+  parameters run by substituting the numeric values into the formula string.
+  The evaluator also learned to honour each band's declared nodata value
+  (previously only NaN) and to reject formulas with trailing tokens
+  (`"N R"` used to silently evaluate as `"N"`). Per-pixel evaluation now
+  resolves band names at parse time instead of building a per-pixel hash
+  map, removing per-pixel allocations from the hot loop.
+
+- **WASM: `spectral_index(formula, band_names, band_tiffs)`** — evaluates an
+  arbitrary band formula in the browser over parallel arrays of GeoTIFF
+  buffers, one per named band. All bands must share dimensions; nodata and
+  division by zero propagate as NaN. Verified bit-identical against the
+  hand-written `ndvi`, `nbr`, `mndwi`, `ndmi`, `gndvi` and `savi`.
+
+### Security
+
+- Lockfile bump: `rustls` 0.23.41 → 0.23.45 (RUSTSEC-2026-0285, TLS 1.3
+  handshake messages accepted at the wrong encryption level) and the
+  yanked `chacha20` 0.10.0 → 0.10.2. No manifest changes.
+
+## [1.2.5] - 2026-08-20
+
+### Fixed
+
+- **`multidirectional_hillshade` produced a degenerate raster** (reported
+  from the WASM bindings, 2026-08). The blend averaged six azimuths spread
+  over the full compass, whose directional terms cancel exactly
+  (`Σ sin az = Σ cos az = 0`): every cell collapsed to
+  `cos θz · 1/√(1+g²)`, i.e. an output capped at `cos(45°)·255 = 180` and
+  nearly constant — on gentle terrain literally every percentile came out
+  as 180. The weighting compounded it: `1 + cross²/g²` is both the
+  complement of the intended weight and carries a constant term that
+  flattens it toward a plain mean.
+
+  It now implements Mark (1992) as `gdaldem hillshade -multidirectional`
+  does — four azimuths over a half-circle (225°, 270°, 315°, 360°) with
+  the aspect-dependent weights `x²/g²`, `y²/g²`, `½ ∓ xy/g²`. Validated
+  against GDAL on a 1000×1000 DEM: **RMSE 0.68, r = 0.99999**, the same
+  agreement the single-direction `hillshade` already had (RMSE 0.69) — the
+  residual is GDAL's `1 + 254·x` versus SurtGIS's `255·x` scaling, present
+  in both. Output values change for every input; that is the point.
+
+- **Terrain algorithms warn when a DEM has no CRS but degree-sized cells.**
+  With a geographic CRS the cell size has been converted to metres per row
+  since 0.17.0, but a DEM whose CRS was stripped still had its ~2.8e-4°
+  cells used as metres, saturating slope near 90° everywhere and poisoning
+  TWI and everything else downstream — silently. Such rasters now get a
+  stderr warning naming the symptom and the two fixes (set the CRS, or
+  reproject). The heuristic requires both degree-sized cells and an extent
+  inside the lon/lat domain, so projected centimetre-resolution grids
+  (drone/LiDAR, coordinates in the hundreds of thousands) are unaffected.
+
+### Security
+
+- `h2` bumped 0.4.13 → 0.4.17 (RUSTSEC-2026-0258: empty DATA frames were
+  accepted and queued without limit). Transitive via `hyper`; lockfile
+  only, no direct dependency change.
+
+## [1.2.4] - 2026-08-17
+
+### Fixed
+
+Three silent-wrong-data findings open since audit R2/R3, closed in audit
+R4's third round:
+
+- **Zarr/NetCDF time decoding now rejects non-gregorian CF calendars**
+  (`noleap`/`365_day`, `360_day`, `julian`, `all_leap`, …) with an explicit
+  error instead of decoding them with real-calendar arithmetic — which
+  silently mis-dated the series (a noleap axis, common in climate-model
+  output, drifts ~1 day per 4 years; a 360-day one ~5 days per year).
+  Gregorian-family calendars (`gregorian`, `standard`,
+  `proleptic_gregorian`, or no calendar attribute) behave as before.
+
+- **Sen's slope can now use real acquisition times.** `mann_kendall` and
+  `sens_slope` divided by the *index* separation `(j − i)`, which is wrong
+  whenever the series is irregularly spaced — the normal case for
+  Landsat/Sentinel stacks. New `mann_kendall_with_times` /
+  `sens_slope_with_times` (validated against `scipy.stats.theilslopes`)
+  divide by the actual time separation; the Mann-Kendall statistic itself
+  (S/tau/p) is rank-based and unaffected. The existing functions keep
+  index spacing (units: per time step) for compatibility. The CLI's
+  `temporal trend --times` now feeds Mann-Kendall and Sen's slope (it
+  previously only reached the linear trend), and Python's
+  `mann_kendall_compute` gains an optional `times=` argument.
+
+- **The native GeoTIFF reader warns when a file declares band
+  scale/offset it does not apply.** Packed products (HLS/MODIS int16
+  reflectance or temperature) carry `SCALE`/`OFFSET` in `GDAL_METADATA`;
+  GDAL unpacks them on read, and SurtGIS's own Zarr/NetCDF readers unpack
+  their CF equivalents — but the GeoTIFF reader returns raw packed values.
+  Until it unpacks, it now says so on stderr (with the unpacking formula)
+  instead of silently handing back values off by orders of magnitude.
+
+### Documentation
+
+- The 1.0.0 release notes overclaimed that the byte-budgeted decode
+  "bounds the composite's whole memory footprint by construction"; a
+  correction note in that entry now states what the code actually bounds
+  (concurrent decode + output buffers, not the accumulated mosaic tiles).
+
+### Fixed — `surtgis-flow` (unpublished crate)
+
+- **`surtgis-flow` (audit R4 sprint 2 — solver correctness
+  ahead of the N4-Macul calibration):**
+  - **Open (transmissive) borders are now on the mass books.** The
+    transmissive ghost mirrors the edge cell including its velocity, so a
+    release near the edge of a cropped DEM legitimately draws mass in from
+    the ghost — previously that was silent mass creation without
+    entrainment, and with entrainment it tripped `MassBudgetViolated`
+    almost immediately with an error message blaming the solver. The net
+    border exchange is tracked per substep (deterministically, per band)
+    and included on the budget side of the invariant; a new
+    `Simulation::boundary_volume()` exposes the running ledger and the CLI
+    "% through open borders" now reports it directly (the plain mass
+    difference wrongly counted eroded volume as border flux).
+  - **The bed is now derived, `z = z₀ − e`, instead of a running
+    `z -= Δe`.** In f32 with bed elevations of 500-900 m the ulp is
+    3-6e-5 m, so sub-ulp erosion increments were credited to the flow and
+    the erosion ledger but never actually left the bed — mass appeared
+    from nowhere. The derived form rounds once, keeping bed and ledger in
+    exact agreement (pinned bitwise by a new test; the legacy path
+    deviated ~2 mm in 20 steps).
+  - Cumulative erosion is clamped to `e_max` at commit (the f64→f32
+    double rounding could overshoot by ~1 ulp).
+  - `update_dem` with entrainment active now re-applies accumulated
+    erosion on top of the new DEM (`z = z₀_new − e`) — raising a live
+    barrier no longer silently un-erodes the channel. The live-barrier
+    path, sold to GEODEO, gains its first tests.
+  - New `SimGrid::bed()` accessor (current, possibly eroded, bed).
+
+### Documentation
+
+- `surtgis-flow`: the horizontal-coordinate (g·tanθ) formulation and its
+  calibration consequences are now documented at the crate root — μ/ξ
+  calibrated with this solver absorb the ~33%-at-30° driving-force bias
+  versus slope-aligned solvers (RAMMS, r.avaflow) and are not
+  interchangeable with values calibrated there.
+
+## [1.2.3] - 2026-08-13
+
+### Fixed
+
+- **Every read path now converges on the NaN nodata convention** (audit
+  R4, the class behind the v1.2.x "ring of ~90° slopes around nodata"
+  user report). Four lateral entry points still leaked a literal float
+  sentinel (e.g. `-9999`) into buffers whose masking looks for NaN:
+  - `--features gdal` builds substituted `read_geotiff` with a
+    non-normalizing version — float sentinel pixels now become NaN and
+    the raster's nodata metadata says NaN, matching the native backend.
+  - The COG/cloud reader kept the sentinel literal and, on sparse COGs,
+    mixed NaN-filled missing tiles with sentinel-valued data tiles in
+    the same raster; it now normalizes on assembly.
+  - The streaming processor's **output** declared the input's finite
+    sentinel as `GDAL_NODATA` while its masked pixels are NaN, so
+    QGIS/GDAL/rasterio read every NaN as valid data; the tag is now NaN.
+  - Zarr/NetCDF reads replaced fill values with NaN but declared the
+    original finite fill as nodata metadata — same external-tools
+    mismatch on any subsequent write; the metadata now says NaN.
+  - The dtype-preserving read's normalization excluded ±inf sentinels
+    (`is_finite` guard); it now rewrites any non-NaN sentinel, matching
+    the typed path.
+
+- **`surtgis flow run` frame grid vs manifest** (GEODEO contract): with
+  `--duration` not a multiple of `--output-interval`, the last frame was
+  clamped to the requested duration while the manifest declared
+  `duration = dt_output·(n_frames−1)` — consumers that place frame *i*
+  at `i·dt_output` (GEODEO) stretched the animation. The run now extends
+  to the full uniform frame grid (with a warning), so the manifest's
+  `duration` equals the span the frames actually cover.
+
+- **`surtgis flow run` argument validation**: `--duration inf` (or a
+  denormal `--output-interval`) passed the `> 0.0` check, saturated the
+  frame count and filled the disk; both must now be finite and the
+  implied frame count is capped at 1,000,000. `--entrainment-k` without
+  `--erodible` is now rejected by the CLI instead of silently ignored.
+
+- **`surtgis-flow` C ABI**: the shipped header now declares
+  `SF_ERR_MASS_BUDGET = 5` (the v2 binary already returned it with
+  entrainment active, but the enum ended at `SF_ERR_INTERNAL = 4`, so a
+  C `switch` could not name it), and `sf_time`/`sf_destroy` gained the
+  `catch_unwind` guard every other entry point already had — no panic
+  can cross the FFI boundary through them.
+
+### Security
+
+- `lru` bumped 0.16 → 0.18.2 (RUSTSEC-2026-0253: `LruCache::pop()` was
+  not panic-safe — potential use-after-free if a stored key's `Drop`
+  panics under `catch_unwind`). The transitive copy via `zarrs`
+  resolves to the patched 0.16.4 backport.
+
+## [1.2.2] - 2026-08-10
+
+### Fixed
+
+- **Cloud reads no longer lose tiles under load.** `stac fetch-mosaic` (and
+  every cloud read: composite, fetch, pipeline) fired all of a COG's byte
+  ranges at once, a self-inflicted burst that trips bandwidth throttling on
+  shared catalogs (Planetary Computer) — bodies aborted mid-transfer,
+  failing whole tiles even after v1.2.1's per-tile retry (a 20-tile
+  Patagonia run lost 5 tiles persistently). Range concurrency is now
+  bounded (6 in flight), and the body read is retried on transient
+  transfer failures instead of surfacing reqwest's opaque "error decoding
+  response body". Verified against the live catalog: the same run now
+  completes 20/20 with negligible time cost. When a body still fails after
+  all attempts, the error names the likely cause (server-side throttling)
+  instead of the opaque message.
+
+- **Malformed TIFFs no longer panic the decoder.** A GeoTIFF declaring
+  `SampleFormat` (tag 339) with count 0 made the `tiff` decoder index an
+  empty vector and panic — a denial of service on a path that decodes
+  untrusted bytes (COGs from arbitrary STAC catalog hrefs), found by the
+  nightly fuzzer. The `tiff` dependency is bumped 0.10 → 0.11 (returns an
+  error for the bad tag) and the shared decoder is wrapped in
+  `catch_unwind`, so any other decoder panic on hostile input also becomes
+  an error rather than unwinding out of the library.
+
+### Note
+
+- When downloading DEM tiles individually and merging with `surtgis
+  mosaic` (a workaround for older versions), give each tile's bounding box
+  a small **overlap** with its neighbours. A bbox pulled slightly inward
+  leaves thin NoData seams along tile edges — invisible in aggregate
+  coverage statistics but a systematic, spatially-structured exclusion.
+  `stac fetch-mosaic` handles this correctly on its own.
+
+## [1.2.1] - 2026-08-08
+
+### Fixed
+
+- **`stac fetch-mosaic` no longer saves incomplete mosaics silently.** A
+  transient HTTP error while fetching a tile was warned, skipped, and the
+  partial mosaic saved with exit 0 — leaving tile-sized NoData holes
+  indistinguishable from legitimate NoData (reported from a real
+  Patagonia workflow: 2 of 20 `cop-dem-glo-30` tiles lost, 25% of the
+  area, detected many pipeline steps later). Now each tile is retried
+  with exponential backoff (`--retries`, default 3 — the reported error
+  succeeds on the second attempt), and if any found tile still cannot be
+  fetched the command **fails by default** listing the missing ids.
+  `--allow-partial` restores the old behaviour, loudly: a WARNING plus a
+  `<output>.partial.json` sidecar listing the missing tiles, and the
+  summary line now prints `N of M tiles`. A missing asset counts as a
+  missing tile instead of a silent skip.
+
+## [1.2.0] - 2026-08-06
+
+### Added
+
+- **`read_geoparquet` accepts nullable (OPTIONAL) attribute columns** —
+  the GeoPandas/pyarrow default when properties are not uniform across
+  features. A missing value becomes `AttributeValue::Null` on that
+  feature (including nulls in the first rows and all-null columns);
+  boolean columns are now read too (`AttributeValue::Bool`). The
+  strictly-columnar `read_geoparquet_points` path still rejects nulls by
+  design — `PointTable` has no missing-value representation — and its
+  error message now points to `read_geoparquet` for nullable data.
+- `AttributeValue` implements `PartialEq`, so consumers can compare
+  property values directly.
+
+## [1.1.0] - 2026-08-06
+
+### Added
+
+- **GeoParquet reader now parses every standard WKB geometry type** (feature
+  `parquet`). `read_geoparquet` was points-only; it now returns a
+  `FeatureCollection` with Point, LineString, Polygon, MultiPoint,
+  MultiLineString and MultiPolygon geometries, decoded by a general WKB
+  cursor that accepts both byte orders and EWKB flags (SRID honoured; Z/M
+  ordinates parsed and dropped). The CRS is resolved from `surtgis:epsg`
+  first and then from the standard `geo.columns.<geom>.crs` field (PROJJSON
+  `id` or OGC URI). Malformed, truncated or unknown-type WKB is rejected
+  with explicit errors instead of silently skipped.
+
+### Fixed
+
+- **`surtgis info` (and the dtype-preserving read path used by WASM/Python)
+  masks finite float NoData sentinels again** (e.g. the rasterio/GDAL
+  `-9999` convention). The `read_geotiff_any` path kept the literal
+  sentinel in float buffers while recording NoData as NaN, so fill cells
+  were counted as valid — `info` reported 100% valid cells and a
+  fill-contaminated Min/Mean on any float product with finite fill.
+  Reported from a real workflow (paleo-lake reconstruction); regression
+  tests cover f32/f64 with `-9999`/`0`/`-1` sentinels end-to-end.
+
+## [1.0.0] - 2026-07-23
+
+First stable release. It promotes the 0.18.0 candidate surface unchanged, now
+that the accompanying paper is published:
+
+> Parra, F. (2026). SurtGIS: A high-performance raster geospatial analysis
+> library in Rust with WebAssembly and Python support. *Environmental
+> Modelling & Software*, 204, 107102.
+> <https://doi.org/10.1016/j.envsoft.2026.107102>
+
+The public API of the seven published crates is now under semantic versioning.
+The curated prelude is `#[non_exhaustive]` throughout, so new fields and enum
+variants ship as minor releases rather than breaking ones; anything still
+evolving (`algorithms::inference`, `fluvial::divide_migration`, the
+`surtgis_cloud::composite` module) stays behind the `unstable` feature and is
+exempt from the 1.x guarantee. There are no API changes relative to 0.18.0
+beyond the additions and fixes listed here.
 
 ### Changed
 
@@ -24,6 +982,14 @@ call them out under a `Breaking` heading when they happen.
   halve; real-data pixels are unchanged, interpolated gap-fill pixels differ
   by at most ~5e-4, i.e. f32 rounding). Together with R9-PR2's byte-budgeted
   decode this bounds the composite's whole memory footprint by construction.
+  *[Correction, 2026-08-16 — audit R4]*: "whole memory footprint by
+  construction" overclaims. The byte budget bounds **concurrent tile
+  decode** (the permit is released when a tile's decoded raster is
+  returned), and this change bounds the **output buffers** — but the tiles
+  subsequently accumulated for each mosaic strip remain an unbounded
+  resident set (the mosaic's inherent floor; the engine's own docs say so).
+  Tying permits to raster lifetime (`TrackedRaster`) is tracked follow-up
+  work.
 
 - **Composite RAM is now bounded by the byte budget, and the calibrated
   strip-sizing model is retired** (feature `unstable`) — audit R9, step 2
@@ -41,7 +1007,44 @@ call them out under a `Breaking` heading when they happen.
   unchanged (verified end-to-end against Planetary Computer); the decode
   budget scales with the RAM budget (498 MB at 2 GB, 1074 MB at 16 GB).
 
+- **Single-band `stac composite` and `stac time-series` now run through the
+  `CompositeEngine`**, and the ~1175-line legacy code path is deleted. Both
+  modes inherit the R8/R9 memory budget and robustness work that previously
+  only covered the multi-band path. Cloud masking for these two modes is now
+  driven by the collection profile (Sentinel-2 SCL, Landsat QA, Sentinel-1
+  none) instead of the old ad-hoc masking; NDVI/Sentinel-2 outputs are
+  equivalent. (audit R3 S2.5)
+
+- **The `surtgis-algorithms` prelude is `#[non_exhaustive]`** across its
+  `Params`, result structs and enums (31 types). Build them with `Default` +
+  field mutation (`let mut p = SlopeParams::default(); p.z_factor = 2.0;`)
+  rather than struct literals or exhaustive matches. This is what lets the 1.x
+  line add options and variants as minor releases.
+
+- **`fluvial::divide_migration` and `algorithms::inference` are now behind the
+  `unstable` feature** — the first because its χ/relief sampling at ridge
+  pixels is not yet scientifically sound (audit CR-2), the second because its
+  nodata/normalization contract is still unwritten. The shipped CLI, Python and
+  WASM builds enable `unstable`, so no shipped command changes.
+
+- **Composite memory robustness** (audit R3 Sprint 2): the tile decompressor is
+  capped, so a corrupt or hostile DEFLATE/LZW tile can no longer inflate past
+  its byte budget; decode permits are sized by the real output window rather
+  than the server's nominal tile size (closing a 6–22× RAM under-count); and
+  the Python binding now surfaces failed-tile/‑date counts in its `meta` dict
+  instead of silently degrading the result.
+
 ### Added
+
+- **`surtgis flow` — a 2D debris-flow solver** (opt-in `flow` feature, new
+  `surtgis-flow` crate). An HLL finite-volume shallow-flow solver with Rayon
+  parallelism and static-yield detention, bed entrainment bounded by
+  construction, and a Chen & Noelle thin-layer reconstruction that restores the
+  driving force at the flow front. Validated against the T1–T13 analytical gate
+  suite (Ritter dam-break, thin-layer step, radial symmetry). Ships with a C
+  ABI (`surtgis-ffi`) and a checkpoint/resume manifest (v2) for real-time
+  integration such as game-engine coupling. Opt-in and off by default; existing
+  commands are unchanged.
 
 - **`surtgis_cloud::composite::MemoryBudget` / `TrackedRaster`** (feature
   `unstable`) — audit R9, step 1 of 3. A byte budget backed by a counting
@@ -96,6 +1099,34 @@ call them out under a `Breaking` heading when they happen.
   checkpoint/resume manifest that R8 also envisioned is deferred to land
   with R9's streaming sink, where a persistent output medium makes resume
   meaningful (resuming into in-memory buffers saves nothing).
+- **Tiled ONNX inference and a temporal streaming reducer** (feature
+  `unstable`) — scaffolds for on-raster model inference and memory-bounded
+  temporal aggregation. Halo handling and per-cell parity are tested, but the
+  nodata/normalization contract is still being finalized, hence `unstable`.
+
+### Fixed
+
+- **Panic on planar TIFFs.** `surtgis info` and the native readers crashed with
+  an index-out-of-bounds on `PlanarConfiguration=2` / `INTERLEAVE=BAND` files
+  (valid GDAL output); they now return an explicit error naming the planar
+  layout. (audit R3 Sprint 2)
+
+- **Zarr/NetCDF/GRIB bbox reads mirrored latitude to the opposite hemisphere.**
+  A southern-hemisphere bounding box could return northern-hemisphere data (and
+  vice versa). Affects every climate-data spatial subset; re-run any Zarr/NetCDF
+  bbox extraction made with 0.18.0 or earlier. (#94)
+
+- **`extract` masked away the majority value** of `stream_network`, `viewshed`
+  and `lineament` outputs when that value coincided with the nodata sentinel,
+  turning valid cells into "no data". (#93)
+
+- **Solar radiation, Perez sky model.** The clearness coefficient used the
+  degrees form (`5.535e-6·θz³`) with `θz` in radians, selecting the wrong sky
+  bin almost always. Corrected to the radians form (`1.041·θz³`). Opt-in path
+  only — the default isotropic model was unaffected. (audit R3 Sprint 1)
+
+- **Phenology label.** The smoother documented as "Savitzky-Golay" is a moving
+  average; the docstring now says so. (audit R3 Sprint 1)
 
 ## [0.18.0] - 2026-07-10
 
@@ -112,6 +1143,45 @@ promote this release unchanged once the EMS paper is published.
 > occlusion), not differently-conventioned. See the `Changed` entries.
 
 ### Breaking
+
+#### API 1.0 breaking window (engine audit R2, Sprint 5, #76)
+
+This release batches the API-shape changes deferred through the earlier
+sprints, since 0.18.0 is the 1.0 candidate.
+
+- **`Algorithm` / `ParallelAlgorithm` traits removed** (20 impls, 20 empty
+  marker structs, zero real consumers — the CLI, Python, WASM and GUI all
+  call free functions or their own registry). Call the free functions
+  directly (e.g. `slope(&dem, params)`), which is what every interface
+  already did.
+- **`algorithms` prelude curated 260 → ~70 symbols** (core prelude stays
+  ~13). Everything dropped from the prelude remains reachable via its
+  module path (`crate::<module>::*`); only the glob convenience set
+  shrank. See the documented admission criterion in the prelude module doc.
+- **New `unstable` feature gates the volatile modules** — the v0.16 hazard
+  family (`energy_cone`, `laharz`, `excess_topography`, `sar`) and the
+  exotic terrain algorithms (`msv`, `pderl_viewshed`, `rea`, `ssa_2d`,
+  `chebyshev_spectral`, `gaussian_scale_space`). They are exempt from the
+  1.x stability guarantee. Off by default for external consumers of the
+  `algorithms` crate; the CLI/Python/WASM enable it, so their shipped
+  commands are unchanged.
+- **`default_nodata()` for unsigned types changed from `MIN` (0) to `MAX`**
+  (`u8`→255, `u16`→65535, `u32`/`u64`→their MAX). `0` is frequently valid
+  data (counts, class 0, masks), so `MAX` is a safer default sentinel.
+  6 call sites audited.
+- **`CloudError` no longer exposes `reqwest::Error` / `StatusCode`** in its
+  public shape: HTTP failures are now the opaque
+  `Http { status: Option<u16>, msg: String }` (with a hand-written `From`
+  so `?` keeps working). Prevents a `reqwest` major from forcing a SurtGIS
+  major.
+- **`ndarray` / `geo` / `geo-types` are re-exported with a written policy**:
+  a major bump of any of them is now a documented major bump of this crate.
+- **Python: `abi3-py39` wheels** — one wheel per platform instead of five.
+  Requires Python ≥ 3.9.
+- **CLI: differentiated exit codes** (0 success, 1 generic, 2 usage/clap,
+  3 not-found) instead of a single generic failure code.
+
+#### Scientific-parity breaking changes (audit D2/D3/D4, #79–#81)
 
 - `ViewshedParams` is now `#[non_exhaustive]` with two new fields
   (`earth_curvature`, `refraction_coeff`): construct it via
@@ -167,7 +1237,69 @@ promote this release unchanged once the EMS paper is published.
   `flatness_distance=0.0` keyword arguments. Validated cell by cell against
   GRASS (`benchmarks/validate_geomorphons_grass.py`).
 
+#### Internal (engine audit R2, Sprints 2–5, #73/#77)
+
+- **The five hot terrain kernels (slope, aspect, hillshade, multidirectional
+  hillshade, curvature) are unified between the batch and streaming paths**,
+  removing the divergence class that produced the C1 hillshade bug; a
+  batch/streaming parity test suite (17 algorithms) guards them (#73).
+- **Real bounded-memory DEFLATE GeoTIFF streaming**: the compressed write
+  path streams one strip at a time via a hand-driven `DirectoryEncoder`
+  instead of buffering the whole image (#77).
+- WASM export-count CI guard corrected (stale threshold 29 vs an actual 57),
+  plus `wasm-pack test --node` and CLI `assert_cmd` smoke tests added (#76).
+
 ### Added
+
+#### I/O capabilities (engine audit R2, Sprint 4, #75)
+
+- **Native COG writer** (`surtgis_core::io::write_cog`): tiled GeoTIFF with
+  internal overviews, nodata-aware 2×2 downsampling, and optional DEFLATE.
+  (Available in the library; a CLI/Python entry point is still pending — see
+  the R3 audit follow-up.)
+- **`AnyRaster` + `read_geotiff_any`**: a 7-variant enum (U8/U16/I16/U32/
+  I32/F32/F64) that preserves a GeoTIFF's native dtype instead of collapsing
+  every type to `f64` (up to 4× less memory for a u16 DEM the caller only
+  inspects). `AnyRaster::to_f64()` is the explicit opt-in back to the old
+  behaviour. The CLI `info` command is the first caller. Native types
+  without an exact variant are widened losslessly (i8→i16, f16→f32,
+  u64/i64→f64).
+- **`Average` and `Cubic` resampling** (`ResampleMethod`): area-weighted
+  mean (exact overlap fraction, nodata-excluded, falls back to bilinear when
+  upsampling) and Catmull-Rom bicubic (a=-0.5, GDAL's default, falls back to
+  bilinear on a nodata window). Fixes aliasing when downsampling to a coarser
+  composite grid. `Average` cross-validated against `gdal_translate -r
+  average`.
+
+#### Performance (engine audit R2, Sprint 3, #74)
+
+- **Focal statistics are now O(1)/O(r) per cell** instead of O(k²): a
+  summed-area table for mean/std/sum/count over square windows (centered on
+  the global mean to avoid catastrophic cancellation in the variance), van
+  Herk–Gil-Werman separable min/max, and an exact Huang/Fenwick sliding
+  window for median/percentile (no histogram quantization). Every fast path
+  is tested against the brute-force reference (square and circular, with
+  NaN). Inverts the one benchmark 0.17.0 lost (TPI-family focal cost).
+- **Shared HTTP client + URL-keyed IFD cache** for COG access: a STAC
+  composite reopening the same COG dozens of times now pays the
+  `reqwest::Client` build, TLS handshake and IFD parse once. The cache key
+  strips the query string so re-signed SAS/presigned URLs for the same asset
+  still hit.
+
+#### Python (engine audit R2, Sprint 5, #76)
+
+- **7 new Python functions (124 total)** binding categories the audit found
+  present in Rust but unbound: zonal statistics, kriging (auto-fit
+  variogram), temporal trend / Mann-Kendall, SLIC and Felzenszwalb
+  segmentation, and pansharpening.
+- **`py.typed` + `surtgis.pyi` type stubs** (generated from the
+  `#[pyfunction]` signatures via `gen_stubs.py`), so `mypy`/IDEs see the API.
+- **Output-buffer copy eliminated** on every raster-returning binding
+  (`Raster::into_array()` moves instead of cloning, 102 call sites).
+- pytest coverage grew 17 → 75 cases across the previously untested
+  categories.
+
+#### Cloud / parity
 
 - **Honest `SigV4 not implemented` error** (audit A2-cloud): signing an S3
   request with `AwsAuth` used to emit half-signed headers (no
@@ -199,6 +1331,77 @@ promote this release unchanged once the EMS paper is published.
 
 ### Fixed
 
+#### 10 silent-wrong-data bugs (engine audit R2, Sprint 1, #72)
+
+Correctness fixes across modules the R2 audit read for the first time.
+Each produced plausible-but-wrong output with no error — **outputs from
+≤0.17.0 for the affected algorithms should be regenerated**:
+
+- **Vector `clip`** now handles `MultiPolygon`/`MultiLineString`/
+  `MultiPoint`/`GeometryCollection` (the shapefile reader converts every
+  ESRI polygon to a `MultiPolygon`, so real shapefiles were passed through
+  unclipped, CR-5), preserves and clips interior rings/holes instead of
+  filling them in (CR-6), and emits a `MultiLineString` for a line that
+  exits and re-enters the window instead of bridging it with a fabricated
+  segment (CR-9).
+- **Vector `overlay`**: `difference`/`union`/`symmetric_difference` with an
+  empty operand now return the non-empty side instead of silently emptying
+  (CR-7); `union`/`symmetric_difference` merge A and B once each instead of
+  looping per A-polygon and inflating area (CR-8). `overlay.rs` gained its
+  first test suite.
+- **Fluvial geometry**: removed a systematic ½-pixel shift in every
+  exported coordinate (ksn segments, long-profile nodes, divide midpoints,
+  χ CSV — CR-1); drainage area is now `(flow_acc + 1)·cell²` so headwaters
+  no longer get area 0 → χ=NaN (A-1); χ integration switched to the
+  trapezoidal rule it claimed to use (A-3). This module feeds the Ñuble
+  hazard maps.
+- **Zonal `Majority`/`Minority`/`Variety`** now compute real categorical
+  statistics instead of silently returning the zone mean (CR-4).
+- **`KdTree::within_radius`** near/far pruning branches were swapped
+  (explored the far side, pruned the near) — restored (CR-3).
+- **SLIC** default compactness (`m=10`, calibrated for CIELAB ~100) is now
+  `0.1` for the `[0,1]`-normalized bands SurtGIS uses, so superpixels
+  follow the image instead of a geometric grid (CR-10).
+- **Kriging**: ordinary/universal kriging deduplicate near-coincident
+  samples instead of silently falling back to IDW on the resulting singular
+  matrix (A-8), and universal kriging evaluates drift at sample-centroid-
+  centered coordinates instead of absolute ones (condition number
+  ~1e28 → ~1e9, A-9).
+- **Mann-Kendall** now uses tau-b with the tie-corrected variance (A-4/A-5),
+  and **Moran's I** uses the standard Cliff & Ord randomization variance
+  instead of a hardcoded kurtosis (A-6).
+- **Vector readers propagate CRS** through `FeatureCollection`, and
+  `rasterize` validates a CRS mismatch instead of silently producing an
+  empty raster (A-13).
+- **REG-1 regression**: the spheroidal latitude correction for geographic
+  DEMs, added to the batch path in 0.17.0, was missing from the streaming
+  path the CLI actually uses — so the same EPSG:4326 DEM gave correct slopes
+  by one route and wrong by the other. The streaming kernels now receive
+  per-row cell sizes; a batch/streaming parity test suite guards it.
+
+#### Loose correctness findings (#73, #77)
+
+- **`aspect()` batch used `-1.0` for flat/invalid cells while streaming
+  used `NaN`** (#77). Since `solar_radiation()` only filters invalid aspect
+  via `is_nan()`, the `-1.0` (~-57.3°) leaked in as a real aspect on every
+  flat cell wherever slope+aspect+solar were computed together. Unified to
+  `NaN`.
+- **~113 approximate nodata comparisons** (`(v - nd).abs() < EPSILON`)
+  across terrain/hydrology/imagery/landscape/morphology tightened to exact
+  bit equality (#73), consistent with `RasterElement::is_nodata` — the
+  tolerance form both false-positived valid values near the sentinel and
+  false-negatived sentinels 1 ULP off after a round-trip.
+- **`check_aligned` gap closed** in the multi-raster algorithms that combine
+  different element types (zonal, watershed_parallel, hand,
+  sediment_connectivity): they checked shape but not geotransform/CRS (#73).
+
+#### Other fixes (audit D7, parity sprint)
+
+- `fill_sinks` default `min_slope` lowered from `0.01` to `1e-5` (audit
+  D7), matching `priority_flood`. This changes the output of the library,
+  the Python `fill_depressions` and the WASM `fill_depressions`, which
+  raised filled depressions far more than SAGA or WhiteboxTools before
+  (entry added after 1.5.2; the change itself shipped here).
 - CLI `hydrology fill-sinks --min-slope` default aligned with the library
   default (`0.01` → `1e-5`, audit D7 — the library was fixed in the
   Sprint-1 round but the CLI kept the old value, giving different results

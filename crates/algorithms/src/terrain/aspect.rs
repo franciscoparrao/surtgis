@@ -10,6 +10,7 @@ use surtgis_core::{Error, Result};
 
 /// Output format for aspect
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum AspectOutput {
     /// Degrees (0-360, 0=North, clockwise)
     #[default]

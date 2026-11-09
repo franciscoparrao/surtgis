@@ -1,0 +1,1091 @@
+//! HTTP handlers.
+
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use std::time::Instant;
+
+use axum::body::Bytes;
+use axum::extract::{Path, Query, State};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use axum::response::{IntoResponse, Response};
+use serde::Deserialize;
+use surtgis_colormap::{
+    ColorScheme, ColormapParams, auto_params, raster_to_rgba, rgba_to_png_bytes,
+};
+use surtgis_core::Raster;
+use surtgis_core::warp::{self, Bounds, GridSpec, Resampling, Transformer};
+
+use crate::AppState;
+use crate::algorithms::{self, Op, PcaFit, Reference};
+use crate::error::ServeError;
+use crate::source::Source;
+use crate::tiles::{self, TILE_EPSG, TILE_SIZE};
+use surtgis_algorithms::embeddings::{PcaModel, mean_vector};
+
+/// Query string of `/tiles`, `/tilejson` and `/statistics`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TileQuery {
+    /// Source: COG URL or local path.
+    pub url: String,
+    /// Operator name (`hillshade`, `slope`, `value`).
+    pub alg: Option<String>,
+    /// Band formula (ASI grammar); exclusive with `alg`.
+    pub formula: Option<String>,
+    /// Band mapping `NAME:INDEX,...` (formula) or a single index (`value`).
+    pub bands: Option<String>,
+    /// Colormap scheme name (see `surtgis_colormap::ColorScheme::ALL`).
+    pub cmap: Option<String>,
+    /// Colormap domain `min,max`; defaults to the operator's range or the
+    /// tile's own min/max.
+    pub rescale: Option<String>,
+    /// Operator parameters `key:value,...`.
+    pub params: Option<String>,
+    /// `/statistics` only: side of the sampling grid in pixels (default 512).
+    pub size: Option<usize>,
+    /// `similarity`: reference location `lon,lat` (EPSG:4326); its cell in
+    /// the source supplies the reference vector.
+    #[serde(rename = "ref")]
+    pub reference: Option<String>,
+    /// `similarity`: explicit reference vector `v1,v2,…` (one per band).
+    pub vec: Option<String>,
+}
+
+/// Query string of `/info`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct InfoQuery {
+    /// Source: COG URL or local path.
+    pub url: String,
+}
+
+fn parse_cmap(name: Option<&str>) -> Result<ColorScheme, ServeError> {
+    let name = name.unwrap_or("grayscale");
+    ColorScheme::ALL
+        .iter()
+        .copied()
+        .find(|s| {
+            s.name().eq_ignore_ascii_case(name)
+                || s.name().replace(' ', "-").eq_ignore_ascii_case(name)
+        })
+        .ok_or_else(|| {
+            ServeError::BadRequest(format!(
+                "unknown cmap '{name}'; one of: {}",
+                ColorScheme::ALL
+                    .iter()
+                    .map(|s| s.name().to_ascii_lowercase())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        })
+}
+
+fn parse_rescale(s: Option<&str>) -> Result<Option<(f64, f64)>, ServeError> {
+    let Some(s) = s else { return Ok(None) };
+    let (a, b) = s
+        .split_once(',')
+        .ok_or_else(|| ServeError::BadRequest("rescale must be min,max".into()))?;
+    let (min, max) = (a.trim().parse::<f64>(), b.trim().parse::<f64>());
+    match (min, max) {
+        (Ok(min), Ok(max)) if min < max => Ok(Some((min, max))),
+        _ => Err(ServeError::BadRequest(
+            "rescale must be two numbers with min < max".into(),
+        )),
+    }
+}
+
+fn crop_gutter(r: &Raster<f64>, gutter: usize) -> Raster<f64> {
+    if gutter == 0 {
+        return r.clone();
+    }
+    let (rows, cols) = r.shape();
+    let view = r
+        .data()
+        .slice(ndarray::s![gutter..rows - gutter, gutter..cols - gutter])
+        .to_owned();
+    let mut out = Raster::from_array(view);
+    let t = r.transform();
+    out.set_transform(surtgis_core::raster::GeoTransform::new(
+        t.origin_x + gutter as f64 * t.pixel_width,
+        t.origin_y + gutter as f64 * t.pixel_height,
+        t.pixel_width,
+        t.pixel_height,
+    ));
+    out.set_crs(r.crs().cloned());
+    out.set_nodata(r.nodata());
+    out
+}
+
+fn transparent_png() -> Bytes {
+    let rgba = vec![0u8; TILE_SIZE * TILE_SIZE * 4];
+    Bytes::from(rgba_to_png_bytes(TILE_SIZE as u32, TILE_SIZE as u32, &rgba).unwrap_or_default())
+}
+
+fn png_response(bytes: Bytes, etag: &str, max_age: u32, cache_state: &'static str) -> Response {
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("image/png"));
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_str(&format!("public, max-age={max_age}")).unwrap(),
+    );
+    if let Ok(v) = HeaderValue::from_str(&format!("\"{etag}\"")) {
+        headers.insert(header::ETAG, v);
+    }
+    headers.insert(
+        axum::http::HeaderName::from_static("x-cache"),
+        HeaderValue::from_static(cache_state),
+    );
+    (StatusCode::OK, headers, bytes).into_response()
+}
+
+/// Run `op` over `grid`: read the source window it needs, warp it onto
+/// the grid and apply the operator. Shared by tiles and `/statistics`.
+pub async fn compute_grid(
+    state: &AppState,
+    source: &Source,
+    op: &Op,
+    grid: GridSpec,
+) -> Result<Raster<f64>, ServeError> {
+    let info = source.info(&state.local, &state.pool).await?;
+    let tf =
+        Transformer::new(info.epsg, grid.epsg).map_err(|e| ServeError::Source(e.to_string()))?;
+    // 2 extra target cells of bilinear support around the grid.
+    let src_bounds =
+        warp::source_window(&grid, &tf, 2).map_err(|e| ServeError::Source(e.to_string()))?;
+    let window = source
+        .read_window(&state.local, &state.pool, &src_bounds, grid.cols)
+        .await?;
+    if window.epsg != info.epsg {
+        return Err(ServeError::Source(
+            "source CRS changed between reads".into(),
+        ));
+    }
+    let op = op.clone();
+    tokio::task::spawn_blocking(move || -> Result<Raster<f64>, ServeError> {
+        let warped = warp_window(&window.bands, &tf, &grid)?;
+        op.run(&warped)
+    })
+    .await
+    .map_err(|e| ServeError::Compute(format!("compute task failed: {e}")))?
+}
+
+fn warp_window(
+    bands: &[Raster<f64>],
+    tf: &Transformer,
+    grid: &GridSpec,
+) -> Result<Vec<Raster<f64>>, ServeError> {
+    let src_gt = *bands[0].transform();
+    warp::warp(bands, &src_gt, tf, grid, Resampling::Bilinear)
+        .map_err(|e| ServeError::Compute(e.to_string()))
+}
+
+/// True-colour tile: warp the three requested bands and pack them as RGBA
+/// (alpha 0 where any band is NaN), scaling `rescale` (default 0–255) to
+/// 0–255.
+async fn render_rgb(
+    state: &AppState,
+    req: &Request,
+    grid: GridSpec,
+    bands: [usize; 3],
+) -> Result<Bytes, ServeError> {
+    let info = req.source.info(&state.local, &state.pool).await?;
+    let tf =
+        Transformer::new(info.epsg, grid.epsg).map_err(|e| ServeError::Source(e.to_string()))?;
+    let src_bounds =
+        warp::source_window(&grid, &tf, 2).map_err(|e| ServeError::Source(e.to_string()))?;
+    let window = req
+        .source
+        .read_window(&state.local, &state.pool, &src_bounds, grid.cols)
+        .await?;
+    let need = *bands.iter().max().unwrap();
+    if window.bands.len() < need {
+        return Err(ServeError::BadRequest(format!(
+            "source has {} band(s), rgb needs band {need}",
+            window.bands.len()
+        )));
+    }
+    let (lo, hi) = req.rescale.unwrap_or((0.0, 255.0));
+    tokio::task::spawn_blocking(move || -> Result<Bytes, ServeError> {
+        let picked: Vec<Raster<f64>> = bands.iter().map(|&i| window.bands[i - 1].clone()).collect();
+        let warped = warp_window(&picked, &tf, &grid)?;
+        let n = TILE_SIZE * TILE_SIZE;
+        let mut rgba = vec![0u8; n * 4];
+        let scale = 255.0 / (hi - lo);
+        for r in 0..TILE_SIZE {
+            for c in 0..TILE_SIZE {
+                let px = (r * TILE_SIZE + c) * 4;
+                let v = [
+                    warped[0].data()[[r, c]],
+                    warped[1].data()[[r, c]],
+                    warped[2].data()[[r, c]],
+                ];
+                if v.iter().any(|x| !x.is_finite()) {
+                    continue;
+                }
+                for k in 0..3 {
+                    rgba[px + k] = ((v[k] - lo) * scale).round().clamp(0.0, 255.0) as u8;
+                }
+                rgba[px + 3] = 255;
+            }
+        }
+        rgba_to_png_bytes(TILE_SIZE as u32, TILE_SIZE as u32, &rgba)
+            .map(Bytes::from)
+            .map_err(|e| ServeError::Compute(e.to_string()))
+    })
+    .await
+    .map_err(|e| ServeError::Compute(format!("render task failed: {e}")))?
+}
+
+/// Turn a `?ref=lon,lat` similarity reference into the vector of that
+/// cell in the source (mean of the ≤ 2×2 cells the location touches),
+/// cached per source and location.
+async fn resolve_reference(state: &AppState, req: &mut Request) -> Result<(), ServeError> {
+    let Op::Similarity {
+        reference: Reference::LonLat(lon, lat),
+        ..
+    } = &req.op
+    else {
+        return Ok(());
+    };
+    let (lon, lat) = (*lon, *lat);
+    let key = format!("{}|{lon}|{lat}", req.source.key());
+    if let Some(v) = state
+        .ref_cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&key)
+        .cloned()
+    {
+        set_reference(&mut req.op, v);
+        return Ok(());
+    }
+    let info = req.source.info(&state.local, &state.pool).await?;
+    let (x, y) = if info.epsg == 4326 {
+        (lon, lat)
+    } else {
+        Transformer::new(4326, info.epsg)
+            .map_err(|e| ServeError::Source(e.to_string()))?
+            .forward(lon, lat)
+            .ok_or_else(|| {
+                ServeError::BadRequest(format!(
+                    "ref {lon},{lat} has no image in EPSG:{}",
+                    info.epsg
+                ))
+            })?
+    };
+    let half = info.pixel_size;
+    let bounds = Bounds {
+        min_x: x - half,
+        min_y: y - half,
+        max_x: x + half,
+        max_y: y + half,
+    };
+    let window = match req
+        .source
+        .read_window(&state.local, &state.pool, &bounds, 2)
+        .await
+    {
+        Ok(w) => w,
+        Err(ServeError::Outside) => {
+            return Err(ServeError::BadRequest(format!(
+                "ref {lon},{lat} lies outside the source"
+            )));
+        }
+        Err(e) => return Err(e),
+    };
+    let mut cells_bands = window.bands;
+    req.op.dequantize().apply_stack(&mut cells_bands);
+    let refs: Vec<&Raster<f64>> = cells_bands.iter().collect();
+    let (rows, cols) = refs
+        .first()
+        .map(|b| b.shape())
+        .ok_or_else(|| ServeError::Source("source has no bands".into()))?;
+    let cells: Vec<(usize, usize)> = (0..rows)
+        .flat_map(|r| (0..cols).map(move |c| (r, c)))
+        .collect();
+    let v = mean_vector(&refs, &cells).map_err(|_| {
+        ServeError::BadRequest(format!("ref {lon},{lat}: the source is nodata there"))
+    })?;
+    state
+        .ref_cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(key, v.clone());
+    set_reference(&mut req.op, v);
+    Ok(())
+}
+
+fn set_reference(op: &mut Op, v: Vec<f64>) {
+    if let Op::Similarity { reference, .. } = op {
+        *reference = Reference::Vector(v);
+    }
+}
+
+/// The PCA of a source: fitted once on a coarse sample of the whole
+/// extent (≈ `samples` vectors), cached by source key.
+async fn pca_for_source(
+    state: &AppState,
+    source: &Source,
+    samples: usize,
+    dequantize: surtgis_algorithms::embeddings::Dequantize,
+) -> Result<Arc<PcaFit>, ServeError> {
+    let key = format!("{}|{:?}", source.key(), dequantize);
+    if let Some(fit) = state
+        .pca_cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&key)
+        .cloned()
+    {
+        return Ok(fit);
+    }
+    let info = source.info(&state.local, &state.pool).await?;
+    if info.bands < 2 {
+        return Err(ServeError::BadRequest(
+            "pca needs a multi-band source (bands = embedding dimensions)".into(),
+        ));
+    }
+    let bounds = Bounds {
+        min_x: info.bounds[0],
+        min_y: info.bounds[1],
+        max_x: info.bounds[2],
+        max_y: info.bounds[3],
+    };
+    // A grid of about samples cells over the whole source: the coarsest
+    // overview that still gives one source pixel per sample cell.
+    let side = (samples as f64).sqrt().ceil() as usize;
+    let window = source
+        .read_window(&state.local, &state.pool, &bounds, side.max(16))
+        .await?;
+    let fit = tokio::task::spawn_blocking(move || -> Result<PcaFit, ServeError> {
+        let refs: Vec<&Raster<f64>> = window.bands.iter().collect();
+        let model = PcaModel::fit_with(&refs, 3.min(refs.len()), Some(samples), dequantize)
+            .map_err(|e| ServeError::Compute(format!("pca fit: {e}")))?;
+        let scores = model
+            .project(&refs)
+            .map_err(|e| ServeError::Compute(format!("pca sample projection: {e}")))?;
+        let ranges = scores
+            .iter()
+            .map(|s| {
+                let mut v: Vec<f64> = s.data().iter().copied().filter(|x| x.is_finite()).collect();
+                if v.is_empty() {
+                    return (-1.0, 1.0);
+                }
+                v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                let n = v.len();
+                let (lo, hi) = (v[(n - 1) * 2 / 100], v[(n - 1) * 98 / 100]);
+                if hi > lo {
+                    (lo, hi)
+                } else {
+                    (lo - 1.0, hi + 1.0)
+                }
+            })
+            .collect();
+        Ok(PcaFit { model, ranges })
+    })
+    .await
+    .map_err(|e| ServeError::Compute(format!("pca task failed: {e}")))??;
+    let fit = Arc::new(fit);
+    state
+        .pca_cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(key, fit.clone());
+    Ok(fit)
+}
+
+/// PCA false-colour tile: warp every band, project with the source's
+/// fit, stretch each component over its own sample range (or `rescale`
+/// for all three) and pack as RGBA.
+async fn render_pca(
+    state: &AppState,
+    req: &Request,
+    grid: GridSpec,
+    samples: usize,
+    dequantize: surtgis_algorithms::embeddings::Dequantize,
+) -> Result<Bytes, ServeError> {
+    let fit = pca_for_source(state, &req.source, samples, dequantize).await?;
+    let info = req.source.info(&state.local, &state.pool).await?;
+    let tf =
+        Transformer::new(info.epsg, grid.epsg).map_err(|e| ServeError::Source(e.to_string()))?;
+    let src_bounds =
+        warp::source_window(&grid, &tf, 2).map_err(|e| ServeError::Source(e.to_string()))?;
+    let window = req
+        .source
+        .read_window(&state.local, &state.pool, &src_bounds, grid.cols)
+        .await?;
+    let rescale = req.rescale;
+    tokio::task::spawn_blocking(move || -> Result<Bytes, ServeError> {
+        let warped = warp_window(&window.bands, &tf, &grid)?;
+        let refs: Vec<&Raster<f64>> = warped.iter().collect();
+        let scores = fit
+            .model
+            .project(&refs)
+            .map_err(|e| ServeError::Compute(e.to_string()))?;
+        let n = TILE_SIZE * TILE_SIZE;
+        let mut rgba = vec![0u8; n * 4];
+        for r in 0..TILE_SIZE {
+            for c in 0..TILE_SIZE {
+                let px = (r * TILE_SIZE + c) * 4;
+                let mut ok = true;
+                let mut out = [0u8; 3];
+                for (k, slot) in out.iter_mut().enumerate() {
+                    let v = scores.get(k).map(|s| s.data()[[r, c]]).unwrap_or(0.0);
+                    if !v.is_finite() {
+                        ok = false;
+                        break;
+                    }
+                    let (lo, hi) =
+                        rescale.unwrap_or(fit.ranges.get(k).copied().unwrap_or((-1.0, 1.0)));
+                    *slot = ((v - lo) / (hi - lo) * 255.0).round().clamp(0.0, 255.0) as u8;
+                }
+
+                if !ok {
+                    continue;
+                }
+                rgba[px..px + 3].copy_from_slice(&out);
+                rgba[px + 3] = 255;
+            }
+        }
+        rgba_to_png_bytes(TILE_SIZE as u32, TILE_SIZE as u32, &rgba)
+            .map(Bytes::from)
+            .map_err(|e| ServeError::Compute(e.to_string()))
+    })
+    .await
+    .map_err(|e| ServeError::Compute(format!("render task failed: {e}")))?
+}
+
+/// Parsed request pieces shared by the endpoints.
+struct Request {
+    source: Source,
+    op: Op,
+    scheme: ColorScheme,
+    rescale: Option<(f64, f64)>,
+}
+
+fn parse_request(state: &AppState, q: &TileQuery) -> Result<Request, ServeError> {
+    Ok(Request {
+        source: Source::resolve(&q.url, &state.sources)?,
+        op: Op::parse(
+            q.alg.as_deref(),
+            q.formula.as_deref(),
+            q.bands.as_deref(),
+            q.params.as_deref(),
+            q.reference.as_deref(),
+            q.vec.as_deref(),
+        )?,
+        scheme: parse_cmap(q.cmap.as_deref())?,
+        rescale: parse_rescale(q.rescale.as_deref())?,
+    })
+}
+
+/// Render tile `(z, x, y)` for the query: the pipeline of the design
+/// document §4.2 — validate, tile → grid + gutter, read, warp, operator,
+/// crop, colour, encode.
+pub async fn render_tile(
+    state: &AppState,
+    z: u8,
+    x: u32,
+    y: u32,
+    q: &TileQuery,
+) -> Result<Bytes, ServeError> {
+    if !tiles::is_valid(z, x, y) {
+        return Err(ServeError::BadRequest(format!(
+            "tile {z}/{x}/{y} does not exist"
+        )));
+    }
+    let mut req = parse_request(state, q)?;
+    resolve_reference(state, &mut req).await?;
+    let gutter = req.op.gutter();
+    let grid = tiles::grid(z, x, y, gutter);
+    if let Some(bands) = req.op.rgb_bands() {
+        return render_rgb(state, &req, grid, bands).await;
+    }
+    if let Some((samples, dequantize)) = req.op.pca_request() {
+        return render_pca(state, &req, grid, samples, dequantize).await;
+    }
+    let result = compute_grid(state, &req.source, &req.op, grid).await?;
+    let (scheme, rescale, default_range) = (req.scheme, req.rescale, req.op.default_range());
+    tokio::task::spawn_blocking(move || -> Result<Bytes, ServeError> {
+        let tile = crop_gutter(&result, gutter);
+        let params = match rescale.or(default_range) {
+            Some((min, max)) => ColormapParams::with_range(scheme, min, max),
+            None => auto_params(&tile, scheme),
+        };
+        let rgba = raster_to_rgba(&tile, &params);
+        rgba_to_png_bytes(TILE_SIZE as u32, TILE_SIZE as u32, &rgba)
+            .map(Bytes::from)
+            .map_err(|e| ServeError::Compute(e.to_string()))
+    })
+    .await
+    .map_err(|e| ServeError::Compute(format!("render task failed: {e}")))?
+}
+
+/// Hash of everything but the tile address: the folder of the L2 layout.
+fn layer_key(q: &TileQuery) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (
+        &q.url,
+        &q.alg,
+        &q.formula,
+        &q.bands,
+        &q.cmap,
+        &q.rescale,
+        &q.params,
+        &q.reference,
+        &q.vec,
+    )
+        .hash(&mut h);
+    format!("{:016x}", h.finish())
+}
+
+fn etag_for(z: u8, x: u32, y: u32, q: &TileQuery) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (
+        z,
+        x,
+        y,
+        &q.url,
+        &q.alg,
+        &q.formula,
+        &q.bands,
+        &q.cmap,
+        &q.rescale,
+        &q.params,
+        &q.reference,
+        &q.vec,
+    )
+        .hash(&mut h);
+    format!("{:016x}", h.finish())
+}
+
+fn alg_label(q: &TileQuery) -> String {
+    if q.formula.is_some() {
+        "formula".into()
+    } else {
+        q.alg.clone().unwrap_or_else(|| "value".into())
+    }
+}
+
+/// `GET /tiles/{z}/{x}/{y}.png?url=…`
+pub async fn tile(
+    State(state): State<Arc<AppState>>,
+    Path((z, x, y_ext)): Path<(u8, u32, String)>,
+    headers: HeaderMap,
+    Query(q): Query<TileQuery>,
+) -> Response {
+    let y_str = y_ext.strip_suffix(".png").unwrap_or(&y_ext);
+    let Ok(y) = y_str.parse::<u32>() else {
+        return ServeError::BadRequest(format!("bad tile row '{y_ext}'")).into_response();
+    };
+    let etag = etag_for(z, x, y, &q);
+    let alg = alg_label(&q);
+
+    // Conditional request: the ETag is a pure function of the query.
+    if headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.contains(etag.as_str()))
+    {
+        state.metrics.tile(&alg, "not_modified");
+        return StatusCode::NOT_MODIFIED.into_response();
+    }
+    if let Some(png) = state.tile_cache.get(&etag) {
+        state.metrics.cache_hits.fetch_add(1, Ordering::Relaxed);
+        state.metrics.tile(&alg, "cached");
+        return png_response(png, &etag, state.max_age, "hit");
+    }
+    state.metrics.cache_misses.fetch_add(1, Ordering::Relaxed);
+    let layer = layer_key(&q);
+    if let Some(bytes) = match &state.disk {
+        Some(disk) => disk.get(&layer, z, x, y).await,
+        None => None,
+    } {
+        let png = Bytes::from(bytes);
+        state.tile_cache.put(etag.clone(), png.clone());
+        state.metrics.tile(&alg, "disk");
+        return png_response(png, &etag, state.max_age, "disk");
+    }
+
+    let Ok(_permit) = state.inflight.try_acquire() else {
+        state.metrics.rejected.fetch_add(1, Ordering::Relaxed);
+        state.metrics.tile(&alg, "rejected");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [(header::RETRY_AFTER, "1")],
+            "too many tiles in flight",
+        )
+            .into_response();
+    };
+
+    let started = Instant::now();
+    let outcome = tokio::time::timeout(state.timeout, render_tile(&state, z, x, y, &q)).await;
+    let elapsed = started.elapsed().as_secs_f64();
+    match outcome {
+        Ok(Ok(png)) => {
+            state.metrics.observe(&alg, elapsed);
+            state.metrics.tile(&alg, "ok");
+            state.tile_cache.put(etag.clone(), png.clone());
+            spawn_disk_put(&state, layer, z, x, y, png.clone());
+            png_response(png, &etag, state.max_age, "miss")
+        }
+        Ok(Err(ServeError::Outside)) => {
+            state.metrics.tile(&alg, "empty");
+            let png = transparent_png();
+            state.tile_cache.put(etag.clone(), png.clone());
+            spawn_disk_put(&state, layer, z, x, y, png.clone());
+            png_response(png, &etag, state.max_age, "miss")
+        }
+        Ok(Err(e)) => {
+            state.metrics.tile(&alg, "error");
+            tracing::warn!(tile = %format!("{z}/{x}/{y}"), url = %q.url, error = %e, "tile failed");
+            e.into_response()
+        }
+        Err(_) => {
+            state.metrics.timeouts.fetch_add(1, Ordering::Relaxed);
+            state.metrics.tile(&alg, "timeout");
+            tracing::warn!(tile = %format!("{z}/{x}/{y}"), url = %q.url, "tile timed out");
+            (StatusCode::GATEWAY_TIMEOUT, "tile timed out").into_response()
+        }
+    }
+}
+
+/// Write a rendered tile to the L2 cache without holding the response.
+fn spawn_disk_put(state: &Arc<AppState>, layer: String, z: u8, x: u32, y: u32, png: Bytes) {
+    if state.disk.is_none() {
+        return;
+    }
+    let state = state.clone();
+    tokio::spawn(async move {
+        if let Some(disk) = &state.disk {
+            disk.put(&layer, z, x, y, &png).await;
+        }
+    });
+}
+
+/// Source bounds in WGS84 as `[w, s, e, n]`.
+fn bounds_wgs84(info: &crate::source::SourceInfo) -> Result<[f64; 4], ServeError> {
+    let tf = Transformer::new(info.epsg, 4326).map_err(|e| ServeError::Source(e.to_string()))?;
+    let corners = [
+        (info.bounds[0], info.bounds[1]),
+        (info.bounds[2], info.bounds[1]),
+        (info.bounds[2], info.bounds[3]),
+        (info.bounds[0], info.bounds[3]),
+    ];
+    let mut b = [180.0f64, 90.0, -180.0, -90.0];
+    for (x, y) in corners {
+        if let Some((lon, lat)) = tf.forward(x, y) {
+            b[0] = b[0].min(lon);
+            b[1] = b[1].min(lat);
+            b[2] = b[2].max(lon);
+            b[3] = b[3].max(lat);
+        }
+    }
+    Ok(b)
+}
+
+/// `GET /tilejson?url=…` — TileJSON 3.0 for the same query.
+pub async fn tilejson(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(q): Query<TileQuery>,
+    raw: axum::extract::RawQuery,
+) -> Result<axum::Json<serde_json::Value>, ServeError> {
+    let req = parse_request(&state, &q)?;
+    let info = req.source.info(&state.local, &state.pool).await?;
+    let b = bounds_wgs84(&info)?;
+    let host = headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("localhost");
+    let scheme = headers
+        .get("x-forwarded-proto")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("http");
+    let query = raw.0.unwrap_or_default();
+    // Native pixel size → the zoom whose resolution is about as fine.
+    let native_res_m = if Transformer::new(info.epsg, 4326)
+        .map(|t| t.src_is_geographic())
+        .unwrap_or(false)
+    {
+        info.pixel_size * 111_320.0
+    } else {
+        info.pixel_size
+    };
+    let maxzoom = (0..=24u8)
+        .find(|&z| tiles::resolution(z) <= native_res_m)
+        .unwrap_or(24)
+        .min(24);
+    Ok(axum::Json(serde_json::json!({
+        "tilejson": "3.0.0",
+        "name": alg_label(&q),
+        "tiles": [format!("{scheme}://{host}/tiles/{{z}}/{{x}}/{{y}}.png?{query}")],
+        "bounds": b,
+        "minzoom": 0,
+        "maxzoom": maxzoom,
+        "scheme": "xyz",
+        "attribution": "SurtGIS Server",
+    })))
+}
+
+/// `GET /statistics?url=…&alg=…[&size=512]` — the operator evaluated on a
+/// coarse grid covering the whole source (Web Mercator), summarised:
+/// count, min, max, mean, std, 2nd and 98th percentiles, and the
+/// `rescale` those percentiles suggest.
+pub async fn statistics(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<TileQuery>,
+) -> Result<axum::Json<serde_json::Value>, ServeError> {
+    let mut req = parse_request(&state, &q)?;
+    resolve_reference(&state, &mut req).await?;
+    if req.op.pca_request().is_some() {
+        return Err(ServeError::BadRequest(
+            "statistics: pca renders RGB tiles and has no single-band statistics".into(),
+        ));
+    }
+    let size = q.size.unwrap_or(512).clamp(16, 2048);
+    let info = req.source.info(&state.local, &state.pool).await?;
+    let tf =
+        Transformer::new(info.epsg, TILE_EPSG).map_err(|e| ServeError::Source(e.to_string()))?;
+    let src_gt = surtgis_core::raster::GeoTransform::new(
+        info.bounds[0],
+        info.bounds[3],
+        (info.bounds[2] - info.bounds[0]) / info.width as f64,
+        -(info.bounds[3] - info.bounds[1]) / info.height as f64,
+    );
+    let merc: Bounds = warp::target_bounds(&src_gt, info.height, info.width, &tf)
+        .map_err(|e| ServeError::Source(e.to_string()))?;
+    let px = merc.width().max(merc.height()) / size as f64;
+    let gutter = req.op.gutter();
+    let inner =
+        GridSpec::covering(&merc, px, TILE_EPSG).map_err(|e| ServeError::Source(e.to_string()))?;
+    let grid = GridSpec {
+        transform: surtgis_core::raster::GeoTransform::new(
+            inner.transform.origin_x - gutter as f64 * px,
+            inner.transform.origin_y + gutter as f64 * px,
+            px,
+            -px,
+        ),
+        rows: inner.rows + 2 * gutter,
+        cols: inner.cols + 2 * gutter,
+        epsg: TILE_EPSG,
+    };
+    let result = compute_grid(&state, &req.source, &req.op, grid).await?;
+    let stats = tokio::task::spawn_blocking(move || {
+        let tile = crop_gutter(&result, gutter);
+        let mut v: Vec<f64> = tile
+            .data()
+            .iter()
+            .copied()
+            .filter(|x| x.is_finite())
+            .collect();
+        if v.is_empty() {
+            return serde_json::json!({ "count": 0 });
+        }
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let n = v.len();
+        let mean = v.iter().sum::<f64>() / n as f64;
+        let var = v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n as f64;
+        let pct = |p: f64| v[((n - 1) as f64 * p).round() as usize];
+        serde_json::json!({
+            "count": n,
+            "grid": [tile.shape().1, tile.shape().0],
+            "min": v[0],
+            "max": v[n - 1],
+            "mean": mean,
+            "std": var.sqrt(),
+            "p2": pct(0.02),
+            "p50": pct(0.5),
+            "p98": pct(0.98),
+            "rescale": format!("{},{}", pct(0.02), pct(0.98)),
+        })
+    })
+    .await
+    .map_err(|e| ServeError::Compute(format!("statistics task failed: {e}")))?;
+    Ok(axum::Json(stats))
+}
+
+/// `POST /jobs` — materialise a pipeline of global operators as a COG.
+pub async fn post_job(
+    State(state): State<Arc<AppState>>,
+    axum::Json(req): axum::Json<crate::jobs::JobRequest>,
+) -> Result<(StatusCode, axum::Json<crate::jobs::JobStatus>), ServeError> {
+    let job = crate::jobs::submit(state, req)?;
+    Ok((StatusCode::ACCEPTED, axum::Json(job)))
+}
+
+/// `GET /jobs/{id}`
+pub async fn get_job(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<axum::Json<crate::jobs::JobStatus>, ServeError> {
+    state
+        .jobs
+        .get(&id)
+        .map(axum::Json)
+        .ok_or_else(|| ServeError::NotFound(format!("no job {id}")))
+}
+
+/// `GET /jobs`
+pub async fn list_jobs(State(state): State<Arc<AppState>>) -> axum::Json<serde_json::Value> {
+    axum::Json(serde_json::json!({
+        "jobs": state.jobs.list(),
+        "steps": crate::jobs::STEPS,
+        "jobs_dir": state.jobs_dir.as_ref().map(|p| p.display().to_string()),
+    }))
+}
+
+/// `GET /info?url=…`
+pub async fn info(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<InfoQuery>,
+) -> Result<axum::Json<crate::source::SourceInfo>, ServeError> {
+    let source = Source::resolve(&q.url, &state.sources)?;
+    Ok(axum::Json(source.info(&state.local, &state.pool).await?))
+}
+
+/// `GET /algorithms`
+pub async fn algorithms_catalog() -> axum::Json<serde_json::Value> {
+    axum::Json(serde_json::json!({
+        "algorithms": algorithms::catalog(),
+        "colormaps": ColorScheme::ALL.iter().map(|s| s.name().to_ascii_lowercase()).collect::<Vec<_>>(),
+        "tile_matrix_set": "WebMercatorQuad",
+        "tile_size": TILE_SIZE,
+    }))
+}
+
+/// `GET /metrics` — Prometheus text exposition.
+pub async fn metrics(State(state): State<Arc<AppState>>) -> Response {
+    let (entries, bytes, _, _) = state.tile_cache.stats();
+    let files = state.local.len();
+    let (urls, readers) = state.pool.stats();
+    let (d_hits, d_misses, d_writes, d_errors) =
+        state.disk.as_ref().map(|d| d.stats()).unwrap_or_default();
+    let body = state.metrics.render(&[
+        (
+            "surtgis_tile_cache_entries",
+            "Rendered tiles held in the L1 cache.",
+            entries as f64,
+        ),
+        (
+            "surtgis_tile_cache_bytes",
+            "Bytes held in the L1 cache.",
+            bytes as f64,
+        ),
+        (
+            "surtgis_local_sources",
+            "Local sources described (metadata cached).",
+            files as f64,
+        ),
+        (
+            "surtgis_pool_urls",
+            "Remote sources with open readers.",
+            urls as f64,
+        ),
+        (
+            "surtgis_pool_readers",
+            "Open remote readers.",
+            readers as f64,
+        ),
+        (
+            "surtgis_disk_cache_hits_total",
+            "Tiles served from the L2 disk cache.",
+            d_hits as f64,
+        ),
+        (
+            "surtgis_disk_cache_misses_total",
+            "L2 disk cache misses.",
+            d_misses as f64,
+        ),
+        (
+            "surtgis_disk_cache_writes_total",
+            "Tiles written to the L2 disk cache.",
+            d_writes as f64,
+        ),
+        (
+            "surtgis_disk_cache_errors_total",
+            "L2 disk cache write failures.",
+            d_errors as f64,
+        ),
+        (
+            "surtgis_jobs_queued",
+            "Jobs waiting for the worker.",
+            state.jobs.counts().0 as f64,
+        ),
+        (
+            "surtgis_jobs_running",
+            "Jobs running.",
+            state.jobs.counts().1 as f64,
+        ),
+        (
+            "surtgis_jobs_done_total",
+            "Jobs finished successfully.",
+            state.jobs.counts().2 as f64,
+        ),
+        (
+            "surtgis_jobs_failed_total",
+            "Jobs that failed.",
+            state.jobs.counts().3 as f64,
+        ),
+        (
+            "surtgis_inflight_available",
+            "Render slots currently free.",
+            state.inflight.available_permits() as f64,
+        ),
+    ]);
+    (
+        [(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        body,
+    )
+        .into_response()
+}
+
+/// `GET /healthz`
+pub async fn healthz() -> &'static str {
+    "ok"
+}
+
+/// `GET /` — the MapLibre demo page.
+pub async fn demo() -> axum::response::Html<&'static str> {
+    axum::response::Html(include_str!("../demo/index.html"))
+}
+
+#[cfg(test)]
+mod embedding_tests {
+    //! End to end on a local 4-band "embedding" source: similarity by
+    //! location and by vector, and PCA false colour, through `render_tile`.
+
+    use super::*;
+    use crate::ServerConfig;
+    use surtgis_core::GeoTransform;
+    use surtgis_core::io::{GeoTiffOptions, write_geotiff_stack};
+
+    /// 4 bands, two regions with distinct vector directions (west/east).
+    fn embedding_source(dir: &std::path::Path) -> (std::path::PathBuf, f64, f64) {
+        let (rows, cols) = (64, 64);
+        let dirs = [[1.0, 0.2, 0.0, 0.1], [0.0, 0.1, 1.0, 0.3]];
+        let mut bands: Vec<Raster<f64>> = (0..4).map(|_| Raster::<f64>::new(rows, cols)).collect();
+        for r in 0..rows {
+            for c in 0..cols {
+                let d = if c < cols / 2 { dirs[0] } else { dirs[1] };
+                for (k, b) in bands.iter_mut().enumerate() {
+                    b.data_mut()[[r, c]] = 100.0 * d[k] + ((r * 7 + c * 3) % 5) as f64;
+                }
+            }
+        }
+        let gt = GeoTransform::new(350_000.0, 6_300_000.0, 10.0, -10.0);
+        for b in &mut bands {
+            b.set_transform(gt);
+            b.set_crs(Some(surtgis_core::CRS::from_epsg(32719)));
+        }
+        let path = dir.join("emb.tif");
+        let refs: Vec<&Raster<f64>> = bands.iter().collect();
+        write_geotiff_stack(&refs, None, &path, &GeoTiffOptions::default()).unwrap();
+        // A location in the western half, as lon/lat.
+        let (x, y) = gt.pixel_to_geo(10, 32);
+        let (lon, lat) = Transformer::new(32719, 4326)
+            .unwrap()
+            .forward(x, y)
+            .unwrap();
+        (path, lon, lat)
+    }
+
+    fn state(root: &std::path::Path) -> Arc<AppState> {
+        let cfg = ServerConfig {
+            root: Some(root.to_path_buf()),
+            ..ServerConfig::default()
+        };
+        Arc::new(AppState::new(&cfg).unwrap())
+    }
+
+    fn query(alg: &str, reference: Option<&str>, vec: Option<&str>) -> TileQuery {
+        TileQuery {
+            url: "emb.tif".into(),
+            alg: Some(alg.into()),
+            formula: None,
+            bands: None,
+            cmap: None,
+            rescale: None,
+            params: None,
+            size: None,
+            reference: reference.map(str::to_string),
+            vec: vec.map(str::to_string),
+        }
+    }
+
+    #[tokio::test]
+    async fn similarity_and_pca_tiles_render() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, lon, lat) = embedding_source(dir.path());
+        let state = state(dir.path());
+        let z = 14;
+        let (x, y) = tiles::tile_for(lon, lat, z);
+
+        // Similarity to the cell at lon/lat: a PNG, and the reference cached.
+        let q = query("similarity", Some(&format!("{lon},{lat}")), None);
+        let png = render_tile(&state, z, x, y, &q).await.unwrap();
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+        assert_eq!(state.ref_cache.lock().unwrap().len(), 1);
+        let cached: Vec<f64> = state
+            .ref_cache
+            .lock()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap()
+            .clone();
+        assert_eq!(cached.len(), 4);
+        assert!(cached[0] > cached[2], "western direction: {cached:?}");
+
+        // Statistics of the same request: cosine in [-1, 1], max ≈ 1.
+        let stats = statistics(State(state.clone()), Query(q.clone()))
+            .await
+            .unwrap()
+            .0;
+        assert!(stats["max"].as_f64().unwrap() > 0.99, "{stats}");
+        assert!(stats["min"].as_f64().unwrap() >= -1.0);
+
+        // Explicit vector, wrong length → 400; right length → tile.
+        let bad = query("similarity", None, Some("1,0"));
+        assert!(matches!(
+            render_tile(&state, z, x, y, &bad).await,
+            Err(ServeError::BadRequest(_))
+        ));
+        let ok = query("similarity", None, Some("1,0.2,0,0.1"));
+        assert!(render_tile(&state, z, x, y, &ok).await.is_ok());
+
+        // Outside the source → 400 with a clear message.
+        let out = query("similarity", Some("0,0"), None);
+        match render_tile(&state, z, x, y, &out).await {
+            Err(ServeError::BadRequest(m)) => {
+                assert!(m.contains("outside") || m.contains("no image"), "{m}")
+            }
+            other => panic!("{other:?}"),
+        }
+
+        // PCA: fit cached per source, three ranges, PNG out.
+        let q = query("pca", None, None);
+        let png = render_tile(&state, z, x, y, &q).await.unwrap();
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+        let fit = state
+            .pca_cache
+            .lock()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap()
+            .clone();
+        assert_eq!(fit.model.n_bands(), 4);
+        assert_eq!(fit.ranges.len(), 3);
+        assert!(fit.model.variance_explained[0] > 0.5);
+        assert!(render_tile(&state, z, x, y, &q).await.is_ok());
+        assert_eq!(state.pca_cache.lock().unwrap().len(), 1);
+        assert!(matches!(
+            statistics(State(state.clone()), Query(q)).await,
+            Err(ServeError::BadRequest(_))
+        ));
+    }
+}

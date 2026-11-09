@@ -52,8 +52,9 @@ solve. Reference is authoritative. Explanation reasons. This is the
 4. **Validated against the canonical alternatives.** Slope, aspect,
    hillshade, flow accumulation, and watershed outputs agree with GDAL 3.11,
    GRASS 8.3, and WhiteboxTools within documented tolerances. The
-   cross-validation numbers live in the paper (Environmental Modelling &
-   Software, under review).
+   cross-validation numbers live in the paper (Parra, 2026,
+   *Environmental Modelling & Software* 204, 107102,
+   [doi:10.1016/j.envsoft.2026.107102](https://doi.org/10.1016/j.envsoft.2026.107102)).
 
 5. **Honest about tradeoffs.** SurtGIS is not faster than everything at
    everything — see [When to use SurtGIS vs alternatives](explanation/vs-alternatives.md)

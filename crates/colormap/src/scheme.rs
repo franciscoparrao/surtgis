@@ -420,9 +420,8 @@ mod tests {
     #[test]
     fn all_schemes_evaluate_midpoint() {
         for &scheme in ColorScheme::ALL {
-            let c = evaluate(scheme, 0.5);
-            // Just verify it doesn't panic and returns valid RGB
-            assert!(c.r <= 255 && c.g <= 255 && c.b <= 255);
+            // Just verify it doesn't panic (u8 channels are valid by type).
+            let _c = evaluate(scheme, 0.5);
         }
     }
 }

@@ -57,6 +57,8 @@ def rust_type_to_py(t: str) -> str:
     m = re.match(r"Vec<PyReadonlyArray[123]<'py,\s*(\w+)>>", t)
     if m:
         return f"list[npt.NDArray[np.{NUMPY_DTYPE.get(m.group(1), m.group(1))}]]"
+    if t == "&ArrayLike<'py>":
+        return "npt.ArrayLike"
     if t == "&Bound<'py, PyAny>":
         return "typing.Callable[..., typing.Any]"
     m = re.match(r"Option<(.+)>$", t)

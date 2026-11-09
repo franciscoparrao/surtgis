@@ -11,6 +11,7 @@ use surtgis_core::{Error, Result};
 
 /// Available focal statistics
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub enum FocalStatistic {
     /// Arithmetic mean
     Mean,
@@ -36,6 +37,7 @@ pub enum FocalStatistic {
 
 /// Parameters for focal statistics
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct FocalParams {
     /// Window radius (actual window size = 2*radius + 1)
     pub radius: usize,

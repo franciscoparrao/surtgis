@@ -51,7 +51,12 @@ fn d8_pipeline_fill_flowdir_accumulation() {
     );
 
     // 1. Fill with epsilon > 0 so the depression drains.
-    let filled = priority_flood(&dem, PriorityFloodParams { epsilon: 1e-5 }).unwrap();
+    let filled = priority_flood(&dem, {
+        let mut p = PriorityFloodParams::default();
+        p.epsilon = 1e-5;
+        p
+    })
+    .unwrap();
 
     // The sink must have been raised.
     assert!(

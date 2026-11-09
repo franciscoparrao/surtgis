@@ -294,17 +294,16 @@ pub fn lineament_detection(
         }
     }
 
-    // Build output rasters
+    // Build output rasters. No nodata sentinel: skeleton/class pixels are
+    // sparse by nature, so 0 ("not a lineament pixel here") is the common,
+    // majority value on every one of these rasters, not missing data.
     let mut kh_out = plan_curvature.with_same_meta::<u8>(rows, cols);
-    kh_out.set_nodata(Some(0));
     *kh_out.data_mut() = kh_skel;
 
     let mut kv_out = profile_curvature.with_same_meta::<u8>(rows, cols);
-    kv_out.set_nodata(Some(0));
     *kv_out.data_mut() = kv_skel;
 
     let mut class_out = plan_curvature.with_same_meta::<u8>(rows, cols);
-    class_out.set_nodata(Some(0));
     *class_out.data_mut() = classified_data;
 
     Ok(LineamentResult {

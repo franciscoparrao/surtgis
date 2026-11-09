@@ -318,6 +318,68 @@ mod tests {
     use super::*;
     use surtgis_core::GeoTransform;
 
+    /// Build a raster with a given transform (contents irrelevant here).
+    fn grid(
+        origin_x: f64,
+        origin_y: f64,
+        px: f64,
+        py: f64,
+        rows: usize,
+        cols: usize,
+    ) -> Raster<f64> {
+        let mut r: Raster<f64> = Raster::new(rows, cols);
+        r.set_transform(GeoTransform::new(origin_x, origin_y, px, py));
+        r
+    }
+
+    #[test]
+    fn looks_like_degrees_flags_stripped_geographic_dems() {
+        // The reported case: Copernicus GLO-30 crop over Chile, 1 arc-second
+        // cells, CRS stripped. Used as metres this saturates slope at ~90°.
+        let glo30 = grid(-72.45, -37.0, 2.777_777_8e-4, -2.777_777_8e-4, 433, 505);
+        assert!(looks_like_degrees(&glo30));
+
+        // Projected UTM at 30 m: neither condition holds.
+        let utm = grid(700_000.0, 5_900_000.0, 30.0, -30.0, 500, 500);
+        assert!(!looks_like_degrees(&utm));
+
+        // Drone/LiDAR orthophoto in UTM with 2 cm cells: tiny cells, but the
+        // coordinates are far outside the lon/lat domain — must NOT warn.
+        let drone = grid(345_000.0, 6_120_000.0, 0.02, -0.02, 2000, 2000);
+        assert!(!looks_like_degrees(&drone));
+
+        // Degree-spaced but coarse (0.1°, e.g. a climate grid): above the
+        // cell-size cut-off, so it is not flagged — it would not produce the
+        // ~90° signature either (0.1 "metres" is a plausible cell size).
+        let coarse = grid(-70.8, -33.2, 0.1, -0.1, 11, 11);
+        assert!(!looks_like_degrees(&coarse));
+
+        // A geographic grid whose extent leaves the lon/lat domain is not a
+        // real lon/lat grid.
+        let bogus = grid(179.9, -37.0, 1e-3, -1e-3, 100, 500);
+        assert!(!looks_like_degrees(&bogus));
+    }
+
+    #[test]
+    fn for_dem_uses_metric_cells_only_with_a_geographic_crs() {
+        use surtgis_core::CRS;
+        let mut geo = grid(-72.45, -37.0, 2.777_777_8e-4, -2.777_777_8e-4, 433, 505);
+        geo.set_crs(Some(CRS::from_epsg(4326)));
+        let cs = CellSizes::for_dem(&geo);
+        assert!(cs.is_geographic());
+        let (dx, dy) = cs.at_row(200);
+        // ~30 m cells at 37°S (E-W shrinks with latitude).
+        assert!((20.0..32.0).contains(&dx), "dx = {dx}");
+        assert!((28.0..32.0).contains(&dy), "dy = {dy}");
+
+        // Same grid without a CRS: sizes stay in degrees (and `for_dem`
+        // warns) — we must not guess the CRS from the numbers alone.
+        let no_crs = grid(-72.45, -37.0, 2.777_777_8e-4, -2.777_777_8e-4, 433, 505);
+        let cs = CellSizes::for_dem(&no_crs);
+        assert!(!cs.is_geographic());
+        assert!((cs.at_row(200).0 - 2.777_777_8e-4).abs() < 1e-12);
+    }
+
     #[test]
     fn test_cell_dimensions_equator() {
         let dims = cell_dimensions(
@@ -478,11 +540,43 @@ pub enum CellSizes {
     },
 }
 
+/// Heuristic: does this raster's geotransform look like lon/lat degrees?
+///
+/// True when the cell size is smaller than 0.01 **and** the whole extent
+/// fits inside the lon/lat domain (|x| ≤ 180, |y| ≤ 90). Both conditions
+/// are needed: a projected grid with centimetre cells (drone/LiDAR) has
+/// coordinates in the hundreds of thousands and fails the second, while a
+/// lab-scale grid near the origin (a flume DEM in metres) is the one case
+/// that can still trip this — which is why it warns instead of erroring.
+///
+/// A degree-spaced DEM whose CRS was stripped is otherwise indistinguishable
+/// from a metre-spaced one, and produces ~90° slopes everywhere (the cell
+/// size, ~2.8e-4 for GLO-30, is read as 28 cm of run for metres of rise).
+pub fn looks_like_degrees(dem: &Raster<f64>) -> bool {
+    let tf = dem.transform();
+    let (rows, cols) = dem.shape();
+    let (px, py) = (tf.pixel_width.abs(), tf.pixel_height.abs());
+    if !(px > 0.0 && px < 0.01 && py > 0.0 && py < 0.01) {
+        return false;
+    }
+    let x0 = tf.origin_x;
+    let x1 = tf.origin_x + cols as f64 * tf.pixel_width;
+    let y0 = tf.origin_y;
+    let y1 = tf.origin_y + rows as f64 * tf.pixel_height;
+    x0.abs() <= 180.0 && x1.abs() <= 180.0 && y0.abs() <= 90.0 && y1.abs() <= 90.0
+}
+
 impl CellSizes {
     /// Build from a raster: geographic per-row sizes when the raster's
     /// CRS declares itself geographic ([`surtgis_core::crs::CRS::is_geographic`]),
     /// constant sizes otherwise (including when no CRS is present —
     /// without metadata we cannot assume degrees).
+    ///
+    /// A raster whose CRS is missing but whose geotransform *looks* like
+    /// degrees gets a stderr warning: without the CRS the cell size is used
+    /// verbatim as metres, which drives slope to ~90° everywhere and
+    /// silently poisons every derived product (see
+    /// [`looks_like_degrees`]).
     pub fn for_dem(dem: &Raster<f64>) -> Self {
         let tf = dem.transform();
         if dem.crs().is_some_and(|c| c.is_geographic()) {
@@ -493,6 +587,21 @@ impl CellSizes {
                 d_lat: tf.pixel_height.abs(),
             }
         } else {
+            if dem.crs().is_none() && looks_like_degrees(dem) {
+                let (rows, _) = dem.shape();
+                let lat = tf.origin_y + (rows as f64 / 2.0) * tf.pixel_height;
+                eprintln!(
+                    "warning: DEM has no CRS and its cell size ({:.3e}) with extent \
+                     (lon {:.3}, lat {:.3}) looks like degrees, but it is being used \
+                     as metres — slope/aspect/TWI and every cell-size-dependent \
+                     product will be wrong (slope saturates near 90°). Set the CRS \
+                     (EPSG:4326 gets automatic metric cell sizes) or reproject to a \
+                     projected CRS such as UTM.",
+                    tf.pixel_width.abs(),
+                    tf.origin_x,
+                    lat,
+                );
+            }
             CellSizes::Constant {
                 dx: tf.pixel_width.abs(),
                 dy: tf.pixel_height.abs(),

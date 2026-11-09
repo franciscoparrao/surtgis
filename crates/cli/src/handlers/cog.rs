@@ -110,8 +110,13 @@ pub fn handle(action: CogCommands, compress: bool) -> Result<()> {
                 }
             };
             let start = Instant::now();
-            let result = slope(&dem, SlopeParams { units, z_factor })
-                .context("Failed to calculate slope")?;
+            let result = slope(&dem, {
+                let mut p = SlopeParams::default();
+                p.units = units;
+                p.z_factor = z_factor;
+                p
+            })
+            .context("Failed to calculate slope")?;
             let elapsed = start.elapsed();
             write_result(&result, &output, compress)?;
             done("COG slope", &output, elapsed);
@@ -152,15 +157,14 @@ pub fn handle(action: CogCommands, compress: bool) -> Result<()> {
             let bbox = parse_bbox(&bbox)?;
             let dem = read_cog_dem(&url, &bbox)?;
             let start = Instant::now();
-            let result = hillshade(
-                &dem,
-                HillshadeParams {
-                    azimuth,
-                    altitude,
-                    z_factor,
-                    normalized: false,
-                },
-            )
+            let result = hillshade(&dem, {
+                let mut p = HillshadeParams::default();
+                p.azimuth = azimuth;
+                p.altitude = altitude;
+                p.z_factor = z_factor;
+                p.normalized = false;
+                p
+            })
             .context("Failed to calculate hillshade")?;
             let elapsed = start.elapsed();
             write_result(&result, &output, compress)?;
@@ -176,7 +180,12 @@ pub fn handle(action: CogCommands, compress: bool) -> Result<()> {
             let bbox = parse_bbox(&bbox)?;
             let dem = read_cog_dem(&url, &bbox)?;
             let start = Instant::now();
-            let result = tpi(&dem, TpiParams { radius }).context("Failed to calculate TPI")?;
+            let result = tpi(&dem, {
+                let mut p = TpiParams::default();
+                p.radius = radius;
+                p
+            })
+            .context("Failed to calculate TPI")?;
             let elapsed = start.elapsed();
             write_result(&result, &output, compress)?;
             done("COG TPI", &output, elapsed);

@@ -76,6 +76,31 @@ mod inner {
             self.rt.block_on(self.inner.read_bbox(bbox, overview))
         }
 
+        /// Read every band of a bounding box (blocking).
+        pub fn read_bbox_bands<T: RasterElement>(
+            &mut self,
+            bbox: &BBox,
+            overview: Option<usize>,
+        ) -> Result<Vec<Raster<T>>> {
+            self.rt.block_on(self.inner.read_bbox_bands(bbox, overview))
+        }
+
+        /// Read one band (0-based) of a bounding box (blocking).
+        pub fn read_bbox_band<T: RasterElement>(
+            &mut self,
+            bbox: &BBox,
+            overview: Option<usize>,
+            band: usize,
+        ) -> Result<Raster<T>> {
+            self.rt
+                .block_on(self.inner.read_bbox_band(bbox, overview, band))
+        }
+
+        /// Number of bands of the full-resolution IFD.
+        pub fn bands(&self) -> usize {
+            self.inner.bands()
+        }
+
         /// Read the full raster extent (blocking).
         pub fn read_full<T: RasterElement>(
             &mut self,
@@ -136,6 +161,11 @@ mod inner {
             let rt = super::shared_runtime()?;
             let inner = StacClient::new(catalog, options)?;
             Ok(Self { rt, inner })
+        }
+
+        /// The catalog this client is configured for.
+        pub fn catalog(&self) -> &StacCatalog {
+            self.inner.catalog()
         }
 
         /// Execute a single search request (blocking).
@@ -213,7 +243,9 @@ mod zarr_inner {
 
     use crate::error::Result;
     use crate::tile_index::BBox;
-    use crate::zarr_reader::{TimeReduction, ZarrMetadata, ZarrReader, ZarrReaderOptions};
+    use crate::zarr_reader::{
+        TimeAggPartial, TimeReduction, ZarrMetadata, ZarrReader, ZarrReaderOptions,
+    };
 
     /// Blocking wrapper around [`ZarrReader`].
     ///
@@ -237,6 +269,29 @@ mod zarr_inner {
         /// Read a geographic bounding box at a specific time (blocking).
         pub fn read_bbox(&self, bbox: &BBox, time: &TimeReduction) -> Result<Raster<f64>> {
             self.rt.block_on(self.inner.read_bbox(bbox, time))
+        }
+
+        /// Read a bounding box over `[start, end]` as mergeable partial
+        /// statistics (blocking). See [`ZarrReader::read_bbox_partial`].
+        pub fn read_bbox_partial(
+            &self,
+            bbox: &BBox,
+            start: &chrono::DateTime<chrono::Utc>,
+            end: &chrono::DateTime<chrono::Utc>,
+        ) -> Result<TimeAggPartial> {
+            self.rt
+                .block_on(self.inner.read_bbox_partial(bbox, start, end))
+        }
+
+        /// Partials for several time windows from one fetch of their union
+        /// (blocking). See [`ZarrReader::read_bbox_partials`].
+        pub fn read_bbox_partials(
+            &self,
+            bbox: &BBox,
+            windows: &[(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)],
+        ) -> Result<Vec<Option<TimeAggPartial>>> {
+            self.rt
+                .block_on(self.inner.read_bbox_partials(bbox, windows))
         }
 
         /// Read the full spatial extent at a specific time (blocking).

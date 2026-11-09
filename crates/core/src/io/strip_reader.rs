@@ -33,6 +33,7 @@ pub struct StripReader {
 impl StripReader {
     /// Open a GeoTIFF file for strip-based reading.
     pub fn open(path: &Path) -> Result<Self> {
+        crate::provenance::observe_input(&path.display().to_string());
         let file = BufReader::new(File::open(path)?);
         let mut decoder = Decoder::new(file)
             .map_err(|e| Error::Other(format!("TIFF decode error: {}", e)))?

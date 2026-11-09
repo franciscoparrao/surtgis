@@ -153,8 +153,9 @@ pub fn viewshed(dem: &Raster<f64>, params: ViewshedParams) -> Result<Raster<u8>>
         }
     }
 
+    // No nodata sentinel: every cell is a definite 0 (not visible) or 1
+    // (visible), and 0 is typically the majority value, not missing data.
     let mut output = dem.with_same_meta::<u8>(rows, cols);
-    output.set_nodata(Some(0));
     *output.data_mut() = output_data;
 
     Ok(output)
@@ -348,8 +349,9 @@ pub fn viewshed_xdraw(dem: &Raster<f64>, params: ViewshedParams) -> Result<Raste
         reference[(r, c)] = terrain_angle.max(ref_interp);
     }
 
+    // No nodata sentinel: every cell is a definite 0 (not visible) or 1
+    // (visible), and 0 is typically the majority value, not missing data.
     let mut output = dem.with_same_meta::<u8>(rows, cols);
-    output.set_nodata(Some(0));
     *output.data_mut() = visible;
 
     Ok(output)

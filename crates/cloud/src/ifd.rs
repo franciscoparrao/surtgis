@@ -76,7 +76,10 @@ fn type_byte_size(type_id: u16) -> Option<usize> {
         10 => Some(8), // SRATIONAL
         11 => Some(4), // FLOAT
         12 => Some(8), // DOUBLE
+        13 => Some(4), // IFD
         16 => Some(8), // LONG8 (BigTIFF)
+        17 => Some(8), // SLONG8 (BigTIFF)
+        18 => Some(8), // IFD8 (BigTIFF)
         _ => None,
     }
 }
@@ -88,11 +91,16 @@ pub struct RawTagEntry {
     pub tag: u16,
     /// TIFF field type ID (1=BYTE, 3=SHORT, 4=LONG, 12=DOUBLE, etc.).
     pub type_id: u16,
-    /// Number of values of the given type.
-    pub count: u32,
-    /// If the value fits in 4 bytes, it's inline; otherwise this is the file offset.
-    pub value_or_offset: u32,
-    /// True if the value data is inline (fits in 4 bytes).
+    /// Number of values of the given type (`u64` since BigTIFF).
+    pub count: u64,
+    /// The value field as an integer: the value itself when `inline`,
+    /// otherwise the file offset of the values.
+    pub value_or_offset: u64,
+    /// Raw bytes of the value field (4 in classic TIFF, 8 in BigTIFF,
+    /// zero-padded), so inline values decode with the same readers as
+    /// external ones.
+    pub value_bytes: [u8; 8],
+    /// True if the value data is inline (fits in the value field).
     pub inline: bool,
 }
 
@@ -102,7 +110,9 @@ pub struct TiffHeader {
     /// Byte order declared in the first two bytes of the file.
     pub byte_order: TiffByteOrder,
     /// File offset of the first Image File Directory.
-    pub first_ifd_offset: u32,
+    pub first_ifd_offset: u64,
+    /// BigTIFF (magic 43): 64-bit offsets and counts, 20-byte IFD entries.
+    pub bigtiff: bool,
 }
 
 /// A single parsed IFD with all tag entries and the offset to the next IFD.
@@ -111,7 +121,7 @@ pub struct RawIfd {
     /// All raw tag entries in this directory.
     pub entries: Vec<RawTagEntry>,
     /// File offset of the next IFD in the chain (0 if this is the last).
-    pub next_ifd_offset: u32,
+    pub next_ifd_offset: u64,
 }
 
 /// Information extracted from one IFD relevant to COG reading.
@@ -164,33 +174,64 @@ pub fn parse_header(data: &[u8]) -> Result<TiffHeader> {
     };
 
     let magic = read_u16(byte_order, &data[2..4]);
-    if magic != 42 {
-        return Err(CloudError::InvalidTiff {
-            reason: format!("expected magic 42, got {}", magic),
-        });
+    match magic {
+        42 => {
+            let first_ifd_offset = read_u32(byte_order, &data[4..8]) as u64;
+            Ok(TiffHeader {
+                byte_order,
+                first_ifd_offset,
+                bigtiff: false,
+            })
+        }
+        43 => {
+            if data.len() < 16 {
+                return Err(CloudError::InvalidTiff {
+                    reason: "BigTIFF header too short".into(),
+                });
+            }
+            let offset_size = read_u16(byte_order, &data[4..6]);
+            if offset_size != 8 {
+                return Err(CloudError::InvalidTiff {
+                    reason: format!("BigTIFF offset size {offset_size}, expected 8"),
+                });
+            }
+            let first_ifd_offset = read_u64(byte_order, &data[8..16]);
+            Ok(TiffHeader {
+                byte_order,
+                first_ifd_offset,
+                bigtiff: true,
+            })
+        }
+        other => Err(CloudError::InvalidTiff {
+            reason: format!("expected magic 42 (TIFF) or 43 (BigTIFF), got {other}"),
+        }),
     }
-
-    let first_ifd_offset = read_u32(byte_order, &data[4..8]);
-
-    Ok(TiffHeader {
-        byte_order,
-        first_ifd_offset,
-    })
 }
 
-/// Parse one IFD from raw bytes.
-///
-/// `data` must start at the IFD offset and contain enough bytes to parse
-/// all entries plus the 4-byte next-IFD pointer.
+/// Parse one classic-TIFF IFD (see [`parse_ifd_with`]).
 pub fn parse_ifd(byte_order: TiffByteOrder, data: &[u8]) -> Result<RawIfd> {
-    if data.len() < 2 {
+    parse_ifd_with(byte_order, false, data)
+}
+
+/// Parse one IFD from raw bytes, classic TIFF (2-byte count, 12-byte
+/// entries, 4-byte next pointer) or BigTIFF (8-byte count, 20-byte
+/// entries, 8-byte next pointer).
+///
+/// `data` must start at the IFD offset and contain the whole IFD.
+pub fn parse_ifd_with(byte_order: TiffByteOrder, bigtiff: bool, data: &[u8]) -> Result<RawIfd> {
+    let (count_size, entry_size, value_size) = if bigtiff { (8, 20, 8) } else { (2, 12, 4) };
+    if data.len() < count_size {
         return Err(CloudError::InvalidTiff {
             reason: "IFD too short".into(),
         });
     }
 
-    let entry_count = read_u16(byte_order, &data[0..2]) as usize;
-    let needed = 2 + entry_count * 12 + 4;
+    let entry_count = if bigtiff {
+        read_u64(byte_order, &data[0..8]) as usize
+    } else {
+        read_u16(byte_order, &data[0..2]) as usize
+    };
+    let needed = count_size + entry_count * entry_size + value_size;
 
     if data.len() < needed {
         return Err(CloudError::InvalidTiff {
@@ -204,26 +245,40 @@ pub fn parse_ifd(byte_order: TiffByteOrder, data: &[u8]) -> Result<RawIfd> {
 
     let mut entries = Vec::with_capacity(entry_count);
     for i in 0..entry_count {
-        let offset = 2 + i * 12;
+        let offset = count_size + i * entry_size;
         let tag = read_u16(byte_order, &data[offset..offset + 2]);
         let type_id = read_u16(byte_order, &data[offset + 2..offset + 4]);
-        let count = read_u32(byte_order, &data[offset + 4..offset + 8]);
-        let value_or_offset = read_u32(byte_order, &data[offset + 8..offset + 12]);
+        let (count, value_or_offset, value_bytes) = if bigtiff {
+            let count = read_u64(byte_order, &data[offset + 4..offset + 12]);
+            let mut vb = [0u8; 8];
+            vb.copy_from_slice(&data[offset + 12..offset + 20]);
+            (count, read_u64(byte_order, &vb), vb)
+        } else {
+            let count = read_u32(byte_order, &data[offset + 4..offset + 8]) as u64;
+            let mut vb = [0u8; 8];
+            vb[..4].copy_from_slice(&data[offset + 8..offset + 12]);
+            (count, read_u32(byte_order, &vb[..4]) as u64, vb)
+        };
 
-        let total_bytes = type_byte_size(type_id).unwrap_or(1) as u64 * count as u64;
-        let inline = total_bytes <= 4;
+        let total_bytes = type_byte_size(type_id).unwrap_or(1) as u64 * count;
+        let inline = total_bytes <= value_size as u64;
 
         entries.push(RawTagEntry {
             tag,
             type_id,
             count,
             value_or_offset,
+            value_bytes,
             inline,
         });
     }
 
-    let next_offset_pos = 2 + entry_count * 12;
-    let next_ifd_offset = read_u32(byte_order, &data[next_offset_pos..next_offset_pos + 4]);
+    let next_offset_pos = count_size + entry_count * entry_size;
+    let next_ifd_offset = if bigtiff {
+        read_u64(byte_order, &data[next_offset_pos..next_offset_pos + 8])
+    } else {
+        read_u32(byte_order, &data[next_offset_pos..next_offset_pos + 4]) as u64
+    };
 
     Ok(RawIfd {
         entries,
@@ -231,24 +286,24 @@ pub fn parse_ifd(byte_order: TiffByteOrder, data: &[u8]) -> Result<RawIfd> {
     })
 }
 
-/// Extract a single u16 value from an inline tag entry.
+/// First SHORT of an inline entry.
 pub fn inline_u16(byte_order: TiffByteOrder, entry: &RawTagEntry) -> u16 {
-    let bytes = match byte_order {
-        TiffByteOrder::LittleEndian => entry.value_or_offset.to_le_bytes(),
-        TiffByteOrder::BigEndian => entry.value_or_offset.to_be_bytes(),
-    };
-    read_u16(byte_order, &bytes[0..2])
+    read_u16(byte_order, &entry.value_bytes[0..2])
 }
 
-/// Extract a single u32 value from an inline tag entry.
-pub fn inline_u32(_byte_order: TiffByteOrder, entry: &RawTagEntry) -> u32 {
-    entry.value_or_offset
+/// First LONG of an inline entry.
+pub fn inline_u32(byte_order: TiffByteOrder, entry: &RawTagEntry) -> u32 {
+    read_u32(byte_order, &entry.value_bytes[0..4])
 }
 
-/// Read an array of u32 or u16 values from external data at the offset indicated by a tag.
-///
-/// `file_data` is the raw bytes starting at `entry.value_or_offset`, of length
-/// at least `entry.count * type_size`.
+/// Every value of an inline entry (up to 4 SHORTs / 2 LONGs in classic
+/// TIFF, up to 8 bytes of values in BigTIFF), decoded by type.
+pub fn inline_values_u64(byte_order: TiffByteOrder, entry: &RawTagEntry) -> Vec<u64> {
+    read_offset_values_u64(byte_order, entry, &entry.value_bytes)
+}
+
+/// Decode the integer values of an entry (BYTE, SHORT, LONG, LONG8 and
+/// their signed/IFD variants) from `data`, widened to `u64`.
 pub fn read_offset_values_u64(
     byte_order: TiffByteOrder,
     entry: &RawTagEntry,
@@ -336,7 +391,7 @@ pub fn read_offset_ascii(entry: &RawTagEntry, data: &[u8]) -> String {
 
 /// Calculate the total byte size needed to read a tag's out-of-line value.
 pub fn external_value_size(entry: &RawTagEntry) -> u64 {
-    type_byte_size(entry.type_id).unwrap_or(1) as u64 * entry.count as u64
+    type_byte_size(entry.type_id).unwrap_or(1) as u64 * entry.count
 }
 
 // ---- Byte order helpers ----
@@ -387,12 +442,14 @@ mod tests {
         let header = parse_header(&data).unwrap();
         assert_eq!(header.byte_order, TiffByteOrder::LittleEndian);
         assert_eq!(header.first_ifd_offset, 8);
+        assert!(!header.bigtiff);
 
         // Big-endian
         data = vec![b'M', b'M', 0, 42, 0, 0, 0, 8];
         let header = parse_header(&data).unwrap();
         assert_eq!(header.byte_order, TiffByteOrder::BigEndian);
         assert_eq!(header.first_ifd_offset, 8);
+        assert!(!header.bigtiff);
     }
 
     #[test]

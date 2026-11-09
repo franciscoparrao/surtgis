@@ -30,6 +30,7 @@ use surtgis_core::{Error, Result};
 
 /// Which curvature to compute
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum CurvatureType {
     /// General (mean) curvature: -(d²z/dx² + d²z/dy²) / 2
     #[default]
@@ -66,6 +67,7 @@ pub enum CurvatureFormula {
 
 /// Parameters for curvature calculation
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct CurvatureParams {
     /// Type of curvature to compute
     pub curvature_type: CurvatureType,

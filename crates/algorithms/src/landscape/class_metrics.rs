@@ -75,7 +75,12 @@ pub fn landscape_metrics(classification: &Raster<f64>) -> Result<LandscapeMetric
     let mut shdi = 0.0f64;
     let mut sidi = 0.0f64;
 
-    for &count in class_counts.values() {
+    // Sum in class order: HashMap iteration order is randomised per
+    // instance and would make SHDI/SIDI differ in the last ULPs run to run.
+    let mut classes: Vec<i64> = class_counts.keys().copied().collect();
+    classes.sort_unstable();
+    for class in classes {
+        let count = class_counts[&class];
         let p = count as f64 / total_valid as f64;
         if p > 0.0 {
             shdi -= p * p.ln();

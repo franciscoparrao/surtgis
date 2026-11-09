@@ -1,0 +1,21 @@
+[package]
+name = "surtgis-ecw"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Native Rust decoder for ER Mapper ECW v2 imagery (no GDAL, no Hexagon SDK)"
+keywords = ["gis", "ecw", "wavelet", "raster", "imagery"]
+categories = ["science::geo", "compression"]
+# Not published yet: the licensing/patent review in docs/ecw_format.md must be
+# signed off first, and the workspace release cadence decides the moment.
+publish = false
+
+[dependencies]
+surtgis-core = { path = "../core" }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+approx = { workspace = true }

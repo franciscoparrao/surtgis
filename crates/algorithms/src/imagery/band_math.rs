@@ -9,6 +9,7 @@ use surtgis_core::raster::Raster;
 
 /// Binary operations for band math
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum BandMathOp {
     /// Per-pixel sum of the two bands.
     Add,

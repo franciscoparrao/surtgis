@@ -3,7 +3,7 @@
 //! Computes landscape ecology metrics on categorical (class) rasters.
 //! Values are rounded to the nearest integer for class identification.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::maybe_rayon::*;
 use ndarray::Array2;
@@ -235,8 +235,11 @@ fn collect_class_counts(
     rows: usize,
     cols: usize,
     offsets: &[(isize, isize)],
-) -> HashMap<i64, usize> {
-    let mut counts = HashMap::new();
+) -> BTreeMap<i64, usize> {
+    // Ordered map: the per-cell sums below run in class order, so the
+    // result is bit-identical run to run (a HashMap's iteration order is
+    // randomised per instance and would perturb the last ULPs).
+    let mut counts = BTreeMap::new();
 
     for &(dr, dc) in offsets {
         let nr = row as isize + dr;

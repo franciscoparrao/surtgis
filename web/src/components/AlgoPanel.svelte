@@ -4,10 +4,11 @@
    *   disabled: boolean,
    *   processing: boolean,
    *   selectedAlgo: string,
+   *   formula: string,
    *   onrun: (algo: string, params: object) => void
    * }}
    */
-  let { disabled, processing, selectedAlgo = $bindable(), onrun } = $props();
+  let { disabled, processing, selectedAlgo = $bindable(), formula = $bindable(), onrun } = $props();
 
   // ── Parameter state ──
   let slopeUnits = $state("degrees");
@@ -96,6 +97,7 @@
         { id: "ndmi", label: "NDMI" },
         { id: "bsi", label: "BSI (4-band)" },
         { id: "normalized_diff", label: "Norm. Difference" },
+        { id: "spectral_index", label: "Custom Formula (ASI)" },
       ],
     },
     {
@@ -154,6 +156,7 @@
     }
     if (id === "hand") params.streamThreshold = Number(handThreshold);
     if (id === "savi") params.lFactor = Number(saviL);
+    if (id === "spectral_index") params.formula = formula;
     if (id.startsWith("morph_")) params.radius = Number(morphRadius);
     if (id.startsWith("focal_")) params.radius = Number(focalRadius);
     if (id === "focal_percentile") params.percentile = Number(focalPercentile);
@@ -331,6 +334,18 @@
                 <input type="number" bind:value={saviL} min="0" max="1" step="0.1" disabled={disabled || processing} />
               </label>
             {/if}
+
+            <!-- Custom formula (Awesome Spectral Indices grammar) -->
+            {#if algo.id === "spectral_index"}
+              <input
+                class="formula-input"
+                type="text"
+                bind:value={formula}
+                placeholder="(N - R)/(N + R)"
+                title="Grammar: + - * / ** parentheses. ASI band names: N, R, G, B, RE1..RE3, N2, S1, S2, A, WV. One uploader appears per band in the formula."
+                disabled={disabled || processing}
+              />
+            {/if}
           </div>
         {/each}
 
@@ -453,6 +468,14 @@
 
   .param input {
     width: 58px;
+  }
+
+  .formula-input {
+    flex: 1 1 100%;
+    min-width: 0;
+    font-family: monospace;
+    font-size: 0.75rem;
+    padding: 0.3rem 0.5rem;
   }
 
   .shared-param {

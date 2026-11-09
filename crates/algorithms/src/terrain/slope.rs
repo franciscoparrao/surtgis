@@ -10,6 +10,7 @@ use surtgis_core::{Error, Result};
 
 /// Units for slope output
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum SlopeUnits {
     /// Degrees (0-90)
     #[default]
@@ -22,6 +23,7 @@ pub enum SlopeUnits {
 
 /// Parameters for slope calculation
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct SlopeParams {
     /// Output units
     pub units: SlopeUnits,

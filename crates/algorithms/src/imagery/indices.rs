@@ -10,6 +10,7 @@ use surtgis_core::raster::Raster;
 
 /// Enumeration of supported spectral indices
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SpectralIndex {
     /// Normalized Difference Vegetation Index
     NDVI,

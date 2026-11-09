@@ -158,3 +158,1188 @@ fn completions_rejects_unknown_shell() {
         .assert()
         .code(2);
 }
+
+// ─── Provenance ────────────────────────────────────────────────────────
+
+/// Every output carries a record of how it was made; `provenance` shows
+/// it, `verify` recomputes the output digest and re-hashes the inputs.
+#[test]
+fn outputs_carry_verifiable_provenance() {
+    let dir = tempfile::tempdir().unwrap();
+    let dem = synth_dem(dir.path());
+    let out = dir.path().join("slope.tif");
+    surtgis_cmd()
+        .args(["terrain", "slope"])
+        .arg(&dem)
+        .arg(&out)
+        .assert()
+        .success();
+
+    surtgis_cmd()
+        .arg("provenance")
+        .arg(&out)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Operation: terrain slope"))
+        .stdout(predicate::str::contains("dem.tif"))
+        .stdout(predicate::str::contains("blake3:"));
+
+    surtgis_cmd()
+        .args(["provenance", "--json"])
+        .arg(&out)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"schema\": \"surtgis-provenance/1\"",
+        ));
+
+    surtgis_cmd()
+        .arg("verify")
+        .arg(&out)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Output  OK"))
+        .stdout(predicate::str::contains("Input   OK"));
+
+    // Touching the input breaks the lineage check but not the output one.
+    let mut d: Raster<f64> = surtgis_core::io::read_geotiff(&dem, None).unwrap();
+    d.set(0, 0, 123.0).unwrap();
+    surtgis_core::io::write_geotiff(&d, &dem, None).unwrap();
+    surtgis_cmd()
+        .arg("verify")
+        .arg(&out)
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("Output  OK"))
+        .stdout(predicate::str::contains("Input   MISMATCH"));
+
+    // The digest follows the pixels: rewriting the output with one pixel
+    // changed (same record passed in) yields a different recorded digest,
+    // so a file whose pixels were altered behind the record cannot verify.
+    let before = surtgis_core::io::read_provenance(&out).unwrap().unwrap();
+    let mut o: Raster<f64> = surtgis_core::io::read_geotiff(&out, None).unwrap();
+    o.set(1, 1, 99.0).unwrap();
+    surtgis_core::io::write_geotiff_with_provenance(&o, &out, None, &before).unwrap();
+    let after = surtgis_core::io::read_provenance(&out).unwrap().unwrap();
+    assert_ne!(
+        before.output.unwrap().data_blake3,
+        after.output.unwrap().data_blake3
+    );
+}
+
+/// `--no-provenance` (and the env var) writes plain files.
+#[test]
+fn no_provenance_flag_writes_plain_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let dem = synth_dem(dir.path());
+    let out = dir.path().join("plain.tif");
+    surtgis_cmd()
+        .args(["--no-provenance", "terrain", "slope"])
+        .arg(&dem)
+        .arg(&out)
+        .assert()
+        .success();
+    assert!(surtgis_core::io::read_provenance(&out).unwrap().is_none());
+    surtgis_cmd()
+        .arg("provenance")
+        .arg(&out)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("no provenance record"));
+    surtgis_cmd().arg("verify").arg(&out).assert().failure();
+
+    let out2 = dir.path().join("plain2.tif");
+    surtgis_cmd()
+        .env("SURTGIS_NO_PROVENANCE", "1")
+        .args(["terrain", "slope"])
+        .arg(&dem)
+        .arg(&out2)
+        .assert()
+        .success();
+    assert!(surtgis_core::io::read_provenance(&out2).unwrap().is_none());
+}
+
+// ─── Embeddings ────────────────────────────────────────────────────────
+
+/// A 4-band "embedding" stack: west and east halves point in different
+/// directions in vector space.
+fn synth_embeddings(dir: &Path) -> PathBuf {
+    let (rows, cols) = (20, 20);
+    let dirs = [[1.0, 0.2, 0.0, 0.1], [0.0, 0.1, 1.0, 0.3]];
+    let mut bands: Vec<Raster<f64>> = (0..4).map(|_| Raster::<f64>::new(rows, cols)).collect();
+    for r in 0..rows {
+        for c in 0..cols {
+            let d = if c < cols / 2 { dirs[0] } else { dirs[1] };
+            for (k, b) in bands.iter_mut().enumerate() {
+                b.data_mut()[[r, c]] = 100.0 * d[k] + ((r * 7 + c * 3) % 5) as f64;
+            }
+        }
+    }
+    for b in &mut bands {
+        b.set_transform(GeoTransform::new(350_000.0, 6_300_000.0, 10.0, -10.0));
+        b.set_crs(Some(surtgis_core::CRS::from_epsg(32719)));
+    }
+    let path = dir.join("emb.tif");
+    let refs: Vec<&Raster<f64>> = bands.iter().collect();
+    surtgis_core::io::write_geotiff_stack(
+        &refs,
+        None,
+        &path,
+        &surtgis_core::io::GeoTiffOptions::default(),
+    )
+    .unwrap();
+    path
+}
+
+#[test]
+fn embeddings_similarity_pca_norm_info() {
+    let dir = tempfile::tempdir().unwrap();
+    let emb = synth_embeddings(dir.path());
+
+    surtgis_cmd()
+        .args(["embeddings", "info"])
+        .arg(&emb)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Bands (dimensions): 4"))
+        .stdout(predicate::str::contains("L2 norm"));
+
+    // Similarity to a western cell: west ≈ 1, east clearly lower.
+    let sim = dir.path().join("sim.tif");
+    surtgis_cmd()
+        .args(["embeddings", "similarity"])
+        .arg(&emb)
+        .arg(&sim)
+        .args(["--ref-cell", "5,3"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Reference: cell (5, 3)"));
+    let s: Raster<f64> = surtgis_core::io::read_geotiff(&sim, None).unwrap();
+    assert!(s.data()[[5, 3]] > 0.999);
+    assert!(s.data()[[5, 15]] < 0.8, "east {}", s.data()[[5, 15]]);
+    // The same reference as lon/lat (centre of cell (5,3)): needs the
+    // `projections` feature of the CLI (off in the no-default-features job).
+    if cfg!(feature = "projections") {
+        let gt = GeoTransform::new(350_000.0, 6_300_000.0, 10.0, -10.0);
+        let (x, y) = gt.pixel_to_geo(3, 5);
+        let (lon, lat) = surtgis_core::warp::Transformer::new(32719, 4326)
+            .unwrap()
+            .forward(x, y)
+            .unwrap();
+        let sim2 = dir.path().join("sim2.tif");
+        surtgis_cmd()
+            .args(["embeddings", "similarity"])
+            .arg(&emb)
+            .arg(&sim2)
+            .args(["--ref-lonlat", &format!("{lon},{lat}")])
+            .assert()
+            .success();
+        let s2: Raster<f64> = surtgis_core::io::read_geotiff(&sim2, None).unwrap();
+        assert_eq!(s.data(), s2.data());
+    }
+    surtgis_cmd()
+        .args(["embeddings", "similarity"])
+        .arg(&emb)
+        .arg(dir.path().join("sim3.tif"))
+        .args(["--ref-vec", "1,0.2,0,0.1", "--metric", "euclidean"])
+        .assert()
+        .success();
+    // Exactly one reference flag.
+    surtgis_cmd()
+        .args(["embeddings", "similarity"])
+        .arg(&emb)
+        .arg(dir.path().join("x.tif"))
+        .assert()
+        .failure();
+
+    // PCA: 3-band stack, model saved and reusable.
+    let pca = dir.path().join("pca.tif");
+    let model = dir.path().join("pca.json");
+    surtgis_cmd()
+        .args(["embeddings", "pca"])
+        .arg(&emb)
+        .arg(&pca)
+        .args(["--components", "3", "--save-model"])
+        .arg(&model)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("PC1: eigenvalue"));
+    let pcs: Vec<Raster<f64>> = surtgis_core::io::read_geotiff_bands(&pca).unwrap();
+    assert_eq!(pcs.len(), 3);
+    assert!(model.exists());
+    surtgis_cmd()
+        .args(["embeddings", "pca"])
+        .arg(&emb)
+        .arg(dir.path().join("pca2.tif"))
+        .args(["--model"])
+        .arg(&model)
+        .assert()
+        .success();
+    let pcs2: Vec<Raster<f64>> =
+        surtgis_core::io::read_geotiff_bands(dir.path().join("pca2.tif")).unwrap();
+    assert_eq!(pcs[0].data(), pcs2[0].data());
+
+    let n = dir.path().join("norm.tif");
+    surtgis_cmd()
+        .args(["embeddings", "norm"])
+        .arg(&emb)
+        .arg(&n)
+        .assert()
+        .success();
+    let nr: Raster<f64> = surtgis_core::io::read_geotiff(&n, None).unwrap();
+    assert!(nr.data()[[0, 0]] > 100.0);
+
+    // Every output carries provenance naming the stack.
+    surtgis_cmd().arg("verify").arg(&sim).assert().success();
+}
+
+/// A multi-band feature raster (an embedding stack) expands to one
+/// feature per band in `extract`, next to ordinary single-band features.
+#[test]
+fn extract_expands_multiband_features() {
+    let dir = tempfile::tempdir().unwrap();
+    let feats = dir.path().join("features");
+    std::fs::create_dir_all(&feats).unwrap();
+    let emb = synth_embeddings(&feats);
+    // One single-band feature on the same grid.
+    let mut single: Raster<f64> = Raster::new(20, 20);
+    single.set_transform(GeoTransform::new(350_000.0, 6_300_000.0, 10.0, -10.0));
+    single.set_crs(Some(surtgis_core::CRS::from_epsg(32719)));
+    single.data_mut().fill(7.0);
+    surtgis_core::io::write_geotiff(&single, feats.join("single.tif"), None).unwrap();
+    let _ = emb;
+    // Two labelled points in the raster CRS.
+    let points = dir.path().join("pts.geojson");
+    std::fs::write(
+        &points,
+        r#"{"type":"FeatureCollection","features":[
+          {"type":"Feature","properties":{"cls":1},"geometry":{"type":"Point","coordinates":[350035.0,6299945.0]}},
+          {"type":"Feature","properties":{"cls":2},"geometry":{"type":"Point","coordinates":[350155.0,6299945.0]}}]}"#,
+    )
+    .unwrap();
+    let out = dir.path().join("table.csv");
+    surtgis_cmd()
+        .args(["extract", "--features-dir"])
+        .arg(&feats)
+        .arg("--points")
+        .arg(&points)
+        .args(["--target", "cls"])
+        .arg(&out)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("4 feature(s)"));
+    let csv = std::fs::read_to_string(&out).unwrap();
+    let header = csv.lines().next().unwrap();
+    for col in ["emb:b1", "emb:b2", "emb:b3", "emb:b4", "single"] {
+        assert!(header.contains(col), "header {header}");
+    }
+    assert_eq!(csv.lines().count(), 3, "{csv}");
+}
+
+// ─── issues_surtgis.md (riesgo_tal_tal, 2026-09-28) ─────────────────────
+
+/// #1: a Float32 file whose GDAL_NODATA is the f64 decimal terra writes
+/// must have its nodata recognised (stats exclude it, `info` names it).
+#[test]
+fn float32_terra_nodata_is_recognised() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("terra.tif");
+    let nd = -3.39999999999999996e38_f64;
+    let mut r: Raster<f32> = Raster::new(4, 4);
+    r.set_transform(GeoTransform::new(0.0, 4.0, 1.0, -1.0));
+    r.data_mut().fill(10.0);
+    r.data_mut()[[0, 0]] = nd as f32;
+    r.set_nodata(Some(nd as f32));
+    surtgis_core::io::write_geotiff(&r, &path, None).unwrap();
+    surtgis_cmd()
+        .arg("info")
+        .arg(&path)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("file tag; NaN in memory"))
+        .stdout(predicate::str::contains("Min: 10.0000"));
+}
+
+/// #3: rasterize streams by strips and never reads the reference pixels;
+/// #4: an ESRI .prj naming the UTM zone equals the raster's EPSG code.
+#[test]
+fn rasterize_streams_and_accepts_esri_prj() {
+    let dir = tempfile::tempdir().unwrap();
+    let reference = dir.path().join("ref.tif");
+    let mut r: Raster<f64> = Raster::new(1100, 40);
+    r.set_transform(GeoTransform::new(500_000.0, 6_300_000.0, 10.0, -10.0));
+    r.set_crs(Some(surtgis_core::CRS::from_epsg(32719)));
+    surtgis_core::io::write_geotiff(&r, &reference, None).unwrap();
+    // A polygon covering rows 100..600 (strip boundary at 512 inside it),
+    // columns 10..30, with a CRS as ESRI WKT (no AUTHORITY).
+    let geojson = dir.path().join("poly.geojson");
+    std::fs::write(
+        &geojson,
+        r#"{"type":"FeatureCollection","crs":{"type":"name","properties":{"name":"PROJCS[\"WGS_1984_UTM_Zone_19S\",GEOGCS[\"GCS_WGS_1984\",DATUM[\"D_WGS_1984\",SPHEROID[\"WGS_1984\",6378137.0,298.257223563]],PRIMEM[\"Greenwich\",0.0],UNIT[\"Degree\",0.0174532925199433]],PROJECTION[\"Transverse_Mercator\"],UNIT[\"Meter\",1.0]]"}},"features":[{"type":"Feature","properties":{"cls":7},"geometry":{"type":"Polygon","coordinates":[[[500100,6299000],[500300,6299000],[500300,6294000],[500100,6294000],[500100,6299000]]]}}]}"#,
+    )
+    .unwrap();
+    let out = dir.path().join("mask.tif");
+    surtgis_cmd()
+        .arg("rasterize")
+        .arg(&geojson)
+        .arg(&out)
+        .arg("--reference")
+        .arg(&reference)
+        .args(["--attribute", "cls"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("3 strips"));
+    let m: Raster<f32> = surtgis_core::io::read_geotiff(&out, None).unwrap();
+    assert_eq!(m.shape(), (1100, 40));
+    assert_eq!(m.data()[[300, 20]], 7.0);
+    assert_eq!(m.data()[[511, 20]], 7.0);
+    assert_eq!(m.data()[[512, 20]], 7.0);
+    assert!(m.data()[[50, 20]].is_nan());
+    assert!(m.data()[[700, 20]].is_nan());
+    assert!(m.data()[[300, 5]].is_nan());
+    let back = surtgis_core::io::read_geotiff::<f32, _>(&out, None).unwrap();
+    assert_eq!(back.crs().and_then(|c| c.epsg()), Some(32719));
+}
+
+/// #5: `reclassify` takes negative bounds and can fill nodata;
+/// `imagery calc` has comparisons, if() and isnan(); `--output-dtype f32`.
+#[test]
+fn reclassify_calc_and_output_dtype_ergonomics() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("v.tif");
+    let mut r: Raster<f64> = Raster::new(3, 3);
+    r.set_transform(GeoTransform::new(0.0, 3.0, 1.0, -1.0));
+    for (i, v) in r.data_mut().iter_mut().enumerate() {
+        *v = i as f64 * 0.25 - 1.0; // -1 .. 1
+    }
+    r.data_mut()[[2, 2]] = f64::NAN;
+    r.set_nodata(Some(f64::NAN));
+    surtgis_core::io::write_geotiff(&r, &src, None).unwrap();
+
+    let out = dir.path().join("cls.tif");
+    surtgis_cmd()
+        .args(["imagery", "reclassify"])
+        .arg(&src)
+        .arg(&out)
+        .args(["--class", "-0.5,0.5,1", "--default", "-9", "--fill-nodata"])
+        .assert()
+        .success();
+    let c: Raster<f64> = surtgis_core::io::read_geotiff(&out, None).unwrap();
+    assert_eq!(c.data()[[1, 1]], 1.0); // 0.0 in [-0.5, 0.5)
+    assert_eq!(c.data()[[0, 0]], -9.0); // -1.0 outside
+    assert_eq!(c.data()[[2, 2]], -9.0); // nodata filled
+
+    let calc = dir.path().join("calc.tif");
+    surtgis_cmd()
+        .args([
+            "imagery",
+            "calc",
+            "-e",
+            "if(isnan(A), 0, if(A > 0, 1, 0))",
+            "-b",
+        ])
+        .arg(format!("A={}", src.display()))
+        .arg(&calc)
+        .assert()
+        .success();
+    let k: Raster<f64> = surtgis_core::io::read_geotiff(&calc, None).unwrap();
+    assert_eq!(k.data()[[2, 2]], 0.0);
+    assert_eq!(k.data()[[2, 1]], 1.0);
+    assert_eq!(k.data()[[0, 0]], 0.0);
+
+    let slope32 = dir.path().join("slope32.tif");
+    surtgis_cmd()
+        .args(["--output-dtype", "f32", "terrain", "slope"])
+        .arg(&src)
+        .arg(&slope32)
+        .assert()
+        .success();
+    let any = surtgis_core::io::read_geotiff_any(&slope32, None).unwrap();
+    assert_eq!(any.dtype(), surtgis_core::DataType::F32);
+}
+
+/// #7: `resample` streams — same values as the in-memory resampler,
+/// nearest and bilinear, across strip boundaries, with nodata.
+#[test]
+fn resample_streams_and_matches_in_memory() {
+    let dir = tempfile::tempdir().unwrap();
+    let src_path = dir.path().join("src.tif");
+    let ref_path = dir.path().join("ref.tif");
+    // 10 m source, 400×300, smooth field with a nodata block.
+    let mut src: Raster<f64> = Raster::new(400, 300);
+    src.set_transform(GeoTransform::new(500_000.0, 6_300_000.0, 10.0, -10.0));
+    src.set_crs(Some(surtgis_core::CRS::from_epsg(32719)));
+    for r in 0..400 {
+        for c in 0..300 {
+            src.data_mut()[[r, c]] = (r as f64 * 0.7).sin() * 50.0 + c as f64 * 0.3;
+        }
+    }
+    for r in 100..140 {
+        for c in 50..90 {
+            src.data_mut()[[r, c]] = f64::NAN;
+        }
+    }
+    src.set_nodata(Some(f64::NAN));
+    surtgis_core::io::write_geotiff(&src, &src_path, None).unwrap();
+    // 37 m reference grid, offset so cells straddle source pixels.
+    let mut reference: Raster<f64> = Raster::new(105, 78);
+    reference.set_transform(GeoTransform::new(500_015.0, 6_299_990.0, 37.0, -37.0));
+    reference.set_crs(Some(surtgis_core::CRS::from_epsg(32719)));
+    surtgis_core::io::write_geotiff(&reference, &ref_path, None).unwrap();
+
+    for method in ["nearest", "bilinear"] {
+        let out = dir.path().join(format!("out_{method}.tif"));
+        surtgis_cmd()
+            .arg("resample")
+            .arg(&src_path)
+            .arg(&out)
+            .arg("--reference")
+            .arg(&ref_path)
+            .args(["--method", method])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("strips of"));
+        let got: Raster<f32> = surtgis_core::io::read_geotiff(&out, None).unwrap();
+        assert_eq!(got.shape(), (105, 78));
+        let m = if method == "nearest" {
+            surtgis_core::ResampleMethod::NearestNeighbor
+        } else {
+            surtgis_core::ResampleMethod::Bilinear
+        };
+        let want = surtgis_core::resample_to_grid(&src, &reference, m).unwrap();
+        let mut valid = 0;
+        for r in 0..105 {
+            for c in 0..78 {
+                let (g, w) = (got.data()[[r, c]] as f64, want.data()[[r, c]]);
+                match (g.is_nan(), w.is_nan()) {
+                    (true, true) => {}
+                    (false, false) => {
+                        valid += 1;
+                        assert!(
+                            (g - w).abs() <= 1e-5 * w.abs().max(1.0),
+                            "{method} ({r},{c}): {g} vs {w}"
+                        );
+                    }
+                    _ => panic!("{method} ({r},{c}): nodata mismatch {g} vs {w}"),
+                }
+            }
+        }
+        assert!(valid > 7000, "{method}: {valid} valid cells");
+        assert_eq!(got.transform().origin_x, 500_015.0);
+        assert_eq!(got.crs().and_then(|c| c.epsg()), Some(32719));
+    }
+}
+
+/// #8: `imagery calc` and `reclassify` stream by strips; the result equals
+/// the in-memory evaluation (5 bands, strips forced to 7 rows).
+#[test]
+fn calc_and_reclassify_stream_by_strips() {
+    use surtgis_algorithms::imagery::index_builder;
+    let dir = tempfile::tempdir().unwrap();
+    let mut paths = Vec::new();
+    let mut rasters = Vec::new();
+    for k in 0..5 {
+        let mut r: Raster<f64> = Raster::new(50, 30);
+        r.set_transform(GeoTransform::new(500_000.0, 6_300_000.0, 10.0, -10.0));
+        r.set_crs(Some(surtgis_core::CRS::from_epsg(32719)));
+        for i in 0..50 {
+            for j in 0..30 {
+                r.data_mut()[[i, j]] = ((i * 7 + j * 3 + k * 11) % 13) as f64 * 0.1;
+            }
+        }
+        if k == 2 {
+            r.data_mut()[[20, 5]] = f64::NAN;
+            r.set_nodata(Some(f64::NAN));
+        }
+        let p = dir.path().join(format!("b{k}.tif"));
+        surtgis_core::io::write_geotiff(&r, &p, None).unwrap();
+        paths.push(p);
+        rasters.push(r);
+    }
+    let out = dir.path().join("mean.tif");
+    let mut cmd = surtgis_cmd();
+    cmd.env("SURTGIS_STRIP_ROWS", "7")
+        .args(["imagery", "calc", "-e", "(A+B+C+D+E)/5"]);
+    for (k, p) in paths.iter().enumerate() {
+        let name = ["A", "B", "C", "D", "E"][k];
+        cmd.arg("-b").arg(format!("{name}={}", p.display()));
+    }
+    cmd.arg(&out)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("8 strips, 5 bands"));
+    let got: Raster<f32> = surtgis_core::io::read_geotiff(&out, None).unwrap();
+    let refs: std::collections::HashMap<&str, &Raster<f64>> = ["A", "B", "C", "D", "E"]
+        .iter()
+        .copied()
+        .zip(rasters.iter())
+        .collect();
+    let want = index_builder("(A+B+C+D+E)/5", &refs).unwrap();
+    for i in 0..50 {
+        for j in 0..30 {
+            let (g, w) = (got.data()[[i, j]] as f64, want.data()[[i, j]]);
+            assert!(
+                (g.is_nan() && w.is_nan()) || (g - w).abs() < 1e-6,
+                "({i},{j}): {g} vs {w}"
+            );
+        }
+    }
+    assert!(got.data()[[20, 5]].is_nan());
+    assert_eq!(got.transform().origin_y, 6_300_000.0);
+    assert_eq!(got.crs().and_then(|c| c.epsg()), Some(32719));
+
+    // Misaligned input is refused, not silently combined.
+    let mut off: Raster<f64> = Raster::new(50, 30);
+    off.set_transform(GeoTransform::new(500_005.0, 6_300_000.0, 10.0, -10.0));
+    let off_path = dir.path().join("off.tif");
+    surtgis_core::io::write_geotiff(&off, &off_path, None).unwrap();
+    surtgis_cmd()
+        .args(["imagery", "calc", "-e", "A+B", "-b"])
+        .arg(format!("A={}", paths[0].display()))
+        .arg("-b")
+        .arg(format!("B={}", off_path.display()))
+        .arg(dir.path().join("x.tif"))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("same grid"));
+
+    // Reclassify streams too: strip boundaries invisible in the classes.
+    let cls = dir.path().join("cls.tif");
+    surtgis_cmd()
+        .env("SURTGIS_STRIP_ROWS", "7")
+        .args(["imagery", "reclassify"])
+        .arg(&paths[0])
+        .arg(&cls)
+        .args(["--class", "0,0.5,1", "--class", "0.5,2,2", "--default", "0"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("8 strips"));
+    let c: Raster<f32> = surtgis_core::io::read_geotiff(&cls, None).unwrap();
+    for i in 0..50 {
+        for j in 0..30 {
+            let v = rasters[0].data()[[i, j]];
+            let want = if v < 0.5 { 1.0 } else { 2.0 };
+            assert_eq!(c.data()[[i, j]], want, "({i},{j}) v={v}");
+        }
+    }
+}
+
+fn write_raster(
+    path: &Path,
+    rows: usize,
+    cols: usize,
+    gt: GeoTransform,
+    epsg: u32,
+    f: impl Fn(usize, usize) -> f64,
+) {
+    let mut r: Raster<f64> = Raster::new(rows, cols);
+    r.set_transform(gt);
+    r.set_crs(Some(surtgis_core::CRS::from_epsg(epsg)));
+    for i in 0..rows {
+        for j in 0..cols {
+            r.set(i, j, f(i, j)).unwrap();
+        }
+    }
+    surtgis_core::io::write_geotiff(&r, path, None).unwrap();
+}
+
+/// Course report #1: `resample` with input and reference in different CRSs
+/// wrote an all-NaN raster and exited 0. It now reprojects on the fly (or,
+/// in a build without `projections`, fails and says to reproject first).
+#[test]
+fn resample_reprojects_when_crs_differs_and_fails_without_overlap() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("dem_4326.tif");
+    // ~6 x 6 km around (-70.0, -25.0), 0.001° cells; value encodes position.
+    write_raster(
+        &src,
+        60,
+        60,
+        GeoTransform::new(-70.03, -24.97, 0.001, -0.001),
+        4326,
+        |i, j| (i * 100 + j) as f64,
+    );
+    let reference = dir.path().join("ref_32719.tif");
+    // UTM 19S, 100 m cells; -70.0,-25.0 is about (399 100, 7 234 900).
+    write_raster(
+        &reference,
+        20,
+        20,
+        GeoTransform::new(398_100.0, 7_235_900.0, 100.0, -100.0),
+        32719,
+        |_, _| 0.0,
+    );
+    let out = dir.path().join("out.tif");
+    let run = surtgis_cmd()
+        .args(["resample", "-m", "nearest", "--reference"])
+        .arg(&reference)
+        .arg(&src)
+        .arg(&out)
+        .assert();
+    if cfg!(feature = "projections") {
+        run.success()
+            .stdout(predicate::str::contains("EPSG:4326 -> EPSG:32719"));
+        let r: Raster<f64> = surtgis_core::io::read_geotiff(&out, None).unwrap();
+        let valid = r.data().iter().filter(|v| v.is_finite()).count();
+        assert_eq!(valid, 400, "the reference lies inside the source");
+        assert_eq!(r.crs().and_then(|c| c.epsg()), Some(32719));
+    } else {
+        run.failure()
+            .stderr(predicate::str::contains("surtgis reproject"));
+    }
+
+    // A reference that misses the source is an error, and no file is left.
+    let far = dir.path().join("far.tif");
+    write_raster(
+        &far,
+        10,
+        10,
+        GeoTransform::new(10.0, 50.0, 0.001, -0.001),
+        4326,
+        |_, _| 0.0,
+    );
+    let out2 = dir.path().join("out2.tif");
+    surtgis_cmd()
+        .args(["resample", "--reference"])
+        .arg(&far)
+        .arg(&src)
+        .arg(&out2)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("does not overlap"));
+    assert!(!out2.exists());
+}
+
+/// Course report #2: `statistics zonal` wrote CSV under a JSON help text,
+/// and zone 0 was dropped without saying so.
+#[test]
+fn zonal_writes_json_or_csv_and_zero_is_opt_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let gt = GeoTransform::new(0.0, 10.0, 1.0, -1.0);
+    let values = dir.path().join("v.tif");
+    write_raster(&values, 10, 10, gt, 32719, |i, _| i as f64);
+    let mut z: Raster<i32> = Raster::new(10, 10);
+    z.set_transform(gt);
+    z.set_crs(Some(surtgis_core::CRS::from_epsg(32719)));
+    for i in 0..10 {
+        for j in 0..10 {
+            z.set(i, j, if i < 5 { 0 } else { 1 }).unwrap();
+        }
+    }
+    let zones = dir.path().join("z.tif");
+    surtgis_core::io::write_geotiff(&z, &zones, None).unwrap();
+
+    let json = dir.path().join("out.json");
+    surtgis_cmd()
+        .args(["statistics", "zonal", "--zones"])
+        .arg(&zones)
+        .arg(&values)
+        .arg(&json)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("zone 0 treated as background"));
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&json).unwrap()).unwrap();
+    assert_eq!(doc["zones_computed"], 1);
+    assert_eq!(doc["statistics"][0]["zone_id"], 1);
+    assert_eq!(doc["statistics"][0]["count"], 50);
+    assert_eq!(doc["statistics"][0]["mean"], 7.0);
+
+    let csv = dir.path().join("out.csv");
+    surtgis_cmd()
+        .args(["statistics", "zonal", "--include-zero", "--zones"])
+        .arg(&zones)
+        .arg(&values)
+        .arg(&csv)
+        .assert()
+        .success();
+    let text = std::fs::read_to_string(&csv).unwrap();
+    assert!(text.starts_with("zone_id,count,"), "{text}");
+    assert!(
+        text.contains("\n0,50,") && text.contains("\n1,50,"),
+        "{text}"
+    );
+}
+
+/// Course report #3: `clip --polygon` masked but kept the full extent.
+#[test]
+fn clip_polygon_crops_to_the_polygon_extent() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("dnbr.tif");
+    write_raster(
+        &input,
+        40,
+        40,
+        GeoTransform::new(300_000.0, 6_000_400.0, 10.0, -10.0),
+        32718,
+        |_, _| 1.0,
+    );
+    let poly = dir.path().join("box.geojson");
+    // Cells 10..20 x 10..20 exactly (100 cells).
+    std::fs::write(
+        &poly,
+        r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},
+        "geometry":{"type":"Polygon","coordinates":[[[300100,6000300],[300200,6000300],
+        [300200,6000200],[300100,6000200],[300100,6000300]]]}}]}"#,
+    )
+    .unwrap();
+    let out = dir.path().join("crop.tif");
+    surtgis_cmd()
+        .arg("clip")
+        .arg(&input)
+        .arg("--polygon")
+        .arg(&poly)
+        .arg(&out)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Clipped: 10 x 10 (100.0% valid cells)",
+        ));
+    let c: Raster<f64> = surtgis_core::io::read_geotiff(&out, None).unwrap();
+    assert_eq!(c.shape(), (10, 10));
+    assert_eq!(c.transform().origin_x, 300_100.0);
+    assert_eq!(c.transform().origin_y, 6_000_300.0);
+
+    let masked = dir.path().join("mask.tif");
+    surtgis_cmd()
+        .arg("clip")
+        .arg(&input)
+        .args(["--keep-extent", "--polygon"])
+        .arg(&poly)
+        .arg(&masked)
+        .assert()
+        .success();
+    let m: Raster<f64> = surtgis_core::io::read_geotiff(&masked, None).unwrap();
+    assert_eq!(m.shape(), (40, 40));
+    assert_eq!(m.data().iter().filter(|v| v.is_finite()).count(), 100);
+
+    // A polygon in other coordinates (lon/lat) misses the grid: an error.
+    let lonlat = dir.path().join("ll.geojson");
+    std::fs::write(
+        &lonlat,
+        r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},
+        "geometry":{"type":"Polygon","coordinates":[[[-70,-25],[-69.9,-25],[-69.9,-25.1],[-70,-25]]]}}]}"#,
+    )
+    .unwrap();
+    surtgis_cmd()
+        .arg("clip")
+        .arg(&input)
+        .arg("--polygon")
+        .arg(&lonlat)
+        .arg(dir.path().join("x.tif"))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("same CRS"));
+}
+
+/// `terrain twi` refuses a slope that is not in radians, and
+/// `cost-distance --map-units` scales by the pixel size.
+#[test]
+fn twi_rejects_degrees_and_cost_distance_map_units() {
+    let dir = tempfile::tempdir().unwrap();
+    let dem = synth_dem(dir.path());
+    let slope_deg = dir.path().join("slope_deg.tif");
+    surtgis_cmd()
+        .args(["terrain", "slope"])
+        .arg(&dem)
+        .arg(&slope_deg)
+        .assert()
+        .success();
+    let facc = dir.path().join("facc.tif");
+    write_raster(
+        &facc,
+        20,
+        20,
+        GeoTransform::new(0.0, 20.0, 1.0, -1.0),
+        32719,
+        |_, _| 3.0,
+    );
+    surtgis_cmd()
+        .args(["terrain", "twi", "--flow-acc"])
+        .arg(&facc)
+        .arg("--slope")
+        .arg(&slope_deg)
+        .arg(dir.path().join("twi.tif"))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--units radians"));
+
+    let gt = GeoTransform::new(0.0, 630.0, 30.0, -30.0);
+    let cost = dir.path().join("cost.tif");
+    write_raster(&cost, 21, 21, gt, 32719, |_, _| 1.0);
+    let src = dir.path().join("src.tif");
+    write_raster(&src, 21, 21, gt, 32719, |i, j| {
+        if (i, j) == (10, 10) { 1.0 } else { 0.0 }
+    });
+    let out = dir.path().join("cd.tif");
+    surtgis_cmd()
+        .args(["terrain", "cost-distance", "--map-units", "--sources"])
+        .arg(&src)
+        .arg(&cost)
+        .arg(&out)
+        .assert()
+        .success();
+    let d: Raster<f64> = surtgis_core::io::read_geotiff(&out, None).unwrap();
+    assert!((d.get(10, 20).unwrap() - 300.0).abs() < 1e-6);
+    assert!((d.get(20, 20).unwrap() - 300.0 * std::f64::consts::SQRT_2).abs() < 1e-6);
+}
+
+/// #10: paths with ñ/accents (Chañaral, Ñuble) must not break the
+/// provenance record, and the written file must verify.
+#[test]
+fn non_ascii_paths_write_and_verify() {
+    let dir = tempfile::tempdir().unwrap();
+    let src_dir = dir.path().join("chañaral");
+    std::fs::create_dir_all(&src_dir).unwrap();
+    let dem = synth_dem(&src_dir);
+    let out = dir.path().join("salida_ñ").join("pendiente_Aysén.tif");
+    std::fs::create_dir_all(out.parent().unwrap()).unwrap();
+    surtgis_cmd()
+        .args(["terrain", "slope"])
+        .arg(&dem)
+        .arg(&out)
+        .assert()
+        .success();
+    surtgis_cmd()
+        .arg("verify")
+        .arg(&out)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("chañaral"));
+}
+
+/// #11: `--bbox` with negative (west/south) coordinates parses without
+/// the `--bbox=` form.
+#[test]
+fn clip_bbox_accepts_negative_coordinates_without_equals() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut r: Raster<f64> = Raster::new(30, 40);
+    r.set_transform(GeoTransform::new(-71.0, -25.0, 0.01, -0.01));
+    r.set_crs(Some(surtgis_core::CRS::from_epsg(4326)));
+    let input = dir.path().join("geo.tif");
+    surtgis_core::io::write_geotiff(&r, &input, None).unwrap();
+    let out = dir.path().join("clip.tif");
+    surtgis_cmd()
+        .arg("clip")
+        .arg(&input)
+        .args(["--bbox", "-70.95,-25.15,-70.90,-25.10"])
+        .arg(&out)
+        .assert()
+        .success();
+    let c: Raster<f64> = surtgis_core::io::read_geotiff(&out, None).unwrap();
+    assert!(c.rows() > 0 && c.rows() < 30 && c.cols() > 0 && c.cols() < 40);
+}
+
+/// #12: weighted flow accumulation; constant weights scale the count.
+#[test]
+fn flow_accumulation_weights_and_include_self() {
+    let dir = tempfile::tempdir().unwrap();
+    let dem = synth_dem(dir.path());
+    let fdir = dir.path().join("fdir.tif");
+    surtgis_cmd()
+        .args(["hydrology", "flow-direction"])
+        .arg(&dem)
+        .arg(&fdir)
+        .assert()
+        .success();
+    let mut w: Raster<f32> = Raster::new(20, 20);
+    w.set_transform(GeoTransform::new(0.0, 20.0, 1.0, -1.0));
+    w.data_mut().fill(2.5);
+    let wpath = dir.path().join("w.tif");
+    surtgis_core::io::write_geotiff(&w, &wpath, None).unwrap();
+
+    let count = dir.path().join("count.tif");
+    let weighted = dir.path().join("weighted.tif");
+    surtgis_cmd()
+        .args(["hydrology", "flow-accumulation"])
+        .arg(&fdir)
+        .arg(&count)
+        .assert()
+        .success();
+    surtgis_cmd()
+        .args(["hydrology", "flow-accumulation"])
+        .arg(&fdir)
+        .arg(&weighted)
+        .arg("--weights")
+        .arg(&wpath)
+        .arg("--include-self")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Weighted flow accumulation"));
+    let n: Raster<f64> = surtgis_core::io::read_geotiff(&count, None).unwrap();
+    let a: Raster<f64> = surtgis_core::io::read_geotiff(&weighted, None).unwrap();
+    assert!(n.data().iter().any(|&v| v > 5.0), "flow must converge");
+    for (cnt, acc) in n.data().iter().zip(a.data()) {
+        assert!(
+            (acc - 2.5 * (cnt + 1.0)).abs() < 1e-9,
+            "{acc} vs 2.5*({cnt}+1)"
+        );
+    }
+
+    // A weight raster on another grid is refused.
+    let mut off: Raster<f32> = Raster::new(20, 21);
+    off.set_transform(GeoTransform::new(0.0, 20.0, 1.0, -1.0));
+    let off_path = dir.path().join("off.tif");
+    surtgis_core::io::write_geotiff(&off, &off_path, None).unwrap();
+    surtgis_cmd()
+        .args(["hydrology", "flow-accumulation"])
+        .arg(&fdir)
+        .arg(dir.path().join("x.tif"))
+        .arg("--weights")
+        .arg(&off_path)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("resample it first"));
+}
+
+/// `verify --against`: an output whose record lists STAC items is checked
+/// against a provider's list of affected items, with an optional window on
+/// the access time; `provenance --stac` maps the record to STAC Processing.
+#[test]
+fn verify_against_affected_stac_items_and_stac_export() {
+    use surtgis_core::provenance::{Provenance, StacItemRecord};
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("composite.tif");
+    let mut r: Raster<f32> = Raster::new(4, 4);
+    r.set_transform(GeoTransform::new(0.0, 4.0, 1.0, -1.0));
+    let mut p = Provenance::new().with_operation("stac composite");
+    let mut item = StacItemRecord::new(
+        "https://planetarycomputer.microsoft.com/api/stac/v1",
+        "sentinel-2-l2a",
+        "S2A_MSIL2A_20261027T145931_R039_T19KCA_20261027T211703",
+    );
+    item.accessed = "2026-10-28T10:00:00Z".into();
+    p.push_stac_item(item);
+    surtgis_core::io::write_geotiff_with_provenance(&r, &out, None, &p).unwrap();
+
+    let list = dir.path().join("affected.txt");
+    std::fs::write(
+        &list,
+        "# Planetary Computer issue 516\nS2A_MSIL2A_20261027T145931_R039_T19KCA_20261027T211703\n",
+    )
+    .unwrap();
+
+    // On the list, inside the incident window: fails.
+    surtgis_cmd()
+        .arg("verify")
+        .arg(&out)
+        .arg("--against")
+        .arg(&list)
+        .args([
+            "--affected-from",
+            "2026-10-26T12:07:00Z",
+            "--affected-to",
+            "2026-10-30",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("AFFECTED"));
+    // Read after the backfill: on the list, but outside the window.
+    surtgis_cmd()
+        .arg("verify")
+        .arg(&out)
+        .arg("--against")
+        .arg(&list)
+        .args(["--affected-to", "2026-10-27"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("outside the affected window"));
+
+    let stac = surtgis_cmd()
+        .args(["provenance", "--stac"])
+        .arg(&out)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let v: serde_json::Value = serde_json::from_slice(&stac).unwrap();
+    assert_eq!(v["links"][0]["rel"], "derived_from");
+    assert!(v["links"][0]["href"].as_str().unwrap().ends_with(
+        "/collections/sentinel-2-l2a/items/S2A_MSIL2A_20261027T145931_R039_T19KCA_20261027T211703"
+    ));
+}
+
+/// `hydrology lake-catchment` on a local DEM: a crater whose rim (600 m
+/// radius) bounds the catchment of the lake at its centre.
+#[test]
+fn lake_catchment_crater_from_local_dem() {
+    if !(cfg!(feature = "cloud") && cfg!(feature = "projections")) {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (x0, y0, cell, n) = (500_000.0, 7_001_200.0, 30.0, 80usize);
+    let (cx, cy) = (x0 + 40.0 * cell, y0 - 40.0 * cell);
+    let dem = dir.path().join("dem.tif");
+    write_raster(
+        &dem,
+        n,
+        n,
+        GeoTransform::new(x0, y0, cell, -cell),
+        32619,
+        |r, c| {
+            let (x, y) = (x0 + (c as f64 + 0.5) * cell, y0 - (r as f64 + 0.5) * cell);
+            let d = ((x - cx).powi(2) + (y - cy).powi(2)).sqrt();
+            // rim at 600 m: inside falls to the centre, outside falls away
+            100.0 - (d - 600.0).abs() * 0.05 + ((r * 7 + c * 3) % 5) as f64 * 0.001
+        },
+    );
+    // Lake: a 150 m square at the centre, in the DEM's CRS (legacy crs member).
+    let lakes = dir.path().join("lakes.geojson");
+    std::fs::write(
+        &lakes,
+        format!(
+            r#"{{"type":"FeatureCollection","crs":{{"type":"name","properties":{{"name":"EPSG:32619"}}}},
+            "features":[{{"type":"Feature","properties":{{"name":"crater"}},"geometry":{{"type":"Polygon",
+            "coordinates":[[[{a},{b}],[{c},{b}],[{c},{d}],[{a},{d}],[{a},{b}]]]}}}}]}}"#,
+            a = cx - 75.0,
+            b = cy - 75.0,
+            c = cx + 75.0,
+            d = cy + 75.0
+        ),
+    )
+    .unwrap();
+    let out = dir.path().join("lakes.csv");
+    surtgis_cmd()
+        .args(["hydrology", "lake-catchment"])
+        .arg(&lakes)
+        .arg(&out)
+        .arg("--dem")
+        .arg(&dem)
+        .args([
+            "--id-field",
+            "name",
+            "--window-km",
+            "2.1",
+            "--max-window-km",
+            "2.1",
+            "--jobs",
+            "1",
+            "--sink-depth",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1/1 lake x DEM runs ok"));
+    let text = std::fs::read_to_string(&out).unwrap();
+    let mut rdr = csv::Reader::from_reader(text.as_bytes());
+    let hdr = rdr.headers().unwrap().clone();
+    let rec = rdr.records().next().unwrap().unwrap();
+    let get = |k: &str| {
+        rec.get(hdr.iter().position(|h| h == k).unwrap())
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(get("lake_id"), "crater");
+    assert_eq!(get("utm_epsg"), "32619");
+    assert_eq!(get("status"), "ok", "{text}");
+    let area: f64 = get("catchment_area_km2").parse().unwrap();
+    let want = std::f64::consts::PI * 0.6 * 0.6;
+    assert!(
+        (area - want).abs() / want < 0.10,
+        "catchment {area} km2 vs disc {want}"
+    );
+    // No side depression in the crater: local == connected.
+    let local: f64 = get("local_catchment_area_km2").parse().unwrap();
+    assert!(
+        (local - area).abs() < 1e-9,
+        "local {local} vs connected {area}"
+    );
+    let lake: f64 = get("lake_area_km2").parse().unwrap();
+    assert!((lake - 0.0225).abs() < 0.006, "lake {lake}");
+}
+
+/// `hydrology lake-catchment` with point lakes and repeated `--water-mask`
+/// rules: a mask without water near the point falls through to the next
+/// one, and with no water at all the lake is the cell under the point.
+#[test]
+fn lake_catchment_point_lake_water_mask_fallback() {
+    if !(cfg!(feature = "cloud") && cfg!(feature = "projections")) {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (x0, y0, cell, n) = (500_000.0, 7_001_200.0, 30.0, 80usize);
+    let (cx, cy) = (x0 + 40.0 * cell, y0 - 40.0 * cell);
+    let gt = GeoTransform::new(x0, y0, cell, -cell);
+    let dem = dir.path().join("dem.tif");
+    write_raster(&dem, n, n, gt, 32619, |r, c| {
+        let (x, y) = (x0 + (c as f64 + 0.5) * cell, y0 - (r as f64 + 0.5) * cell);
+        let d = ((x - cx).powi(2) + (y - cy).powi(2)).sqrt();
+        100.0 - (d - 600.0).abs() * 0.05 + ((r * 7 + c * 3) % 5) as f64 * 0.001
+    });
+    // Dry everywhere, and a 150 m (5x5 cells) lake of 90 % occurrence
+    // over a 30 % background.
+    let dry = dir.path().join("dry.tif");
+    write_raster(&dry, n, n, gt, 32619, |_, _| 0.0);
+    let occ = dir.path().join("occurrence.tif");
+    write_raster(&occ, n, n, gt, 32619, |r, c| {
+        if (38..43).contains(&r) && (38..43).contains(&c) {
+            90.0
+        } else {
+            30.0
+        }
+    });
+    let lakes = dir.path().join("lakes.geojson");
+    std::fs::write(
+        &lakes,
+        format!(
+            r#"{{"type":"FeatureCollection","crs":{{"type":"name","properties":{{"name":"EPSG:32619"}}}},
+            "features":[{{"type":"Feature","properties":{{"name":"crater"}},"geometry":{{"type":"Point",
+            "coordinates":[{cx},{cy}]}}}}]}}"#
+        ),
+    )
+    .unwrap();
+    let run = |masks: &[String], out: &Path| {
+        let mut cmd = surtgis_cmd();
+        cmd.args(["hydrology", "lake-catchment"])
+            .arg(&lakes)
+            .arg(out)
+            .arg("--dem")
+            .arg(&dem)
+            .args([
+                "--id-field",
+                "name",
+                "--window-km",
+                "2.1",
+                "--max-window-km",
+                "2.1",
+                "--jobs",
+                "1",
+            ]);
+        for m in masks {
+            cmd.arg("--water-mask").arg(m);
+        }
+        cmd.assert().success();
+        let text = std::fs::read_to_string(out).unwrap();
+        let mut rdr = csv::Reader::from_reader(text.as_bytes());
+        let hdr = rdr.headers().unwrap().clone();
+        let rec = rdr.records().next().unwrap().unwrap();
+        hdr.iter()
+            .zip(rec.iter())
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect::<std::collections::HashMap<_, _>>()
+    };
+    let dry_spec = format!("{}>=50", dry.display());
+    let occ_spec = format!("{}>=50", occ.display());
+
+    // The dry mask falls through; the occurrence rule finds the 5x5 lake.
+    let row = run(&[dry_spec.clone(), occ_spec], &dir.path().join("a.csv"));
+    assert_eq!(row["status"], "ok", "{row:?}");
+    assert_eq!(row["lake_source"], "occurrence", "{row:?}");
+    assert!(row["message"].contains("no water"), "{row:?}");
+    let lake: f64 = row["lake_area_km2"].parse().unwrap();
+    assert!((lake - 0.0225).abs() < 0.006, "lake {lake}");
+    let area: f64 = row["catchment_area_km2"].parse().unwrap();
+    let want = std::f64::consts::PI * 0.6 * 0.6;
+    assert!(
+        (area - want).abs() / want < 0.10,
+        "catchment {area} vs {want}"
+    );
+
+    // No water in any mask: the cell under the point is the lake.
+    let row = run(&[dry_spec], &dir.path().join("b.csv"));
+    assert_eq!(row["status"], "point_only", "{row:?}");
+    assert_eq!(row["lake_source"], "point");
+    let lake: f64 = row["lake_area_km2"].parse().unwrap();
+    assert!((lake - 0.0009).abs() < 1e-6, "lake {lake}");
+}

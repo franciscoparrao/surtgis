@@ -70,9 +70,47 @@ const NEIGHBORS: [(isize, isize, f64); 8] = [
 /// # Returns
 /// Raster of accumulated minimum cost from the nearest source cell.
 /// Source cells have cost 0. Unreachable cells are NaN.
+///
+/// Distances are in **cell steps**, whatever the pixel size: a uniform
+/// cost of 1 gives 10 at ten cells. Use [`cost_distance_map_units`] for
+/// costs per map unit (metres on a projected grid).
 pub fn cost_distance(
     cost_surface: &Raster<f64>,
     params: CostDistanceParams,
+) -> Result<Raster<f64>> {
+    cost_distance_steps(cost_surface, params, [1.0, 1.0, std::f64::consts::SQRT_2])
+}
+
+/// Accumulated cost distance with the step lengths taken from the grid's
+/// pixel size: `|pixel_width|` east–west, `|pixel_height|` north–south and
+/// their hypotenuse on diagonals. With a cost per map unit (e.g. per
+/// metre) the result is the accumulated cost; with a uniform cost of 1 it
+/// is the distance in map units (300 at ten 30 m cells).
+///
+/// Meaningful on projected grids; on a geographic grid the "map units"
+/// are degrees.
+///
+/// # Errors
+/// As [`cost_distance`], plus a non-finite or zero pixel size.
+pub fn cost_distance_map_units(
+    cost_surface: &Raster<f64>,
+    params: CostDistanceParams,
+) -> Result<Raster<f64>> {
+    let t = cost_surface.transform();
+    let (dx, dy) = (t.pixel_width.abs(), t.pixel_height.abs());
+    if !(dx.is_finite() && dy.is_finite() && dx > 0.0 && dy > 0.0) {
+        return Err(Error::Other(format!(
+            "cost distance in map units needs a positive pixel size, got {dx} x {dy}"
+        )));
+    }
+    cost_distance_steps(cost_surface, params, [dx, dy, dx.hypot(dy)])
+}
+
+/// Dijkstra core; `steps` = `[east-west, north-south, diagonal]` lengths.
+fn cost_distance_steps(
+    cost_surface: &Raster<f64>,
+    params: CostDistanceParams,
+    steps: [f64; 3],
 ) -> Result<Raster<f64>> {
     let (rows, cols) = cost_surface.shape();
 
@@ -124,7 +162,12 @@ pub fn cost_distance(
 
         let cost_here = unsafe { cost_surface.get_unchecked(row, col) };
 
-        for &(dr, dc, step_dist) in &NEIGHBORS {
+        for &(dr, dc, _) in &NEIGHBORS {
+            let step_dist = match (dr != 0, dc != 0) {
+                (true, true) => steps[2],
+                (true, false) => steps[1],
+                _ => steps[0],
+            };
             let nr = row as isize + dr;
             let nc = col as isize + dc;
 
@@ -250,5 +293,36 @@ mod tests {
         let r = uniform_cost(5, 5, 1.0);
         let result = cost_distance(&r, CostDistanceParams::default());
         assert!(result.is_err(), "Should error with no sources");
+    }
+    #[test]
+    fn map_units_scale_by_pixel_size() {
+        use surtgis_core::GeoTransform;
+        let mut c: Raster<f64> = Raster::filled(21, 21, 1.0);
+        c.set_transform(GeoTransform::new(0.0, 0.0, 30.0, -20.0));
+        let p = || CostDistanceParams {
+            sources: vec![(10, 10)],
+        };
+        let steps = cost_distance(&c, p()).unwrap();
+        let metres = cost_distance_map_units(&c, p()).unwrap();
+        assert!((steps.get(10, 20).unwrap() - 10.0).abs() < 1e-9);
+        assert!(
+            (metres.get(10, 20).unwrap() - 300.0).abs() < 1e-9,
+            "east-west 10 x 30 m"
+        );
+        assert!(
+            (metres.get(20, 10).unwrap() - 200.0).abs() < 1e-9,
+            "north-south 10 x 20 m"
+        );
+        let diag = 10.0 * 30f64.hypot(20.0);
+        assert!(
+            (metres.get(20, 20).unwrap() - diag).abs() < 1e-9,
+            "diagonal"
+        );
+        // Square pixels: map units are exactly steps x cell size.
+        c.set_transform(GeoTransform::new(0.0, 0.0, 30.0, -30.0));
+        let sq = cost_distance_map_units(&c, p()).unwrap();
+        for (a, b) in sq.data().iter().zip(steps.data()) {
+            assert!((a - 30.0 * b).abs() < 1e-9);
+        }
     }
 }

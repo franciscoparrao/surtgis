@@ -52,9 +52,14 @@ impl CRS {
         Self::from_epsg(3857)
     }
 
-    /// Get EPSG code if known
+    /// Get EPSG code if known, or inferred from the WKT: a trailing
+    /// `AUTHORITY["EPSG","n"]`, or the well-known ESRI/OGC names of WGS 84
+    /// (`GCS_WGS_1984`), its UTM zones (`WGS_1984_UTM_Zone_19S`,
+    /// `WGS 84 / UTM zone 19S`) and Web Mercator — ESRI `.prj` files carry
+    /// no authority, so the name is all there is.
     pub fn epsg(&self) -> Option<u32> {
         self.epsg
+            .or_else(|| self.wkt.as_deref().and_then(infer_epsg_from_wkt))
     }
 
     /// Get WKT representation
@@ -95,8 +100,10 @@ impl CRS {
 
     /// Check if two CRS are equivalent
     pub fn is_equivalent(&self, other: &CRS) -> bool {
-        // Simple check: if both have EPSG codes, compare them
-        if let (Some(a), Some(b)) = (self.epsg, other.epsg) {
+        // If both resolve to an EPSG code (declared or inferred from the
+        // WKT), that decides: an ESRI .prj "WGS_1984_UTM_Zone_19S" and
+        // EPSG:32719 are the same CRS.
+        if let (Some(a), Some(b)) = (self.epsg(), other.epsg()) {
             return a == b;
         }
 
@@ -115,7 +122,7 @@ impl CRS {
 
     /// Get a string identifier for this CRS
     pub fn identifier(&self) -> String {
-        if let Some(code) = self.epsg {
+        if let Some(code) = self.epsg() {
             return format!("EPSG:{}", code);
         }
         if let Some(proj) = &self.proj {
@@ -147,6 +154,54 @@ impl Default for CRS {
     fn default() -> Self {
         Self::wgs84()
     }
+}
+
+/// EPSG code of a WKT string: the outermost `AUTHORITY["EPSG","n"]`
+/// (the last one in WKT1, where inner authorities belong to the datum,
+/// spheroid, unit…), else the WGS 84 family by name (ESRI and OGC
+/// spellings). `None` when nothing is recognised.
+fn infer_epsg_from_wkt(wkt: &str) -> Option<u32> {
+    let upper = wkt.to_ascii_uppercase();
+    // The last AUTHORITY is the CRS's own (WKT1 nests datum/unit ones).
+    if let Some(pos) = upper.rfind("AUTHORITY[\"EPSG\",")
+        && upper[..pos].trim_end().ends_with(',')
+        && let Some(rest) = upper[pos..].split_once("\",\"").map(|x| x.1)
+        && let Some(code) = rest
+            .split('"')
+            .next()
+            .and_then(|c| c.trim().parse::<u32>().ok())
+    {
+        return Some(code);
+    }
+    // Head name: PROJCS["..."] / GEOGCS["..."] / PROJCRS / GEOGCRS.
+    let name_start = upper.find('"')? + 1;
+    let name_end = upper[name_start..].find('"')? + name_start;
+    let name = upper[name_start..name_end].replace(' ', "_");
+    if name.starts_with("GCS_WGS_1984") || name == "WGS_84" || name == "WGS84" {
+        return Some(4326);
+    }
+    if name.contains("WEB_MERCATOR") || name.contains("PSEUDO-MERCATOR") {
+        return Some(3857);
+    }
+    // WGS_1984_UTM_Zone_19S | WGS_84_/_UTM_ZONE_19S
+    if name.contains("WGS_1984") || name.contains("WGS_84") {
+        let idx = name.find("ZONE_")?;
+        let zone_str: String = name[idx + 5..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        let zone: u32 = zone_str.parse().ok()?;
+        if !(1..=60).contains(&zone) {
+            return None;
+        }
+        let hemi = name[idx + 5 + zone_str.len()..].chars().next()?;
+        return match hemi {
+            'N' => Some(32600 + zone),
+            'S' => Some(32700 + zone),
+            _ => None,
+        };
+    }
+    None
 }
 
 #[cfg(test)]
@@ -185,5 +240,23 @@ mod tests {
         let a = CRS::from_epsg(4326);
         let b = CRS::wgs84();
         assert!(a.is_equivalent(&b));
+    }
+
+    #[test]
+    fn epsg_inferred_from_esri_and_ogc_wkt_names() {
+        let esri = "PROJCS[\"WGS_1984_UTM_Zone_19S\",GEOGCS[\"GCS_WGS_1984\",DATUM[\"D_WGS_1984\",SPHEROID[\"WGS_1984\",6378137.0,298.257223563]],PRIMEM[\"Greenwich\",0.0],UNIT[\"Degree\",0.0174532925199433]],PROJECTION[\"Transverse_Mercator\"],UNIT[\"Meter\",1.0]]";
+        assert_eq!(CRS::from_wkt(esri).epsg(), Some(32719));
+        assert!(CRS::from_wkt(esri).is_equivalent(&CRS::from_epsg(32719)));
+        assert_eq!(CRS::from_wkt(esri).identifier(), "EPSG:32719");
+        let ogc = "PROJCS[\"WGS 84 / UTM zone 19N\",GEOGCS[\"WGS 84\",DATUM[\"WGS_1984\",SPHEROID[\"WGS 84\",6378137,298.257223563,AUTHORITY[\"EPSG\",\"7030\"]],AUTHORITY[\"EPSG\",\"6326\"]],AUTHORITY[\"EPSG\",\"4326\"]],UNIT[\"metre\",1],AUTHORITY[\"EPSG\",\"32619\"]]";
+        assert_eq!(CRS::from_wkt(ogc).epsg(), Some(32619));
+        let gcs = "GEOGCS[\"GCS_WGS_1984\",DATUM[\"D_WGS_1984\",SPHEROID[\"WGS_1984\",6378137.0,298.257223563]],PRIMEM[\"Greenwich\",0.0],UNIT[\"Degree\",0.0174532925199433]]";
+        assert_eq!(CRS::from_wkt(gcs).epsg(), Some(4326));
+        assert!(CRS::from_wkt(gcs).is_geographic());
+        assert_eq!(
+            CRS::from_wkt("PROJCS[\"Custom_Lambert\",GEOGCS[\"x\"]]").epsg(),
+            None
+        );
+        assert!(!CRS::from_wkt(esri).is_equivalent(&CRS::from_epsg(32718)));
     }
 }

@@ -50,8 +50,12 @@ pub fn stream_network(flow_acc: &Raster<f64>, params: StreamNetworkParams) -> Re
         }
     }
 
+    // No nodata sentinel: every cell gets a definite 0 (non-stream) or 1
+    // (stream) classification, and 0 is the common, majority value — not
+    // missing data. Declaring it as nodata silently turned every
+    // non-stream cell into NaN for any f64 consumer (e.g. `surtgis
+    // extract`), which is exactly the opposite of what this raster means.
     let mut output = flow_acc.with_same_meta::<u8>(rows, cols);
-    output.set_nodata(Some(0));
     *output.data_mut() = output_data;
 
     Ok(output)
@@ -116,6 +120,46 @@ mod tests {
             for col in 0..cols {
                 let val = streams.get(row, col).unwrap();
                 assert!(val == 0 || val == 1, "Expected 0 or 1, got {}", val);
+            }
+        }
+    }
+
+    /// Regression for BUG_EXTRACT_ZERO_MATCH: `stream_network` used to set
+    /// nodata = 0, so every non-stream cell (0, the overwhelming majority
+    /// of the raster) read back as NaN once cast to f64 — exactly the
+    /// path `surtgis extract` / `sample_at_points` use. A non-stream cell
+    /// must round-trip through GeoTIFF as a real, finite 0.0.
+    #[test]
+    fn non_stream_cells_survive_geotiff_roundtrip_as_finite_zero() {
+        let mut dem = Raster::new(5, 5);
+        dem.set_transform(GeoTransform::new(0.0, 5.0, 1.0, -1.0));
+        for row in 0..5 {
+            for col in 0..5 {
+                dem.set(row, col, (5 - row) as f64 * 10.0).unwrap();
+            }
+        }
+
+        let fdir = flow_direction(&dem).unwrap();
+        let facc = flow_accumulation(&fdir).unwrap();
+        let streams = stream_network(&facc, StreamNetworkParams { threshold: 2.0 }).unwrap();
+
+        assert_eq!(streams.nodata(), None);
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("streams.tif");
+        surtgis_core::io::write_geotiff(&streams, &path, None).unwrap();
+
+        let read_back: Raster<f64> = surtgis_core::io::read_geotiff(&path, None).unwrap();
+        let (rows, cols) = streams.shape();
+        for row in 0..rows {
+            for col in 0..cols {
+                let original = streams.get(row, col).unwrap();
+                let roundtripped = read_back.get(row, col).unwrap();
+                assert!(
+                    roundtripped.is_finite(),
+                    "cell ({row},{col}) = {original} became non-finite ({roundtripped}) after GeoTIFF roundtrip + f64 cast"
+                );
+                assert_eq!(roundtripped, original as f64);
             }
         }
     }

@@ -17,6 +17,15 @@ pub fn handle(input: PathBuf) -> Result<()> {
 
     println!("File: {}", input.display());
     println!("Data type: {}", dtype);
+    if let Ok(Some(p)) = surtgis_core::io::read_provenance(&input) {
+        println!(
+            "Provenance: {} {} on {}, {} input(s) — `surtgis provenance` for details",
+            p.engine.name,
+            p.engine.version,
+            p.created,
+            p.inputs.len()
+        );
+    }
     println!("Dimensions: {} x {} ({} cells)", cols, rows, rows * cols);
     dispatch_any!(&any, r => {
         println!("Cell size: {}", r.cell_size());
@@ -28,8 +37,18 @@ pub fn handle(input: PathBuf) -> Result<()> {
         if let Some(crs) = r.crs() {
             println!("CRS: {}", crs);
         }
-        if let Some(nodata) = r.nodata() {
-            println!("NoData: {}", nodata);
+        // Floats are normalised to NaN in memory; say what the file declares
+        // as well, so "NoData: NaN" is not mistaken for "no nodata tag".
+        let declared = surtgis_core::io::window::geotiff_info(&input)
+            .ok()
+            .and_then(|i| i.nodata);
+        match (r.nodata(), declared) {
+            (Some(nd), Some(tag)) if nd.to_f64().is_some_and(|v| v.is_nan()) && !tag.is_nan() => {
+                println!("NoData: {tag} (file tag; NaN in memory)");
+            }
+            (Some(nd), _) => println!("NoData: {}", nd),
+            (None, Some(tag)) => println!("NoData: {tag} (file tag)"),
+            (None, None) => {}
         }
         let stats = r.statistics();
         println!("\nStatistics:");

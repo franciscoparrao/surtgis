@@ -41,6 +41,8 @@ pub mod wasm_api;
 
 #[cfg(feature = "grib")]
 pub mod grib_reader;
+#[cfg(any(feature = "zarr", feature = "netcdf"))]
+mod latlon_grid;
 #[cfg(feature = "netcdf")]
 pub mod netcdf_reader;
 #[cfg(feature = "zarr")]
@@ -64,7 +66,8 @@ pub use stac_cube_source::StacCubeSource;
 
 #[cfg(feature = "zarr")]
 pub use zarr_reader::{
-    AggMethod, TimeReduction, TimeSelector, ZarrMetadata, ZarrReader, ZarrReaderOptions,
+    AggMethod, TimeAggPartial, TimeReduction, TimeSelector, ZarrMetadata, ZarrReader,
+    ZarrReaderOptions,
 };
 
 /// Blocking API re-exported as `blocking` module (native only).

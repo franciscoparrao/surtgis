@@ -7,6 +7,7 @@ mod native;
 mod options;
 pub mod strip_reader;
 pub mod strip_writer;
+pub mod window;
 
 // Single GeoTiffOptions struct shared by both backends (see options.rs) —
 // no longer feature-dependent, so the type is stable regardless of which
@@ -42,6 +43,13 @@ pub use native::{read_geotiff_from_buffer, write_geotiff_to_buffer};
 // first place (the `gdal` backend still goes through `read_geotiff`).
 pub use native::{read_geotiff_any, read_geotiff_any_from_buffer};
 
+// Internal helper shared with the sibling `surtgis-cloud` crate (COG
+// reader) so every read path converges on the same nodata convention:
+// float buffers rewrite a non-NaN sentinel to NaN, integers keep it.
+// Hidden: not part of the supported public API.
+#[doc(hidden)]
+pub use native::normalize_any_float_nodata;
+
 // Streaming I/O
 pub use strip_reader::StripReader;
 pub use strip_writer::{StripWriterConfig, write_geotiff_streaming};
@@ -49,4 +57,10 @@ pub use strip_writer::{StripWriterConfig, write_geotiff_streaming};
 // Cloud-Optimized GeoTIFF (COG) writer — tiled + internal overview
 // pyramid, native (no `gdal` feature required). See `cog_writer` module
 // docs for exactly what "Cloud-Optimized" means here.
-pub use cog_writer::{CogCompression, CogOptions, OverviewResampling, write_cog};
+pub use cog_writer::{
+    CogCompression, CogOptions, OverviewResampling, write_cog, write_cog_with_provenance,
+};
+pub use native::{
+    parse_gdal_metadata_items, raster_data_hash, read_gdal_metadata, read_provenance,
+    write_geotiff_with_provenance,
+};

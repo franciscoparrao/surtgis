@@ -35,6 +35,10 @@ install from [crates.io](https://crates.io/crates/surtgis):
 cargo install surtgis --all-features
 ```
 
+The crates.io release has no `ecw` feature (the ECW decoder crate is not
+published while its licensing review is open); the precompiled binaries and
+a `--git` build with `--features ecw` include it.
+
 System libraries required for `--all-features`:
 
 | Feature | Linux | macOS | Windows |
@@ -42,10 +46,10 @@ System libraries required for `--all-features`:
 | `netcdf` | `libnetcdf-dev` | `brew install netcdf` | not supported |
 | `grib` | libgribapi or eccodes | `brew install eccodes` | not supported |
 
-If you only need the same feature set as the precompiled binary:
+If you only need the same feature set as the precompiled binary (minus ECW):
 
 ```bash
-cargo install surtgis
+cargo install surtgis --features server
 ```
 
 ## 3. From source (for contributors)

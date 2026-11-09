@@ -38,7 +38,7 @@ pub use gpkg_reader::{list_gpkg_layers, read_gpkg};
 pub use shapefile_reader::read_shapefile;
 
 /// A feature attribute value (one cell of a vector attribute table).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AttributeValue {
     /// No value / missing.
     Null,
