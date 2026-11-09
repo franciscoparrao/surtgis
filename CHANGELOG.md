@@ -8,6 +8,22 @@ breaking changes only ship in a major version and are called out under a
 
 ## [Unreleased]
 
+### Added
+
+- `raster::complex_from_amp_phase` (feature `complex`): a complex raster
+  from amplitude and phase rasters, `z = amp·(cos φ + i·sin φ)`, the
+  counterpart of `complex_from_parts`. Same grid checks; a non-finite
+  amplitude or phase gives complex nodata.
+- Example `insar_conjugate_product` (`cargo run -p surtgis-core --example
+  insar_conjugate_product --features complex`): read → conjugate product
+  → write an interferogram with core's public API only.
+
+### Changed
+
+- `SPEC_SURTGIS_COMPLEX_INSAR.md` now describes what shipped in 0.15.4
+  (split real/imaginary GeoTIFFs rather than native `CFloat32`) and marks
+  the divergences from the original proposal as closed decisions.
+
 ## [1.8.1] - 2026-11-06
 
 Every Earth Search query fetched its first page up to 1000 times, the COG
