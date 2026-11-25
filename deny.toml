@@ -21,6 +21,12 @@ ignore = [
     { id = "RUSTSEC-2025-0119", reason = "number_prefix via indicatif (CLI progress bars); cosmetic dep" },
     { id = "RUSTSEC-2024-0436", reason = "paste proc-macro via zarrs; compile-time only" },
     { id = "RUSTSEC-2026-0192", reason = "ttf-parser via the GUI font stack (publish = false)" },
+    # chrono and humantime declared unmaintained (chronotope/chrono#1768);
+    # no successor release. chrono also comes through gdal, parquet and
+    # object_store, so dropping our direct use (zarr/netcdf time axes)
+    # would not remove it.
+    { id = "RUSTSEC-2026-0543", reason = "chrono: no successor; also via gdal/parquet/object_store" },
+    { id = "RUSTSEC-2026-0542", reason = "humantime via object_store (zarr feature); no successor" },
     # quick-xml 0.38 pinned by zbus_xml (GUI accessibility, publish = false);
     # DoS-class issues in an XML path the library crates never execute.
     { id = "RUSTSEC-2026-0194", reason = "quick-xml via GUI zbus stack only" },
