@@ -138,7 +138,7 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 
 # Vector formats
 shapefile = { version = "0.7", features = ["geo-types"] }
-rusqlite = { version = "0.39", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 
 # ML
 smelt-ml = "1.3"

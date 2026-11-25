@@ -24,6 +24,14 @@ breaking changes only ship in a major version and are called out under a
   (split real/imaginary GeoTIFFs rather than native `CFloat32`) and marks
   the divergences from the original proposal as closed decisions.
 
+### Security
+
+- RUSTSEC-2026-0459 (CVE-2026-119375): the SQLite bundled for GeoPackage
+  I/O could return uninitialised page-cache memory when a `.gpkg` was
+  opened with a crafted sibling `-wal` file. `rusqlite` 0.39 → 0.41
+  (`libsqlite3-sys` 0.39.1, SQLite 3.54.1). `rusqlite` is internal to
+  `surtgis-core`, so no public API changes.
+
 ## [1.8.1] - 2026-11-06
 
 Every Earth Search query fetched its first page up to 1000 times, the COG
