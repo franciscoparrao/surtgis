@@ -31,6 +31,14 @@ breaking changes only ship in a major version and are called out under a
   opened with a crafted sibling `-wal` file. `rusqlite` 0.39 → 0.41
   (`libsqlite3-sys` 0.39.1, SQLite 3.54.1). `rusqlite` is internal to
   `surtgis-core`, so no public API changes.
+- RUSTSEC-2026-0544: zlib heap buffer overflow in `gzwrite` paths of the
+  bundled `libz-sys` (via the NetCDF and Blosc builds), `libz-sys`
+  1.1.31 → 1.1.33.
+- RUSTSEC-2026-0592: stack overflow in `Url::origin()` on nested `blob:`
+  URLs, `url` 2.5.8 → 2.5.9.
+- RUSTSEC-2026-0595: `parquet` wrote Bloom filters in plaintext in
+  encrypted Parquet files, `parquet` 59.0.0 → 59.3.3. SurtGIS writes
+  GeoParquet without encryption, so its output was not affected.
 
 ## [1.8.1] - 2026-11-06
 
