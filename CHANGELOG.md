@@ -8,6 +8,12 @@ breaking changes only ship in a major version and are called out under a
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-11-25
+
+GeoTIFFs tagged PixelIsPoint (every Landsat Collection 2 band) are read
+on the right grid instead of half a pixel off, complex rasters can be
+built from amplitude and phase, and four dependency advisories are fixed.
+
 ### Fixed
 
 - **GeoTIFFs tagged PixelIsPoint were read half a pixel off.** The
