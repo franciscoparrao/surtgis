@@ -36,6 +36,9 @@ breaking changes only ship in a major version and are called out under a
   1.1.31 → 1.1.33.
 - RUSTSEC-2026-0592: stack overflow in `Url::origin()` on nested `blob:`
   URLs, `url` 2.5.8 → 2.5.9.
+- RUSTSEC-2026-0595: `parquet` wrote Bloom filters in plaintext in
+  encrypted Parquet files, `parquet` 59.0.0 → 59.3.3. SurtGIS writes
+  GeoParquet without encryption, so its output was not affected.
 
 ## [1.8.1] - 2026-11-06
 
