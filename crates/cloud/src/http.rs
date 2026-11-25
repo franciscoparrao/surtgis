@@ -730,6 +730,10 @@ mod tests {
                     std::thread::sleep(std::time::Duration::from_millis(40));
                     let mut buf = [0u8; 1024];
                     let _ = stream.read(&mut buf);
+                    // Leave the count before answering: once the response
+                    // is out the client may start its next request, and
+                    // counting this one still in flight then read 7 > 6.
+                    cur.fetch_sub(1, Ordering::SeqCst);
                     let body = b"0123456789";
                     let resp = format!(
                         "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes 0-9/1000\r\nConnection: close\r\n\r\n",
@@ -738,7 +742,6 @@ mod tests {
                     let _ = stream.write_all(resp.as_bytes());
                     let _ = stream.write_all(body);
                     let _ = stream.flush();
-                    cur.fetch_sub(1, Ordering::SeqCst);
                 });
             }
         });
