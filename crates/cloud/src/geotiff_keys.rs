@@ -31,7 +31,10 @@ pub fn extract_geotiff_meta(
     entries: &[RawTagEntry],
     resolved: &[(u16, Vec<u8>)],
 ) -> GeoTiffMeta {
-    let geo_transform = extract_geotransform(byte_order, entries, resolved);
+    let mut geo_transform = extract_geotransform(byte_order, entries, resolved);
+    if raster_type(byte_order, entries, resolved) == Some(2) {
+        geo_transform = pixel_is_point_to_area(geo_transform);
+    }
     let crs = extract_crs(byte_order, entries, resolved);
     let nodata = extract_nodata(entries, resolved);
 
@@ -42,8 +45,39 @@ pub fn extract_geotiff_meta(
     }
 }
 
+/// Move a PixelIsPoint transform (tiepoint at the centre of the first
+/// pixel) to the corner convention every `GeoTransform` here uses, as GDAL
+/// does by default (`GTIFF_POINT_GEO_IGNORE=FALSE`).
+fn pixel_is_point_to_area(mut gt: GeoTransform) -> GeoTransform {
+    gt.origin_x -= 0.5 * (gt.pixel_width + gt.row_rotation);
+    gt.origin_y -= 0.5 * (gt.col_rotation + gt.pixel_height);
+    gt
+}
+
+/// GTRasterTypeGeoKey (1025): 1 = PixelIsArea, 2 = PixelIsPoint. `None`
+/// when absent, which GeoTIFF reads as PixelIsArea.
+fn raster_type(
+    byte_order: TiffByteOrder,
+    entries: &[RawTagEntry],
+    resolved: &[(u16, Vec<u8>)],
+) -> Option<u32> {
+    let entry = entries.iter().find(|e| e.tag == tags::GEO_KEY_DIRECTORY)?;
+    let data = resolved
+        .iter()
+        .find(|(tag, _)| *tag == tags::GEO_KEY_DIRECTORY)?
+        .1
+        .as_slice();
+    let keys = ifd::read_offset_values_u64(byte_order, entry, data);
+    let num_keys = *keys.get(3)? as usize;
+    (0..num_keys)
+        .map(|i| 4 + i * 4)
+        .take_while(|&base| base + 3 < keys.len())
+        .find(|&base| keys[base] == 1025 && keys[base + 1] == 0)
+        .map(|base| keys[base + 3] as u32)
+}
+
 /// Extract GeoTransform from ModelPixelScale + ModelTiepoint, or from
-/// ModelTransformation matrix.
+/// ModelTransformation matrix, as written (tiepoint convention unchanged).
 fn extract_geotransform(
     byte_order: TiffByteOrder,
     entries: &[RawTagEntry],

@@ -607,7 +607,36 @@ pub(crate) fn read_crs<R: std::io::Read + std::io::Seek>(
     None
 }
 
-/// Attempt to read GeoTransform from TIFF tags
+/// GTRasterTypeGeoKey (1025) from the GeoKeyDirectory: 1 = PixelIsArea,
+/// 2 = PixelIsPoint. `None` when the key is absent, which GeoTIFF reads
+/// as PixelIsArea.
+pub(crate) fn read_raster_type<R: std::io::Read + std::io::Seek>(
+    decoder: &mut Decoder<R>,
+) -> Option<u16> {
+    let geokeys = decoder.get_tag_u16_vec(Tag::Unknown(34735)).ok()?;
+    if geokeys.len() < 4 {
+        return None;
+    }
+    let num_keys = geokeys[3] as usize;
+    (0..num_keys)
+        .map(|i| 4 + i * 4)
+        .take_while(|&base| base + 3 < geokeys.len())
+        .find(|&base| geokeys[base] == 1025 && geokeys[base + 1] == 0)
+        .map(|base| geokeys[base + 3])
+}
+
+/// Move a PixelIsPoint transform (tiepoint at the centre of the first
+/// pixel) to the corner convention every SurtGIS `GeoTransform` uses, as
+/// GDAL does by default (`GTIFF_POINT_GEO_IGNORE=FALSE`).
+pub(crate) fn pixel_is_point_to_area(mut gt: GeoTransform) -> GeoTransform {
+    gt.origin_x -= 0.5 * (gt.pixel_width + gt.row_rotation);
+    gt.origin_y -= 0.5 * (gt.col_rotation + gt.pixel_height);
+    gt
+}
+
+/// Attempt to read GeoTransform from TIFF tags. The result is always in
+/// the corner (PixelIsArea) convention: a PixelIsPoint file's tiepoint is
+/// moved half a pixel to the corner of the first pixel.
 pub(crate) fn read_geotransform<R: std::io::Read + std::io::Seek>(
     decoder: &mut Decoder<R>,
 ) -> Result<GeoTransform> {
@@ -635,12 +664,12 @@ pub(crate) fn read_geotransform<R: std::io::Read + std::io::Seek>(
         let pixel_width = scale[0];
         let pixel_height = -scale[1]; // Negative for north-up
 
-        return Ok(GeoTransform::new(
-            origin_x,
-            origin_y,
-            pixel_width,
-            pixel_height,
-        ));
+        let gt = GeoTransform::new(origin_x, origin_y, pixel_width, pixel_height);
+        return Ok(if read_raster_type(decoder) == Some(2) {
+            pixel_is_point_to_area(gt)
+        } else {
+            gt
+        });
     }
 
     Err(Error::Other("Cannot determine geotransform".into()))

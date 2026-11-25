@@ -55,7 +55,7 @@ impl StripReader {
             as usize;
 
         // Read GeoTransform from tags
-        let transform = read_geotransform_from_decoder(&mut decoder).unwrap_or_default();
+        let transform = super::native::read_geotransform(&mut decoder).unwrap_or_default();
 
         // Read CRS from GeoKeys
         let crs = read_crs_from_decoder(&mut decoder);
@@ -220,37 +220,6 @@ fn decode_to_f64(result: DecodingResult) -> Vec<f64> {
         DecodingResult::I32(buf) => buf.iter().map(|&v| v as f64).collect(),
         _ => vec![],
     }
-}
-
-/// Read GeoTransform from TIFF tags (ModelPixelScaleTag + ModelTiepointTag).
-fn read_geotransform_from_decoder<R: std::io::Read + std::io::Seek>(
-    decoder: &mut Decoder<R>,
-) -> Result<GeoTransform> {
-    let scale_tag = Tag::Unknown(33550);
-    let tiepoint_tag = Tag::Unknown(33922);
-
-    let scale = decoder
-        .get_tag_f64_vec(scale_tag)
-        .map_err(|_| Error::Other("No pixel scale tag".into()))?;
-
-    let tiepoint = decoder
-        .get_tag_f64_vec(tiepoint_tag)
-        .map_err(|_| Error::Other("No tiepoint tag".into()))?;
-
-    if scale.len() >= 2 && tiepoint.len() >= 6 {
-        let origin_x = tiepoint[3] - tiepoint[0] * scale[0];
-        let origin_y = tiepoint[4] + tiepoint[1] * scale[1];
-        let pixel_width = scale[0];
-        let pixel_height = -scale[1];
-        return Ok(GeoTransform::new(
-            origin_x,
-            origin_y,
-            pixel_width,
-            pixel_height,
-        ));
-    }
-
-    Err(Error::Other("Cannot determine geotransform".into()))
 }
 
 /// Read GDAL_NODATA tag (42113) — ASCII string parsed to f64.

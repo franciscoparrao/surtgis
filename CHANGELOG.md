@@ -8,6 +8,21 @@ breaking changes only ship in a major version and are called out under a
 
 ## [Unreleased]
 
+### Fixed
+
+- **GeoTIFFs tagged PixelIsPoint were read half a pixel off.** The
+  readers ignored `GTRasterTypeGeoKey` (1025) and took the tiepoint of a
+  `RasterPixelIsPoint` file, which marks the centre of the first pixel, as
+  its corner: every Landsat Collection 2 band (Planetary Computer, USGS)
+  came out shifted half a pixel north-west, with window origins on pixel
+  centres, and was then written tagged PixelIsArea. The local readers
+  (`read_geotiff*`, `geotiff_info`, `StripReader`) and the COG reader now
+  move the tiepoint to the corner as GDAL does by default; `GeoTransform`
+  is always in the corner convention. Files without the key, or
+  PixelIsArea (e.g. Sentinel-2), read as before. Checked on
+  `LC08_L2SP_200029_20130827_02_T1`: same origin as GDAL (x ≡ 15 mod 30)
+  and identical values. Reported from strandline.
+
 ### Added
 
 - `raster::complex_from_amp_phase` (feature `complex`): a complex raster
