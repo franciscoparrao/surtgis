@@ -109,13 +109,13 @@ fn cog_fetch<'py>(
 ) -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyDict>)> {
     let bb = BBox::new(bbox.0, bbox.1, bbox.2, bbox.3);
     let raster: Raster<f64> = py
-        .allow_threads(|| {
+        .detach(|| {
             let mut reader = CogReaderBlocking::open(url, CogReaderOptions::default())?;
             reader.read_bbox(&bb, overview)
         })
         .map_err(err)?;
     let meta = raster_meta_dict(py, &raster)?;
-    let arr: Array2<f64> = raster.data().clone();
+    let arr: Array2<f64> = crate::to_np(raster.data().clone());
     Ok((arr.into_pyarray(py), meta))
 }
 
@@ -131,13 +131,13 @@ fn cog_fetch_full<'py>(
     overview: Option<usize>,
 ) -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyDict>)> {
     let raster: Raster<f64> = py
-        .allow_threads(|| {
+        .detach(|| {
             let mut reader = CogReaderBlocking::open(url, CogReaderOptions::default())?;
             reader.read_full(overview)
         })
         .map_err(err)?;
     let meta = raster_meta_dict(py, &raster)?;
-    let arr: Array2<f64> = raster.data().clone();
+    let arr: Array2<f64> = crate::to_np(raster.data().clone());
     Ok((arr.into_pyarray(py), meta))
 }
 
@@ -148,7 +148,7 @@ fn cog_fetch_full<'py>(
 #[pyfunction]
 fn cog_info<'py>(py: Python<'py>, url: &str) -> PyResult<Bound<'py, PyDict>> {
     let meta: CogMetadata = py
-        .allow_threads(|| {
+        .detach(|| {
             let reader = CogReaderBlocking::open(url, CogReaderOptions::default())?;
             Ok::<_, surtgis_cloud::error::CloudError>(reader.metadata())
         })
@@ -198,7 +198,7 @@ fn stac_search<'py>(
         params = params.limit(n);
     }
     let items = py
-        .allow_threads(|| {
+        .detach(|| {
             let client = StacClientBlocking::new(cat, StacClientOptions::default())?;
             client.search_all(&params)
         })
@@ -244,7 +244,7 @@ fn stac_search<'py>(
 #[pyo3(signature = (href, collection, catalog="pc"))]
 fn stac_sign_href(py: Python<'_>, href: &str, collection: &str, catalog: &str) -> PyResult<String> {
     let cat = StacCatalog::from_str_or_url(catalog);
-    py.allow_threads(|| {
+    py.detach(|| {
         let client = StacClientBlocking::new(cat, StacClientOptions::default())?;
         client.sign_asset_href(href, collection)
     })
@@ -286,7 +286,7 @@ impl StripSink for BufferSink {
         &mut self,
         band_idx: usize,
         row_start: usize,
-        strip: Array2<f64>,
+        strip: surtgis_core::ndarray::Array2<f64>,
     ) -> surtgis_cloud::Result<()> {
         let buf = &mut self.buffers[band_idx];
         let offset = row_start * self.cols;
@@ -381,7 +381,7 @@ fn composite<'py>(
     };
 
     let report = py
-        .allow_threads(|| {
+        .detach(|| {
             let mut engine = CompositeEngine::new(spec)?;
             engine.run(&DefaultAssetResolver, &mask, &mut sink, &mut NoProgress)
         })

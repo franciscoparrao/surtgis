@@ -8,6 +8,14 @@ breaking changes only ship in a major version and are called out under a
 
 ## [Unreleased]
 
+### Security
+
+- Python bindings: `pyo3` 0.23 → 0.30 and `numpy` 0.23 → 0.30, closing
+  RUSTSEC-2025-0020 (buffer overflow in `PyString::from_object`) and
+  RUSTSEC-2026-0177 (missing `Sync` bound on `PyCFunction` closures),
+  which had been ignored in `deny.toml` pending this bump. The Python API
+  is unchanged.
+
 ## [1.9.0] - 2026-11-25
 
 GeoTIFFs tagged PixelIsPoint (every Landsat Collection 2 band) are read
