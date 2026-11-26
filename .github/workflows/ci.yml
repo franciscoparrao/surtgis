@@ -225,6 +225,10 @@ jobs:
           components: rustfmt
       - name: Check formatting
         run: cargo fmt --all -- --check
+      # Every public function of algorithms/relief is either a counted
+      # algorithm (docs/algorithms.csv) or excluded with a reason.
+      - name: Algorithm registry is complete
+        run: python3 scripts/count_algorithms.py --check
 
 
   msrv:

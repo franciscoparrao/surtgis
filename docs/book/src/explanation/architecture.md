@@ -72,7 +72,7 @@ Trade-offs of this choice:
 
 **Wins:**
 - Single binary. Ship as precompiled. No `libgdal.so` version mismatch hell.
-- Works on WASM. 56 of the 127 algorithms compile to
+- Works on WASM. 58 functions, covering a subset of the algorithms, compile to
   `wasm32-unknown-unknown` and run in any modern browser without a
   server. This includes the full Florinsky 14-curvature system,
   D8/MFD/D-infinity hydrology, 14 spectral indices, the focal-stats

@@ -8,6 +8,18 @@ breaking changes only ship in a major version and are called out under a
 
 ## [Unreleased]
 
+### Changed
+
+- The algorithm count is now reproducible: `docs/algorithms.csv` lists
+  each distinct operation with the function that implements it,
+  `docs/algorithms_excluded.csv` gives the reason for every other public
+  function, and `scripts/count_algorithms.py` counts them and fails in CI
+  when a new public function is left unclassified. With the rule of the
+  EMS paper's Table S1 SurtGIS has 221 algorithms (127 in that table, 32
+  that already existed but were not listed, 62 added since March 2026),
+  plus 16 vector geoprocessing operations; README, user guide and Zenodo
+  metadata said 127.
+
 ## [1.9.0] - 2026-11-25
 
 GeoTIFFs tagged PixelIsPoint (every Landsat Collection 2 band) are read
