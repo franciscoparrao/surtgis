@@ -4,7 +4,7 @@
 
 **High-performance geospatial analysis library and CLI in Rust.**
 
-127 algorithms (56 of them also in the browser via WebAssembly), 90 CLI subcommands, streaming I/O for arbitrarily large DEMs, native CRS reprojection, and an end-to-end satellite composite pipeline — all from a single binary with no external dependencies.
+221 algorithms (a subset also runs in the browser through 58 WebAssembly functions), 209 CLI subcommands, streaming I/O for arbitrarily large DEMs, native CRS reprojection, and an end-to-end satellite composite pipeline — all from a single binary with no external dependencies.
 
 **📖 [User guide](https://franciscoparrao.github.io/surtgis/book/)** · **[API reference (docs.rs)](https://docs.rs/surtgis-core)** · **[Release downloads](https://github.com/franciscoparrao/surtgis/releases/latest)** · **[CHANGELOG](CHANGELOG.md)**
 
@@ -110,7 +110,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
 ## Highlights
 
-- **127 algorithms** — terrain, hydrology, imagery, landscape, classification, statistics, morphology, interpolation
+- **221 algorithms** — terrain, hydrology, imagery, temporal, fluvial, landscape, classification, statistics, morphology, interpolation, texture, pansharpening, segmentation; each one listed in [`docs/algorithms.csv`](docs/algorithms.csv) and counted by `scripts/count_algorithms.py`
 - **90 CLI subcommands** — batch modes (`terrain all`, `hydrology all`), expression-based indices, landscape metrics
 - **Streaming I/O** — 12 terrain algorithms process DEMs of any size with ~200MB RAM
 - **STAC composite** — end-to-end satellite pipeline: search → mosaic → cloud-mask → median composite
@@ -126,11 +126,11 @@ See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 ```
 surtgis/
 ├── surtgis-core           # Raster<T>, GeoTransform, CRS, GeoTIFF I/O, streaming, mosaic, vector
-├── surtgis-algorithms     # 127 algorithms in 9 modules
+├── surtgis-algorithms     # 216 algorithms in 17 modules
 ├── surtgis-parallel       # Rayon-based parallel strategies
 ├── surtgis-cli            # 90 CLI subcommands (14 modular files)
 ├── surtgis-cloud          # COG reader, STAC client, bbox reprojection
-├── surtgis-wasm           # WebAssembly bindings (56 algos)
+├── surtgis-wasm           # WebAssembly bindings (58 functions)
 ├── surtgis-python         # Python bindings (PyO3)
 ├── surtgis-gui            # egui desktop application
 └── surtgis-colormap       # Color schemes and raster rendering

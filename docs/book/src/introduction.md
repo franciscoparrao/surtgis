@@ -1,13 +1,13 @@
 # SurtGIS
 
 **High-performance geospatial analysis in Rust.** A single CLI binary and a
-set of Rust crates that compute 127 terrain, hydrology, imagery, morphology,
-interpolation, and classification algorithms — with native GeoTIFF I/O,
-streaming for rasters larger than RAM, native CRS reprojection, and an
-end-to-end STAC composite pipeline for Planetary Computer and Earth Search.
-56 of the 127 algorithms also compile to WebAssembly and run in any modern
-browser without a server, including the complete Florinsky 14-curvature
-morphometric system.
+set of Rust crates that compute 221 terrain, hydrology, imagery, temporal,
+fluvial, morphology, interpolation, and classification algorithms — with
+native GeoTIFF I/O, streaming for rasters larger than RAM, native CRS
+reprojection, and an end-to-end STAC composite pipeline for Planetary
+Computer and Earth Search. A subset also runs in any modern browser without
+a server, through 58 WebAssembly functions that include the complete
+Florinsky 14-curvature morphometric system.
 
 This book is the user guide. For the auto-generated API reference (for
 embedding SurtGIS as a library in Rust code), see

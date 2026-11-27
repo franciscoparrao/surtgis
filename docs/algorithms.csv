@@ -1,0 +1,222 @@
+id,category,algorithm,crate,function,source
+1,Terrain,Slope (Horn's method),algorithms,slope,table-2026-03
+2,Terrain,Aspect (0–360°),algorithms,aspect,table-2026-03
+3,Terrain,Northness (cos aspect),algorithms,northness,table-2026-03
+4,Terrain,Eastness (sin aspect),algorithms,eastness,table-2026-03
+5,Terrain,Analytical hillshade,algorithms,hillshade,table-2026-03
+6,Terrain,Multidirectional hillshade,algorithms,multidirectional_hillshade,table-2026-03
+7,Terrain,General curvature,algorithms,curvature,table-2026-03
+8,Terrain,Profile curvature,algorithms,curvature,table-2026-03
+9,Terrain,Plan curvature,algorithms,curvature,table-2026-03
+10,Terrain,Mean curvature H,algorithms,advanced_curvatures,table-2026-03
+11,Terrain,Gaussian curvature K,algorithms,advanced_curvatures,table-2026-03
+12,Terrain,Unsphericity M,algorithms,advanced_curvatures,table-2026-03
+13,Terrain,Difference curvature E,algorithms,advanced_curvatures,table-2026-03
+14,Terrain,Minimal curvature k_min,algorithms,advanced_curvatures,table-2026-03
+15,Terrain,Maximal curvature k_max,algorithms,advanced_curvatures,table-2026-03
+16,Terrain,Horizontal curvature k_h,algorithms,advanced_curvatures,table-2026-03
+17,Terrain,Vertical curvature k_v,algorithms,advanced_curvatures,table-2026-03
+18,Terrain,Horizontal excess k_he,algorithms,advanced_curvatures,table-2026-03
+19,Terrain,Vertical excess k_ve,algorithms,advanced_curvatures,table-2026-03
+20,Terrain,Accumulation curvature K_a,algorithms,advanced_curvatures,table-2026-03
+21,Terrain,Ring curvature K_r,algorithms,advanced_curvatures,table-2026-03
+22,Terrain,Rotor,algorithms,advanced_curvatures,table-2026-03
+23,Terrain,Laplacian,algorithms,advanced_curvatures,table-2026-03
+24,Terrain,Topographic Position Index (TPI),algorithms,tpi,table-2026-03
+25,Terrain,Terrain Ruggedness Index (TRI),algorithms,tri,table-2026-03
+26,Terrain,Deviation from Mean Elevation,algorithms,dev,table-2026-03
+27,Terrain,Vector Ruggedness Measure (VRM),algorithms,vrm,table-2026-03
+28,Terrain,Geomorphons (10-class),algorithms,geomorphons,table-2026-03
+29,Terrain,Multi-scale landform classification,algorithms,landform_classification,table-2026-03
+30,Terrain,Shape index,algorithms,shape_index,table-2026-03
+31,Terrain,Curvedness,algorithms,curvedness,table-2026-03
+32,Terrain,MRVBF / MRRTF,algorithms,mrvbf,table-2026-03
+33,Terrain,Convergence index,algorithms,convergence_index,table-2026-03
+34,Terrain,Sky View Factor (SVF),algorithms,sky_view_factor,table-2026-03
+35,Terrain,Positive openness,algorithms,positive_openness,table-2026-03
+36,Terrain,Negative openness,algorithms,negative_openness,table-2026-03
+37,Terrain,Viewshed (R2),algorithms,viewshed,table-2026-03
+38,Terrain,Viewshed (X-Draw),algorithms,viewshed_xdraw,table-2026-03
+39,Terrain,Multi-observer viewshed,algorithms,viewshed_multiple,table-2026-03
+40,Terrain,Probabilistic viewshed,algorithms,viewshed_probabilistic,table-2026-03
+41,Terrain,Stream Power Index (SPI),algorithms,spi,table-2026-03
+42,Terrain,Sediment Transport Index (STI),algorithms,sti,table-2026-03
+43,Terrain,Wind exposure index,algorithms,wind_exposure,table-2026-03
+44,Terrain,Solar radiation (daily),algorithms,solar_radiation,table-2026-03
+45,Terrain,Solar radiation (shadowed),algorithms,solar_radiation_shadowed,table-2026-03
+46,Terrain,Solar radiation (annual),algorithms,solar_radiation_annual,table-2026-03
+47,Terrain,Lineament detection,algorithms,lineament_detection,table-2026-03
+48,Terrain,Cost distance (D8),algorithms,cost_distance,table-2026-03
+49,Terrain,Contour lines,algorithms,contour_lines,table-2026-03
+50,Hydrology,Planchon–Darboux fill,algorithms,fill_sinks,table-2026-03
+51,Hydrology,Priority-Flood fill,algorithms,priority_flood,table-2026-03
+52,Hydrology,Breach depressions,algorithms,breach_depressions,table-2026-03
+53,Hydrology,D8 flow direction,algorithms,flow_direction,table-2026-03
+54,Hydrology,D-infinity flow direction,algorithms,flow_direction_dinf,table-2026-03
+55,Hydrology,D8 flow accumulation,algorithms,flow_accumulation,table-2026-03
+56,Hydrology,MFD flow accumulation,algorithms,flow_accumulation_mfd,table-2026-03
+57,Hydrology,Adaptive MFD accumulation,algorithms,flow_accumulation_mfd_adaptive,table-2026-03
+58,Hydrology,TFGA flow accumulation,algorithms,flow_accumulation_tfga,table-2026-03
+59,Hydrology,D-infinity accumulation,algorithms,flow_accumulation_dinf,table-2026-03
+60,Hydrology,TWI (Topographic Wetness Index),algorithms,twi,table-2026-03
+61,Hydrology,HAND (Height Above Nearest Drainage),algorithms,hand,table-2026-03
+62,Hydrology,Watershed delineation,algorithms,watershed,table-2026-03
+63,Hydrology,Stream network extraction,algorithms,stream_network,table-2026-03
+64,Hydrology,Strahler stream order,algorithms,strahler_order,table-2026-03
+65,Hydrology,Flow path length,algorithms,flow_path_length,table-2026-03
+66,Hydrology,Isobasins,algorithms,isobasins,table-2026-03
+67,Hydrology,Flood fill simulation,algorithms,flood_fill_simulation,table-2026-03
+68,Hydrology,Nested depression analysis,algorithms,nested_depressions,table-2026-03
+69,Imagery,NDVI,algorithms,ndvi,table-2026-03
+70,Imagery,NDWI,algorithms,ndwi,table-2026-03
+71,Imagery,MNDWI,algorithms,mndwi,table-2026-03
+72,Imagery,NDRE,algorithms,ndre,table-2026-03
+73,Imagery,GNDVI,algorithms,gndvi,table-2026-03
+74,Imagery,NGRDI,algorithms,ngrdi,table-2026-03
+75,Imagery,RECI,algorithms,reci,table-2026-03
+76,Imagery,SAVI,algorithms,savi,table-2026-03
+77,Imagery,MSAVI,algorithms,msavi,table-2026-03
+78,Imagery,EVI,algorithms,evi,table-2026-03
+79,Imagery,EVI2,algorithms,evi2,table-2026-03
+80,Imagery,NBR,algorithms,nbr,table-2026-03
+81,Imagery,NDSI,algorithms,ndsi,table-2026-03
+82,Imagery,NDBI,algorithms,ndbi,table-2026-03
+83,Imagery,NDMI,algorithms,ndmi,table-2026-03
+84,Imagery,BSI (Bare Soil Index),algorithms,bsi,table-2026-03
+85,Imagery,Generic normalized difference,algorithms,normalized_difference,table-2026-03
+86,Imagery,Band math (binary ops),algorithms,band_math_binary,table-2026-03
+87,Imagery,Band math (expressions),algorithms,band_math,table-2026-03
+88,Imagery,Reclassify,algorithms,reclassify,table-2026-03
+89,Imagery,Raster difference / change detection,algorithms,raster_difference,table-2026-03
+90,Imagery,Change vector analysis,algorithms,change_vector_analysis,table-2026-03
+91,Morphology,Erosion,algorithms,erode,table-2026-03
+92,Morphology,Dilation,algorithms,dilate,table-2026-03
+93,Morphology,Opening,algorithms,opening,table-2026-03
+94,Morphology,Closing,algorithms,closing,table-2026-03
+95,Morphology,Morphological gradient,algorithms,gradient,table-2026-03
+96,Morphology,Top-hat transform,algorithms,top_hat,table-2026-03
+97,Morphology,Black-hat transform,algorithms,black_hat,table-2026-03
+98,Statistics,Focal mean,algorithms,focal_statistics,table-2026-03
+99,Statistics,Focal standard deviation,algorithms,focal_statistics,table-2026-03
+100,Statistics,Focal range,algorithms,focal_statistics,table-2026-03
+101,Statistics,Focal median,algorithms,focal_statistics,table-2026-03
+102,Statistics,Focal minimum,algorithms,focal_statistics,table-2026-03
+103,Statistics,Focal maximum,algorithms,focal_statistics,table-2026-03
+104,Statistics,Focal sum,algorithms,focal_statistics,table-2026-03
+105,Statistics,Focal majority (mode),algorithms,focal_statistics,table-2026-03
+106,Statistics,Zonal statistics,algorithms,zonal_statistics,table-2026-03
+107,Statistics,Moran's I (global),algorithms,global_morans_i,table-2026-03
+108,Statistics,Getis-Ord Gi* (local),algorithms,local_getis_ord,table-2026-03
+109,Interpolation,Inverse Distance Weighting (IDW),algorithms,idw,table-2026-03
+110,Interpolation,Nearest neighbor,algorithms,nearest_neighbor,table-2026-03
+111,Interpolation,Natural neighbor,algorithms,natural_neighbor,table-2026-03
+112,Interpolation,TIN (barycentric),algorithms,tin_interpolation,table-2026-03
+113,Interpolation,Thin plate spline,algorithms,tps_interpolation,table-2026-03
+114,Interpolation,Ordinary kriging,algorithms,ordinary_kriging,table-2026-03
+115,Interpolation,Universal kriging,algorithms,universal_kriging,table-2026-03
+116,Interpolation,Regression kriging,algorithms,regression_kriging,table-2026-03
+117,Interpolation,Variogram estimation \,algorithms,fit_variogram,table-2026-03
+118,Landscape,Shannon diversity index,algorithms,shannon_diversity,table-2026-03
+119,Landscape,Simpson diversity index,algorithms,simpson_diversity,table-2026-03
+120,Landscape,Patch density,algorithms,patch_density,table-2026-03
+121,Classification,K-means clustering,algorithms,kmeans_raster,table-2026-03
+122,Classification,ISODATA clustering,algorithms,isodata,table-2026-03
+123,Classification,Minimum distance classifier,algorithms,minimum_distance,table-2026-03
+124,Classification,Maximum likelihood classifier,algorithms,maximum_likelihood,table-2026-03
+125,Classification,PCA (first component),algorithms,pca,table-2026-03
+126,Texture,GLCM texture features (Haralick),algorithms,haralick_glcm,table-2026-03
+127,Texture,Sobel edge detection,algorithms,sobel_edge,table-2026-03
+128,Terrain,Feature-preserving DEM smoothing (FPDEMS),algorithms,feature_preserving_smoothing,pre-2026-03
+129,Terrain,Multiscale curvature,algorithms,multiscale_curvatures,pre-2026-03
+130,Terrain,Accumulation / dispersion zones,algorithms,accumulation_zones,pre-2026-03
+131,Terrain,FFT low-pass DEM filter,algorithms,fft_low_pass,pre-2026-03
+132,Terrain,Gaussian scale-space pyramid,algorithms,gaussian_scale_space,pre-2026-03
+133,Terrain,Gaussian DEM smoothing,algorithms,gaussian_smoothing,pre-2026-03
+134,Terrain,Horizon angles,algorithms,horizon_angles,pre-2026-03
+135,Terrain,Multi-scale valleyness (MSV),algorithms,msv,pre-2026-03
+136,Terrain,Viewshed observer optimisation,algorithms,observer_optimization,pre-2026-03
+137,Terrain,Representative elementary area (REA),algorithms,rea_analysis,pre-2026-03
+138,Terrain,2D singular spectrum analysis denoising,algorithms,ssa_2d,pre-2026-03
+139,Terrain,Morphometric uncertainty from DEM RMSE,algorithms,uncertainty,pre-2026-03
+140,Terrain,Viewshed (PDERL),algorithms,viewshed_pderl,pre-2026-03
+141,Texture,Laplacian edge filter,algorithms,laplacian,pre-2026-03
+142,Imagery,Cloud mask (Sentinel-2 SCL),algorithms,cloud_mask_scl,pre-2026-03
+143,Imagery,Per-pixel median composite,algorithms,median_composite,pre-2026-03
+144,Landscape,Class-level landscape metrics,algorithms,class_metrics,pre-2026-03
+145,Landscape,Patch labelling (connected components),algorithms,label_patches,pre-2026-03
+146,Landscape,Landscape-level metrics,algorithms,landscape_metrics,pre-2026-03
+147,Landscape,Patch-level metrics,algorithms,patch_metrics,pre-2026-03
+148,Hydrology,Basin morphometry,algorithms,basin_morphometry,pre-2026-03
+149,Hydrology,Drainage density,algorithms,drainage_density,pre-2026-03
+150,Hydrology,Hypsometric integral,algorithms,hypsometric_integral,pre-2026-03
+151,Hydrology,Sediment connectivity index (IC),algorithms,sediment_connectivity,pre-2026-03
+152,Imagery,Burn severity classes (dNBR),algorithms,burn_severity_classify,pre-2026-03
+153,Imagery,Differenced NBR (dNBR),algorithms,dnbr,pre-2026-03
+154,Terrain,LS factor (RUSLE),algorithms,ls_factor,pre-2026-03
+155,Terrain,Relative slope position,algorithms,relative_slope_position,pre-2026-03
+156,Terrain,Surface area ratio,algorithms,surface_area_ratio,pre-2026-03
+157,Terrain,Valley depth,algorithms,valley_depth,pre-2026-03
+158,Terrain,Circular variance of aspect,algorithms,circular_variance_aspect,2026-03+
+159,Terrain,Difference from mean elevation,algorithms,diff_from_mean_elev,2026-03+
+160,Terrain,Directional relief,algorithms,directional_relief,2026-03+
+161,Terrain,Downslope index,algorithms,downslope_index,2026-03+
+162,Terrain,Edge density,algorithms,edge_density,2026-03+
+163,Terrain,Elevation above pit,algorithms,elev_above_pit,2026-03+
+164,Terrain,Elevation relative to min/max,algorithms,elev_relative_to_min_max,2026-03+
+165,Terrain,Maximum branch length,algorithms,max_branch_length,2026-03+
+166,Terrain,Normal vector angular deviation,algorithms,normal_vector_deviation,2026-03+
+167,Terrain,Percent elevation range,algorithms,percent_elev_range,2026-03+
+168,Terrain,Relative aspect,algorithms,relative_aspect,2026-03+
+169,Terrain,Spherical standard deviation of normals,algorithms,spherical_std_dev,2026-03+
+170,Imagery,Cloud mask (HLS Fmask),algorithms,cloud_mask_hls_fmask,2026-03+
+171,Imagery,Landsat TOA reflectance calibration,algorithms,dn_to_toa_landsat,2026-03+
+172,Imagery,Dark-object subtraction (DOS1),algorithms,dos1,2026-03+
+173,Imagery,Feather mosaic,algorithms,feather_mosaic,2026-03+
+174,Imagery,Histogram matching,algorithms,histogram_match,2026-03+
+175,Imagery,IR-MAD change detection,algorithms,ir_mad,2026-03+
+176,Imagery,MAD change detection,algorithms,mad,2026-03+
+177,Imagery,Moment matching,algorithms,moment_match,2026-03+
+178,Texture,Local binary pattern (LBP),algorithms,lbp,2026-03+
+179,Hydrology,Energy-cone inundation,algorithms,energy_cone,2026-03+
+180,Hydrology,LAHARZ inundation,algorithms,laharz,2026-03+
+181,Hydrology,Melton ruggedness ratio,algorithms,melton_ruggedness,2026-03+
+182,Imagery,Dual-polarisation SAR water index,algorithms,dual_pol_water_index,2026-03+
+183,Imagery,Lee speckle filter,algorithms,lee_filter,2026-03+
+184,Imagery,SAR water / flood mask,algorithms,sar_water_mask,2026-03+
+185,Terrain,Excess topography,algorithms,excess_topography,2026-03+
+186,Imagery,Refined Lee speckle filter,algorithms,refined_lee_filter,2026-03+
+187,Hydrology,Flat resolution (D8 across flats),algorithms,resolve_flats,2026-03+
+188,Inference,Tiled ONNX model inference,algorithms,run_tiled,2026-03+
+189,Embeddings,Embedding similarity map,algorithms,similarity,2026-03+
+190,Hydrology,Lake catchment (lake as outlet),algorithms,lake_catchment,2026-03+
+191,Hydrology,Water body extraction at a point,algorithms,water_body_at,2026-03+
+192,Temporal,Per-pixel linear trend,algorithms,linear_trend,2026-03+
+193,Temporal,Mann–Kendall trend test,algorithms,mann_kendall,2026-03+
+194,Temporal,Sen's slope,algorithms,sens_slope,2026-03+
+195,Temporal,Temporal anomaly,algorithms,temporal_anomaly,2026-03+
+196,Temporal,Vegetation phenology metrics,algorithms,vegetation_phenology,2026-03+
+197,Temporal,Temporal mean,algorithms,temporal_mean,2026-03+
+198,Temporal,Temporal minimum,algorithms,temporal_min,2026-03+
+199,Temporal,Temporal maximum,algorithms,temporal_max,2026-03+
+200,Temporal,Temporal standard deviation,algorithms,temporal_std,2026-03+
+201,Temporal,Temporal valid count,algorithms,temporal_count,2026-03+
+202,Temporal,Temporal percentile,algorithms,temporal_percentile,2026-03+
+203,Fluvial,χ transform,algorithms,chi_transform,2026-03+
+204,Fluvial,Normalised channel steepness (ksn),algorithms,channel_steepness,2026-03+
+205,Fluvial,Concavity index θ,algorithms,concavity_index,2026-03+
+206,Fluvial,Knickpoint detection,algorithms,knickpoint_detection,2026-03+
+207,Fluvial,Longitudinal river profiles,algorithms,long_profile,2026-03+
+208,Fluvial,Swath profile,algorithms,swath_profile,2026-03+
+209,Fluvial,Divide migration metrics,algorithms,divide_migration,2026-03+
+210,Pansharpening,Brovey pansharpening,algorithms,brovey,2026-03+
+211,Pansharpening,Gram–Schmidt pansharpening,algorithms,gram_schmidt,2026-03+
+212,Pansharpening,PCA pansharpening,algorithms,pca_pansharpen,2026-03+
+213,Segmentation,Felzenszwalb–Huttenlocher segmentation,algorithms,felzenszwalb,2026-03+
+214,Segmentation,SLIC superpixels,algorithms,slic,2026-03+
+215,Relief,Ray-traced terrain shadows,relief,ray_shade,2026-03+
+216,Relief,Ambient occlusion shading,relief,ambient_shade,2026-03+
+217,Relief,Sphere-map shading,relief,sphere_shade,2026-03+
+218,Relief,Flat-water detection,relief,detect_water,2026-03+
+219,Flow,"2D debris-flow solver (Voellmy, entrainment)",flow,step,2026-03+
+220,Statistics,Focal count,algorithms,focal_statistics,pre-2026-03
+221,Statistics,Focal percentile,algorithms,focal_statistics,pre-2026-03

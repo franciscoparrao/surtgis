@@ -1,0 +1,91 @@
+crate,function,kind,reason
+algorithms,all_curvatures,variant,bundle of the curvatures counted one by one
+algorithms,chebyshev_derivatives,variant,derivative scheme behind slope and curvatures
+algorithms,cost_distance_map_units,variant,map-unit form of cost_distance
+algorithms,empirical_variogram,variant,part of the variogram row (fit_variogram)
+algorithms,evans_young,variant,derivative scheme behind slope and curvatures
+algorithms,fit_best_variogram,variant,part of the variogram row (fit_variogram)
+algorithms,flow_accumulation_weighted,variant,weighted form of flow_accumulation
+algorithms,flow_dinf,variant,D-infinity primitive behind flow_direction_dinf
+algorithms,haralick_glcm_multi,variant,multi-band form of haralick_glcm
+algorithms,horizon_angle_map,variant,single-azimuth form of horizon_angles
+algorithms,horizon_angle_map_fast,variant,fast form of horizon_angle_map
+algorithms,horizon_angles_fast,variant,fast form of horizon_angles
+algorithms,horn,variant,derivative scheme behind slope and curvatures
+algorithms,hypsometric_hillshade,variant,rendering of hillshade with hypsometric tint
+algorithms,iterative_mean_smoothing,variant,iterated focal mean
+algorithms,mann_kendall_with_times,variant,irregular-time form of mann_kendall
+algorithms,northness_eastness,variant,both outputs of northness and eastness
+algorithms,pennock,variant,derivative scheme behind slope and curvatures
+algorithms,priority_flood_flat,variant,epsilon form of priority_flood
+algorithms,reduce_temporal,variant,generic dispatcher of the temporal statistics
+algorithms,regression_kriging_with_variogram,variant,fixed-variogram form of regression_kriging
+algorithms,scale_space_derivatives,variant,derivatives on the gaussian_scale_space pyramid
+algorithms,sens_slope_series,variant,single-series form of sens_slope
+algorithms,sens_slope_with_times,variant,irregular-time form of sens_slope
+algorithms,sky_view_factor_fast,variant,fast form of sky_view_factor
+algorithms,slope_geographic,variant,geographic-CRS form of slope
+algorithms,solar_radiation_annual_only,variant,annual total of solar_radiation_annual
+algorithms,temporal_stats,variant,bundle of the temporal statistics counted one by one
+algorithms,watershed_parallel,variant,parallel form of watershed
+algorithms,zevenbergen_thorne,variant,derivative scheme behind slope and curvatures
+algorithms,zonal_statistics_raster,variant,raster-zone form of zonal_statistics
+algorithms,zonal_statistics_raster_with,variant,raster-zone form of zonal_statistics
+algorithms,zonal_statistics_with,variant,parameterised form of zonal_statistics
+algorithms,build_stream_graph,utility,stream network data structure
+algorithms,cell_dimensions,utility,grid geometry
+algorithms,par_map_rows,utility,parallel iteration helper
+algorithms,cos_incidence_vectorial,utility,solar geometry helper
+algorithms,db_to_linear,utility,unit conversion
+algorithms,decode,utility,flow-direction encoding
+algorithms,distance,utility,flow-direction helper
+algorithms,dn_to_reflectance_s2,utility,fixed scale/offset conversion
+algorithms,dn_to_surface_reflectance_landsat_c2,utility,fixed scale/offset conversion
+algorithms,downstream,utility,flow-direction helper
+algorithms,encode,utility,flow-direction encoding
+algorithms,extract_patches,utility,ML sampling helper
+algorithms,extract_window,utility,array helper
+algorithms,geographic_cell_sizes,utility,grid geometry
+algorithms,grid_points_in_polygon,utility,ML sampling helper
+algorithms,index_builder,utility,formula evaluator for the Awesome Spectral Indices catalogue
+algorithms,linear_to_db,utility,unit conversion
+algorithms,log_transform,utility,value transform
+algorithms,looks_like_degrees,utility,CRS heuristic
+algorithms,mean_vector,utility,embedding helper
+algorithms,neighbour_stats,utility,neighbourhood helper
+algorithms,norm,utility,embedding helper
+algorithms,norm_with,utility,embedding helper
+algorithms,opposite,utility,flow-direction encoding
+algorithms,patches_to_csv,utility,output writer
+algorithms,sample_at_points,utility,ML sampling helper
+algorithms,signatures_from_training,utility,classifier training helper
+algorithms,solar_vector,utility,solar geometry helper
+algorithms,surface_normal,utility,geometry helper
+algorithms,vector_at,utility,embedding helper
+algorithms,vincenty_distance,utility,geodesic helper
+algorithms,write_chi_csv,utility,output writer
+algorithms,write_ksn_segments_csv,utility,output writer
+algorithms,write_ksn_segments_json,utility,output writer
+algorithms,write_long_profiles_csv,utility,output writer
+algorithms,write_long_profiles_json,utility,output writer
+algorithms,write_swath_csv,utility,output writer
+algorithms,write_swath_json,utility,output writer
+algorithms,area,vector,"vector geoprocessing, counted apart"
+algorithms,bounding_box,vector,"vector geoprocessing, counted apart"
+algorithms,buffer_geometry,vector,"vector geoprocessing, counted apart"
+algorithms,buffer_points,vector,"vector geoprocessing, counted apart"
+algorithms,centroid,vector,"vector geoprocessing, counted apart"
+algorithms,clip_by_rect,vector,"vector geoprocessing, counted apart"
+algorithms,convex_hull,vector,"vector geoprocessing, counted apart"
+algorithms,difference,vector,"vector geoprocessing, counted apart"
+algorithms,dissolve,vector,"vector geoprocessing, counted apart"
+algorithms,intersection,vector,"vector geoprocessing, counted apart"
+algorithms,length,vector,"vector geoprocessing, counted apart"
+algorithms,perimeter,vector,"vector geoprocessing, counted apart"
+algorithms,simplify_dp,vector,"vector geoprocessing, counted apart"
+algorithms,simplify_vw,vector,"vector geoprocessing, counted apart"
+algorithms,symmetric_difference,vector,"vector geoprocessing, counted apart"
+algorithms,union,vector,"vector geoprocessing, counted apart"
+relief,cast_shadow_ray_mask,utility,helper of ray_shade
+relief,horizon_tan_map,utility,helper of ray_shade
+relief,water_depth,utility,part of detect_water
