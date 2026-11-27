@@ -8,6 +8,11 @@ breaking changes only ship in a major version and are called out under a
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-11-27
+
+Lake catchments from point lakes no longer lose the part of a lake beyond
+a narrows (new `--max-neck-cells`).
+
 ### Fixed
 
 - `lake-catchment` (point lakes) and `hydrology::water_body_at` kept only
