@@ -32,6 +32,7 @@ pub struct Args {
     pub water_masks: Vec<String>,
     pub water_value: f64,
     pub min_lake_cells: usize,
+    pub max_neck_cells: usize,
     pub min_compactness: f64,
     pub window_km: f64,
     pub max_window_km: f64,
@@ -348,7 +349,9 @@ fn one(lake: &Lake, dem: &NamedSource, water: &[WaterSource], a: &Args) -> Row {
                         for (o, v) in bin.data_mut().iter_mut().zip(wm.data().iter()) {
                             *o = u8::from(w.rule.is_water(*v));
                         }
-                        match water_body_at(&bin, r, c, WaterBodyParams::default()) {
+                        let mut wp = WaterBodyParams::default();
+                        wp.max_neck_cells = a.max_neck_cells;
+                        match water_body_at(&bin, r, c, wp) {
                             Some(wb) if wb.cells >= a.min_lake_cells => {
                                 found = Some((wb, w.src.label.clone()));
                                 break;

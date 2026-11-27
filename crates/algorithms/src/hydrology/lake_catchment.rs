@@ -11,7 +11,8 @@
 //!
 //! [`water_body_at`] builds that mask from a water raster (e.g. ESA
 //! WorldCover class 80) and a point near the lake, with a morphological
-//! opening that keeps a lake from being merged with the river it drains to.
+//! opening that keeps a lake from being merged with the river it drains to,
+//! and short necks that join the lobes of one lake back together.
 
 use std::collections::VecDeque;
 
@@ -298,6 +299,11 @@ pub struct WaterBodyParams {
     /// connected component: water necks up to about `2 * opening_radius`
     /// cells wide (a river leaving the lake) are cut. 0 disables it.
     pub opening_radius: usize,
+    /// Lobes of the opened mask joined to the lake through raw water with
+    /// at most this many cells removed by the opening (a narrows inside the
+    /// lake) are part of it; longer thin stretches (a river to another
+    /// lake) still separate. 0 keeps only the lobe at the point.
+    pub max_neck_cells: usize,
 }
 
 impl Default for WaterBodyParams {
@@ -305,6 +311,7 @@ impl Default for WaterBodyParams {
         Self {
             search_radius: 10,
             opening_radius: 2,
+            max_neck_cells: 5,
         }
     }
 }
@@ -325,9 +332,11 @@ pub struct WaterBody {
 
 /// The water body nearest to `(row, col)` in `water` (non-zero = water):
 /// the 8-connected component of the opened water mask closest to the
-/// point (within `search_radius`), grown back into the raw water by the
-/// opening radius so its shoreline is not eroded. `None` when no water
-/// cell lies within the search radius.
+/// point (within `search_radius`), together with every other opened
+/// component reachable from it across a neck of at most `max_neck_cells`
+/// thin cells, grown back into the raw water by the opening radius so its
+/// shoreline is not eroded. `None` when no water cell lies within the
+/// search radius.
 pub fn water_body_at(
     water: &Raster<u8>,
     row: usize,
@@ -349,7 +358,11 @@ pub fn water_body_at(
         .or_else(|| nearest_true(&raw, rows, cols, row, col, params.search_radius))?;
     let use_opened = opened[seed.0 * cols + seed.1];
     let base = if use_opened { &opened } else { &raw };
-    let mut body = flood(base, rows, cols, seed);
+    let mut body = if use_opened && r_open > 0 && params.max_neck_cells > 0 {
+        join_lobes(&raw, &opened, rows, cols, seed, params.max_neck_cells)
+    } else {
+        flood(base, rows, cols, seed)
+    };
     if use_opened && r_open > 0 {
         // Grow back into the raw water by the opening radius.
         let grown = square_filter(&body, rows, cols, r_open, false);
@@ -371,6 +384,73 @@ pub fn water_body_at(
         cells,
         raw_component_cells: raw_component.iter().filter(|&&b| b).count(),
     })
+}
+
+/// The opened component at `seed` plus every opened component reachable
+/// through raw water crossing at most `max_neck` thin (raw, not opened)
+/// cells since the last accepted component. 0-1 BFS: opened cells cost 0,
+/// thin cells 1, and reaching a new component accepts all of it at cost 0.
+fn join_lobes(
+    raw: &[bool],
+    opened: &[bool],
+    rows: usize,
+    cols: usize,
+    seed: (usize, usize),
+    max_neck: usize,
+) -> Vec<bool> {
+    let n = rows * cols;
+    let mut lobes = vec![false; n];
+    let mut dist = vec![usize::MAX; n];
+    let mut q = VecDeque::new();
+    // Mark the whole opened component at `start` as lake, visiting only its
+    // cells, and queue them at distance 0.
+    let accept = |start: usize, lobes: &mut [bool], dist: &mut [usize], q: &mut VecDeque<usize>| {
+        let mut stack = vec![start];
+        lobes[start] = true;
+        while let Some(i) = stack.pop() {
+            dist[i] = 0;
+            q.push_front(i);
+            let (r, c) = (i / cols, i % cols);
+            for nr in r.saturating_sub(1)..=(r + 1).min(rows - 1) {
+                for nc in c.saturating_sub(1)..=(c + 1).min(cols - 1) {
+                    let j = nr * cols + nc;
+                    if opened[j] && !lobes[j] {
+                        lobes[j] = true;
+                        stack.push(j);
+                    }
+                }
+            }
+        }
+    };
+    accept(seed.0 * cols + seed.1, &mut lobes, &mut dist, &mut q);
+    while let Some(i) = q.pop_front() {
+        let (r, c, d) = (i / cols, i % cols, dist[i]);
+        for dr in -1isize..=1 {
+            for dc in -1isize..=1 {
+                let (nr, nc) = (r as isize + dr, c as isize + dc);
+                if (dr, dc) == (0, 0)
+                    || nr < 0
+                    || nc < 0
+                    || nr >= rows as isize
+                    || nc >= cols as isize
+                {
+                    continue;
+                }
+                let j = nr as usize * cols + nc as usize;
+                if !raw[j] || lobes[j] {
+                    continue;
+                }
+                if opened[j] {
+                    // another lobe, `d` thin cells away from an accepted one
+                    accept(j, &mut lobes, &mut dist, &mut q);
+                } else if d < max_neck && d + 1 < dist[j] {
+                    dist[j] = d + 1;
+                    q.push_back(j);
+                }
+            }
+        }
+    }
+    lobes
 }
 
 /// Square erosion (`all`) or dilation (any) of radius `r`, separable, O(n).
@@ -593,6 +673,48 @@ mod tests {
             ..Default::default()
         };
         assert!(water_body_at(&w, 2, 38, far).is_none());
+    }
+
+    /// Two 10 x 10 lobes joined by a 2-cell-wide water strip `gap` cells
+    /// long: the opening (radius 2) removes the strip, so only the neck
+    /// length decides whether the far lobe belongs to the lake.
+    fn two_lobes(gap: usize) -> Raster<u8> {
+        let cols = 10 + gap + 10 + 8;
+        let mut w: Raster<u8> = Raster::new(20, cols);
+        for r in 5..15 {
+            for c in (4..14).chain(14 + gap..24 + gap) {
+                w.set(r, c, 1).unwrap();
+            }
+        }
+        for r in 9..11 {
+            for c in 14..14 + gap {
+                w.set(r, c, 1).unwrap();
+            }
+        }
+        w
+    }
+
+    #[test]
+    fn water_body_joins_lobes_across_a_short_neck_only() {
+        // 4-cell narrows: one lake, both lobes (and the narrows) kept.
+        let w = two_lobes(4);
+        let wb = water_body_at(&w, 10, 8, WaterBodyParams::default()).unwrap();
+        assert_eq!(wb.mask.get(10, 22).unwrap(), 1, "far lobe joined");
+        assert_eq!(wb.cells, 200 + 8, "{} cells", wb.cells);
+        // Without joining, the far lobe is lost (the behaviour before).
+        let p = WaterBodyParams {
+            max_neck_cells: 0,
+            ..Default::default()
+        };
+        let one = water_body_at(&w, 10, 8, p).unwrap();
+        assert_eq!(one.mask.get(10, 22).unwrap(), 0);
+        assert!(one.cells < 120, "{} cells", one.cells);
+        // 15-cell channel: a river to another lake, which stays separate.
+        let w = two_lobes(15);
+        let wb = water_body_at(&w, 10, 8, WaterBodyParams::default()).unwrap();
+        assert_eq!(wb.mask.get(10, 33).unwrap(), 0, "other lake not merged");
+        assert!(wb.cells < 120, "{} cells", wb.cells);
+        assert_eq!(wb.raw_component_cells, 200 + 30);
     }
 
     #[test]

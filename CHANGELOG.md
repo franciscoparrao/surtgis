@@ -8,6 +8,25 @@ breaking changes only ship in a major version and are called out under a
 
 ## [Unreleased]
 
+### Fixed
+
+- `lake-catchment` (point lakes) and `hydrology::water_body_at` kept only
+  the part of a lake on the point's side of any narrows: the opening that
+  cuts the outflow river also cut lakes with narrow arms. On Arctic test
+  lakes the kept area was 0.85 of 14.2 km² and 8.1 of 21.6 km². Parts
+  joined across at most `max_neck_cells` cells removed by the opening
+  (new `WaterBodyParams` field and `--max-neck-cells`, default 5) now
+  belong to the lake; a longer channel to another lake still separates
+  them, and 0 restores the previous behaviour.
+
+### Changed
+
+- Note on 1.9.0: Copernicus GLO-30 (Planetary Computer) and FABDEM tiles
+  are tagged PixelIsPoint, so since 1.9.0 they are read on GDAL's grid,
+  half a pixel (about 15 m) from 1.8.x. Results computed on them with
+  1.8.x or earlier differ: two Arctic test catchments changed by 5 % and
+  12 % with the lake unchanged. ALOS AW3D30 is PixelIsArea and unchanged.
+
 ## [1.9.1] - 2026-11-26
 
 The Python wheels move to pyo3 0.30, which closes two advisories, and the

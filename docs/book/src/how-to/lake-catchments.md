@@ -19,6 +19,10 @@ For each lake:
 3. The lake is rasterized from its polygon. A point lake is instead taken
    from `--water-mask` as the nearest water body, with a small
    morphological opening so the lake is not merged with its outflow river.
+   The opening also cuts a lake at its narrows; parts joined across a
+   narrows of at most `--max-neck-cells` removed cells (default 5, 150 m on
+   the 30 m grid) are put back together, while a longer channel to another
+   lake still separates them.
 4. **The lake is the outlet.** Its cells drain the depression-filling step
    like the sea does, so a lake in a closed basin is not filled up to the
    basin's spill level. Every lake cell is a pour point, so the catchment
