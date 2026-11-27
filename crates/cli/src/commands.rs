@@ -1329,6 +1329,11 @@ pub enum HydrologyCommands {
         /// lake; the cell under the point is (status point_only)
         #[arg(long, default_value = "4")]
         min_lake_cells: usize,
+        /// Parts of a water-mask lake joined across a narrows of at most
+        /// this many cells removed by the river-cutting opening count as
+        /// one lake; 0 keeps only the part at the point
+        #[arg(long, default_value = "5")]
+        max_neck_cells: usize,
         /// Water-mask lakes below this compactness 4πA/P² (or cut by the
         /// opening to under half their component) get status review:
         /// possibly a river or merged lakes
