@@ -8,6 +8,11 @@ breaking changes only ship in a major version and are called out under a
 
 ## [Unreleased]
 
+## [1.9.1] - 2026-11-26
+
+The Python wheels move to pyo3 0.30, which closes two advisories, and the
+algorithm count becomes reproducible: 221, not 127.
+
 ### Changed
 
 - The algorithm count is now reproducible: `docs/algorithms.csv` lists
