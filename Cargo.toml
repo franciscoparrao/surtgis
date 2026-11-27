@@ -124,8 +124,8 @@ js-sys = "0.3"
 wasm-bindgen-test = "0.3"
 
 # Python
-pyo3 = { version = "0.23", features = ["extension-module", "generate-import-lib"] }
-numpy = { version = "0.23", features = ["half"] }
+pyo3 = { version = "0.30", features = ["extension-module"] }
+numpy = { version = "0.30", features = ["half"] }
 
 # GUI
 eframe = { version = "0.33", features = ["wgpu"] }
