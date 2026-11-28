@@ -21,6 +21,8 @@ if [ ! -x "$BIN" ]; then
 fi
 
 mkdir -p "$OUT"
+# Every page here is generated: start clean so a removed command loses its page.
+rm -f "$OUT"/*.md
 
 # Fence a help block with language hint so syntax highlighter picks up flags.
 fence_help() {
@@ -34,31 +36,14 @@ strip_ansi() {
     sed -r 's/\x1B\[[0-9;]*[a-zA-Z]//g'
 }
 
-# Top-level commands to document. Excludes `help` (meta) and aliases.
-TOP_COMMANDS=(
-    info
-    terrain
-    hydrology
-    imagery
-    morphology
-    landscape
-    extract
-    extract-patches
-    clip
-    reproject
-    rasterize
-    resample
-    mosaic
-    cog
-    stac
-    pipeline
-    vector
-    interpolation
-    temporal
-    classification
-    texture
-    statistics
-)
+# Top-level commands to document, read from `--help` so a new command
+# gets its page without editing this script. Excludes `help` (meta) and
+# `completions` (shell setup, not geoprocessing).
+mapfile -t TOP_COMMANDS < <("$BIN" --help 2>&1 | strip_ansi | awk '
+    /^Commands:/ { in_cmds=1; next }
+    in_cmds && /^Options:/ { exit }
+    in_cmds && NF && $1 != "help" && $1 != "completions" { print $1 }
+')
 
 # --- Write index page ---
 {

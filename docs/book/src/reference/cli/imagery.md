@@ -45,11 +45,13 @@ Commands:
   help              Print this message or the help of the given subcommand(s)
 
 Options:
-  -v, --verbose                  Verbose output
-      --compress                 Compress output GeoTIFFs (deflate)
-      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
-  -h, --help                     Print help
+  -v, --verbose                      Verbose output
+      --compress                     Compress output GeoTIFFs (deflate)
+      --streaming                    Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>      Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --output-dtype <OUTPUT_DTYPE>  Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN) [default: f64] [possible values: f32, f64]
+      --no-provenance                Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
+  -h, --help                         Print help
 ```
 
 ## `imagery ndvi` {#ndvi}
@@ -63,13 +65,15 @@ Arguments:
   <OUTPUT>  Output file
 
 Options:
-      --nir <NIR>                NIR band file
-  -v, --verbose                  Verbose output
-      --compress                 Compress output GeoTIFFs (deflate)
-      --red <RED>                Red band file
-      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
-  -h, --help                     Print help
+      --nir <NIR>                    NIR band file
+  -v, --verbose                      Verbose output
+      --compress                     Compress output GeoTIFFs (deflate)
+      --red <RED>                    Red band file
+      --streaming                    Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>      Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --output-dtype <OUTPUT_DTYPE>  Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN) [default: f64] [possible values: f32, f64]
+      --no-provenance                Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
+  -h, --help                         Print help
 ```
 
 ## `imagery ndwi` {#ndwi}
@@ -83,13 +87,15 @@ Arguments:
   <OUTPUT>  Output file
 
 Options:
-      --green <GREEN>            Green band file
-  -v, --verbose                  Verbose output
-      --compress                 Compress output GeoTIFFs (deflate)
-      --nir <NIR>                NIR band file
-      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
-  -h, --help                     Print help
+      --green <GREEN>                Green band file
+  -v, --verbose                      Verbose output
+      --compress                     Compress output GeoTIFFs (deflate)
+      --nir <NIR>                    NIR band file
+      --streaming                    Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>      Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --output-dtype <OUTPUT_DTYPE>  Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN) [default: f64] [possible values: f32, f64]
+      --no-provenance                Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
+  -h, --help                         Print help
 ```
 
 ## `imagery mndwi` {#mndwi}
@@ -103,13 +109,15 @@ Arguments:
   <OUTPUT>  Output file
 
 Options:
-      --green <GREEN>            Green band file
-  -v, --verbose                  Verbose output
-      --compress                 Compress output GeoTIFFs (deflate)
-      --swir <SWIR>              SWIR band file
-      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
-  -h, --help                     Print help
+      --green <GREEN>                Green band file
+  -v, --verbose                      Verbose output
+      --compress                     Compress output GeoTIFFs (deflate)
+      --swir <SWIR>                  SWIR band file
+      --streaming                    Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>      Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --output-dtype <OUTPUT_DTYPE>  Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN) [default: f64] [possible values: f32, f64]
+      --no-provenance                Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
+  -h, --help                         Print help
 ```
 
 ## `imagery nbr` {#nbr}
@@ -123,13 +131,15 @@ Arguments:
   <OUTPUT>  Output file
 
 Options:
-      --nir <NIR>                NIR band file
-  -v, --verbose                  Verbose output
-      --compress                 Compress output GeoTIFFs (deflate)
-      --swir <SWIR>              SWIR band file
-      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
-  -h, --help                     Print help
+      --nir <NIR>                    NIR band file
+  -v, --verbose                      Verbose output
+      --compress                     Compress output GeoTIFFs (deflate)
+      --swir <SWIR>                  SWIR band file
+      --streaming                    Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>      Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --output-dtype <OUTPUT_DTYPE>  Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN) [default: f64] [possible values: f32, f64]
+      --no-provenance                Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
+  -h, --help                         Print help
 ```
 
 ## `imagery savi` {#savi}
@@ -143,14 +153,16 @@ Arguments:
   <OUTPUT>  Output file
 
 Options:
-      --nir <NIR>                NIR band file
-  -v, --verbose                  Verbose output
-      --compress                 Compress output GeoTIFFs (deflate)
-      --red <RED>                Red band file
-  -l, --l-factor <L_FACTOR>      Soil brightness correction factor (0..1) [default: 0.5]
-      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
-  -h, --help                     Print help
+      --nir <NIR>                    NIR band file
+  -v, --verbose                      Verbose output
+      --compress                     Compress output GeoTIFFs (deflate)
+      --red <RED>                    Red band file
+  -l, --l-factor <L_FACTOR>          Soil brightness correction factor (0..1) [default: 0.5]
+      --streaming                    Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>      Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --output-dtype <OUTPUT_DTYPE>  Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN) [default: f64] [possible values: f32, f64]
+      --no-provenance                Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
+  -h, --help                         Print help
 ```
 
 ## `imagery evi` {#evi}
@@ -164,14 +176,16 @@ Arguments:
   <OUTPUT>  Output file
 
 Options:
-      --nir <NIR>                NIR band file
-  -v, --verbose                  Verbose output
-      --compress                 Compress output GeoTIFFs (deflate)
-      --red <RED>                Red band file
-      --blue <BLUE>              Blue band file
-      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
-  -h, --help                     Print help
+      --nir <NIR>                    NIR band file
+  -v, --verbose                      Verbose output
+      --compress                     Compress output GeoTIFFs (deflate)
+      --red <RED>                    Red band file
+      --blue <BLUE>                  Blue band file
+      --streaming                    Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>      Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --output-dtype <OUTPUT_DTYPE>  Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN) [default: f64] [possible values: f32, f64]
+      --no-provenance                Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
+  -h, --help                         Print help
 ```
 
 ## `imagery bsi` {#bsi}
@@ -185,15 +199,17 @@ Arguments:
   <OUTPUT>  Output file
 
 Options:
-      --swir <SWIR>              SWIR band file
-  -v, --verbose                  Verbose output
-      --compress                 Compress output GeoTIFFs (deflate)
-      --red <RED>                Red band file
-      --nir <NIR>                NIR band file
-      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-      --blue <BLUE>              Blue band file
-      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
-  -h, --help                     Print help
+      --swir <SWIR>                  SWIR band file
+  -v, --verbose                      Verbose output
+      --compress                     Compress output GeoTIFFs (deflate)
+      --red <RED>                    Red band file
+      --nir <NIR>                    NIR band file
+      --streaming                    Force streaming mode for large rasters (auto-detected if >500MB)
+      --blue <BLUE>                  Blue band file
+      --max-memory <MAX_MEMORY>      Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --output-dtype <OUTPUT_DTYPE>  Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN) [default: f64] [possible values: f32, f64]
+      --no-provenance                Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
+  -h, --help                         Print help
 ```
 
 ## `imagery band-math` {#band-math}
@@ -207,14 +223,16 @@ Arguments:
   <OUTPUT>  Output file
 
 Options:
-  -a <A>                         First input raster
-  -v, --verbose                  Verbose output
-  -b <B>                         Second input raster
-      --compress                 Compress output GeoTIFFs (deflate)
-      --op <OP>                  Operation: add, subtract, multiply, divide, power, min, max
-      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
-  -h, --help                     Print help
+  -a <A>                             First input raster
+  -v, --verbose                      Verbose output
+  -b <B>                             Second input raster
+      --compress                     Compress output GeoTIFFs (deflate)
+      --op <OP>                      Operation: add, subtract, multiply, divide, power, min, max
+      --streaming                    Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>      Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --output-dtype <OUTPUT_DTYPE>  Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN) [default: f64] [possible values: f32, f64]
+      --no-provenance                Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
+  -h, --help                         Print help
 ```
 
 ## `imagery calc` {#calc}
@@ -222,7 +240,9 @@ Options:
 ```text
 Compute custom spectral index from arithmetic expression
 
-Common formulas: NDVI:  "(NIR - Red) / (NIR + Red)" EXG:   "2 * Green - Red - Blue" VARI:  "(Green - Red) / (Green + Red - Blue)" Clay:  "SWIR1 / SWIR2"
+Supports + - * / ** (power), parentheses, unary minus and numeric constants: the full grammar of the Awesome Spectral Indices catalogue (Montero et al., 2023), so its parameter-free formulas run verbatim with the ASI band names.
+
+Common formulas: NDVI:  "(NIR - Red) / (NIR + Red)" EXG:   "2 * Green - Red - Blue" VARI:  "(Green - Red) / (Green + Red - Blue)" BAI:   "1.0 / ((0.1 - R) ** 2.0 + (0.06 - N) ** 2.0)"
 
 Usage: surtgis imagery calc [OPTIONS] --expression <EXPRESSION> <OUTPUT>
 
@@ -249,6 +269,15 @@ Options:
       --max-memory <MAX_MEMORY>
           Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
 
+      --output-dtype <OUTPUT_DTYPE>
+          Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN)
+          
+          [default: f64]
+          [possible values: f32, f64]
+
+      --no-provenance
+          Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
+
   -h, --help
           Print help (see a summary with '-h')
 ```
@@ -264,13 +293,15 @@ Arguments:
   <OUTPUT>  
 
 Options:
-      --nir <NIR>                
-  -v, --verbose                  Verbose output
-      --compress                 Compress output GeoTIFFs (deflate)
-      --red <RED>                
-      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
-  -h, --help                     Print help
+      --nir <NIR>                    
+  -v, --verbose                      Verbose output
+      --compress                     Compress output GeoTIFFs (deflate)
+      --red <RED>                    
+      --streaming                    Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>      Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --output-dtype <OUTPUT_DTYPE>  Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN) [default: f64] [possible values: f32, f64]
+      --no-provenance                Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
+  -h, --help                         Print help
 ```
 
 ## `imagery gndvi` {#gndvi}
@@ -284,13 +315,15 @@ Arguments:
   <OUTPUT>  
 
 Options:
-      --nir <NIR>                
-  -v, --verbose                  Verbose output
-      --compress                 Compress output GeoTIFFs (deflate)
-      --green <GREEN>            
-      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
-  -h, --help                     Print help
+      --nir <NIR>                    
+  -v, --verbose                      Verbose output
+      --compress                     Compress output GeoTIFFs (deflate)
+      --green <GREEN>                
+      --streaming                    Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>      Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --output-dtype <OUTPUT_DTYPE>  Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN) [default: f64] [possible values: f32, f64]
+      --no-provenance                Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
+  -h, --help                         Print help
 ```
 
 ## `imagery ngrdi` {#ngrdi}
@@ -304,13 +337,15 @@ Arguments:
   <OUTPUT>  
 
 Options:
-      --green <GREEN>            
-  -v, --verbose                  Verbose output
-      --compress                 Compress output GeoTIFFs (deflate)
-      --red <RED>                
-      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
-  -h, --help                     Print help
+      --green <GREEN>                
+  -v, --verbose                      Verbose output
+      --compress                     Compress output GeoTIFFs (deflate)
+      --red <RED>                    
+      --streaming                    Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>      Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --output-dtype <OUTPUT_DTYPE>  Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN) [default: f64] [possible values: f32, f64]
+      --no-provenance                Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
+  -h, --help                         Print help
 ```
 
 ## `imagery reci` {#reci}
@@ -324,13 +359,15 @@ Arguments:
   <OUTPUT>  
 
 Options:
-      --nir <NIR>                
-  -v, --verbose                  Verbose output
-      --compress                 Compress output GeoTIFFs (deflate)
-      --red-edge <RED_EDGE>      
-      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
-  -h, --help                     Print help
+      --nir <NIR>                    
+  -v, --verbose                      Verbose output
+      --compress                     Compress output GeoTIFFs (deflate)
+      --red-edge <RED_EDGE>          
+      --streaming                    Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>      Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --output-dtype <OUTPUT_DTYPE>  Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN) [default: f64] [possible values: f32, f64]
+      --no-provenance                Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
+  -h, --help                         Print help
 ```
 
 ## `imagery ndre` {#ndre}
@@ -344,13 +381,15 @@ Arguments:
   <OUTPUT>  
 
 Options:
-      --nir <NIR>                
-  -v, --verbose                  Verbose output
-      --compress                 Compress output GeoTIFFs (deflate)
-      --red-edge <RED_EDGE>      
-      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
-  -h, --help                     Print help
+      --nir <NIR>                    
+  -v, --verbose                      Verbose output
+      --compress                     Compress output GeoTIFFs (deflate)
+      --red-edge <RED_EDGE>          
+      --streaming                    Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>      Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --output-dtype <OUTPUT_DTYPE>  Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN) [default: f64] [possible values: f32, f64]
+      --no-provenance                Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
+  -h, --help                         Print help
 ```
 
 ## `imagery ndsi` {#ndsi}
@@ -364,13 +403,15 @@ Arguments:
   <OUTPUT>  
 
 Options:
-      --green <GREEN>            
-  -v, --verbose                  Verbose output
-      --compress                 Compress output GeoTIFFs (deflate)
-      --swir <SWIR>              
-      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
-  -h, --help                     Print help
+      --green <GREEN>                
+  -v, --verbose                      Verbose output
+      --compress                     Compress output GeoTIFFs (deflate)
+      --swir <SWIR>                  
+      --streaming                    Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>      Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --output-dtype <OUTPUT_DTYPE>  Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN) [default: f64] [possible values: f32, f64]
+      --no-provenance                Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
+  -h, --help                         Print help
 ```
 
 ## `imagery ndmi` {#ndmi}
@@ -384,13 +425,15 @@ Arguments:
   <OUTPUT>  
 
 Options:
-      --nir <NIR>                
-  -v, --verbose                  Verbose output
-      --compress                 Compress output GeoTIFFs (deflate)
-      --swir <SWIR>              
-      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
-  -h, --help                     Print help
+      --nir <NIR>                    
+  -v, --verbose                      Verbose output
+      --compress                     Compress output GeoTIFFs (deflate)
+      --swir <SWIR>                  
+      --streaming                    Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>      Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --output-dtype <OUTPUT_DTYPE>  Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN) [default: f64] [possible values: f32, f64]
+      --no-provenance                Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
+  -h, --help                         Print help
 ```
 
 ## `imagery ndbi` {#ndbi}
@@ -404,13 +447,15 @@ Arguments:
   <OUTPUT>  
 
 Options:
-      --swir <SWIR>              
-  -v, --verbose                  Verbose output
-      --compress                 Compress output GeoTIFFs (deflate)
-      --nir <NIR>                
-      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
-  -h, --help                     Print help
+      --swir <SWIR>                  
+  -v, --verbose                      Verbose output
+      --compress                     Compress output GeoTIFFs (deflate)
+      --nir <NIR>                    
+      --streaming                    Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>      Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --output-dtype <OUTPUT_DTYPE>  Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN) [default: f64] [possible values: f32, f64]
+      --no-provenance                Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
+  -h, --help                         Print help
 ```
 
 ## `imagery msavi` {#msavi}
@@ -424,13 +469,15 @@ Arguments:
   <OUTPUT>  
 
 Options:
-      --nir <NIR>                
-  -v, --verbose                  Verbose output
-      --compress                 Compress output GeoTIFFs (deflate)
-      --red <RED>                
-      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
-  -h, --help                     Print help
+      --nir <NIR>                    
+  -v, --verbose                      Verbose output
+      --compress                     Compress output GeoTIFFs (deflate)
+      --red <RED>                    
+      --streaming                    Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>      Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --output-dtype <OUTPUT_DTYPE>  Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN) [default: f64] [possible values: f32, f64]
+      --no-provenance                Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
+  -h, --help                         Print help
 ```
 
 ## `imagery reclassify` {#reclassify}
@@ -445,13 +492,16 @@ Arguments:
   <OUTPUT>  
 
 Options:
-      --class <MIN,MAX,VALUE>    Class definition as "min,max,value" (repeatable)
-  -v, --verbose                  Verbose output
-      --compress                 Compress output GeoTIFFs (deflate)
-      --default <DEFAULT>        Default value for unclassified cells [default: NaN]
-      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
-  -h, --help                     Print help
+      --class <MIN,MAX,VALUE>        Class definition as "min,max,value" (repeatable; negative bounds are fine: `--class -0.5,0.5,1`)
+  -v, --verbose                      Verbose output
+      --compress                     Compress output GeoTIFFs (deflate)
+      --default <DEFAULT>            Default value for valid cells that match no class [default: NaN]
+      --fill-nodata                  Also give nodata (NaN) cells the default value, i.e. fill nodata
+      --streaming                    Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>      Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --output-dtype <OUTPUT_DTYPE>  Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN) [default: f64] [possible values: f32, f64]
+      --no-provenance                Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
+  -h, --help                         Print help
 ```
 
 ## `imagery median-composite` {#median-composite}
@@ -465,12 +515,14 @@ Arguments:
   <OUTPUT>  Output file
 
 Options:
-  -i, --input <INPUT>            Input raster files (at least 2, repeatable)
-  -v, --verbose                  Verbose output
-      --compress                 Compress output GeoTIFFs (deflate)
-      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
-  -h, --help                     Print help
+  -i, --input <INPUT>                Input raster files (at least 2, repeatable)
+  -v, --verbose                      Verbose output
+      --compress                     Compress output GeoTIFFs (deflate)
+      --streaming                    Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>      Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --output-dtype <OUTPUT_DTYPE>  Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN) [default: f64] [possible values: f32, f64]
+      --no-provenance                Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
+  -h, --help                         Print help
 ```
 
 ## `imagery dnbr` {#dnbr}
@@ -500,8 +552,12 @@ Options:
           Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
       --post-swir <POST_SWIR>
           
+      --output-dtype <OUTPUT_DTYPE>
+          Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN) [default: f64] [possible values: f32, f64]
       --severity-output <SEVERITY_OUTPUT>
           Also output burn severity classification
+      --no-provenance
+          Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
   -h, --help
           Print help
 ```
@@ -518,13 +574,15 @@ Arguments:
   <OUTPUT>  Output file
 
 Options:
-      --scl <SCL>                SCL classification raster
-  -v, --verbose                  Verbose output
-      --compress                 Compress output GeoTIFFs (deflate)
-      --keep <KEEP>              SCL classes to keep (comma-separated, default: 4,5,6,11) [default: 4,5,6,11]
-      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
-  -h, --help                     Print help
+      --scl <SCL>                    SCL classification raster
+  -v, --verbose                      Verbose output
+      --compress                     Compress output GeoTIFFs (deflate)
+      --keep <KEEP>                  SCL classes to keep (comma-separated, default: 4,5,6,11) [default: 4,5,6,11]
+      --streaming                    Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>      Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --output-dtype <OUTPUT_DTYPE>  Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN) [default: f64] [possible values: f32, f64]
+      --no-provenance                Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
+  -h, --help                         Print help
 ```
 
 ## `imagery calibrate` {#calibrate}
@@ -542,11 +600,13 @@ Commands:
   help           Print this message or the help of the given subcommand(s)
 
 Options:
-  -v, --verbose                  Verbose output
-      --compress                 Compress output GeoTIFFs (deflate)
-      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
-  -h, --help                     Print help
+  -v, --verbose                      Verbose output
+      --compress                     Compress output GeoTIFFs (deflate)
+      --streaming                    Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>      Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --output-dtype <OUTPUT_DTYPE>  Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN) [default: f64] [possible values: f32, f64]
+      --no-provenance                Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
+  -h, --help                         Print help
 ```
 
 ## `imagery pansharpen` {#pansharpen}
@@ -563,11 +623,13 @@ Commands:
   help          Print this message or the help of the given subcommand(s)
 
 Options:
-  -v, --verbose                  Verbose output
-      --compress                 Compress output GeoTIFFs (deflate)
-      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
-  -h, --help                     Print help
+  -v, --verbose                      Verbose output
+      --compress                     Compress output GeoTIFFs (deflate)
+      --streaming                    Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>      Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --output-dtype <OUTPUT_DTYPE>  Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN) [default: f64] [possible values: f32, f64]
+      --no-provenance                Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
+  -h, --help                         Print help
 ```
 
 ## `imagery stack` {#stack}
@@ -581,12 +643,14 @@ Arguments:
   <OUTPUT>  Output multi-band GeoTIFF
 
 Options:
-      --band <BANDS>             One or more input single-band rasters (repeatable). Order determines band order in the output — pass R, G, B for an RGB stack
-  -v, --verbose                  Verbose output
-      --compress                 Compress output GeoTIFFs (deflate)
-      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
-  -h, --help                     Print help
+      --band <BANDS>                 One or more input single-band rasters (repeatable). Order determines band order in the output — pass R, G, B for an RGB stack
+  -v, --verbose                      Verbose output
+      --compress                     Compress output GeoTIFFs (deflate)
+      --streaming                    Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>      Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --output-dtype <OUTPUT_DTYPE>  Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN) [default: f64] [possible values: f32, f64]
+      --no-provenance                Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
+  -h, --help                         Print help
 ```
 
 ## `imagery change-detection` {#change-detection}
@@ -602,11 +666,13 @@ Commands:
   help    Print this message or the help of the given subcommand(s)
 
 Options:
-  -v, --verbose                  Verbose output
-      --compress                 Compress output GeoTIFFs (deflate)
-      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
-  -h, --help                     Print help
+  -v, --verbose                      Verbose output
+      --compress                     Compress output GeoTIFFs (deflate)
+      --streaming                    Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>      Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --output-dtype <OUTPUT_DTYPE>  Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN) [default: f64] [possible values: f32, f64]
+      --no-provenance                Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
+  -h, --help                         Print help
 ```
 
 ## `imagery color-balance` {#color-balance}
@@ -622,11 +688,13 @@ Commands:
   help       Print this message or the help of the given subcommand(s)
 
 Options:
-  -v, --verbose                  Verbose output
-      --compress                 Compress output GeoTIFFs (deflate)
-      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
-  -h, --help                     Print help
+  -v, --verbose                      Verbose output
+      --compress                     Compress output GeoTIFFs (deflate)
+      --streaming                    Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>      Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --output-dtype <OUTPUT_DTYPE>  Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN) [default: f64] [possible values: f32, f64]
+      --no-provenance                Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
+  -h, --help                         Print help
 ```
 
 ## `imagery mosaic-feather` {#mosaic-feather}
@@ -640,12 +708,14 @@ Arguments:
   <OUTPUT>  Output blended raster
 
 Options:
-      --input <INPUTS>           Input rasters (repeatable)
-  -v, --verbose                  Verbose output
-      --compress                 Compress output GeoTIFFs (deflate)
-      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
-  -h, --help                     Print help
+      --input <INPUTS>               Input rasters (repeatable)
+  -v, --verbose                      Verbose output
+      --compress                     Compress output GeoTIFFs (deflate)
+      --streaming                    Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>      Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --output-dtype <OUTPUT_DTYPE>  Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN) [default: f64] [possible values: f32, f64]
+      --no-provenance                Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
+  -h, --help                         Print help
 ```
 
 ## `imagery sar-db` {#sar-db}
@@ -660,11 +730,13 @@ Arguments:
   <OUTPUT>  Output dB raster
 
 Options:
-  -v, --verbose                  Verbose output
-      --compress                 Compress output GeoTIFFs (deflate)
-      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
-  -h, --help                     Print help
+  -v, --verbose                      Verbose output
+      --compress                     Compress output GeoTIFFs (deflate)
+      --streaming                    Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>      Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --output-dtype <OUTPUT_DTYPE>  Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN) [default: f64] [possible values: f32, f64]
+      --no-provenance                Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
+  -h, --help                         Print help
 ```
 
 ## `imagery sar-water-index` {#sar-water-index}
@@ -678,13 +750,15 @@ Arguments:
   <OUTPUT>  Output index raster
 
 Options:
-      --co-pol <CO_POL>          Co-pol band (e.g. VV), linear power
-  -v, --verbose                  Verbose output
-      --compress                 Compress output GeoTIFFs (deflate)
-      --cross-pol <CROSS_POL>    Cross-pol band (e.g. VH), linear power
-      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
-  -h, --help                     Print help
+      --co-pol <CO_POL>              Co-pol band (e.g. VV), linear power
+  -v, --verbose                      Verbose output
+      --compress                     Compress output GeoTIFFs (deflate)
+      --cross-pol <CROSS_POL>        Cross-pol band (e.g. VH), linear power
+      --streaming                    Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>      Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --output-dtype <OUTPUT_DTYPE>  Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN) [default: f64] [possible values: f32, f64]
+      --no-provenance                Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
+  -h, --help                         Print help
 ```
 
 ## `imagery sar-water-mask` {#sar-water-mask}
@@ -699,13 +773,15 @@ Arguments:
   <OUTPUT>  Output u8 water mask (1=water, 0=land, 255=nodata)
 
 Options:
-      --threshold <THRESHOLD>    Decision threshold
-  -v, --verbose                  Verbose output
-      --compress                 Compress output GeoTIFFs (deflate)
-      --water-above              Water is ABOVE the threshold (use for a water index). Default: water is below the threshold (use for backscatter)
-      --streaming                Force streaming mode for large rasters (auto-detected if >500MB)
-      --max-memory <MAX_MEMORY>  Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
-  -h, --help                     Print help
+      --threshold <THRESHOLD>        Decision threshold
+  -v, --verbose                      Verbose output
+      --compress                     Compress output GeoTIFFs (deflate)
+      --water-above                  Water is ABOVE the threshold (use for a water index). Default: water is below the threshold (use for backscatter)
+      --streaming                    Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>      Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --output-dtype <OUTPUT_DTYPE>  Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN) [default: f64] [possible values: f32, f64]
+      --no-provenance                Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
+  -h, --help                         Print help
 ```
 
 ## `imagery sar-lee` {#sar-lee}
@@ -720,13 +796,15 @@ Arguments:
   <OUTPUT>  Output filtered raster
 
 Options:
-  -v, --verbose                    Verbose output
-      --window-size <WINDOW_SIZE>  Odd window side length [default: 7]
-      --compress                   Compress output GeoTIFFs (deflate)
-      --looks <LOOKS>              Equivalent number of looks (ENL); 1.0 for single-look [default: 1.0]
-      --refined                    Use the edge-aligned refined Lee (1981) instead of the classic Lee
-      --streaming                  Force streaming mode for large rasters (auto-detected if >500MB)
-      --max-memory <MAX_MEMORY>    Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
-  -h, --help                       Print help
+  -v, --verbose                      Verbose output
+      --window-size <WINDOW_SIZE>    Odd window side length [default: 7]
+      --compress                     Compress output GeoTIFFs (deflate)
+      --looks <LOOKS>                Equivalent number of looks (ENL); 1.0 for single-look [default: 1.0]
+      --refined                      Use the edge-aligned refined Lee (1981) instead of the classic Lee
+      --streaming                    Force streaming mode for large rasters (auto-detected if >500MB)
+      --max-memory <MAX_MEMORY>      Maximum memory to use (e.g., 4G, 1024MB, 500MiB). If raster would exceed this when decompressed, force streaming
+      --output-dtype <OUTPUT_DTYPE>  Sample type of Float64 outputs: `f64` (default) or `f32` (half the size; nodata stays NaN) [default: f64] [possible values: f32, f64]
+      --no-provenance                Do not embed a provenance record (command, hashed inputs, output digest) in the written GeoTIFFs, and skip hashing the inputs. Also honoured as SURTGIS_NO_PROVENANCE=1
+  -h, --help                         Print help
 ```
 
