@@ -97,6 +97,29 @@ jobs:
         if: matrix.os != 'ubuntu-latest'
         run: cargo test -p surtgis-core -p surtgis-algorithms -p surtgis-cloud -p surtgis-relief -p surtgis-colormap
 
+  # docs/book/src/reference/cli is generated from `surtgis --help`; a CLI
+  # change that does not regenerate it fails here.
+  cli-reference:
+    name: CLI reference is up to date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libhdf5-dev libnetcdf-dev libeccodes-dev pkg-config
+      - name: Build the CLI
+        run: cargo build -p surtgis --bin surtgis
+      - name: Regenerate and compare
+        run: |
+          SURTGIS_BIN=target/debug/surtgis bash docs/book/generate_cli_reference.sh
+          git add -N docs/book/src/reference/cli
+          git diff --exit-code -- docs/book/src/reference/cli \
+            || { echo "::error::CLI reference is stale: run docs/book/generate_cli_reference.sh"; exit 1; }
+
   test-no-parallel:
     name: Test (no parallel)
     runs-on: ubuntu-latest
